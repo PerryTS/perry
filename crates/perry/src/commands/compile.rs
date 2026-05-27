@@ -1420,7 +1420,11 @@ pub fn run_with_parse_cache(
     };
 
     // Pre-compute native library FFI functions
-    let ffi_functions: Vec<(String, Vec<String>, String)> = ctx
+    let ffi_functions: Vec<(
+        String,
+        Vec<perry_api_manifest::NativeAbiType>,
+        perry_api_manifest::NativeAbiType,
+    )> = ctx
         .native_libraries
         .iter()
         .flat_map(|lib| {

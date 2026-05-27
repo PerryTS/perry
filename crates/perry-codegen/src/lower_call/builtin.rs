@@ -153,11 +153,16 @@ pub(super) fn lower_builtin_new(
         // every .on/.emit call dispatched against a junk pointer and
         // silently registered nothing / fired nothing.
         "EventEmitter" => {
-            for a in args {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_event_emitter_new", &[]);
+            let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // node:perf_hooks — `new PerformanceObserver(cb)` registers the

@@ -762,7 +762,7 @@ pub(super) fn collect_modules(
                         while let Some(dir) = pkg_dir {
                             if dir.join("package.json").exists() && has_perry_native_library(dir) {
                                 if let Some(manifest) =
-                                    parse_native_library_manifest(dir, module_name, target)
+                                    parse_native_library_manifest(dir, module_name, target)?
                                 {
                                     // #466 Phase 2: refuse to load a wrapper whose
                                     // declared abiVersion is incompatible with the
@@ -864,7 +864,7 @@ pub(super) fn collect_modules(
                         while let Some(dir) = pkg_dir {
                             if dir.join("package.json").exists() && has_perry_native_library(dir) {
                                 if let Some(manifest) =
-                                    parse_native_library_manifest(dir, module_name, target)
+                                    parse_native_library_manifest(dir, module_name, target)?
                                 {
                                     // #466 Phase 2: refuse to load a wrapper whose
                                     // declared abiVersion is incompatible with the
@@ -1042,7 +1042,7 @@ pub(super) fn collect_modules(
                     while let Some(dir) = pkg_dir {
                         if dir.join("package.json").exists() && has_perry_native_library(dir) {
                             if let Some(manifest) =
-                                parse_native_library_manifest(dir, &src_str, target)
+                                parse_native_library_manifest(dir, &src_str, target)?
                             {
                                 if let Err(msg) = super::resolve::validate_abi_version(&manifest) {
                                     return Err(anyhow::anyhow!("{}", msg));

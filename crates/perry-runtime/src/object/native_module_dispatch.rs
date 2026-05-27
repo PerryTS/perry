@@ -763,6 +763,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("os", "userInfo") => {
             f64::from_bits(JSValue::pointer(crate::os::js_os_user_info() as *const u8).bits())
         }
+        ("os", "getPriority") => crate::os::js_os_get_priority(arg(0)),
+        ("os", "setPriority") => crate::os::js_os_set_priority(arg(0), arg(1)),
 
         // ── path module (args are NaN-boxed strings → extract raw StringHeader ptr) ──
         ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0))),

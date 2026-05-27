@@ -25,9 +25,9 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
     BufferElem, BufferIndexUnit, BufferViewRep, BufferViewSlot, ExpectedNativeRep,
-    GuardedBufferIndex, LengthSource, LoweredValue, MaterializationReason, NativeFactUse,
-    NativeOwnedViewFact, NativeRep, NativeRepRecord, NativeValueState, ScalarConversionRecord,
-    SemanticKind,
+    GuardedBufferIndex, LengthSource, LoweredValue, MaterializationReason, NativeAbiTypeRecord,
+    NativeFactUse, NativeOwnedViewFact, NativeRep, NativeRepRecord, NativeValueState,
+    ScalarConversionRecord, SemanticKind,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{
@@ -49,6 +49,7 @@ mod helpers;
 mod i32_fast_path;
 mod index;
 mod nanbox_inline;
+mod native_record;
 mod object_literal;
 mod pod_record;
 mod range_facts;
@@ -93,6 +94,7 @@ pub(crate) use nanbox_inline::{
     i32_bool_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline, nanbox_pointer_inline_pub,
     nanbox_string_inline,
 };
+pub(crate) use native_record::raw_f64_layout_fact;
 pub(crate) use object_literal::lower_object_literal;
 pub(crate) use pod_record::{
     lower_and_store_initial_pod_field, lower_pod_local_reassignment, materialize_pod_local,
@@ -420,14 +422,20 @@ pub(crate) struct FnCtx<'a> {
     /// of undefined". Same shape as `func_signatures`'s `has_rest`
     /// bit but for class-method dispatch.
     pub method_has_rest: &'a std::collections::HashMap<(String, String), bool>,
-    /// FFI manifest: `name → (param_kinds, return_kind)` from
-    /// `package.json` `nativeLibrary.functions`. Kinds use the native-library
-    /// manifest ABI vocabulary. `lower_call` consults
+    /// FFI manifest: `name -> (params, return)` from `package.json`
+    /// `nativeLibrary.functions`. Descriptors use the shared native-library
+    /// ABI vocabulary. `lower_call` consults
     /// this at native-library call sites so handle-returning functions
     /// (`*mut View`-typed C entries) declare an `i64` LLVM return type that
     /// reads the C ABI's `x0` register. Without it, the call defaults to
     /// `double` (reads `d0`) and observes 0 instead of the real handle.
-    pub ffi_signatures: &'a std::collections::HashMap<String, (Vec<String>, String)>,
+    pub ffi_signatures: &'a std::collections::HashMap<
+        String,
+        (
+            Vec<perry_api_manifest::NativeAbiType>,
+            perry_api_manifest::NativeAbiType,
+        ),
+    >,
     /// Per-module map: local class/binding name → import source spec.
     /// Used by `lower_builtin_new` to disambiguate ambiguously-named
     /// built-in constructors. See issue #602.
@@ -943,237 +951,6 @@ pub(crate) struct BoundedIndexPair {
     pub scope_id: u32,
 }
 
-fn bounds_proof_label(proof: &BoundsProof) -> &'static str {
-    match proof {
-        BoundsProof::LoopGuard => "loop_guard",
-        BoundsProof::MinLength => "min_length",
-        BoundsProof::ExplicitGuard => "explicit_guard",
-        BoundsProof::ExplicitAssume => "explicit_assume",
-    }
-}
-
-fn materialization_reason_label(reason: &MaterializationReason) -> &'static str {
-    match reason {
-        MaterializationReason::FunctionAbi => "function_abi",
-        MaterializationReason::ReturnAbi => "return_abi",
-        MaterializationReason::GenericCall => "generic_call",
-        MaterializationReason::DynamicPropertyAccess => "dynamic_property_access",
-        MaterializationReason::ExceptionPath => "exception_path",
-        MaterializationReason::RuntimeApi => "runtime_api",
-        MaterializationReason::DebugLogging => "debug_logging",
-        MaterializationReason::UnknownAlias => "unknown_alias",
-        MaterializationReason::UnknownBounds => "unknown_bounds",
-        MaterializationReason::ClosureCapture => "closure_capture",
-        MaterializationReason::Reassignment => "reassignment",
-        MaterializationReason::UnknownCallEscape => "unknown_call_escape",
-        MaterializationReason::UseAfterDispose => "use_after_dispose",
-        MaterializationReason::EscapingUnownedPointer => "escaping_unowned_pointer",
-        MaterializationReason::StaleViewLength => "stale_view_length",
-        MaterializationReason::MutableAlias => "mutable_alias",
-        MaterializationReason::MissingOwnerRoot => "missing_owner_root",
-        MaterializationReason::PodMaterialization => "pod_materialization",
-        MaterializationReason::PodUnsupported => "pod_unsupported",
-        MaterializationReason::PodDynamicMutation => "pod_dynamic_mutation",
-    }
-}
-
-fn native_fact_use(
-    kind: &'static str,
-    local_id: Option<u32>,
-    state: &'static str,
-    detail: &str,
-    reason: Option<MaterializationReason>,
-) -> NativeFactUse {
-    let local = local_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    NativeFactUse {
-        fact_id: format!("native_region.{}.{}.{}", kind, local, detail),
-        kind: kind.to_string(),
-        local_id,
-        state: state.to_string(),
-        reason,
-    }
-}
-
-pub(crate) fn raw_f64_layout_fact(
-    local_id: Option<u32>,
-    state: &'static str,
-    detail: &str,
-    reason: Option<MaterializationReason>,
-) -> NativeFactUse {
-    native_fact_use("raw_f64_layout", local_id, state, detail, reason)
-}
-
-fn native_fact_uses_for_record(
-    local_id: Option<u32>,
-    lowered: &LoweredValue,
-    bounds_state: Option<&BoundsState>,
-    alias_state: Option<&AliasState>,
-    access_mode: Option<&BufferAccessMode>,
-    materialization_reason: Option<&MaterializationReason>,
-) -> (Vec<NativeFactUse>, Vec<NativeFactUse>) {
-    let mut consumed = Vec::new();
-    let mut rejected = Vec::new();
-    match &lowered.rep {
-        NativeRep::JsValue => {}
-        NativeRep::I32 => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "i32",
-            None,
-        )),
-        NativeRep::I64 => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "i64",
-            None,
-        )),
-        NativeRep::U32 => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "u32",
-            None,
-        )),
-        NativeRep::U64 => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "u64",
-            None,
-        )),
-        NativeRep::USize => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "usize",
-            None,
-        )),
-        NativeRep::F64 => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "f64",
-            None,
-        )),
-        NativeRep::F32 => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "f32",
-            None,
-        )),
-        NativeRep::U8 => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "u8",
-            None,
-        )),
-        NativeRep::BufferLen => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "buffer_len",
-            None,
-        )),
-        NativeRep::NativeHandle => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "native_handle",
-            None,
-        )),
-        NativeRep::PromiseBoundary => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "promise_boundary",
-            None,
-        )),
-        NativeRep::BufferView(_) => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            "buffer_view",
-            None,
-        )),
-        NativeRep::PodRecord { layout_id, .. } => consumed.push(native_fact_use(
-            "representation",
-            local_id,
-            "consumed",
-            layout_id,
-            None,
-        )),
-    }
-    match bounds_state {
-        Some(BoundsState::Proven { proof }) => consumed.push(native_fact_use(
-            "bounds",
-            local_id,
-            "consumed",
-            bounds_proof_label(proof),
-            None,
-        )),
-        Some(BoundsState::Guarded { guard_id }) => consumed.push(native_fact_use(
-            "bounds", local_id, "consumed", guard_id, None,
-        )),
-        Some(BoundsState::Unknown) | None => {
-            if matches!(
-                access_mode,
-                Some(BufferAccessMode::DynamicFallback | BufferAccessMode::CheckedNative)
-            ) {
-                rejected.push(native_fact_use(
-                    "bounds",
-                    local_id,
-                    "missing",
-                    "unknown",
-                    materialization_reason.cloned(),
-                ));
-            }
-        }
-    }
-    match alias_state {
-        Some(AliasState::NoAliasProven) => consumed.push(native_fact_use(
-            "alias_noalias",
-            local_id,
-            "consumed",
-            "noalias_proven",
-            None,
-        )),
-        Some(AliasState::NoAliasGuarded { guard_id }) => consumed.push(native_fact_use(
-            "alias_noalias",
-            local_id,
-            "consumed",
-            guard_id,
-            None,
-        )),
-        Some(AliasState::MayAlias | AliasState::Unknown) | None => {
-            if matches!(access_mode, Some(BufferAccessMode::DynamicFallback)) {
-                rejected.push(native_fact_use(
-                    "alias_noalias",
-                    local_id,
-                    "missing",
-                    "unknown_or_may_alias",
-                    materialization_reason.cloned(),
-                ));
-            }
-        }
-    }
-    if let Some(reason) = materialization_reason {
-        rejected.push(native_fact_use(
-            "materialization_hazard",
-            local_id,
-            "invalidated",
-            materialization_reason_label(reason),
-            Some(reason.clone()),
-        ));
-    }
-    (consumed, rejected)
-}
-
 impl<'a> FnCtx<'a> {
     pub fn next_loop_proof_scope_id(&mut self) -> u32 {
         let id = self.next_loop_proof_scope_id;
@@ -1304,7 +1081,7 @@ impl<'a> FnCtx<'a> {
         emitted_noalias: bool,
         notes: Vec<String>,
     ) {
-        self.record_lowered_value_with_access_mode_and_facts(
+        self.record_lowered_value_full(
             expr_kind,
             local_id,
             consumer,
@@ -1317,6 +1094,7 @@ impl<'a> FnCtx<'a> {
             buffer_access,
             Vec::new(),
             Vec::new(),
+            None,
             emitted_inbounds,
             emitted_noalias,
             notes,
@@ -1341,8 +1119,76 @@ impl<'a> FnCtx<'a> {
         emitted_noalias: bool,
         notes: Vec<String>,
     ) {
+        self.record_lowered_value_full(
+            expr_kind,
+            local_id,
+            consumer,
+            lowered,
+            bounds_state,
+            alias_state,
+            access_mode,
+            materialization_reason,
+            scalar_conversion,
+            buffer_access,
+            extra_consumed_facts,
+            extra_rejected_facts,
+            None,
+            emitted_inbounds,
+            emitted_noalias,
+            notes,
+        );
+    }
+
+    pub fn record_lowered_value_with_native_abi(
+        &mut self,
+        expr_kind: impl Into<String>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        native_abi_type: NativeAbiTypeRecord,
+        notes: Vec<String>,
+    ) {
+        self.record_lowered_value_full(
+            expr_kind,
+            None,
+            consumer,
+            lowered,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Some(native_abi_type),
+            false,
+            false,
+            notes,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_lowered_value_full(
+        &mut self,
+        expr_kind: impl Into<String>,
+        local_id: Option<u32>,
+        consumer: impl Into<String>,
+        lowered: &LoweredValue,
+        bounds_state: Option<BoundsState>,
+        alias_state: Option<AliasState>,
+        access_mode: Option<BufferAccessMode>,
+        materialization_reason: Option<MaterializationReason>,
+        scalar_conversion: Option<ScalarConversionRecord>,
+        buffer_access: Option<BufferAccessFacts>,
+        extra_consumed_facts: Vec<NativeFactUse>,
+        extra_rejected_facts: Vec<NativeFactUse>,
+        native_abi_type: Option<NativeAbiTypeRecord>,
+        emitted_inbounds: bool,
+        emitted_noalias: bool,
+        notes: Vec<String>,
+    ) {
         let block_label = self.current_block_label();
-        let (mut consumed_facts, mut rejected_facts) = native_fact_uses_for_record(
+        let (mut consumed_facts, mut rejected_facts) = native_record::native_fact_uses_for_record(
             local_id,
             lowered,
             bounds_state.as_ref(),
@@ -1395,6 +1241,7 @@ impl<'a> FnCtx<'a> {
             native_value_state,
             native_abi_transition: scalar_conversion.clone(),
             scalar_conversion,
+            native_abi_type,
             pod_layout: None,
             consumed_facts,
             rejected_facts,

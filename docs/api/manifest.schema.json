@@ -59,14 +59,283 @@
         },
         "params": {
           "type": "array",
-          "items": {
-            "type": "string",
-            "enum": ["string", "number", "i32", "i64", "bool", "ptr"]
-          }
+          "items": { "$ref": "#/$defs/abiParamDescriptor" }
         },
-        "returns": {
+        "returns": { "$ref": "#/$defs/abiReturnDescriptor" }
+      }
+    },
+    "abiParamDescriptor": {
+      "description": "Native ABI descriptor for one TypeScript argument. `buffer+len` consumes one JS argument and lowers to two native slots.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiParamString" },
+        { "$ref": "#/$defs/abiStructuredParam" }
+      ]
+    },
+    "abiReturnDescriptor": {
+      "description": "Native ABI descriptor for the return value. `buffer+len` is parameter-only.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiReturnString" },
+        { "$ref": "#/$defs/abiStructuredReturn" }
+      ]
+    },
+    "abiDescriptor": {
+      "description": "Native ABI descriptor accepted as metadata, for example the result type inside `promise<T>`.",
+      "anyOf": [
+        { "$ref": "#/$defs/abiDescriptorString" },
+        { "$ref": "#/$defs/abiStructuredDescriptor" }
+      ]
+    },
+    "abiParamString": {
+      "type": "string",
+      "anyOf": [
+        {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "buffer+len",
+            "handle",
+            "promise"
+          ]
+        },
+        { "pattern": "^handle<[^>]+>$" },
+        { "pattern": "^promise<[^>]+>$" }
+      ]
+    },
+    "abiReturnString": {
+      "type": "string",
+      "anyOf": [
+        {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "handle",
+            "promise",
+            "void"
+          ]
+        },
+        { "pattern": "^handle<[^>]+>$" },
+        { "pattern": "^promise<[^>]+>$" }
+      ]
+    },
+    "abiDescriptorString": {
+      "type": "string",
+      "anyOf": [
+        {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "buffer+len",
+            "handle",
+            "promise",
+            "void"
+          ]
+        },
+        { "pattern": "^handle<[^>]+>$" },
+        { "pattern": "^promise<[^>]+>$" }
+      ]
+    },
+    "abiStructuredParam": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiStructuredParamDescriptor" }
+      ],
+      "not": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": { "kind": { "const": "void" } }
+      }
+    },
+    "abiStructuredReturn": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiStructuredReturnDescriptor" }
+      ],
+      "not": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": { "kind": { "const": "buffer+len" } }
+      }
+    },
+    "abiStructuredParamDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiParamHandleDescriptor" },
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
+    },
+    "abiStructuredReturnDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiReturnHandleDescriptor" },
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
+    },
+    "abiStructuredDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/abiHandleDescriptor" },
+        { "$ref": "#/$defs/abiPromiseDescriptor" },
+        { "$ref": "#/$defs/abiBufferAndLenDescriptor" },
+        { "$ref": "#/$defs/abiScalarDescriptor" }
+      ]
+    },
+    "abiParamHandleDescriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/abiHandleDescriptor" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["finalizer"]
+          },
+          "description": "Native handle parameters may not declare finalizers."
+        }
+      ]
+    },
+    "abiReturnHandleDescriptor": {
+      "$ref": "#/$defs/abiHandleDescriptor"
+    },
+    "abiHandleDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["finalizer"]
+          },
+          "then": {
+            "type": "object",
+            "required": ["ownership"],
+            "properties": {
+              "ownership": { "const": "owned" }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "kind": { "const": "handle" },
+        "type": {
           "type": "string",
-          "enum": ["string", "ptr", "i64_str", "i64", "number", "void"]
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional metadata naming the native handle type."
+        },
+        "ownership": {
+          "enum": ["borrowed", "owned"],
+          "default": "borrowed",
+          "description": "Whether JavaScript owns the wrapped native resource."
+        },
+        "nullable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether a null native resource pointer is valid."
+        },
+        "thread": {
+          "enum": ["any", "main", "creator"],
+          "default": "any",
+          "description": "Thread-affinity contract enforced when unwrapping the handle."
+        },
+        "finalizer": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional one-shot finalizer symbol. Valid only on owned return handles."
+        },
+        "debugName": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Short debug name stored in the runtime handle payload."
+        }
+      }
+    },
+    "abiPromiseDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "promise" },
+        "result": {
+          "$ref": "#/$defs/abiDescriptor",
+          "description": "Optional metadata describing the JavaScript promise result."
+        }
+      }
+    },
+    "abiBufferAndLenDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "buffer+len" }
+      }
+    },
+    "abiScalarDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "jsvalue",
+            "js_value",
+            "string",
+            "bool",
+            "boolean",
+            "i32",
+            "i64",
+            "i64_str",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "number",
+            "ptr",
+            "buffer_len",
+            "void"
+          ]
         }
       }
     },

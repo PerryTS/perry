@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1280 entries across 81 modules
+// Coverage: 1282 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -945,6 +945,8 @@ declare module "os" {
   /** stdlib */
   export function freemem(...args: any[]): any;
   /** stdlib */
+  export function getPriority(pid?: number): number;
+  /** stdlib */
   export function homedir(...args: any[]): any;
   /** stdlib */
   export function hostname(...args: any[]): any;
@@ -958,6 +960,8 @@ declare module "os" {
   export function platform(...args: any[]): any;
   /** stdlib */
   export function release(...args: any[]): any;
+  /** stdlib */
+  export function setPriority(pidOrPriority: number, priority?: number): void;
   /** stdlib */
   export function tmpdir(...args: any[]): any;
   /** stdlib */

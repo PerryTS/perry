@@ -686,8 +686,8 @@ pub struct NativeLibraryManifest {
 #[derive(Debug, Clone)]
 pub struct NativeFunctionDecl {
     pub name: String,
-    pub params: Vec<String>,
-    pub returns: String,
+    pub params: Vec<perry_api_manifest::NativeAbiType>,
+    pub returns: perry_api_manifest::NativeAbiType,
 }
 
 /// Target-specific native library build configuration

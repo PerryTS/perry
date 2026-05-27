@@ -23,6 +23,10 @@ fn get_hrtime_start() -> &'static Instant {
     HRTIME_START.get_or_init(Instant::now)
 }
 
+#[path = "os_priority.rs"]
+mod os_priority;
+pub use os_priority::{js_os_get_priority, js_os_set_priority};
+
 /// Get the operating system platform
 /// Returns: "darwin", "linux", "win32", "freebsd", etc.
 #[no_mangle]
