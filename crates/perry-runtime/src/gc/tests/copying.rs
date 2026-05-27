@@ -1700,6 +1700,52 @@ fn test_copying_minor_rewrites_overflow_owner_metadata_key() {
 }
 
 #[test]
+fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+
+    let value = young_leaf();
+    let key = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+    unsafe {
+        init_test_closure(key as *mut u8);
+    }
+    js_shadow_slot_set(0, ptr_bits(key));
+
+    crate::object::test_seed_class_dynamic_prop_root(0x5401, "dyn", string_bits(value));
+    crate::object::test_seed_class_prototype_method_root(0x5401, "proto", string_bits(value));
+    crate::object::test_seed_class_prototype_method_value_root(0x5401, "bound", string_bits(value));
+    crate::object::test_seed_function_class_id_key(ptr_bits(key), 0x8200_5401);
+
+    let _ = gc_collect_minor();
+
+    let dynamic_bits = crate::object::test_class_dynamic_prop_root_bits(0x5401, "dyn");
+    let prototype_bits = crate::object::test_class_prototype_method_root_bits(0x5401, "proto");
+    let cached_bits = crate::object::test_class_prototype_method_value_root_bits(0x5401, "bound");
+    let value_after = (dynamic_bits & POINTER_MASK) as usize;
+    let key_after_bits = js_shadow_slot_get(0);
+
+    assert_eq!(dynamic_bits & TAG_MASK, STRING_TAG);
+    assert_eq!(prototype_bits, dynamic_bits);
+    assert_eq!(cached_bits, dynamic_bits);
+    assert_ne!(value_after, value);
+    assert!(crate::arena::pointer_in_nursery(value_after));
+    assert_ne!(key_after_bits, ptr_bits(key));
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_5401),
+        key_after_bits
+    );
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(key_after_bits)),
+        0x8200_5401
+    );
+}
+
+#[test]
 fn test_copying_minor_rewrites_old_overflow_object_child_without_reentrant_borrow() {
     struct OverflowFieldsRootGuard;
 

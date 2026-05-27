@@ -453,6 +453,54 @@ fn root_scan_slices_many_registered_timer_roots_with_tiny_budget() {
 }
 
 #[test]
+fn root_scan_slices_many_registered_class_side_table_roots_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::object::scan_class_side_table_roots_mut,
+        crate::object::scan_class_side_table_roots_mut_step,
+        crate::object::new_class_side_table_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+
+    const ROOTS: usize = 32;
+    let children = (0..ROOTS).map(|_| young_leaf()).collect::<Vec<_>>();
+    for (idx, &child) in children.iter().enumerate() {
+        crate::object::test_seed_class_dynamic_prop_root(
+            0x5300 + idx as u32,
+            "root",
+            string_bits(child),
+        );
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 10_000, "root scan did not finish");
+    }
+    assert!(
+        root_steps > ROOTS,
+        "class side-table roots should require multiple tiny root_scan steps"
+    );
+    for &child in &children {
+        let header = unsafe { header_from_user_ptr(child as *const u8) };
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "class side-table value should be marked by the sliced scanner"
+            );
+        }
+    }
+    crate::object::test_clear_class_side_table_roots();
+}
+
+#[test]
 fn root_scan_slices_many_registered_tui_state_roots_with_tiny_budget() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -949,6 +997,126 @@ fn full_cycle_global_root_store_after_root_scan_preserves_new_value() {
     assert!(
         malloc_user_ptr_tracked(child),
         "child stored into a registered global root after root scan should survive via root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_class_static_field_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let child = alloc_tracked_test_closure();
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    let name = b"lateStatic";
+    unsafe {
+        crate::object::js_class_register_static_field(
+            0x5101,
+            name.as_ptr(),
+            name.len(),
+            f64::from_bits(ptr_bits(child as usize)),
+        );
+    }
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "static class field stored after root scan should survive via the side-table root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_class_ref_dynamic_prop_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let child = alloc_tracked_test_closure();
+    let key = crate::string::js_string_from_bytes(b"lateDynamic".as_ptr(), 11);
+    let class_ref_bits = 0x7FFE_0000_0000_0000u64 | 0x5102;
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    crate::object::js_object_set_field_by_name(
+        class_ref_bits as *mut crate::object::ObjectHeader,
+        key,
+        f64::from_bits(ptr_bits(child as usize)),
+    );
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "dynamic class-ref property stored after root scan should survive via the side-table root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_prototype_method_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let child = alloc_tracked_test_closure();
+    let name = b"lateMethod";
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    unsafe {
+        crate::object::js_register_prototype_method(
+            0x5103,
+            name.as_ptr(),
+            name.len(),
+            f64::from_bits(ptr_bits(child as usize)),
+        );
+    }
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "prototype method stored after root scan should survive via the side-table root barrier"
+    );
+}
+
+#[test]
+fn full_cycle_bound_prototype_method_cache_after_root_scan_marks_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    let value = crate::object::class_prototype_method_value_for_name(0x5104, "lateBound");
+    let value_bits = value.to_bits();
+    assert_eq!(value_bits & TAG_MASK, POINTER_TAG);
+    let value_ptr = (value_bits & POINTER_MASK) as usize;
+    let value_header = unsafe { header_from_user_ptr(value_ptr as *const u8) };
+    unsafe {
+        assert_ne!(
+            (*value_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "bound prototype-method cache creation after root scan should fire the root barrier"
+        );
+    }
+
+    run_cycle_in_single_unit_steps(&mut state);
+    assert_eq!(
+        crate::object::test_class_prototype_method_value_root_bits(0x5104, "lateBound"),
+        value_bits
     );
 }
 

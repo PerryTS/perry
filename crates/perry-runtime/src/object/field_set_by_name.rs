@@ -185,12 +185,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     .unwrap_or("")
                     .to_string();
                 if !name.is_empty() {
-                    CLASS_DYNAMIC_PROPS.with(|m| {
-                        m.borrow_mut()
-                            .entry(class_id)
-                            .or_insert_with(std::collections::HashMap::new)
-                            .insert(name, value);
-                    });
+                    class_dynamic_prop_root_store(class_id, name, value);
                 }
             }
             return;
