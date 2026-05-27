@@ -60,6 +60,19 @@ pub fn transform_generator_function_with_extra_captures(
     let is_async_generator = func.is_async;
     func.is_async = false;
 
+    // #321: hoist `yield` / `yield*` that live inside a larger expression
+    // (`return (yield 1) + (yield 2)`, call args, array/object literals, etc.)
+    // into ordered `let __ygen_N = yield E;` temps so the linearizer below only
+    // ever encounters a yield at a position it already splits into states.
+    // Without this, a buried yield falls into the linearizer's catch-all and
+    // codegen lowers it via the "generators not implemented" arm (returns 0.0)
+    // — the resumed value is dropped and the generator never suspends at it.
+    // The temps land as `Stmt::Let` in the body, so `collect_hoisted_vars`
+    // below picks them up and boxes/preallocates them like any other hoisted
+    // local. Allocated before `local_id_before` so they are not double-counted
+    // in `extra_local_ids`.
+    hoist_yields_in_stmts(&mut func.body, next_local_id);
+
     let state_id = alloc_local(next_local_id);
     let done_id = alloc_local(next_local_id);
     let sent_id = alloc_local(next_local_id); // value passed by caller via next(val)

@@ -13,6 +13,7 @@ use perry_types::{FuncId, LocalId, Type};
 
 mod break_continue;
 mod helpers;
+mod hoist_yields;
 mod id_scan;
 mod iter_result_rewrite;
 mod linearize;
@@ -32,6 +33,7 @@ pub(crate) use helpers::{
     alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmt, rewrite_hoisted_lets_in_stmts,
     wrap_in_promise_resolve, wrap_returns_in_promise,
 };
+pub(crate) use hoist_yields::hoist_yields_in_stmts;
 pub(crate) use id_scan::{
     compute_max_func_id, compute_max_local_id, scan_expr_for_max_func, scan_expr_for_max_local,
     scan_stmt_for_max_func, scan_stmt_for_max_local, scan_stmts_for_max_func,
