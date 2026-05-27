@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1361 entries across 82 modules
+// Coverage: 1363 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1866,6 +1866,8 @@ declare module "stream" {
   /** stdlib */
   export class Readable { [key: string]: any; }
   /** stdlib */
+  export class Stream { [key: string]: any; }
+  /** stdlib */
   export class Transform { [key: string]: any; }
   /** stdlib */
   export class Writable { [key: string]: any; }
@@ -1879,6 +1881,8 @@ declare module "stream" {
   export function addAbortSignal(...args: any[]): any;
   /** stdlib */
   export function compose(...args: any[]): any;
+  /** stdlib */
+  export default function (...args: any[]): any;
   /** stdlib */
   export function duplexPair(...args: any[]): any;
   /** stdlib */

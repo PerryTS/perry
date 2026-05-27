@@ -2412,6 +2412,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("stream", "Duplex"),
     class("stream", "Transform"),
     class("stream", "PassThrough"),
+    // Legacy base class (extends EventEmitter); modern classes hang off it as
+    // statics. `stream.Stream === stream.default`. #1966.
+    class("stream", "Stream"),
+    // `node:stream`'s default export is the legacy `Stream` class itself.
+    method("stream", "default", false, None),
     method("stream", "pipeline", false, None),
     method("stream", "finished", false, None),
     property("stream", "promises"),
