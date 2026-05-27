@@ -149,7 +149,8 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 /// JS built-in namespaces (typeof === "object", not "function"). Same
 /// shape on the singleton — a backing object with `prototype` so chained
 /// reads degrade gracefully — but typeof reports "object".
-pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &["console", "Math", "JSON", "Reflect"];
+pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
+    &["console", "process", "Math", "JSON", "Reflect"];
 
 /// No-op thunk used as the function body for the singleton globalThis
 /// built-in constructor values. Lets `globalThis.Array` carry a real
@@ -349,7 +350,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
-        let ns_value = if name == "console" {
+        let ns_value = if matches!(name, "console" | "process") {
             js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
         } else {
             let ns_obj = js_object_alloc(0, 0);
