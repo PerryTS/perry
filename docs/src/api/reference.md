@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1319 entries across 81 modules.
+Total: 1337 entries across 81 modules.
 
 ## Modules
 
@@ -1913,13 +1913,22 @@ Total: 1319 entries across 81 modules.
 ### Classes
 
 - `BrotliCompress`
+- `BrotliCompress`
+- `BrotliDecompress`
 - `BrotliDecompress`
 - `Deflate`
+- `Deflate`
+- `DeflateRaw`
 - `DeflateRaw`
 - `Gunzip`
+- `Gunzip`
+- `Gzip`
 - `Gzip`
 - `Inflate`
+- `Inflate`
 - `InflateRaw`
+- `InflateRaw`
+- `Unzip`
 - `Unzip`
 - `ZstdCompress`
 - `ZstdDecompress`
@@ -1930,6 +1939,7 @@ Total: 1319 entries across 81 modules.
 - `brotliCompressSync` — module
 - `brotliDecompress` — module
 - `brotliDecompressSync` — module
+- `crc32` — module
 - `createBrotliCompress` — module
 - `createBrotliDecompress` — module
 - `createDeflate` — module
@@ -1941,12 +1951,20 @@ Total: 1319 entries across 81 modules.
 - `createUnzip` — module
 - `createZstdCompress` — module
 - `createZstdDecompress` — module
+- `deflate` — module
+- `deflateRaw` — module
+- `deflateRawSync` — module
 - `deflateSync` — module
 - `gunzip` — module
 - `gunzipSync` — module
 - `gzip` — module
 - `gzipSync` — module
+- `inflate` — module
+- `inflateRaw` — module
+- `inflateRawSync` — module
 - `inflateSync` — module
+- `unzip` — module
+- `unzipSync` — module
 
 ### Properties
 

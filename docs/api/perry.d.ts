@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1319 entries across 81 modules
+// Coverage: 1337 entries across 81 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2063,19 +2063,37 @@ declare module "zlib" {
   /** stdlib */
   export class BrotliCompress { [key: string]: any; }
   /** stdlib */
+  export class BrotliCompress { [key: string]: any; }
+  /** stdlib */
   export class BrotliDecompress { [key: string]: any; }
+  /** stdlib */
+  export class BrotliDecompress { [key: string]: any; }
+  /** stdlib */
+  export class Deflate { [key: string]: any; }
   /** stdlib */
   export class Deflate { [key: string]: any; }
   /** stdlib */
   export class DeflateRaw { [key: string]: any; }
   /** stdlib */
+  export class DeflateRaw { [key: string]: any; }
+  /** stdlib */
   export class Gunzip { [key: string]: any; }
+  /** stdlib */
+  export class Gunzip { [key: string]: any; }
+  /** stdlib */
+  export class Gzip { [key: string]: any; }
   /** stdlib */
   export class Gzip { [key: string]: any; }
   /** stdlib */
   export class Inflate { [key: string]: any; }
   /** stdlib */
+  export class Inflate { [key: string]: any; }
+  /** stdlib */
   export class InflateRaw { [key: string]: any; }
+  /** stdlib */
+  export class InflateRaw { [key: string]: any; }
+  /** stdlib */
+  export class Unzip { [key: string]: any; }
   /** stdlib */
   export class Unzip { [key: string]: any; }
   /** stdlib */
@@ -2092,6 +2110,8 @@ declare module "zlib" {
   export function brotliDecompress(p0: string): any;
   /** stdlib */
   export function brotliDecompressSync(p0: string): string;
+  /** stdlib */
+  export function crc32(p0: string, seed?: number): number;
   /** stdlib */
   export function createBrotliCompress(options?: any): any;
   /** stdlib */
@@ -2115,6 +2135,12 @@ declare module "zlib" {
   /** stdlib */
   export function createZstdDecompress(options?: any): any;
   /** stdlib */
+  export function deflate(...args: any[]): any;
+  /** stdlib */
+  export function deflateRaw(...args: any[]): any;
+  /** stdlib */
+  export function deflateRawSync(p0: string): any;
+  /** stdlib */
   export function deflateSync(p0: string): string;
   /** stdlib */
   export function gunzip(p0: string): any;
@@ -2125,6 +2151,16 @@ declare module "zlib" {
   /** stdlib */
   export function gzipSync(p0: string): string;
   /** stdlib */
+  export function inflate(...args: any[]): any;
+  /** stdlib */
+  export function inflateRaw(...args: any[]): any;
+  /** stdlib */
+  export function inflateRawSync(p0: string): any;
+  /** stdlib */
   export function inflateSync(p0: string): string;
+  /** stdlib */
+  export function unzip(...args: any[]): any;
+  /** stdlib */
+  export function unzipSync(p0: string): any;
 }
 

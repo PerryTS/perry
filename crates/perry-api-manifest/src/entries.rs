@@ -1303,12 +1303,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_str("p0")],
         TypeSpec::Any,
     ),
+    // `crc32(data, seed?)` — `seed` is the running CRC from a prior chunk
+    // so callers can stream a long input. Dispatch declares 2 args; mirror
+    // that arity here so manifest_consistency stays green.
     method_sig(
         "zlib",
         "crc32",
         false,
         None,
-        &[p_str("p0")],
+        &[
+            p_str("p0"),
+            ParamSpec::Named {
+                name: "seed",
+                ty: TypeSpec::Number,
+                optional: true,
+            },
+        ],
         TypeSpec::Number,
     ),
     // Callback-form variants that #1843 didn't surface. `gzip`/`gunzip` and
