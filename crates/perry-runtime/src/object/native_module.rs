@@ -1529,14 +1529,29 @@ pub(crate) unsafe fn get_native_module_constant(
                     Some(str_val("/dev/null"))
                 }
             }
-            "constants" => Some(create_sub_namespace("os.constants")),
+            "constants" => Some(create_cached_sub_namespace(
+                "os.constants",
+                &OS_CONSTANTS_CACHE,
+            )),
             _ => None,
         },
         "os.constants" => match property {
-            "signals" => Some(create_sub_namespace("os.constants.signals")),
-            "errno" => Some(create_sub_namespace("os.constants.errno")),
-            "priority" => Some(create_sub_namespace("os.constants.priority")),
-            "dlopen" => Some(create_sub_namespace("os.constants.dlopen")),
+            "signals" => Some(create_cached_sub_namespace(
+                "os.constants.signals",
+                &OS_CONSTANTS_SIGNALS_CACHE,
+            )),
+            "errno" => Some(create_cached_sub_namespace(
+                "os.constants.errno",
+                &OS_CONSTANTS_ERRNO_CACHE,
+            )),
+            "priority" => Some(create_cached_sub_namespace(
+                "os.constants.priority",
+                &OS_CONSTANTS_PRIORITY_CACHE,
+            )),
+            "dlopen" => Some(create_cached_sub_namespace(
+                "os.constants.dlopen",
+                &OS_CONSTANTS_DLOPEN_CACHE,
+            )),
             // Top-level libuv constant — sits directly on `os.constants`, not
             // inside one of the nested tables. Node's UDP socket impl uses it
             // for `SO_REUSEADDR`. Value is the published libuv flag (4).
@@ -1674,6 +1689,18 @@ pub(crate) unsafe fn get_native_module_constant(
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
 fn create_sub_namespace(name: &str) -> f64 {
     js_create_native_module_namespace(name.as_ptr(), name.len())
+}
+
+fn create_cached_sub_namespace(name: &str, cache: &std::sync::atomic::AtomicU64) -> f64 {
+    let cached = cache.load(Ordering::Relaxed);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+
+    let result = create_sub_namespace(name);
+    // GC_STORE_AUDIT(ROOT): os constants caches are mutable roots visited by scan_object_cache_roots_mut.
+    cache.store(result.to_bits(), Ordering::Relaxed);
+    result
 }
 
 /// Issue #912 (#909 follow-up): cached `http.METHODS` array. Matches
