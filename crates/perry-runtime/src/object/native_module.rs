@@ -190,6 +190,13 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
             arr,
         );
     }
+    if module_name == "events" && property_name == "EventEmitter" {
+        crate::closure::closure_set_dynamic_prop(
+            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+            "defaultMaxListeners",
+            10.0,
+        );
+    }
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
         c.borrow_mut().insert(key, value.to_bits());

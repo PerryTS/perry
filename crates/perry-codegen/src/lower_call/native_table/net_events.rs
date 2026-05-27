@@ -761,6 +761,24 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "setMaxListeners",
+        class_filter: None,
+        runtime: "js_node_stream_method_set_max_listeners",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "getMaxListeners",
+        class_filter: None,
+        runtime: "js_node_stream_method_get_max_listeners",
+        args: &[],
+        ret: NR_F64,
+    },
     // ========== Events ==========
     NativeModSig {
         module: "events",

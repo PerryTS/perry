@@ -159,6 +159,40 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn stream_max_listeners_default_and_override_round_trip() {
+    let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let get_max = js_object_get_field_by_name_f64(obj, hidden_key(b"getMaxListeners"));
+    let set_max = js_object_get_field_by_name_f64(obj, hidden_key(b"setMaxListeners"));
+
+    let initial = unsafe { crate::closure::js_native_call_value(get_max, std::ptr::null(), 0) };
+    assert_eq!(initial, 10.0);
+
+    let returned = unsafe { crate::closure::js_native_call_value(set_max, [25.0].as_ptr(), 1) };
+    assert_eq!(returned.to_bits(), stream.to_bits());
+
+    let updated = unsafe { crate::closure::js_native_call_value(get_max, std::ptr::null(), 0) };
+    assert_eq!(updated, 25.0);
+
+    let other = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let other_get = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(other) as *const ObjectHeader,
+        hidden_key(b"getMaxListeners"),
+    );
+    let other_initial =
+        unsafe { crate::closure::js_native_call_value(other_get, std::ptr::null(), 0) };
+    assert_eq!(other_initial, 10.0);
+
+    let native_handle = raw_ptr_from_value(other) as i64;
+    assert_eq!(js_node_stream_method_get_max_listeners(native_handle), 10.0);
+    assert_eq!(
+        js_node_stream_method_set_max_listeners(native_handle, 42.0).to_bits(),
+        other.to_bits()
+    );
+    assert_eq!(js_node_stream_method_get_max_listeners(native_handle), 42.0);
+}
+
+#[test]
 fn stream_native_receiver_methods_update_hidden_state() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
