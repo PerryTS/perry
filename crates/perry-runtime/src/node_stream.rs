@@ -177,6 +177,7 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
         );
         mark_writable_finished(stream);
         let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
+        mark_stream_closed(stream);
         let _ = emit_stream_event(stream, string_value(b"close"), &[]);
     }
     if is_callable_value(callback) {
@@ -473,6 +474,16 @@ pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> f64 {
     readable_aborted_value(stream_value_from_handle(stream_handle))
+}
+
+/// `stream.closed` property getter on typed stream instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_closed(stream_handle: i64) -> f64 {
+    get_hidden_value(
+        stream_value_from_handle(stream_handle),
+        hidden_key(b"closed"),
+    )
+    .unwrap_or(f64::from_bits(TAG_FALSE))
 }
 
 /// `stream.writableCorked` property getter on a typed writable-side instance.
@@ -2073,6 +2084,7 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
 /// Initialize visible lifecycle flags shared by all stream sides.
 fn init_lifecycle_state(stream: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    set_visible_closed(stream, false);
 }
 
 fn init_constructor(stream: f64, name: &str) {
@@ -2134,6 +2146,15 @@ fn mark_writable_ended(stream: f64) {
 fn mark_writable_finished(stream: f64) {
     set_visible_writable(stream, false);
     set_visible_writable_finished(stream, true);
+}
+
+fn set_visible_closed(stream: f64, closed: bool) {
+    let value = if closed { TAG_TRUE } else { TAG_FALSE };
+    set_hidden_value(stream, hidden_key(b"closed"), f64::from_bits(value));
+}
+
+pub(super) fn mark_stream_closed(stream: f64) {
+    set_visible_closed(stream, true);
 }
 
 /// Initialize the readable side of a stream: direction flag, buffered byte

@@ -791,6 +791,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "stream",
         has_receiver: true,
+        method: "closed",
+        class_filter: None,
+        runtime: "js_node_stream_method_closed",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
         method: "writable",
         class_filter: None,
         runtime: "js_node_stream_method_writable",

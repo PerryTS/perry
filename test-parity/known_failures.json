@@ -350,12 +350,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.closed flag + close event don't deliver. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/writable/closed-flag": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Writable.closed flag + close event don't deliver. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/transform/flush-callback": {
     "issue": "1532",
     "added": "2026-05-23",

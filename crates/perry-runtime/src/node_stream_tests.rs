@@ -630,6 +630,10 @@ fn writable_lifecycle_flags_reflect_end_and_finish() {
         TAG_TRUE
     );
     assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"closed")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
         js_node_stream_method_writable_ended(handle).to_bits(),
         TAG_FALSE
     );
@@ -662,6 +666,10 @@ fn writable_lifecycle_flags_reflect_end_and_finish() {
     );
     assert_eq!(
         js_object_get_field_by_name_f64(obj, hidden_key(b"writableFinished")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"closed")).to_bits(),
         TAG_TRUE
     );
     WRITABLE_FINISH_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
