@@ -50,6 +50,11 @@ extern "C" {
     fn perry_ffi_native_async_promise(token: *mut NativeAsyncCompletion) -> *mut Promise;
     fn perry_ffi_native_async_resolve_bits(token: *mut NativeAsyncCompletion, bits: u64) -> i32;
     fn perry_ffi_native_async_reject_bits(token: *mut NativeAsyncCompletion, bits: u64) -> i32;
+    fn perry_ffi_native_async_reject_string(
+        token: *mut NativeAsyncCompletion,
+        data: *const u8,
+        len: usize,
+    ) -> i32;
     fn perry_ffi_native_async_cancel(token: *mut NativeAsyncCompletion) -> i32;
     fn perry_ffi_native_async_attach_handle(
         token: *mut NativeAsyncCompletion,
@@ -287,10 +292,10 @@ impl JsNativeAsyncCompletion {
         self.resolve_bits(TAG_UNDEFINED)
     }
 
-    /// Reject with a string reason.
+    /// Reject with a string reason. The runtime copies the bytes immediately and
+    /// allocates the Perry JS string later on the main thread.
     pub fn reject_string(self, message: &str) -> i32 {
-        let str_handle = alloc_string(message);
-        self.reject_bits(nanbox_string_bits(str_handle.as_raw()))
+        unsafe { perry_ffi_native_async_reject_string(self.0, message.as_ptr(), message.len()) }
     }
 
     /// Cancel the token, rejecting with Perry's default cancellation reason.
@@ -298,7 +303,7 @@ impl JsNativeAsyncCompletion {
         unsafe { perry_ffi_native_async_cancel(self.0) }
     }
 
-    /// Attach a JS native-handle value for runtime cleanup on reject/cancel.
+    /// Attach a JS native-handle value for runtime cleanup according to flags.
     pub fn attach_handle(&self, value: crate::JsValue, cleanup_flags: u32) -> i32 {
         unsafe { perry_ffi_native_async_attach_handle(self.0, value.bits(), cleanup_flags) }
     }

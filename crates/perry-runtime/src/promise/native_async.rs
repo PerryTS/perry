@@ -18,11 +18,6 @@ const STATE_PENDING: u8 = 0;
 const STATE_QUEUED: u8 = 1;
 const STATE_COMPLETED: u8 = 2;
 
-const PAYLOAD_RESOLVE_BITS: u8 = 1;
-const PAYLOAD_REJECT_BITS: u8 = 2;
-const PAYLOAD_CANCEL: u8 = 3;
-const PAYLOAD_WRONG_THREAD: u8 = 4;
-
 const THREAD_ANY: u8 = 0;
 const THREAD_MAIN: u8 = 1;
 
@@ -48,39 +43,33 @@ struct AttachedHandle {
     cleanup_flags: u32,
 }
 
-#[derive(Clone, Copy)]
-struct PendingPayload {
-    kind: u8,
-    bits: u64,
+enum PendingPayload {
+    ResolveBits(u64),
+    RejectBits(u64),
+    RejectString(Vec<u8>),
+    Cancel,
+    WrongThread,
 }
 
 impl PendingPayload {
     fn resolve(bits: u64) -> Self {
-        Self {
-            kind: PAYLOAD_RESOLVE_BITS,
-            bits,
-        }
+        Self::ResolveBits(bits)
     }
 
     fn reject(bits: u64) -> Self {
-        Self {
-            kind: PAYLOAD_REJECT_BITS,
-            bits,
-        }
+        Self::RejectBits(bits)
+    }
+
+    fn reject_string(bytes: Vec<u8>) -> Self {
+        Self::RejectString(bytes)
     }
 
     fn cancel() -> Self {
-        Self {
-            kind: PAYLOAD_CANCEL,
-            bits: 0,
-        }
+        Self::Cancel
     }
 
     fn wrong_thread() -> Self {
-        Self {
-            kind: PAYLOAD_WRONG_THREAD,
-            bits: 0,
-        }
+        Self::WrongThread
     }
 }
 
@@ -196,28 +185,36 @@ fn complete_bits(token: *mut NativeAsyncCompletion, bits: u64, fulfilled: bool) 
     enqueue_with_thread_policy(token, payload, PERRY_NATIVE_ASYNC_OK)
 }
 
-fn string_value_bits(message: &str) -> u64 {
-    let ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+fn bytes_value_bits(bytes: &[u8]) -> u64 {
+    let ptr = if bytes.is_empty() {
+        crate::string::js_string_from_bytes(std::ptr::null(), 0)
+    } else {
+        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    };
     crate::value::JSValue::string_ptr(ptr).bits()
 }
 
+fn string_value_bits(message: &str) -> u64 {
+    bytes_value_bits(message.as_bytes())
+}
+
 fn payload_to_settlement(payload: PendingPayload) -> (bool, u64, u32) {
-    match payload.kind {
-        PAYLOAD_RESOLVE_BITS => (true, payload.bits, PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS),
-        PAYLOAD_REJECT_BITS => (false, payload.bits, PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT),
-        PAYLOAD_CANCEL => (
+    match payload {
+        PendingPayload::ResolveBits(bits) => (true, bits, PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS),
+        PendingPayload::RejectBits(bits) => (false, bits, PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT),
+        PendingPayload::RejectString(bytes) => (
+            false,
+            bytes_value_bits(&bytes),
+            PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT,
+        ),
+        PendingPayload::Cancel => (
             false,
             string_value_bits(DEFAULT_CANCEL_REASON),
             PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL,
         ),
-        PAYLOAD_WRONG_THREAD => (
+        PendingPayload::WrongThread => (
             false,
             string_value_bits(WRONG_THREAD_REASON),
-            PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT,
-        ),
-        _ => (
-            false,
-            string_value_bits("Native async operation failed"),
             PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT,
         ),
     }
@@ -330,13 +327,43 @@ pub extern "C" fn js_native_async_completion_reject_bits(
     complete_bits(token, bits, false)
 }
 
+/// Reject a native async token with caller-owned UTF-8 bytes.
+///
+/// The bytes are copied before enqueueing so worker threads do not allocate
+/// Perry runtime strings; string allocation happens while draining on the main
+/// thread.
+#[no_mangle]
+pub extern "C" fn js_native_async_completion_reject_string(
+    token: *mut NativeAsyncCompletion,
+    data: *const u8,
+    len: usize,
+) -> i32 {
+    if data.is_null() && len > 0 {
+        return PERRY_NATIVE_ASYNC_INVALID;
+    }
+    if len > u32::MAX as usize {
+        return PERRY_NATIVE_ASYNC_INVALID;
+    }
+    let bytes = if len == 0 {
+        Vec::new()
+    } else {
+        // Copy before returning so caller-owned storage can be dropped or reused.
+        unsafe { std::slice::from_raw_parts(data, len).to_vec() }
+    };
+    enqueue_with_thread_policy(
+        token,
+        PendingPayload::reject_string(bytes),
+        PERRY_NATIVE_ASYNC_OK,
+    )
+}
+
 /// Cancel a native async token, rejecting its Promise with the default reason.
 #[no_mangle]
 pub extern "C" fn js_native_async_completion_cancel(token: *mut NativeAsyncCompletion) -> i32 {
     enqueue_with_thread_policy(token, PendingPayload::cancel(), PERRY_NATIVE_ASYNC_OK)
 }
 
-/// Attach a JS native-handle value to a token for cleanup on reject/cancel.
+/// Attach a JS native-handle value to a token for cleanup according to flags.
 #[no_mangle]
 pub extern "C" fn js_native_async_completion_attach_handle(
     token: *mut NativeAsyncCompletion,
@@ -430,12 +457,10 @@ pub extern "C" fn js_native_async_process_pending() -> i32 {
             let mut context = context;
             crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
             set_promise_context_snapshot(promise_ptr, context);
-            if !fulfilled {
-                for (idx, handle) in handles.iter().enumerate() {
-                    if handle.cleanup_flags & cleanup_mask != 0 {
-                        let bits = handle_roots[idx].get_nanbox_u64();
-                        crate::native_handle::js_native_handle_dispose(f64::from_bits(bits));
-                    }
+            for (idx, handle) in handles.iter().enumerate() {
+                if handle.cleanup_flags & cleanup_mask != 0 {
+                    let bits = handle_roots[idx].get_nanbox_u64();
+                    crate::native_handle::js_native_handle_dispose(f64::from_bits(bits));
                 }
             }
             if fulfilled {
@@ -483,8 +508,10 @@ pub fn scan_native_async_completion_roots_mut(visitor: &mut crate::gc::RuntimeRo
         if old_promise != 0 && old_promise != slots.promise {
             moved_promises.push((old_promise, slots.promise, token_ptr));
         }
-        if let Some(payload) = &mut slots.payload {
-            visitor.visit_nanbox_u64_slot(&mut payload.bits);
+        if let Some(PendingPayload::ResolveBits(bits) | PendingPayload::RejectBits(bits)) =
+            &mut slots.payload
+        {
+            visitor.visit_nanbox_u64_slot(bits);
         }
         for handle in &mut slots.handles {
             visitor.visit_nanbox_u64_slot(&mut handle.value_bits);
@@ -528,7 +555,12 @@ pub(crate) fn test_native_async_slot_snapshot(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     (
         slots.promise,
-        slots.payload.map(|payload| payload.bits),
+        slots.payload.as_ref().and_then(|payload| match payload {
+            PendingPayload::ResolveBits(bits) | PendingPayload::RejectBits(bits) => Some(*bits),
+            PendingPayload::RejectString(_)
+            | PendingPayload::Cancel
+            | PendingPayload::WrongThread => None,
+        }),
         slots
             .handles
             .iter()
@@ -615,6 +647,37 @@ mod tests {
     }
 
     #[test]
+    fn reject_string_copies_bytes_before_main_thread_settlement() {
+        let _guard = test_native_async_lock();
+        test_reset_native_async_registry();
+
+        let token = js_native_async_completion_new(0);
+        let promise = js_native_async_completion_promise(token);
+        assert_eq!(
+            js_native_async_completion_reject_string(token, std::ptr::null(), 1),
+            PERRY_NATIVE_ASYNC_INVALID
+        );
+
+        let expected = b"native async copied rejection".to_vec();
+        let mut message = String::from_utf8(expected.clone()).expect("valid utf-8");
+        let data = message.as_ptr();
+        let len = message.len();
+        assert_eq!(
+            js_native_async_completion_reject_string(token, data, len),
+            PERRY_NATIVE_ASYNC_OK
+        );
+        message.clear();
+        message.push_str("mutated after queue");
+        drop(message);
+
+        assert_eq!(js_native_async_process_pending(), 1);
+        assert_eq!(super::super::js_promise_state(promise), 2);
+        unsafe {
+            assert_heap_string_value(super::super::js_promise_reason(promise), &expected);
+        }
+    }
+
+    #[test]
     fn cancel_cleanup_disposes_attached_handle_once() {
         let _guard = test_native_async_lock();
         test_reset_native_async_registry();
@@ -650,6 +713,36 @@ mod tests {
     }
 
     #[test]
+    fn success_cleanup_disposes_attached_handle_once() {
+        let _guard = test_native_async_lock();
+        test_reset_native_async_registry();
+        CLEANUP_FINALIZER_CALLS.store(0, AtomicOrdering::SeqCst);
+
+        let token = js_native_async_completion_new(0);
+        let promise = js_native_async_completion_promise(token);
+        let handle = owned_native_handle("NativeAsyncSuccessCleanup", 0x6789);
+        assert_eq!(
+            js_native_async_completion_attach_handle(
+                token,
+                handle.to_bits(),
+                PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS,
+            ),
+            PERRY_NATIVE_ASYNC_OK
+        );
+        assert_eq!(
+            js_native_async_completion_resolve_bits(token, 6.0f64.to_bits()),
+            PERRY_NATIVE_ASYNC_OK
+        );
+        assert_eq!(js_native_async_process_pending(), 1);
+
+        assert_eq!(super::super::js_promise_state(promise), 1);
+        assert_eq!(super::super::js_promise_value(promise), 6.0);
+        assert_eq!(CLEANUP_FINALIZER_CALLS.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(crate::native_handle::js_native_handle_dispose(handle), 0);
+        assert_eq!(CLEANUP_FINALIZER_CALLS.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
     fn main_thread_token_wrong_thread_rejects() {
         let _guard = test_native_async_lock();
         test_reset_native_async_registry();
@@ -667,6 +760,35 @@ mod tests {
         assert_eq!(status, PERRY_NATIVE_ASYNC_WRONG_THREAD);
         assert_eq!(js_native_async_process_pending(), 1);
         assert_eq!(super::super::js_promise_state(promise), 2);
+    }
+
+    #[test]
+    fn main_thread_token_reject_string_wrong_thread_uses_wrong_thread_reason() {
+        let _guard = test_native_async_lock();
+        test_reset_native_async_registry();
+        let token = js_native_async_completion_new(PERRY_NATIVE_ASYNC_THREAD_MAIN);
+        let promise = js_native_async_completion_promise(token);
+        let token_addr = token as usize;
+        let status = std::thread::spawn(move || {
+            let message = String::from("worker string rejection");
+            js_native_async_completion_reject_string(
+                token_addr as *mut NativeAsyncCompletion,
+                message.as_ptr(),
+                message.len(),
+            )
+        })
+        .join()
+        .expect("thread join");
+
+        assert_eq!(status, PERRY_NATIVE_ASYNC_WRONG_THREAD);
+        assert_eq!(js_native_async_process_pending(), 1);
+        assert_eq!(super::super::js_promise_state(promise), 2);
+        unsafe {
+            assert_heap_string_value(
+                super::super::js_promise_reason(promise),
+                WRONG_THREAD_REASON.as_bytes(),
+            );
+        }
     }
 
     #[test]

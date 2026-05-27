@@ -30,6 +30,11 @@ extern "C" {
     fn js_native_async_completion_promise(token: *mut c_void) -> *mut perry_runtime::Promise;
     fn js_native_async_completion_resolve_bits(token: *mut c_void, bits: u64) -> i32;
     fn js_native_async_completion_reject_bits(token: *mut c_void, bits: u64) -> i32;
+    fn js_native_async_completion_reject_string(
+        token: *mut c_void,
+        data: *const u8,
+        len: usize,
+    ) -> i32;
     fn js_native_async_completion_cancel(token: *mut c_void) -> i32;
     fn js_native_async_completion_attach_handle(
         token: *mut c_void,
@@ -124,6 +129,17 @@ pub extern "C" fn perry_ffi_native_async_reject_bits(token: *mut c_void, bits: u
     unsafe { js_native_async_completion_reject_bits(token, bits) }
 }
 
+/// Reject a native async completion token with copied UTF-8 message bytes.
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_reject_string(
+    token: *mut c_void,
+    data: *const u8,
+    len: usize,
+) -> i32 {
+    async_bridge::ensure_pump_registered();
+    unsafe { js_native_async_completion_reject_string(token, data, len) }
+}
+
 /// Cancel a native async completion token with Perry's default cancellation
 /// reason.
 #[no_mangle]
@@ -132,7 +148,7 @@ pub extern "C" fn perry_ffi_native_async_cancel(token: *mut c_void) -> i32 {
     unsafe { js_native_async_completion_cancel(token) }
 }
 
-/// Attach a JS native-handle value for cleanup if the token rejects/cancels.
+/// Attach a JS native-handle value for cleanup according to cleanup flags.
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_attach_handle(
     token: *mut c_void,
