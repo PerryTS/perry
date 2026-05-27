@@ -54,7 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
     capture_p.set_defaults(func=capture)
 
     suite_p = sub.add_parser("suite", help="run a compiler-output proof suite")
-    suite_p.add_argument("--suite", choices=("native-region-proof",), required=True)
+    suite_p.add_argument(
+        "--suite",
+        choices=("native-region-proof", "native-abi-proof"),
+        required=True,
+    )
     suite_p.add_argument("--out-dir")
     suite_p.add_argument("--perry")
     suite_p.add_argument("--clang")
@@ -74,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     suite_p.add_argument("--fp-contract", choices=("off", "on", "fast"))
     suite_p.add_argument("--expect-fma", choices=("auto", "off", "on"), default="auto")
     suite_p.add_argument("--perf-counters", choices=("auto", "off", "on"), default="auto")
+    suite_p.add_argument("--gate", action="store_true")
     suite_p.add_argument("--print-summary", action="store_true")
     suite_p.set_defaults(func=capture_suite)
 

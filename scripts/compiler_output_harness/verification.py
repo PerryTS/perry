@@ -934,7 +934,8 @@ def verify_artifacts(
     )
     add(
         "no_boxed_number_allocations",
-        "js_boxed_number_new" not in ir_after,
+        bool(workload_info.get("allow_boxed_number_allocations"))
+        or "js_boxed_number_new" not in ir_after,
         "optimized IR has no boxed-number allocation helper",
     )
 

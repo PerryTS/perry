@@ -1230,3 +1230,121 @@ consumer = "TypedArrayGet.slow_path"
 native_rep_name = "js_value"
 access_mode = "dynamic_fallback"
 materialization_reason = "escaping_unowned_pointer"
+
+[workloads.native_abi_packet_typed]
+source = "benchmarks/compiler_output/fixtures/native_abi_packet_typed.ts"
+kind = "native_abi_packet_typed"
+allow_hot_loop_conversions = true
+allow_dynamic_property_runtime = true
+allowed_hot_loop_runtime_calls = [
+  "js_shadow_frame_push",
+  "js_shadow_slot_bind",
+]
+
+[workloads.native_abi_packet_typed.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: packet evidence compares typed ABI shape against the boxed/control packet"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_abi_packet_typed.runtime_budgets]
+allocations_traced = 5
+gc_collections_traced = 1
+write_barriers_static = 8
+write_barriers_traced = 8
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.native_abi_packet_typed.stdout_checks]]
+name = "native_abi_packet_typed_checksum"
+contains = "native_abi_packet_typed:"
+detail = "typed packet fixture emits a semantic checksum"
+
+[workloads.native_abi_packet_typed.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_bounds"]
+
+[[workloads.native_abi_packet_typed.native_rep_checks.require_records]]
+name = "packet_typed_buffer_view"
+consumer_contains = "BufferView"
+native_rep_name = "buffer_view"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_abi_packet_typed.native_rep_checks.require_records]]
+name = "packet_typed_u8_load_or_store"
+consumer_contains = "u8_"
+native_rep_name = "u8"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
+
+[workloads.native_abi_packet_control]
+source = "benchmarks/compiler_output/fixtures/native_abi_packet_control.ts"
+kind = "native_abi_packet_control"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+allow_boxed_number_allocations = true
+allowed_hot_loop_runtime_calls = [
+  "js_array_push_f64",
+  "js_buffer_get",
+  "js_buffer_set",
+  "js_handle_object_get_property",
+  "js_boxed_number_new",
+  "js_native_call_method",
+  "js_native_arena_alloc",
+  "js_native_arena_dispose",
+  "js_native_arena_view",
+  "js_object_get",
+  "js_object_set",
+  "js_get_property",
+  "js_set_property",
+  "js_dyn_index_get",
+  "js_shadow_frame_push",
+  "js_shadow_slot_bind",
+  "js_shadow_slot_set",
+  "js_uint8array_get",
+  "js_uint8array_set",
+]
+
+[workloads.native_abi_packet_control.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: boxed/control packet intentionally keeps dynamic calls for delta reporting"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_abi_packet_control.runtime_budgets]
+allocations_traced = 200
+gc_collections_traced = 2
+write_barriers_static = 64
+write_barriers_traced = 160
+boxed_number_allocations_static = 64
+buffer_slow_path_accesses_static = 128
+
+[[workloads.native_abi_packet_control.stdout_checks]]
+name = "native_abi_packet_control_checksum"
+contains = "native_abi_packet_control:"
+detail = "control packet fixture emits a semantic checksum"
+
+[workloads.native_abi_packet_control.native_rep_checks]
+allow_materialization_reasons = [
+  "function_abi",
+  "runtime_api",
+  "unknown_alias",
+  "unknown_bounds",
+  "dynamic_escape",
+]

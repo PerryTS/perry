@@ -6,6 +6,11 @@ import unittest
 from pathlib import Path
 
 
+if sys.version_info < (3, 11):
+    print("SKIP: Python 3.11+ is required for stdlib TOML parsing")
+    raise SystemExit(0)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "compiler_output_regression.py"
 
@@ -675,6 +680,8 @@ entry:
         self.assertIn("numeric_arrays", spec["workloads"])
         self.assertIn("raw_numeric_object_fields", spec["workloads"])
         self.assertIn("scalar_replacement_literals", spec["workloads"])
+        self.assertIn("native_abi_packet_typed", spec["workloads"])
+        self.assertIn("native_abi_packet_control", spec["workloads"])
         self.assertTrue(spec["workloads"]["fma_contract"]["fma_gate"]["enabled"])
         for name, workload in spec["workloads"].items():
             self.assertIn("source", workload, name)
@@ -699,6 +706,27 @@ entry:
             ]
         )
         self.assertEqual(args.suite, "native-region-proof")
+
+    def test_suite_parser_accepts_native_abi_proof(self):
+        parser = HARNESS.build_parser()
+        args = parser.parse_args(
+            [
+                "suite",
+                "--suite",
+                "native-abi-proof",
+                "--perry",
+                "target/debug/perry",
+                "--benchmark-mode",
+                "smoke",
+                "--runs",
+                "1",
+                "--perf-counters",
+                "off",
+                "--gate",
+            ]
+        )
+        self.assertEqual(args.suite, "native-abi-proof")
+        self.assertTrue(args.gate)
 
     def test_workload_spec_rejects_missing_required_fields(self):
         with self.assertRaises(HARNESS.HarnessError):

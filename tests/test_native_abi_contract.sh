@@ -43,6 +43,31 @@ fi
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
+EVIDENCE_DIR="${PERRY_NATIVE_ABI_EVIDENCE_DIR:-${NATIVE_ABI_EVIDENCE_DIR:-}}"
+if [ -n "$EVIDENCE_DIR" ]; then
+  case "$EVIDENCE_DIR" in
+    /*) ;;
+    *) EVIDENCE_DIR="$(pwd)/$EVIDENCE_DIR" ;;
+  esac
+  mkdir -p "$EVIDENCE_DIR"
+fi
+
+write_evidence() {
+  local name="$1"
+  local text="$2"
+  if [ -n "$EVIDENCE_DIR" ]; then
+    printf '%s\n' "$text" > "$EVIDENCE_DIR/$name"
+  fi
+}
+
+copy_native_reps_evidence() {
+  if [ -n "$EVIDENCE_DIR" ]; then
+    mkdir -p "$EVIDENCE_DIR/native-reps"
+    cp "$ARTIFACT_DIR"/*.json "$EVIDENCE_DIR/native-reps/" 2>/dev/null || true
+    cp "$ARTIFACT_TEXT" "$EVIDENCE_DIR/native-reps.txt" 2>/dev/null || true
+  fi
+}
+
 LIBDIR="$TMPDIR/node_modules/native-abi-contract-fixture"
 mkdir -p "$LIBDIR/src" "$LIBDIR/target/release"
 
@@ -284,12 +309,15 @@ COMPILE_OUTPUT=$(PERRY_NATIVE_REPS=1 \
   PERRY_NATIVE_REPS_DIR="$ARTIFACT_DIR" \
   PERRY_VERIFY_NATIVE_REGIONS=1 \
   "$PERRY" compile main.ts --output test_bin 2>&1) || {
+  write_evidence "compile.log" "$COMPILE_OUTPUT"
   echo "FAIL: compile error"
   echo "$COMPILE_OUTPUT" | tail -20
   exit 1
 }
+write_evidence "compile.log" "$COMPILE_OUTPUT"
 
 RUN_OUTPUT=$(./test_bin 2>&1)
+write_evidence "runtime.stdout" "$RUN_OUTPUT"
 if [ "$RUN_OUTPUT" != "PASS" ]; then
   echo "FAIL: JS-visible native ABI behavior changed"
   echo "Expected: PASS"
@@ -307,6 +335,7 @@ if [ "${#ARTIFACTS[@]}" -eq 0 ]; then
   exit 1
 fi
 cat "${ARTIFACTS[@]}" > "$ARTIFACT_TEXT"
+copy_native_reps_evidence
 
 if ! grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*[0-9]+' "$ARTIFACT_TEXT"; then
   echo "FAIL: native reps artifact missing numeric schema_version"

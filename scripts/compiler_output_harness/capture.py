@@ -45,6 +45,17 @@ SUITES: dict[str, list[str]] = {
         "raw_numeric_object_fields",
         "scalar_replacement_literals",
     ],
+    "native-abi-proof": [
+        "h1_native_rep_equivalence",
+        "h1_buffer_alias_negative",
+        "numeric_arrays",
+        "raw_numeric_object_fields",
+        "scalar_replacement_literals",
+        "width_aware_buffer_kernels",
+        "native_owned_typed_views",
+        "native_abi_packet_typed",
+        "native_abi_packet_control",
+    ],
 }
 
 
