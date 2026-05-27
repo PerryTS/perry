@@ -1010,12 +1010,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: second getWriter() on a locked WritableStream should throw. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/web/writer-close-returns-promise": {
-    "issue": "1545",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: writer.close() does not return a Promise. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/dispose/await-using-disposes": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1051,12 +1045,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Symbol.dispose presence on stream instances (Node 21+) misreports. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/pipe-to-prevent-cancel": {
-    "issue": "1545",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeTo preventCancel option behavior not implemented. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/duplex-pair/wired-comms": {
     "issue": "1532",
@@ -1568,12 +1556,6 @@
     "category": "bug-open",
     "reason": "node:stream: unshift() — readableLength does not grow by chunk size. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/transform-readable-writable-wired": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TransformStream.readable/.writable not correctly typed as ReadableStream/WritableStream instances. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/compose/instance-chain": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -1652,12 +1634,6 @@
     "category": "bug-open",
     "reason": "node:stream: Stream class default export prototype chain doesn't reach EventEmitter. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/cancel-returns-undefined-promise": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: rs.cancel() resolves to value other than undefined. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/options/auto-destroy-true-default": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1682,12 +1658,6 @@
     "category": "bug-open",
     "reason": "node:stream: unshift() return value — not undefined. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/pipe-to-returns-promise": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeTo() return value — not a Promise<undefined>. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/pipeline/promise-form": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1699,12 +1669,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: toArray() result not spreadable array (wrong type or shape). Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/web/writable-abort-returns-promise": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: WritableStream.abort() — return is not Promise<undefined>. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/pipe/end-true-explicit": {
     "issue": "1532",
@@ -1837,12 +1801,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: write() does not return false when buffered bytes cross HWM. Flips to PASS when #1539 lands."
-  },
-  "node-suite/stream/web/transform-readable-empty": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TransformStream with empty writable.close() doesn't yield {done:true} on readable side. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/readable/from-empty-iterable": {
     "issue": "1532",
@@ -2719,12 +2677,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(Set) — iteration order or count wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/web/cancel-with-undefined-reason": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: cancel(undefined) explicit — fails to compile or reason isn't undefined. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/pipe/end-true-explicit-still-ends": {
     "issue": "1532",
