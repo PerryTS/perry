@@ -2587,7 +2587,10 @@ function callWasmClosure(closureVal, ...extraArgs) {
     const fn = wasmInstance.exports.__indirect_function_table.get(closure.funcIdx | 0);
     // Extra args need to be BigInt (i64) for WASM functions. Captures are already BigInt.
     const wasmArgs = extraArgs.map(v => __jsValueToBits(v));
-    if (fn) return __bitsToJsValue(fn(...(closure.captures || []), ...wasmArgs));
+    if (fn) {
+      const result = fn(...(closure.captures || []), ...wasmArgs);
+      return (typeof result === 'bigint') ? __bitsToJsValue(result) : undefined;
+    }
   }
   return u64ToF64(TAG_UNDEFINED);
 }
