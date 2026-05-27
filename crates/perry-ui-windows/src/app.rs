@@ -33,6 +33,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 /// Timer ID for periodic tick that processes setTimeout/setInterval queues.
@@ -452,6 +453,10 @@ pub fn app_run(app_handle: i64) {
                     unsafe {
                         js_callback_timer_tick();
                         js_interval_timer_tick();
+                        // Issue #1865: perry/ui `onFrame` display-link
+                        // callbacks. Real DwmFlush-aligned vsync driver is
+                        // a follow-up.
+                        js_frame_pump_default();
                     }
                 }
                 // perry/media (#351) — UI-thread state poll for active

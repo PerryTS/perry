@@ -79,6 +79,10 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         // `promptAction.showToast` through the runtime drain queue).
         // Now wires to a JS-side fade-in/out div in wasm_runtime.js.
         "showToast" => "perry_ui_show_toast",
+        // Issue #1865: display-link frame callbacks. On web these map to
+        // requestAnimationFrame / cancelAnimationFrame via wasm_runtime.js.
+        "onFrame" => "perry_ui_on_frame",
+        "cancelFrame" => "perry_ui_cancel_frame",
         // Text decoration (issue #185 Phase B). 0=none, 1=underline,
         // 2=strikethrough on the canonical FFI; CSS-side translates.
         "textSetDecoration" | "text_set_decoration" => "perry_ui_text_set_decoration",

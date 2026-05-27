@@ -1213,6 +1213,7 @@ extern "C" {
     fn js_promise_run_microtasks() -> i32;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 pub struct PerryTimerTargetIvars {
@@ -1272,6 +1273,10 @@ define_class!(
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
+                    // Issue #1865: perry/ui `onFrame` one-shot display-link
+                    // callbacks. Driven off the same ~8ms pump for now;
+                    // CADisplayLink-quality vsync alignment is a follow-up.
+                    js_frame_pump_default();
                     js_promise_run_microtasks();
                     // Process deferred promise resolutions from perry-stdlib tokio workers.
                     // No-op if perry-stdlib is not linked (function pointer not registered).

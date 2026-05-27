@@ -306,6 +306,7 @@ extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 // ============================================
@@ -327,6 +328,8 @@ define_class!(
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
+                    // Issue #1865: perry/ui `onFrame` display-link callbacks.
+                    js_frame_pump_default();
                     js_promise_run_microtasks();
                     #[cfg(feature = "geisterhand")]
                     {

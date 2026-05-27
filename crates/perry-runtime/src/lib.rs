@@ -41,6 +41,7 @@ pub mod event_pump;
 pub mod exception;
 pub mod fast_hash;
 pub mod ffi;
+pub mod frame;
 pub mod fs;
 pub mod gc;
 pub mod map;

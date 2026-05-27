@@ -797,6 +797,37 @@ pub(crate) fn lower_native_method_call(
     // cross-platform code compiles, but only harmonyos shows visual
     // feedback. Future v3 follow-up: route to NSAlert/UIAlertController/
     // GtkPopover on the desktop UI backends.
+    // perry/ui.onFrame(cb) — one-shot display-link callback. Issue #1865.
+    // The callback fires once on the next vsync with (timestampMs, deltaMs).
+    // Idiomatic loop: re-register from inside the callback.
+    if module == "perry/ui" && method == "onFrame" && object.is_none() {
+        if args.len() != 1 {
+            return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        }
+        let cb_box = lower_expr(ctx, &args[0])?;
+        ctx.pending_declares
+            .push(("js_on_frame_callback".to_string(), I64, vec![I64]));
+        let blk = ctx.block();
+        let cb_handle = unbox_to_i64(blk, &cb_box);
+        let id = blk.call(I64, "js_on_frame_callback", &[(I64, &cb_handle)]);
+        return Ok(nanbox_pointer_inline(ctx.block(), &id));
+    }
+
+    // perry/ui.cancelFrame(id) — cancel a pending onFrame registration.
+    // Accepts the pointer-tagged handle returned by `onFrame`.
+    if module == "perry/ui" && method == "cancelFrame" && object.is_none() {
+        if args.len() != 1 {
+            return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        }
+        let id_box = lower_expr(ctx, &args[0])?;
+        ctx.pending_declares
+            .push(("js_cancel_frame".to_string(), crate::types::VOID, vec![I64]));
+        let blk = ctx.block();
+        let id_handle = unbox_to_i64(blk, &id_box);
+        blk.call_void("js_cancel_frame", &[(I64, &id_handle)]);
+        return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+    }
+
     if module == "perry/ui" && method == "showToast" && object.is_none() {
         if args.is_empty() {
             return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));

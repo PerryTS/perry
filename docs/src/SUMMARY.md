@@ -47,6 +47,7 @@
 - [Dialogs](ui/dialogs.md)
 - [Table](ui/table.md)
 - [Animation](ui/animation.md)
+- [Frame Callbacks](ui/on-frame.md)
 - [Multi-Window](ui/multi-window.md)
 - [Theming](ui/theming.md)
 - [Camera](ui/camera.md)

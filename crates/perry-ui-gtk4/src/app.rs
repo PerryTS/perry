@@ -76,6 +76,7 @@ extern "C" {
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
     fn js_run_ext_pump();
+    fn js_frame_pump_default() -> i32;
 }
 
 /// Extract a &str from a *const StringHeader pointer.
@@ -314,6 +315,9 @@ pub fn app_run(_app_handle: i64) {
             unsafe {
                 js_callback_timer_tick();
                 js_interval_timer_tick();
+                // Issue #1865: perry/ui `onFrame` display-link callbacks.
+                // Real gtk_widget_add_tick_callback wiring is a follow-up.
+                js_frame_pump_default();
                 js_run_ext_pump();
                 js_run_stdlib_pump();
                 js_promise_run_microtasks();

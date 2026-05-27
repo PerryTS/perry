@@ -3054,6 +3054,24 @@ function perry_ui_animate_position(h, dx, dy, durationSecs) {
 }
 
 // ---------- Events ----------
+// Issue #1865: display-link callbacks. One-shot per registration, like
+// requestAnimationFrame. The id we return matches the rAF id so cancelFrame
+// can hand it straight to cancelAnimationFrame. timestampMs is rAF's
+// DOMHighResTimeStamp; deltaMs is computed per-closure (idiomatic
+// `function loop(t,dt){ ...; onFrame(loop); }` gets accurate deltas).
+const __perryFrameLastByClosure = new WeakMap();
+function perry_ui_on_frame(callback) {
+  if (!callback || typeof callback.funcIdx === 'undefined') return 0;
+  const id = requestAnimationFrame((ts) => {
+    const prev = __perryFrameLastByClosure.get(callback);
+    const dt = (typeof prev === 'number' && ts >= prev) ? ts - prev : 0;
+    __perryFrameLastByClosure.set(callback, ts);
+    callWasmClosure(callback, ts, dt);
+  });
+  return id;
+}
+function perry_ui_cancel_frame(id) { cancelAnimationFrame(id); }
+
 function perry_ui_set_on_click(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("click", () => callWasmClosure(callback));
 }
@@ -3987,6 +4005,8 @@ const __perryUiDispatch = {
   perry_ui_animate_opacity, perry_ui_animate_position,
   // #1546: showToast on web
   perry_ui_show_toast,
+  // #1865: display-link callbacks (requestAnimationFrame)
+  perry_ui_on_frame, perry_ui_cancel_frame,
   // Events
   perry_ui_set_on_click, perry_ui_set_on_hover, perry_ui_set_on_double_click,
   // State

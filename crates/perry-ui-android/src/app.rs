@@ -161,6 +161,7 @@ extern "C" {
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
     fn js_promise_run_microtasks() -> i32;
+    fn js_frame_pump_default() -> i32;
 }
 
 /// Start the timer pump that drives setInterval/setTimeout/Promise callbacks.
@@ -222,6 +223,10 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         js_stdlib_process_pending();
         js_callback_timer_tick();
         js_interval_timer_tick();
+        // Issue #1865: perry/ui `onFrame` display-link callbacks. Real
+        // Choreographer.postFrameCallback wiring is a follow-up; for now
+        // the same 8ms pump drives one-shot frame callbacks.
+        js_frame_pump_default();
         js_promise_run_microtasks();
     }
     // perry/media (#351) — drive state polling on the UI thread so the
