@@ -2144,12 +2144,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: rs.locked false after pipeThrough (should be true). Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/from-string-array-yields-each": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(['a','b','c']) — each string not a separate chunk. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/tee-after-getReader-throws": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -2594,12 +2588,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipe() src immediate error — error not fired on src listener. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-string-iterates-codepoints": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(string) — chunk count / shape wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/destroyed-after-finish": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -2792,23 +2780,11 @@
     "category": "bug-open",
     "reason": "node:stream/web: strategy.size returning non-number — doesn't throw on enqueue. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/from-string-chunk-buffer": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from('hello') — chunk type/shape doesn't match Node. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/just-source-only": {
     "issue": "1531",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src) — only source given, Duplex output empty. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/readable/from-string-as-iterable-single-chunk": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from('text') — chunk shape/count wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/iter-helpers/map-async-with-concurrency": {
     "issue": "1558",
