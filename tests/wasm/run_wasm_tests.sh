@@ -53,6 +53,21 @@ const _stub = { id: '', appendChild: () => {}, getElementById: () => null, style
 const _doc = { createElement: () => Object.assign({}, _stub), getElementById: () => null, title: '' };
 _doc.head = _stub; _doc.body = _stub;
 globalThis.document = _doc;
+let __rafNow = 0;
+const __rafTimers = new Map();
+globalThis.requestAnimationFrame = (cb) => {
+  const id = setTimeout(() => {
+    __rafTimers.delete(id);
+    __rafNow += 16;
+    cb(__rafNow);
+  }, 0);
+  __rafTimers.set(id, id);
+  return id;
+};
+globalThis.cancelAnimationFrame = (id) => {
+  clearTimeout(id);
+  __rafTimers.delete(id);
+};
 const fs = require('fs');
 const html = fs.readFileSync('$html_file', 'utf8');
 const scripts = [];

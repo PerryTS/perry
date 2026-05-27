@@ -3057,15 +3057,18 @@ function perry_ui_animate_position(h, dx, dy, durationSecs) {
 // Issue #1865: display-link callbacks. One-shot per registration, like
 // requestAnimationFrame. The id we return matches the rAF id so cancelFrame
 // can hand it straight to cancelAnimationFrame. timestampMs is rAF's
-// DOMHighResTimeStamp; deltaMs is computed per-closure (idiomatic
-// `function loop(t,dt){ ...; onFrame(loop); }` gets accurate deltas).
-const __perryFrameLastByClosure = new WeakMap();
+// DOMHighResTimeStamp; deltaMs is computed per stable WASM function-table
+// index because the JS closure wrapper crossing the WASM boundary is freshly
+// allocated on each call. This keeps the idiomatic
+// `function loop(t,dt){ ...; onFrame(loop); }` pattern accurate.
+const __perryFrameLastByFuncIdx = new Map();
 function perry_ui_on_frame(callback) {
   if (!callback || typeof callback.funcIdx === 'undefined') return 0;
+  const key = callback.funcIdx | 0;
   const id = requestAnimationFrame((ts) => {
-    const prev = __perryFrameLastByClosure.get(callback);
+    const prev = __perryFrameLastByFuncIdx.get(key);
     const dt = (typeof prev === 'number' && ts >= prev) ? ts - prev : 0;
-    __perryFrameLastByClosure.set(callback, ts);
+    __perryFrameLastByFuncIdx.set(key, ts);
     callWasmClosure(callback, ts, dt);
   });
   return id;
