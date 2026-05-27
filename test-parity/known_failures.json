@@ -1286,12 +1286,6 @@
     "category": "bug-open",
     "reason": "node:stream/promises: pipeline doesn't reject with the underlying Error. Flips to PASS when #1533 lands."
   },
-  "node-suite/stream/promises/finished-with-signal": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/promises: finished with signal does not reject on abort. Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/promises/pipeline-with-signal": {
     "issue": "1533",
     "added": "2026-05-23",
@@ -1724,12 +1718,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: pipeThrough(transform, {preventClose:true}) — transform.writable should remain unlocked. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/promises/finished-returns-promise": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: promises.finished(stream) — return value not a Promise or doesn't resolve. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/cancel-during-pipeto": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -2089,12 +2077,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: TS readable.cancel — writable.write does not reject after. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/promises/finished-stream-already-ended": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: finished(alreadyEnded) — does not resolve immediately. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/readable-property-shape": {
     "issue": "1532",
