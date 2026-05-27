@@ -287,9 +287,9 @@ extern "C" fn writable_write_callback_noop(_closure: *const ClosureHeader) -> f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_write2(closure: *const ClosureHeader, chunk: f64, enc: f64) -> f64 {
+extern "C" fn ns_write3(closure: *const ClosureHeader, chunk: f64, enc: f64, cb: f64) -> f64 {
     let stream = this_value(closure);
-    write_writable_chunk(stream, chunk, enc)
+    write_writable_chunk(stream, chunk, enc, cb)
 }
 
 extern "C" fn ns_end3(closure: *const ClosureHeader, chunk: f64, encoding: f64, cb: f64) -> f64 {
@@ -306,10 +306,9 @@ extern "C" fn ns_uncork0(closure: *const ClosureHeader) -> f64 {
     uncork_stream(this_value(closure))
 }
 
-fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
+fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, callback: f64) {
     if let Some(write) = writable_hidden_write(stream) {
-        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
-        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+        let cb_value = writable_write_callback_value(callback);
         let args = [chunk, enc, cb_value];
         let prev_this = crate::object::js_implicit_this_set(stream);
         unsafe {
@@ -328,15 +327,49 @@ fn throw_writable_null_chunk() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
+fn writable_write_callback_value(callback: f64) -> f64 {
+    if is_callable_value(callback) {
+        callback
+    } else {
+        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
+        f64::from_bits(JSValue::pointer(cb as *const u8).bits())
+    }
+}
+
+fn normalize_write_args(chunk: f64, enc: f64, cb: f64) -> (f64, f64, f64) {
+    let (encoding, callback) = if is_callable_value(enc) {
+        (f64::from_bits(TAG_UNDEFINED), enc)
+    } else {
+        (enc, cb)
+    };
+    let (chunk, encoding) = normalize_writable_write_chunk(chunk, encoding);
+    (chunk, encoding, callback)
+}
+
+fn normalize_writable_write_chunk(chunk: f64, encoding: f64) -> (f64, f64) {
+    let value = JSValue::from_bits(chunk.to_bits());
+    if value.is_any_string() {
+        let enc_tag = crate::buffer::js_encoding_tag_from_value(encoding);
+        let buf = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, enc_tag);
+        return (box_pointer(buf as *const u8), string_value(b"buffer"));
+    }
+    let raw = raw_ptr_from_value(chunk);
+    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+        return (chunk, string_value(b"buffer"));
+    }
+    (chunk, encoding)
+}
+
+fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
     if JSValue::from_bits(chunk.to_bits()).is_null() {
         throw_writable_null_chunk();
     }
+    let (chunk, enc, callback) = normalize_write_args(chunk, enc, cb);
     if writable_corked_count(stream) > 0.0 {
         buffer_writable_write(stream, chunk, enc);
         return f64::from_bits(TAG_TRUE);
     }
-    invoke_writable_write(stream, chunk, enc);
+    invoke_writable_write(stream, chunk, enc, callback);
     emit_writable_chunk(stream, chunk);
     f64::from_bits(TAG_TRUE)
 }
@@ -363,7 +396,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
 fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
     let (chunk, encoding, callback) = normalize_end_args(chunk, encoding, cb);
     if has_end_chunk(chunk) {
-        let _ = write_writable_chunk(stream, chunk, encoding);
+        let _ = write_writable_chunk(stream, chunk, encoding, f64::from_bits(TAG_UNDEFINED));
     }
     flush_writable_buffered(stream);
     finish_stream(stream, callback);
@@ -540,8 +573,18 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, enc: f64) -> f64 {
+    js_node_stream_method_write3(stream_handle, chunk, enc, f64::from_bits(TAG_UNDEFINED))
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_write3(
+    stream_handle: i64,
+    chunk: f64,
+    enc: f64,
+    cb: f64,
+) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    write_writable_chunk(stream, chunk, enc)
+    write_writable_chunk(stream, chunk, enc, cb)
 }
 
 #[no_mangle]
@@ -1149,7 +1192,7 @@ fn register_stub_arities() {
     register(ns_read1 as *const u8, 1);
     register(ns_pipe1 as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
-    register(ns_write2 as *const u8, 2);
+    register(ns_write3 as *const u8, 3);
     register(ns_end3 as *const u8, 3);
     register(ns_cork0 as *const u8, 0);
     register(ns_uncork0 as *const u8, 0);
@@ -1554,7 +1597,7 @@ fn flush_writable_buffered(stream: f64) {
         } else {
             f64::from_bits(TAG_UNDEFINED)
         };
-        invoke_writable_write(stream, chunk, enc);
+        invoke_writable_write(stream, chunk, enc, f64::from_bits(TAG_UNDEFINED));
         emit_writable_chunk(stream, chunk);
         i += 2;
     }
@@ -1923,7 +1966,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
         ("rawListeners", cast1(ns_raw_listeners)),
-        ("write", cast2(ns_write2)),
+        ("write", cast3(ns_write3)),
         ("end", cast3(ns_end3)),
         ("cork", cast0(ns_cork0)),
         ("uncork", cast0(ns_uncork0)),
@@ -1960,7 +2003,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
-        ("write", cast2(ns_write2)),
+        ("write", cast3(ns_write3)),
         ("end", cast3(ns_end3)),
         ("cork", cast0(ns_cork0)),
         ("uncork", cast0(ns_uncork0)),
