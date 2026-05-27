@@ -391,7 +391,7 @@ nanoid = { version = "0.5", optional = true }
 # LRU Cache — optional from v0.5.539 so the well-known flip can
 # strip the perry-stdlib copy when `import 'lru-cache'` resolves
 # to perry-ext-lru-cache instead.
-lru = { version = "0.16", optional = true }
+lru = { version = "0.18", optional = true }
 
 # CLI parsing (Commander)
 clap = { version = "4.4", features = ["derive"] }

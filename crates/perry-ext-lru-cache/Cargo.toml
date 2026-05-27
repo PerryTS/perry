@@ -10,7 +10,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-lru = "0.16"
+lru = "0.18"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
