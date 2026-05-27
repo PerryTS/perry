@@ -61,6 +61,11 @@ pub(super) fn try_module_class_static(
                                 // the normal value-method path instead of
                                 // building NativeMethodCall(class="version").
                                 | ("process", "version")
+                                // `os.EOL` / `os.devNull` are string-valued
+                                // module properties, so `os.devNull.includes(x)`
+                                // is a String method on the property value.
+                                | ("os", "EOL")
+                                | ("os", "devNull")
                         );
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires
