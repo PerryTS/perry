@@ -23,7 +23,7 @@ use perry_ffi::{
     StringHeader,
 };
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 
 use flate2::read::{
@@ -207,10 +207,117 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
+// ── streaming codec state ────────────────────────────────────────────────────
+//
+// Stateful write-codec backing a stream handle: fed incrementally by `.write()`,
+// flushed by `.flush()`, finalized by `.end()`. flate2's write-encoders compress
+// on write and emit a Z_SYNC_FLUSH block on `flush()`; brotli's CompressorWriter
+// does the same via BROTLI_OPERATION_FLUSH and runs BROTLI_OPERATION_FINISH on
+// `into_inner()`. `None` for `createUnzip` (gzip/zlib auto-detect isn't a
+// streaming write-codec, so it stays buffer-until-end via `run_codec`).
+
+enum CodecState {
+    GzEnc(flate2::write::GzEncoder<Vec<u8>>),
+    GzDec(flate2::write::GzDecoder<Vec<u8>>),
+    ZlibEnc(flate2::write::ZlibEncoder<Vec<u8>>),
+    ZlibDec(flate2::write::ZlibDecoder<Vec<u8>>),
+    DeflateEnc(flate2::write::DeflateEncoder<Vec<u8>>),
+    DeflateDec(flate2::write::DeflateDecoder<Vec<u8>>),
+    BrotliEnc(brotli::CompressorWriter<Vec<u8>>),
+    BrotliDec(brotli::DecompressorWriter<Vec<u8>>),
+}
+
+impl CodecState {
+    fn write_chunk(&mut self, data: &[u8]) -> std::io::Result<()> {
+        match self {
+            CodecState::GzEnc(w) => w.write_all(data),
+            CodecState::GzDec(w) => w.write_all(data),
+            CodecState::ZlibEnc(w) => w.write_all(data),
+            CodecState::ZlibDec(w) => w.write_all(data),
+            CodecState::DeflateEnc(w) => w.write_all(data),
+            CodecState::DeflateDec(w) => w.write_all(data),
+            CodecState::BrotliEnc(w) => w.write_all(data),
+            CodecState::BrotliDec(w) => w.write_all(data),
+        }
+    }
+
+    fn flush_codec(&mut self) -> std::io::Result<()> {
+        match self {
+            CodecState::GzEnc(w) => w.flush(),
+            CodecState::GzDec(w) => w.flush(),
+            CodecState::ZlibEnc(w) => w.flush(),
+            CodecState::ZlibDec(w) => w.flush(),
+            CodecState::DeflateEnc(w) => w.flush(),
+            CodecState::DeflateDec(w) => w.flush(),
+            CodecState::BrotliEnc(w) => w.flush(),
+            CodecState::BrotliDec(w) => w.flush(),
+        }
+    }
+
+    /// Take the output produced since the last drain (the inner `Vec<u8>`).
+    fn drain(&mut self) -> Vec<u8> {
+        match self {
+            CodecState::GzEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::GzDec(w) => std::mem::take(w.get_mut()),
+            CodecState::ZlibEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::ZlibDec(w) => std::mem::take(w.get_mut()),
+            CodecState::DeflateEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::DeflateDec(w) => std::mem::take(w.get_mut()),
+            CodecState::BrotliEnc(w) => std::mem::take(w.get_mut()),
+            CodecState::BrotliDec(w) => std::mem::take(w.get_mut()),
+        }
+    }
+
+    /// Finalize the stream, returning the remaining output (since the last drain).
+    fn finish(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            CodecState::GzEnc(w) => w.finish(),
+            CodecState::GzDec(w) => w.finish(),
+            CodecState::ZlibEnc(w) => w.finish(),
+            CodecState::ZlibDec(w) => w.finish(),
+            CodecState::DeflateEnc(w) => w.finish(),
+            CodecState::DeflateDec(w) => w.finish(),
+            CodecState::BrotliEnc(w) => Ok(w.into_inner()),
+            // DecompressorWriter::into_inner returns Result<W, W> (Err on an
+            // unterminated stream); take the decoded bytes either way.
+            CodecState::BrotliDec(w) => Ok(w.into_inner().unwrap_or_else(|v| v)),
+        }
+    }
+}
+
+fn make_codec_state(codec: Codec) -> Option<CodecState> {
+    use flate2::write;
+    Some(match codec {
+        Codec::Gzip => CodecState::GzEnc(write::GzEncoder::new(Vec::new(), Compression::default())),
+        Codec::Gunzip => CodecState::GzDec(write::GzDecoder::new(Vec::new())),
+        Codec::Deflate => {
+            CodecState::ZlibEnc(write::ZlibEncoder::new(Vec::new(), Compression::default()))
+        }
+        Codec::Inflate => CodecState::ZlibDec(write::ZlibDecoder::new(Vec::new())),
+        Codec::DeflateRaw => CodecState::DeflateEnc(write::DeflateEncoder::new(
+            Vec::new(),
+            Compression::default(),
+        )),
+        Codec::InflateRaw => CodecState::DeflateDec(write::DeflateDecoder::new(Vec::new())),
+        Codec::BrotliCompress => {
+            CodecState::BrotliEnc(brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22))
+        }
+        Codec::BrotliDecompress => {
+            CodecState::BrotliDec(brotli::DecompressorWriter::new(Vec::new(), 4096))
+        }
+        // Unzip auto-detects the header — kept buffer-until-end (run_codec).
+        Codec::Unzip => return None,
+    })
+}
+
 // ── registry ─────────────────────────────────────────────────────────────────
 
 struct ZlibStreamState {
     codec: Codec,
+    /// Streaming codec, fed incrementally. `None` for `createUnzip` (uses
+    /// `input` + `run_codec` on `.end()`) or once finalized.
+    codec_state: Option<CodecState>,
+    /// Only used by `createUnzip` (buffer-until-end auto-detect).
     input: Vec<u8>,
     ended: bool,
     /// `.pipe(dest)` destinations as NaN-boxed bits; 'data'/'end' forward here.
@@ -221,6 +328,9 @@ enum ZlibEvent {
     Data(i64, Vec<u8>),
     End(i64),
     Error(i64, String),
+    /// `.flush(cb)` completion callback — invoked (0 args) after its flushed
+    /// 'data' is delivered.
+    Callback(i64),
 }
 
 struct Statics {
@@ -262,6 +372,13 @@ fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
                 }
             }
         }
+        // `.flush(cb)` callbacks queued but not yet drained are referenced only
+        // here — root them too, same hazard as listeners.
+        for ev in s.pending.iter_mut() {
+            if let ZlibEvent::Callback(cb) = ev {
+                visitor.visit_i64_slot(cb);
+            }
+        }
     }
 }
 
@@ -274,6 +391,7 @@ fn create_stream(codec: Codec) -> i64 {
         id,
         ZlibStreamState {
             codec,
+            codec_state: make_codec_state(codec),
             input: Vec::new(),
             ended: false,
             pipes: Vec::new(),
@@ -357,36 +475,84 @@ unsafe fn event_name(value: f64) -> Option<String> {
 
 // ── instance ops ───────────────────────────────────────────────────────────────
 
+/// Feed a chunk to the streaming codec and queue any output that becomes
+/// available immediately (incremental 'data'). For `createUnzip` (no streaming
+/// codec) the chunk is buffered until `.end()`.
 fn stream_write(handle: i64, bytes: &[u8]) {
-    if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
-        if !s.ended {
-            s.input.extend_from_slice(bytes);
-        }
+    let mut g = statics().lock().unwrap();
+    let event = match g.streams.get_mut(&handle) {
+        Some(s) if !s.ended => match s.codec_state.as_mut() {
+            Some(cs) => match cs.write_chunk(bytes) {
+                Ok(()) => {
+                    let out = cs.drain();
+                    (!out.is_empty()).then(|| ZlibEvent::Data(handle, out))
+                }
+                Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
+            },
+            None => {
+                s.input.extend_from_slice(bytes);
+                None
+            }
+        },
+        _ => return,
+    };
+    if let Some(ev) = event {
+        g.pending.push(ev);
+        drop(g);
+        notify_main_thread();
     }
 }
 
-/// Run the codec on the buffered input and queue 'data'/'end' (or 'error').
+/// `.flush([kind], cb?)` — emit a Z_SYNC_FLUSH (BROTLI_OPERATION_FLUSH) block so
+/// a consumer can decode everything written so far, then queue the callback.
+fn stream_flush(handle: i64, cb: i64) {
+    let mut g = statics().lock().unwrap();
+    let data = match g.streams.get_mut(&handle) {
+        Some(s) if !s.ended => match s.codec_state.as_mut() {
+            Some(cs) => {
+                let _ = cs.flush_codec();
+                cs.drain()
+            }
+            None => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    if !data.is_empty() {
+        g.pending.push(ZlibEvent::Data(handle, data));
+    }
+    if cb != 0 {
+        g.pending.push(ZlibEvent::Callback(cb));
+    }
+    drop(g);
+    notify_main_thread();
+}
+
+/// Finalize the stream and queue the remaining output + 'end' (or 'error').
 fn finish_stream(handle: i64) {
-    let (codec, input) = {
+    let (codec_state, codec, input) = {
         let mut g = statics().lock().unwrap();
         match g.streams.get_mut(&handle) {
             Some(s) if !s.ended => {
                 s.ended = true;
-                (s.codec, std::mem::take(&mut s.input))
+                (s.codec_state.take(), s.codec, std::mem::take(&mut s.input))
             }
             _ => return,
         }
     };
+    let result = match codec_state {
+        Some(cs) => cs.finish().map_err(|e| e.to_string()),
+        None => run_codec(codec, &input).map_err(|e| e.to_string()), // Unzip
+    };
     {
         let mut g = statics().lock().unwrap();
-        match run_codec(codec, &input) {
+        match result {
             Ok(out) => {
                 if !out.is_empty() {
                     g.pending.push(ZlibEvent::Data(handle, out));
                 }
                 g.pending.push(ZlibEvent::End(handle));
             }
-            Err(e) => g.pending.push(ZlibEvent::Error(handle, format!("{}", e))),
+            Err(msg) => g.pending.push(ZlibEvent::Error(handle, msg)),
         }
     }
     notify_main_thread();
@@ -480,10 +646,18 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
             finish_stream(handle);
             f64::from_bits(UNDEFINED)
         }
-        // `.flush([cb])` — buffer-until-end model has nothing to flush mid-
-        // stream (output emits on `.end()`); accept as a no-op so callers
-        // don't hit "flush is not a function".
-        "flush" => f64::from_bits(UNDEFINED),
+        // `.flush([kind], cb?)` — Node's signature is `flush([kind], callback)`.
+        // `kind` is numeric; the callback is the POINTER_TAG arg (if any).
+        "flush" => {
+            let cb = args
+                .iter()
+                .rev()
+                .find(|a| (a.to_bits() >> 48) == 0x7FFD)
+                .map(|a| (a.to_bits() & POINTER_MASK) as i64)
+                .unwrap_or(0);
+            stream_flush(handle, cb);
+            f64::from_bits(UNDEFINED)
+        }
         _ => f64::from_bits(UNDEFINED),
     }
 }
@@ -593,6 +767,11 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 g.listeners.remove(&id);
                 g.streams.remove(&id);
             }
+            ZlibEvent::Callback(cb) => {
+                if cb != 0 {
+                    let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
+                }
+            }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_error_object(&msg);
                 for cb in listeners_for(id, "error") {
@@ -617,5 +796,58 @@ pub extern "C" fn js_ext_zlib_has_active_handles() -> i32 {
         0
     } else {
         1
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    /// Drive the streaming codec like the FFI ops do: write each chunk +
+    /// drain, flush + drain between chunks, then finish — and reassemble the
+    /// full compressed stream.
+    fn stream_compress(codec: Codec, chunks: &[&[u8]]) -> Vec<u8> {
+        let mut cs = make_codec_state(codec).expect("streaming codec");
+        let mut out = Vec::new();
+        for c in chunks {
+            cs.write_chunk(c).unwrap();
+            out.extend(cs.drain());
+            cs.flush_codec().unwrap();
+            out.extend(cs.drain());
+        }
+        out.extend(cs.finish().unwrap());
+        out
+    }
+
+    #[test]
+    fn gzip_stream_roundtrips() {
+        let c = stream_compress(Codec::Gzip, &[b"hello ", b"streaming ", b"world"]);
+        assert_eq!(&c[..2], &[0x1f, 0x8b]); // gzip magic
+        assert_eq!(
+            run_codec(Codec::Gunzip, &c).unwrap(),
+            b"hello streaming world"
+        );
+    }
+
+    #[test]
+    fn deflate_stream_is_zlib_format_and_roundtrips() {
+        let c = stream_compress(Codec::Deflate, &[b"AAAA", b"BBBB"]);
+        assert_eq!(c[0], 0x78); // zlib header (NOT raw deflate)
+        assert_eq!(run_codec(Codec::Inflate, &c).unwrap(), b"AAAABBBB");
+    }
+
+    #[test]
+    fn deflate_raw_stream_roundtrips() {
+        let c = stream_compress(Codec::DeflateRaw, &[b"raw ", b"deflate"]);
+        assert_eq!(run_codec(Codec::InflateRaw, &c).unwrap(), b"raw deflate");
+    }
+
+    #[test]
+    fn brotli_stream_roundtrips() {
+        let c = stream_compress(Codec::BrotliCompress, &[b"brotli ", b"stream ", b"test"]);
+        assert_eq!(
+            run_codec(Codec::BrotliDecompress, &c).unwrap(),
+            b"brotli stream test"
+        );
     }
 }
