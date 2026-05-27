@@ -464,12 +464,6 @@
     "category": "bug-open",
     "reason": "node:stream: final() constructor option not invoked before finish. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/write/write-null": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write(null) error path (ERR_STREAM_NULL_VALUES) doesn't emit error / throw. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/write/writev-batch": {
     "issue": "1531",
     "added": "2026-05-23",

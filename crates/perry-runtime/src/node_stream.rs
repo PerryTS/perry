@@ -319,7 +319,19 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
     }
 }
 
+#[cold]
+fn throw_writable_null_chunk() -> ! {
+    let msg = b"May not write null values to stream";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_NULL_VALUES");
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
+    if JSValue::from_bits(chunk.to_bits()).is_null() {
+        throw_writable_null_chunk();
+    }
     if writable_corked_count(stream) > 0.0 {
         buffer_writable_write(stream, chunk, enc);
         return f64::from_bits(TAG_TRUE);
