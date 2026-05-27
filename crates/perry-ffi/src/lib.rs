@@ -46,13 +46,17 @@
 
 mod async_runtime;
 pub use async_runtime::{
-    nanbox_string_bits, spawn_blocking, spawn_blocking_with_reactor, JsPromise,
+    nanbox_string_bits, spawn_blocking, spawn_blocking_with_reactor, JsNativeAsyncCompletion,
+    JsPromise, PERRY_NATIVE_ASYNC_ALREADY_COMPLETED, PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL,
+    PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT, PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS,
+    PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK, PERRY_NATIVE_ASYNC_THREAD_MAIN,
+    PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
 
 mod types;
 pub use types::{
-    ArrayHeader, BigIntHeader, BufferHeader, ClosureHeader, ObjectHeader, Promise, StringHeader,
-    BIGINT_LIMBS,
+    ArrayHeader, BigIntHeader, BufferHeader, ClosureHeader, NativeAsyncCompletion, ObjectHeader,
+    Promise, StringHeader, BIGINT_LIMBS,
 };
 
 mod handle;

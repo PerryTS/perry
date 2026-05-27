@@ -217,6 +217,88 @@ mod manifest_parse_tests {
     }
 
     #[test]
+    fn native_async_promise_return_parses_completion_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parsed = parse_manifest_from_functions(
+            dir.path(),
+            serde_json::json!([
+                {
+                    "name": "native_async_return",
+                    "params": [],
+                    "returns": {
+                        "kind": "promise",
+                        "result": "f64",
+                        "completion": "native_async",
+                        "thread": "main"
+                    }
+                }
+            ]),
+        )
+        .expect("parse manifest")
+        .expect("manifest");
+
+        let ret = &parsed.functions[0].returns;
+        assert_eq!(ret.to_string(), "promise<f64>");
+        assert_eq!(
+            ret.promise_completion()
+                .map(|completion| completion.as_str()),
+            Some("native_async")
+        );
+        assert_eq!(
+            ret.promise_thread().map(|thread| thread.as_str()),
+            Some("main")
+        );
+        assert_eq!(
+            ret.promise_result().map(ToString::to_string),
+            Some("f64".into())
+        );
+    }
+
+    #[test]
+    fn native_async_promise_param_is_rejected() {
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_native_async_param",
+            "params": [
+                {
+                    "kind": "promise",
+                    "result": "jsvalue",
+                    "completion": "native_async"
+                }
+            ],
+            "returns": "void"
+        }));
+        assert!(err.contains("bad_native_async_param"), "{err}");
+        assert!(err.contains("params[0]"), "{err}");
+        assert!(err.contains("native_async"), "{err}");
+        assert!(err.contains("valid only on returns"), "{err}");
+    }
+
+    #[test]
+    fn native_async_promise_rejects_invalid_completion_and_thread_fields() {
+        let completion_err = parse_manifest_error(serde_json::json!({
+            "name": "bad_promise_completion",
+            "params": [],
+            "returns": {
+                "kind": "promise",
+                "completion": "later"
+            }
+        }));
+        assert!(completion_err.contains("completion"), "{completion_err}");
+        assert!(completion_err.contains("direct"), "{completion_err}");
+
+        let thread_err = parse_manifest_error(serde_json::json!({
+            "name": "bad_promise_thread",
+            "params": [],
+            "returns": {
+                "kind": "promise",
+                "thread": "worker"
+            }
+        }));
+        assert!(thread_err.contains("thread"), "{thread_err}");
+        assert!(thread_err.contains("main"), "{thread_err}");
+    }
+
+    #[test]
     fn native_abi_owned_return_handle_parses_finalizer_contract() {
         let dir = tempfile::tempdir().expect("tempdir");
         let parsed = parse_manifest_from_functions(

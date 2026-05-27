@@ -25,6 +25,27 @@ use std::ffi::c_void;
 
 use crate::common::async_bridge;
 
+extern "C" {
+    fn js_native_async_completion_new(flags: u32) -> *mut c_void;
+    fn js_native_async_completion_promise(token: *mut c_void) -> *mut perry_runtime::Promise;
+    fn js_native_async_completion_resolve_bits(token: *mut c_void, bits: u64) -> i32;
+    fn js_native_async_completion_reject_bits(token: *mut c_void, bits: u64) -> i32;
+    fn js_native_async_completion_cancel(token: *mut c_void) -> i32;
+    fn js_native_async_completion_attach_handle(
+        token: *mut c_void,
+        handle_bits: u64,
+        cleanup_flags: u32,
+    ) -> i32;
+    fn js_native_async_completion_resolve_promise_bits(
+        promise: *mut perry_runtime::Promise,
+        bits: u64,
+    ) -> i32;
+    fn js_native_async_completion_reject_promise_bits(
+        promise: *mut perry_runtime::Promise,
+        bits: u64,
+    ) -> i32;
+}
+
 /// `perry_ffi_promise_new()` — allocate a fresh Promise.
 ///
 /// Thin pass-through to perry-runtime's allocator. Returned pointer
@@ -43,9 +64,8 @@ use crate::common::async_bridge;
 /// `unpin_promise_after_native_resolution` in `async_bridge`).
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_new() -> *mut perry_runtime::Promise {
-    let p = perry_runtime::js_promise_new();
-    unsafe { async_bridge::pin_promise_for_native_resolution(p as usize) };
-    p
+    async_bridge::ensure_pump_registered();
+    unsafe { js_native_async_completion_promise(js_native_async_completion_new(0)) }
 }
 
 /// `perry_ffi_promise_resolve_bits(promise, bits)` — resolve the
@@ -58,14 +78,68 @@ pub extern "C" fn perry_ffi_promise_new() -> *mut perry_runtime::Promise {
 /// directly.
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_resolve_bits(promise: *mut perry_runtime::Promise, bits: u64) {
-    async_bridge::queue_promise_resolution(promise as usize, true, bits);
+    async_bridge::ensure_pump_registered();
+    unsafe {
+        let _ = js_native_async_completion_resolve_promise_bits(promise, bits);
+    }
 }
 
 /// `perry_ffi_promise_reject_bits(promise, bits)` — reject with a
 /// JSValue. Same encoding contract as resolve.
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_reject_bits(promise: *mut perry_runtime::Promise, bits: u64) {
-    async_bridge::queue_promise_resolution(promise as usize, false, bits);
+    async_bridge::ensure_pump_registered();
+    unsafe {
+        let _ = js_native_async_completion_reject_promise_bits(promise, bits);
+    }
+}
+
+/// `perry_ffi_native_async_new(flags)` — allocate a runtime-owned native
+/// async completion token and its JS-visible Promise.
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_new(flags: u32) -> *mut c_void {
+    async_bridge::ensure_pump_registered();
+    unsafe { js_native_async_completion_new(flags) }
+}
+
+/// Return the JS Promise associated with a native async completion token.
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_promise(
+    token: *mut c_void,
+) -> *mut perry_runtime::Promise {
+    unsafe { js_native_async_completion_promise(token) }
+}
+
+/// Resolve a native async completion token with encoded JSValue bits.
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_resolve_bits(token: *mut c_void, bits: u64) -> i32 {
+    async_bridge::ensure_pump_registered();
+    unsafe { js_native_async_completion_resolve_bits(token, bits) }
+}
+
+/// Reject a native async completion token with encoded JSValue bits.
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_reject_bits(token: *mut c_void, bits: u64) -> i32 {
+    async_bridge::ensure_pump_registered();
+    unsafe { js_native_async_completion_reject_bits(token, bits) }
+}
+
+/// Cancel a native async completion token with Perry's default cancellation
+/// reason.
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_cancel(token: *mut c_void) -> i32 {
+    async_bridge::ensure_pump_registered();
+    unsafe { js_native_async_completion_cancel(token) }
+}
+
+/// Attach a JS native-handle value for cleanup if the token rejects/cancels.
+#[no_mangle]
+pub extern "C" fn perry_ffi_native_async_attach_handle(
+    token: *mut c_void,
+    handle_bits: u64,
+    cleanup_flags: u32,
+) -> i32 {
+    unsafe { js_native_async_completion_attach_handle(token, handle_bits, cleanup_flags) }
 }
 
 /// `perry_ffi_promise_resolve_deferred(promise, ctx, invoke)` — resolve the

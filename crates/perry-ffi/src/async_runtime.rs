@@ -31,7 +31,7 @@
 
 use std::ffi::c_void;
 
-use crate::{alloc_string, Promise, StringHeader};
+use crate::{alloc_string, NativeAsyncCompletion, Promise, StringHeader};
 
 extern "C" {
     fn perry_ffi_promise_new() -> *mut Promise;
@@ -46,6 +46,16 @@ extern "C" {
         ctx: *mut c_void,
         invoke: extern "C" fn(*mut c_void) -> u64,
     );
+    fn perry_ffi_native_async_new(flags: u32) -> *mut NativeAsyncCompletion;
+    fn perry_ffi_native_async_promise(token: *mut NativeAsyncCompletion) -> *mut Promise;
+    fn perry_ffi_native_async_resolve_bits(token: *mut NativeAsyncCompletion, bits: u64) -> i32;
+    fn perry_ffi_native_async_reject_bits(token: *mut NativeAsyncCompletion, bits: u64) -> i32;
+    fn perry_ffi_native_async_cancel(token: *mut NativeAsyncCompletion) -> i32;
+    fn perry_ffi_native_async_attach_handle(
+        token: *mut NativeAsyncCompletion,
+        handle_bits: u64,
+        cleanup_flags: u32,
+    ) -> i32;
     fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
     fn perry_ffi_spawn_blocking_with_reactor(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
 }
@@ -63,6 +73,23 @@ const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+
+/// Native async operation completed or the handle attachment succeeded.
+pub const PERRY_NATIVE_ASYNC_OK: i32 = 0;
+/// Completion was already requested; the payload was dropped.
+pub const PERRY_NATIVE_ASYNC_ALREADY_COMPLETED: i32 = 1;
+/// A `thread: "main"` token was completed from another thread.
+pub const PERRY_NATIVE_ASYNC_WRONG_THREAD: i32 = 2;
+/// Token or promise pointer was null/invalid.
+pub const PERRY_NATIVE_ASYNC_INVALID: i32 = 3;
+/// Create a token that rejects completion requests from non-main threads.
+pub const PERRY_NATIVE_ASYNC_THREAD_MAIN: u32 = 1 << 0;
+/// Dispose attached cleanup handles when the token rejects.
+pub const PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT: u32 = 1 << 0;
+/// Dispose attached cleanup handles when the token is cancelled.
+pub const PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL: u32 = 1 << 1;
+/// Dispose attached cleanup handles even when the token resolves.
+pub const PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS: u32 = 1 << 2;
 
 /// Opaque handle to a JS Promise allocated in Perry's arena.
 ///
@@ -194,6 +221,86 @@ impl JsPromise {
     pub fn reject_string(self, message: &str) {
         let str_handle = alloc_string(message);
         unsafe { perry_ffi_promise_reject_bits(self.0, nanbox_string_bits(str_handle.as_raw())) };
+    }
+}
+
+/// Runtime-owned native async completion token.
+///
+/// This is the explicit token API behind [`JsPromise`]'s legacy shims. The
+/// JavaScript-visible value remains the [`Promise`] returned by
+/// [`Self::promise`], while the token is safe to move into worker-thread
+/// closures and complete exactly once.
+#[repr(transparent)]
+pub struct JsNativeAsyncCompletion(*mut NativeAsyncCompletion);
+
+// SAFETY: the runtime token owns synchronization and exposes only atomic
+// completion plus main-thread-pumped settlement.
+unsafe impl Send for JsNativeAsyncCompletion {}
+
+impl JsNativeAsyncCompletion {
+    /// Allocate a token with default `thread: "any"` completion policy.
+    pub fn new() -> Self {
+        Self::with_flags(0)
+    }
+
+    /// Allocate a token with explicit native async flags.
+    pub fn with_flags(flags: u32) -> Self {
+        Self(unsafe { perry_ffi_native_async_new(flags) })
+    }
+
+    /// Wrap a raw token pointer obtained from the C ABI.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a token returned by `perry_ffi_native_async_new`.
+    pub unsafe fn from_raw(ptr: *mut NativeAsyncCompletion) -> Self {
+        Self(ptr)
+    }
+
+    /// Return the raw token pointer for passing through custom FFI layers.
+    pub fn as_raw(&self) -> *mut NativeAsyncCompletion {
+        self.0
+    }
+
+    /// Return the JS Promise associated with this token.
+    pub fn promise(&self) -> *mut Promise {
+        unsafe { perry_ffi_native_async_promise(self.0) }
+    }
+
+    /// Resolve with arbitrary encoded JSValue bits.
+    pub fn resolve_bits(self, bits: u64) -> i32 {
+        unsafe { perry_ffi_native_async_resolve_bits(self.0, bits) }
+    }
+
+    /// Reject with arbitrary encoded JSValue bits.
+    pub fn reject_bits(self, bits: u64) -> i32 {
+        unsafe { perry_ffi_native_async_reject_bits(self.0, bits) }
+    }
+
+    /// Resolve with a number.
+    pub fn resolve_number(self, n: f64) -> i32 {
+        self.resolve_bits(n.to_bits())
+    }
+
+    /// Resolve with `undefined`.
+    pub fn resolve_undefined(self) -> i32 {
+        self.resolve_bits(TAG_UNDEFINED)
+    }
+
+    /// Reject with a string reason.
+    pub fn reject_string(self, message: &str) -> i32 {
+        let str_handle = alloc_string(message);
+        self.reject_bits(nanbox_string_bits(str_handle.as_raw()))
+    }
+
+    /// Cancel the token, rejecting with Perry's default cancellation reason.
+    pub fn cancel(self) -> i32 {
+        unsafe { perry_ffi_native_async_cancel(self.0) }
+    }
+
+    /// Attach a JS native-handle value for runtime cleanup on reject/cancel.
+    pub fn attach_handle(&self, value: crate::JsValue, cleanup_flags: u32) -> i32 {
+        unsafe { perry_ffi_native_async_attach_handle(self.0, value.bits(), cleanup_flags) }
     }
 }
 

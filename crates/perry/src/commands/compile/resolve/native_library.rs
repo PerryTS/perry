@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use perry_api_manifest::{
     NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity,
-    NativePodAbi, NativePodFieldAbi,
+    NativePodAbi, NativePodFieldAbi, NativePromiseAbi, NativePromiseCompletion,
+    NativePromiseThread,
 };
 
 use super::super::{
@@ -304,6 +305,7 @@ fn parse_native_library_functions(
 enum NativeAbiDescriptorPosition {
     Param,
     Return,
+    Metadata,
 }
 
 fn parse_native_abi_descriptor(
@@ -466,7 +468,7 @@ fn parse_native_abi_descriptor(
                     "handle descriptor `finalizer` requires `ownership: \"owned\"`",
                 ));
             }
-            if finalizer.is_some() && position == NativeAbiDescriptorPosition::Param {
+            if finalizer.is_some() && position != NativeAbiDescriptorPosition::Return {
                 return Err(invalid_native_abi_error(
                     package_json,
                     function_index,
@@ -504,6 +506,19 @@ fn parse_native_abi_descriptor(
             }))
         }
         "promise" => {
+            let allowed = ["kind", "result", "completion", "thread"];
+            for key in object.keys() {
+                if !allowed.contains(&key.as_str()) {
+                    return Err(invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        &format!("unknown promise descriptor field `{key}`"),
+                    ));
+                }
+            }
             let result = match object.get("result") {
                 Some(result) => parse_native_abi_descriptor(
                     package_json,
@@ -511,11 +526,61 @@ fn parse_native_abi_descriptor(
                     function_name,
                     slot,
                     result,
-                    position,
+                    NativeAbiDescriptorPosition::Metadata,
                 )?,
                 None => NativeAbiType::JsValue,
             };
-            Ok(NativeAbiType::Promise(Box::new(result)))
+            let completion = match object.get("completion") {
+                Some(v) => match v.as_str() {
+                    Some("direct") => NativePromiseCompletion::Direct,
+                    Some("native_async") => NativePromiseCompletion::NativeAsync,
+                    Some(_) | None => {
+                        return Err(invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "promise descriptor `completion` must be `direct` or `native_async`",
+                        ));
+                    }
+                },
+                None => NativePromiseCompletion::Direct,
+            };
+            if completion == NativePromiseCompletion::NativeAsync
+                && position != NativeAbiDescriptorPosition::Return
+            {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    "native_async promise completion is valid only on returns",
+                ));
+            }
+            let thread = match object.get("thread") {
+                Some(v) => match v.as_str() {
+                    Some("any") => NativePromiseThread::Any,
+                    Some("main") => NativePromiseThread::Main,
+                    Some(_) | None => {
+                        return Err(invalid_native_abi_error(
+                            package_json,
+                            function_index,
+                            function_name,
+                            slot,
+                            &value.to_string(),
+                            "promise descriptor `thread` must be `any` or `main`",
+                        ));
+                    }
+                },
+                None => NativePromiseThread::Any,
+            };
+            Ok(NativeAbiType::Promise(NativePromiseAbi {
+                result: Box::new(result),
+                completion,
+                thread,
+            }))
         }
         "pod" => {
             parse_native_pod_descriptor(package_json, function_index, function_name, slot, value)
