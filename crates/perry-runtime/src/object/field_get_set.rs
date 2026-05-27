@@ -1265,6 +1265,38 @@ pub extern "C" fn js_object_get_field_by_name(
             }
             return JSValue::undefined();
         }
+        // Typed arrays (Int32Array/Float64Array/...): the `TypedArrayHeader` is
+        // `std::alloc`'d (small) or GC-old-allocated (large), but in both cases
+        // tracked in TYPED_ARRAY_REGISTRY, so detect via the side table before
+        // the GC-header read below (which would read garbage for the small
+        // `std::alloc` case). `.length`, `.byteLength`, `.byteOffset`, and
+        // `.BYTES_PER_ELEMENT` lower as generic PropertyGet for multi-byte
+        // numeric-length views whose static type the codegen doesn't recognize;
+        // pre-fix, only Uint8Array worked (it's a registered buffer) so
+        // multi-byte `.byteLength` returned undefined.
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(obj as usize) {
+            if !key.is_null() {
+                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let key_len = (*key).byte_len as usize;
+                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                let ta = obj as *const crate::typedarray::TypedArrayHeader;
+                let elem_size = crate::typedarray::elem_size_for_kind(kind);
+                match key_bytes {
+                    b"length" => {
+                        let len = crate::typedarray::js_typed_array_length(ta);
+                        return JSValue::number(len as f64);
+                    }
+                    b"byteLength" => {
+                        let len = crate::typedarray::js_typed_array_length(ta);
+                        return JSValue::number((len as usize * elem_size) as f64);
+                    }
+                    b"byteOffset" => return JSValue::number(0.0),
+                    b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
+                    _ => {}
+                }
+            }
+            return JSValue::undefined();
+        }
         // Sets: SetHeader is allocated via raw `alloc()` (no GcHeader),
         // so we can't safely read the byte preceding the pointer to
         // determine its type. Detect via the SET_REGISTRY first and

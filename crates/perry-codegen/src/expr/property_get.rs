@@ -124,10 +124,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 _ => unreachable!(),
             };
             let (ptr_slot, _scope) = ctx.buffer_data_slots.get(&arr_id).cloned().unwrap();
+            // The length field's byte offset relative to `data_ptr` differs by
+            // header layout: an 8-byte `BufferHeader` keeps it at `data-8`, but
+            // a 16-byte `TypedArrayHeader` (Int32Array/Float64Array/... numeric
+            // -length constructors) keeps it at `data-16`. #1862 began
+            // registering multi-byte typed arrays in `buffer_data_slots` with a
+            // data_ptr 16 bytes past the header, so the hardcoded `-8` here read
+            // the packed `kind|elem_size` bytes (Int32→0x404=1028,
+            // Float64→0x807=2055) instead of `.length`. Prefer the co-registered
+            // `buffer_view_slots` entry, which carries the correct
+            // `length_offset_from_data` (and a `length_slot` for native views).
+            let view = ctx.buffer_view_slots.get(&arr_id).cloned();
+            let length_slot = view.as_ref().and_then(|v| v.length_slot.clone());
+            let length_offset = view
+                .as_ref()
+                .map(|v| v.length_offset_from_data)
+                .unwrap_or(-8);
             let blk = ctx.block();
-            let data_ptr = blk.load(PTR, &ptr_slot);
-            let header_ptr = blk.gep(I8, &data_ptr, &[(I32, "-8")]);
-            let len_i32 = blk.load_invariant(I32, &header_ptr);
+            let len_i32 = if let Some(length_slot) = length_slot.as_ref() {
+                blk.load(I32, length_slot)
+            } else {
+                let data_ptr = blk.load(PTR, &ptr_slot);
+                let header_ptr = blk.gep(I8, &data_ptr, &[(I32, &length_offset.to_string())]);
+                blk.load_invariant(I32, &header_ptr)
+            };
             let lowered = LoweredValue::buffer_len(len_i32);
             ctx.record_lowered_value(
                 "Buffer.length",
