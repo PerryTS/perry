@@ -322,6 +322,29 @@ pub const MATRIX: &[MatrixRow] = &[
         ffi: "perry_ui_widget_set_on_hover",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
+    // Continuous pointer events (issue #1868). Callback receives a
+    // PointerEvent { x, y, button, pointerType } object. macOS uses a
+    // transparent overlay NSView that subclasses NSView and overrides
+    // mouseDown:/mouseUp:/mouseMoved:; other platforms use the native
+    // primitive listed in the issue's implementation sketch table.
+    MatrixRow {
+        widget: "*",
+        prop: "on_mouse_down",
+        ffi: "perry_ui_widget_set_on_mouse_down",
+        statuses: W_ALL_NATIVE_WEB_TODO,
+    },
+    MatrixRow {
+        widget: "*",
+        prop: "on_mouse_up",
+        ffi: "perry_ui_widget_set_on_mouse_up",
+        statuses: W_ALL_NATIVE_WEB_TODO,
+    },
+    MatrixRow {
+        widget: "*",
+        prop: "on_mouse_move",
+        ffi: "perry_ui_widget_set_on_mouse_move",
+        statuses: W_ALL_NATIVE_WEB_TODO,
+    },
     MatrixRow {
         widget: "*",
         prop: "animate_opacity",

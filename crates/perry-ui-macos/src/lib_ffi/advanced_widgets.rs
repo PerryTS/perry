@@ -456,6 +456,27 @@ pub extern "C" fn perry_ui_widget_set_on_click(handle: i64, callback: f64) {
     widgets::set_on_click(handle, callback);
 }
 
+/// Set an onMouseDown handler. Callback receives a `PointerEvent`
+/// `{ x, y, button, pointerType }`. Issue #1868.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_down(handle: i64, callback: f64) {
+    crate::pointer::set_on_mouse_down(handle, callback);
+}
+
+/// Set an onMouseUp handler. See `perry_ui_widget_set_on_mouse_down`.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_up(handle: i64, callback: f64) {
+    crate::pointer::set_on_mouse_up(handle, callback);
+}
+
+/// Set an onMouseMove handler. Fires while the pointer is over the
+/// widget (with or without a button pressed). See
+/// `perry_ui_widget_set_on_mouse_down`.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_move(handle: i64, callback: f64) {
+    crate::pointer::set_on_mouse_move(handle, callback);
+}
+
 /// Animate the opacity of a widget. `duration_secs` is in seconds.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_animate_opacity(handle: i64, target: f64, duration_secs: f64) {

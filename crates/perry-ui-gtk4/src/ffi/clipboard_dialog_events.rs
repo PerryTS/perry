@@ -156,6 +156,23 @@ pub extern "C" fn perry_ui_widget_set_on_double_click(handle: i64, callback: f64
     widgets::set_on_double_click(handle, callback);
 }
 
+/// Continuous pointer events (issue #1868). Callback receives a
+/// PointerEvent { x, y, button, pointerType } object.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_down(handle: i64, callback: f64) {
+    widgets::set_on_mouse_down(handle, callback);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_up(handle: i64, callback: f64) {
+    widgets::set_on_mouse_up(handle, callback);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_move(handle: i64, callback: f64) {
+    widgets::set_on_mouse_move(handle, callback);
+}
+
 // =============================================================================
 // Animation
 // =============================================================================

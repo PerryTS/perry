@@ -187,6 +187,43 @@ object PerryBridge {
         }
     }
 
+    // --- Continuous pointer events (issue #1868) ---
+    //
+    // Installs a `View.OnTouchListener` that routes `ACTION_DOWN`,
+    // `ACTION_MOVE`, `ACTION_UP` / `ACTION_CANCEL` to the three
+    // pre-registered native callback keys. Coordinates are converted
+    // from device pixels to dp so the JS side sees widget-local *points*
+    // (top-left origin), matching the macOS / GTK4 / Windows backends.
+    // `button` is always 0 for touch — multi-button mouse / stylus is
+    // a planned follow-up via `MotionEvent.getButtonState()`.
+    //
+    // Returning `false` from the listener keeps the underlying control
+    // — buttons, scroll containers, gesture detectors — receiving the
+    // same events, so observing pointers never steals an existing tap.
+    @JvmStatic
+    fun setOnPointerCallbacks(
+        view: View,
+        downKey: Long,
+        moveKey: Long,
+        upKey: Long
+    ) {
+        val density = activity.resources.displayMetrics.density
+        view.setOnTouchListener { _, ev ->
+            val xDp = (ev.x / density).toDouble()
+            val yDp = (ev.y / density).toDouble()
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN ->
+                    nativeInvokePointerCallback(downKey, xDp, yDp, 0)
+                android.view.MotionEvent.ACTION_MOVE ->
+                    nativeInvokePointerCallback(moveKey, xDp, yDp, 0)
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL ->
+                    nativeInvokePointerCallback(upKey, xDp, yDp, 0)
+            }
+            false
+        }
+    }
+
     // --- Issue #553: scroll-end callback with backpressure ---
     //
     // Attaches a scroll listener that fires `nativeInvokeCallback0(key)`
@@ -1419,6 +1456,11 @@ object PerryBridge {
 
     @JvmStatic
     external fun nativeInvokeCallback2(key: Long, arg1: Double, arg2: Double)
+
+    // Continuous pointer events (issue #1868). Native side allocates a
+    // `PointerEvent { x, y, button, pointerType: "touch" }` and invokes
+    // the closure registered under `key`.
+    external fun nativeInvokePointerCallback(key: Long, x: Double, y: Double, button: Int)
 
     @JvmStatic
     external fun nativeInvokeCallbackWithString(key: Long, text: String)

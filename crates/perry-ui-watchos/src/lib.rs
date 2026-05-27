@@ -1081,6 +1081,17 @@ pub extern "C" fn perry_ui_widget_set_on_hover(_h: i64, _cb: f64) {}
 pub extern "C" fn perry_ui_widget_set_on_click(_h: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_double_click(_h: i64, _cb: f64) {}
+// Continuous pointer events (issue #1868). watchOS doesn't expose raw
+// touch coordinates through WKInterfaceObject — only WKTapGestureRecognizer
+// fires, with no x/y. Symbols exported as no-op so cross-platform code
+// links; the matrix entry stays Wired (symbol present) until the watchOS
+// gesture-with-location API surfaces in a future watchOS release.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_down(_h: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_up(_h: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_mouse_move(_h: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_animate_opacity(_h: i64, _t: f64, _d: f64) {}
 #[no_mangle]

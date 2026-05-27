@@ -588,6 +588,10 @@ pub fn set_on_double_click(_handle: i64, _callback: f64) {
     // No-op for now
 }
 
+// Continuous pointer events (issue #1868). Real implementation lives
+// in [`crate::pointer`], which calls into the Kotlin
+// `PerryBridge.setOnPointerCallbacks` to install a `View.OnTouchListener`.
+
 /// Animate opacity. `duration_secs` is in seconds.
 pub fn animate_opacity(handle: i64, target: f64, duration_secs: f64) {
     if let Some(view_ref) = get_widget(handle) {

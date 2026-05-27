@@ -14,6 +14,7 @@ pub mod location;
 pub mod media_playback;
 pub mod menu;
 pub mod network_stub;
+pub mod pointer;
 pub mod screenshot;
 pub mod state;
 pub mod websocket;

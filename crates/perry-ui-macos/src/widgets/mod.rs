@@ -1125,7 +1125,14 @@ thread_local! {
     static CLICK_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
-/// Set an on-hover callback for a widget (mouse enter/exit).
+/// Set an on-hover callback for a widget. As of issue #1868 the
+/// callback receives `(isHovering: boolean)` — fires `true` on enter
+/// and `false` on leave through the same closure. Implementation lives
+/// in [`crate::pointer::set_on_hover_v2`], which shares the NSEvent
+/// monitor that powers `onMouseDown`/`onMouseUp`/`onMouseMove`. The
+/// previous tracking-area implementation never actually fired (the
+/// tracking area's owner was the widget's stock `NSView`, which has no
+/// `mouseEntered:` override) so this is also the bug-fix.
 pub fn set_on_hover(handle: i64, callback: f64) {
     HOVER_CALLBACKS.with(|cbs| {
         cbs.borrow_mut().insert(handle, callback);
@@ -1141,19 +1148,7 @@ pub fn set_on_hover(handle: i64, callback: f64) {
         }
     }
 
-    if let Some(view) = get_widget(handle) {
-        unsafe {
-            // Add tracking area for mouse enter/exit
-            let ta_cls = AnyClass::get(c"NSTrackingArea").unwrap();
-            let bounds: objc2_core_foundation::CGRect = objc2::msg_send![&*view, bounds];
-            let options: u64 = 0x01 | 0x02 | 0x20; // MouseEnteredAndExited | MouseMoved | ActiveAlways
-            let tracking_area: *mut AnyObject = objc2::msg_send![ta_cls, alloc];
-            let tracking_area: *mut AnyObject = objc2::msg_send![
-                tracking_area, initWithRect: bounds, options: options, owner: &*view, userInfo: std::ptr::null::<AnyObject>()
-            ];
-            let _: () = objc2::msg_send![&*view, addTrackingArea: tracking_area];
-        }
-    }
+    crate::pointer::set_on_hover_v2(handle, callback);
 }
 
 /// Set a double-click handler for a widget.

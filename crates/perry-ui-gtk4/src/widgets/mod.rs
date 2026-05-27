@@ -449,26 +449,35 @@ pub fn set_background_gradient(
     }
 }
 
-/// Set an on-hover callback on a widget.
+/// Set an on-hover callback on a widget. As of issue #1868 the
+/// callback receives `(isHovering: boolean)` — fires `true` on enter
+/// and `false` on leave through the same closure. Previously this fired
+/// `1.0` / `0.0` numeric values, which are still truthy-equivalent but
+/// don't satisfy `=== true` checks.
 pub fn set_on_hover(handle: i64, callback: f64) {
     extern "C" {
         fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
+    // Perry's NaN-box payload for `true` / `false`. Mirrors
+    // `perry-runtime/src/value/tags.rs` which keeps them crate-internal.
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+
     if let Some(widget) = get_widget(handle) {
         let motion = gtk4::EventControllerMotion::new();
         let cb = callback;
         motion.connect_enter(move |_ctrl, _x, _y| {
             let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
             unsafe {
-                js_closure_call1(ptr, 1.0);
+                js_closure_call1(ptr, f64::from_bits(TAG_TRUE));
             }
         });
         let cb2 = callback;
         motion.connect_leave(move |_ctrl| {
             let ptr = unsafe { js_nanbox_get_pointer(cb2) } as *const u8;
             unsafe {
-                js_closure_call1(ptr, 0.0);
+                js_closure_call1(ptr, f64::from_bits(TAG_FALSE));
             }
         });
         widget.add_controller(motion);
@@ -516,6 +525,108 @@ pub fn set_on_click(handle: i64, callback: f64) {
             }
         });
         widget.add_controller(gesture);
+    }
+}
+
+/// Continuous pointer events (issue #1868). Wires onMouseDown/Up/Move
+/// using `GtkGestureClick` (for press/release with button info) and
+/// `GtkEventControllerMotion` (for motion).
+///
+/// Callback receives a `PointerEvent { x, y, button, pointerType: "mouse" }`
+/// allocated by `js_pointer_event_new`. GDK delivers coordinates in
+/// widget-local points with top-left origin already — no flip needed.
+///
+/// `GdkButton` is `1`=left / `2`=middle / `3`=right; we remap to the JS
+/// convention `0`/`1`/`2` (web `MouseEvent.button`).
+pub fn set_on_mouse_down(handle: i64, callback: f64) {
+    extern "C" {
+        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+        fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
+    }
+    if let Some(widget) = get_widget(handle) {
+        let gesture = gtk4::GestureClick::new();
+        // 0 = listen for every button (left/middle/right/back/forward).
+        gesture.set_button(0);
+        let cb = callback;
+        gesture.connect_pressed(move |g, _n_press, x, y| {
+            let gdk_button = g.current_button();
+            let js_button = match gdk_button {
+                1 => 0,
+                2 => 1,
+                3 => 2,
+                8 => 3,
+                9 => 4,
+                other => other.saturating_sub(1),
+            };
+            let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
+            let pe = unsafe { js_pointer_event_new(x, y, js_button, 0) };
+            unsafe {
+                js_closure_call1(ptr, pe);
+            }
+        });
+        widget.add_controller(gesture);
+    }
+}
+
+pub fn set_on_mouse_up(handle: i64, callback: f64) {
+    extern "C" {
+        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+        fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
+    }
+    if let Some(widget) = get_widget(handle) {
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(0);
+        let cb = callback;
+        gesture.connect_released(move |g, _n_press, x, y| {
+            let gdk_button = g.current_button();
+            let js_button = match gdk_button {
+                1 => 0,
+                2 => 1,
+                3 => 2,
+                8 => 3,
+                9 => 4,
+                other => other.saturating_sub(1),
+            };
+            let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
+            let pe = unsafe { js_pointer_event_new(x, y, js_button, 0) };
+            unsafe {
+                js_closure_call1(ptr, pe);
+            }
+        });
+        widget.add_controller(gesture);
+    }
+}
+
+pub fn set_on_mouse_move(handle: i64, callback: f64) {
+    extern "C" {
+        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+        fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
+    }
+    if let Some(widget) = get_widget(handle) {
+        let motion = gtk4::EventControllerMotion::new();
+        let cb = callback;
+        motion.connect_motion(move |_ctrl, x, y| {
+            let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
+            // No active button while just hovering — report 0 (Left) as
+            // per the web `MouseEvent.button` spec for mousemove.
+            let pe = unsafe { js_pointer_event_new(x, y, 0, 0) };
+            unsafe {
+                js_closure_call1(ptr, pe);
+            }
+        });
+        widget.add_controller(motion);
     }
 }
 

@@ -14,6 +14,7 @@ pub mod media_playback;
 pub mod menu;
 pub mod network;
 pub mod notifications;
+pub mod pointer;
 pub mod state;
 pub mod string_header;
 pub mod tray;

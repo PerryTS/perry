@@ -1232,6 +1232,30 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::Closure],
         ret: ReturnKind::Void,
     },
+    // Continuous pointer events (issue #1868). Callbacks receive a
+    // PointerEvent { x, y, button, pointerType } object — allocated
+    // in perry-runtime/src/pointer_event.rs and passed via
+    // js_closure_call1. Coordinates are widget-local points (top-left
+    // origin). onMouseMove is coalesced to one call per frame per
+    // widget at the platform-backend layer.
+    MethodRow {
+        method: "widgetSetOnMouseDown",
+        runtime: "perry_ui_widget_set_on_mouse_down",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetOnMouseUp",
+        runtime: "perry_ui_widget_set_on_mouse_up",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetOnMouseMove",
+        runtime: "perry_ui_widget_set_on_mouse_move",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "widgetAnimateOpacity",
         runtime: "perry_ui_widget_animate_opacity",

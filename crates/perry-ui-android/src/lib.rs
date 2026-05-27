@@ -28,6 +28,7 @@ pub mod location;
 pub mod media_playback;
 pub mod menu;
 pub mod network;
+pub mod pointer;
 #[cfg(feature = "geisterhand")]
 pub mod screenshot;
 pub mod sheet;

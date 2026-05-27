@@ -916,8 +916,64 @@ export function widgetSetContextMenu(widget: Widget, menu: Widget): void;
 export function widgetAddOverlay(widget: Widget, overlay: Widget): void;
 export function widgetSetOverlayFrame(widget: Widget, x: number, y: number, width: number, height: number): void;
 export function widgetSetOnClick(widget: Widget, callback: () => void): void;
-export function widgetSetOnHover(widget: Widget, callback: () => void): void;
+/**
+ * Fired when the pointer enters (`true`) or leaves (`false`) the widget's
+ * bounds. The callback signature changed in issue #1868 to deliver both
+ * states through a single callback; previous code that wrote
+ * `widgetSetOnHover(w, () => ...)` keeps compiling and running — extra
+ * arguments are ignored at the call site — but only fires on enter.
+ */
+export function widgetSetOnHover(widget: Widget, callback: (isHovering: boolean) => void): void;
 export function widgetSetOnDoubleClick(widget: Widget, callback: () => void): void;
+
+/**
+ * Which mouse button fired a pointer event. Values match the web
+ * `MouseEvent.button` spec so the model is portable. On touch
+ * platforms the value is always `MouseButton.Left`.
+ */
+export const enum MouseButton {
+    Left = 0,
+    Middle = 1,
+    Right = 2,
+    Back = 3,
+    Forward = 4,
+}
+
+/**
+ * Which input device fired a pointer event. Mirrors the web
+ * `PointerEvent.pointerType` spec. Multi-touch is not yet surfaced;
+ * stylus is reported as `"pen"` when the platform exposes it.
+ */
+export type PointerType = "mouse" | "touch" | "pen";
+
+/**
+ * Continuous pointer event payload delivered to `onMouseDown`,
+ * `onMouseUp`, `onMouseMove`. Coordinates are widget-local points
+ * (top-left origin). Issue #1868.
+ */
+export interface PointerEvent {
+    x: number;
+    y: number;
+    button: MouseButton;
+    pointerType: PointerType;
+}
+
+/**
+ * Fire when a button is pressed over the widget. Use together with
+ * `widgetSetOnMouseUp` to disambiguate clicks from drags, or with
+ * `widgetSetOnMouseMove` to drive drawing / drag-and-drop. Issue #1868.
+ */
+export function widgetSetOnMouseDown(widget: Widget, callback: (e: PointerEvent) => void): void;
+
+/** Fire when a button is released over the widget. See `widgetSetOnMouseDown`. */
+export function widgetSetOnMouseUp(widget: Widget, callback: (e: PointerEvent) => void): void;
+
+/**
+ * Fire continuously while the pointer is over the widget. On macOS,
+ * duplicate same-position events are coalesced to one call per
+ * (x, y) pair. See `widgetSetOnMouseDown`.
+ */
+export function widgetSetOnMouseMove(widget: Widget, callback: (e: PointerEvent) => void): void;
 /** Animate opacity to `target` over `durationSecs` seconds. */
 export function widgetAnimateOpacity(widget: Widget, target: number, durationSecs: number): void;
 /** Animate position by `(dx, dy)` pixels over `durationSecs` seconds. */

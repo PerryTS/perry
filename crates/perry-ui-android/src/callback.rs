@@ -51,6 +51,24 @@ fn pump_microtasks() {
 static CALLBACKS: Mutex<Option<HashMap<i64, f64>>> = Mutex::new(None);
 static NEXT_KEY: AtomicI64 = AtomicI64::new(1);
 
+/// Read the closure currently stored under `key`, or `None` if it's
+/// been removed. Used by the pointer dispatcher to fetch the current
+/// callback without going through `invoke*`.
+pub fn get(key: i64) -> Option<f64> {
+    let guard = CALLBACKS.lock().unwrap();
+    guard.as_ref().and_then(|m| m.get(&key).copied())
+}
+
+/// Overwrite the closure stored under `key`. Used by the pointer
+/// dispatcher (issue #1868) to swap the active callback per phase
+/// without inventing a new key — the Kotlin OnTouchListener already
+/// holds a stable `(downKey, moveKey, upKey)` triple per widget.
+pub fn replace(key: i64, closure_f64: f64) {
+    let mut guard = CALLBACKS.lock().unwrap();
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.insert(key, closure_f64);
+}
+
 /// Register a NaN-boxed closure and return a unique key for it.
 pub fn register(closure_f64: f64) -> i64 {
     let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);

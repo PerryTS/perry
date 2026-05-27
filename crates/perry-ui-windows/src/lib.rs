@@ -9,6 +9,7 @@ pub mod issue_552_stub;
 pub mod keyboard;
 pub mod media_playback;
 pub mod network_stub;
+pub mod pointer;
 
 // Install a vectored exception handler that prints crash info to stderr.
 #[cfg(target_os = "windows")]
