@@ -1,4 +1,5 @@
 use super::*;
+use std::any::Any;
 
 mod scanner_shims;
 mod shadow_stack;
@@ -22,6 +23,9 @@ pub use shadow_stack::{
 pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
 
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
+pub(crate) type BudgetedMutableRootScanner =
+    for<'a> fn(&mut RuntimeRootVisitor<'a>, &mut dyn Any, &mut usize) -> bool;
+pub(crate) type BudgetedMutableRootScannerStateFactory = fn() -> Box<dyn Any>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MutableRootScannerSource {
@@ -33,6 +37,8 @@ pub(super) enum MutableRootScannerSource {
 pub(super) struct MutableRootScannerEntry {
     pub(super) scanner: MutableRootScanner,
     pub(super) source: MutableRootScannerSource,
+    pub(super) budgeted_scanner: Option<BudgetedMutableRootScanner>,
+    pub(super) budgeted_state_factory: Option<BudgetedMutableRootScannerStateFactory>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -203,9 +209,29 @@ pub(super) fn copy_only_root_scanner_counts() -> (usize, usize) {
     (rust_scanners, ffi_scanners)
 }
 
+pub(super) fn registered_root_scanners_block_budgeted_gc() -> bool {
+    let has_copy_only = ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty())
+        || FFI_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty());
+    let has_unbudgeted_mutable = MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners
+            .borrow()
+            .iter()
+            .any(|entry| entry.budgeted_scanner.is_none())
+    });
+    let has_ffi_mutable = FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty())
+        || FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty());
+    has_copy_only || has_unbudgeted_mutable || has_ffi_mutable
+}
+
 /// Register a runtime-owned root scanner that exposes mutable slots.
 /// These scanners are marked like ordinary roots, but their storage is
 /// revisited after evacuation so forwarded references can be rewritten.
+///
+/// This compatibility registration has no resumable cursor. Ordinary
+/// low-pause GC steps therefore treat it as a synchronous-only scanner and
+/// defer while it is registered. Runtime scanners that can participate in
+/// `NormalIncremental`/`MutatorAssist` progress must use
+/// `gc_register_budgeted_mutable_root_scanner_with_source`.
 pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
     gc_register_mutable_root_scanner_with_source(
         scanner,
@@ -225,9 +251,28 @@ pub(super) fn gc_register_mutable_root_scanner_with_source(
     source: MutableRootScannerSource,
 ) {
     MUTABLE_ROOT_SCANNERS.with(|scanners| {
-        scanners
-            .borrow_mut()
-            .push(MutableRootScannerEntry { scanner, source });
+        scanners.borrow_mut().push(MutableRootScannerEntry {
+            scanner,
+            source,
+            budgeted_scanner: None,
+            budgeted_state_factory: None,
+        });
+    });
+}
+
+pub(super) fn gc_register_budgeted_mutable_root_scanner_with_source(
+    scanner: MutableRootScanner,
+    budgeted_scanner: BudgetedMutableRootScanner,
+    budgeted_state_factory: BudgetedMutableRootScannerStateFactory,
+    source: MutableRootScannerSource,
+) {
+    MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(MutableRootScannerEntry {
+            scanner,
+            source,
+            budgeted_scanner: Some(budgeted_scanner),
+            budgeted_state_factory: Some(budgeted_state_factory),
+        });
     });
 }
 
@@ -1477,6 +1522,44 @@ pub(super) fn scan_runtime_handle_roots_mut(visitor: &mut RuntimeRootVisitor<'_>
     });
 }
 
+#[derive(Default)]
+pub(crate) struct RuntimeHandleRootScanState {
+    cursor: usize,
+}
+
+pub(crate) fn new_runtime_handle_root_scan_state() -> Box<dyn Any> {
+    Box::<RuntimeHandleRootScanState>::default()
+}
+
+pub(crate) fn scan_runtime_handle_roots_mut_step(
+    visitor: &mut RuntimeRootVisitor<'_>,
+    state: &mut dyn Any,
+    remaining: &mut usize,
+) -> bool {
+    let state = state
+        .downcast_mut::<RuntimeHandleRootScanState>()
+        .expect("runtime handle root scanner state type");
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        while *remaining > 0 && state.cursor < stack.len() {
+            match &mut stack[state.cursor] {
+                RuntimeHandleSlot::Nanbox(bits) => {
+                    visitor.visit_nanbox_u64_slot(bits);
+                }
+                RuntimeHandleSlot::RawTagged { addr, tag } => {
+                    visitor.visit_tagged_usize_slot(addr, *tag);
+                }
+                RuntimeHandleSlot::HeapWord(bits) => {
+                    visitor.visit_heap_word_u64_slot(bits);
+                }
+            }
+            state.cursor += 1;
+            *remaining -= 1;
+        }
+        state.cursor >= stack.len()
+    })
+}
+
 #[inline]
 pub(super) fn atomic_store_ordering(
     ordering: std::sync::atomic::Ordering,
@@ -1581,6 +1664,90 @@ pub(super) fn visit_mutable_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
     visit_global_root_slots(&mut visit);
 }
 
+#[derive(Default)]
+pub(super) struct MutableRootSlotScanCursor {
+    shadow_seen: usize,
+    global_seen: usize,
+    shadow_done: bool,
+    global_done: bool,
+}
+
+pub(super) fn mark_mutable_root_slots_step(
+    valid_ptrs: &ValidPointerSet,
+    mut shadow_stats: Option<&mut ShadowRootTraceStats>,
+    mut root_sources: Option<&mut RootSourcesTraceStats>,
+    cursor: &mut MutableRootSlotScanCursor,
+    budget: usize,
+) -> bool {
+    let mut remaining = budget;
+    if !cursor.shadow_done {
+        if remaining == 0 {
+            return false;
+        }
+        let mut seen = 0usize;
+        let mut exhausted = true;
+        visit_shadow_stack_root_slots(|slot| unsafe {
+            if seen < cursor.shadow_seen {
+                seen += 1;
+                return;
+            }
+            if remaining == 0 {
+                exhausted = false;
+                return;
+            }
+
+            let bits = slot.read();
+            record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
+            if let Some(stats) = shadow_stats.as_mut() {
+                stats.record_scan(bits);
+            }
+            if bits != 0 {
+                try_mark_value(bits, valid_ptrs);
+            }
+            seen += 1;
+            cursor.shadow_seen = seen;
+            remaining -= 1;
+        });
+        if !exhausted {
+            return false;
+        }
+        cursor.shadow_done = true;
+    }
+
+    if !cursor.global_done {
+        if remaining == 0 {
+            return false;
+        }
+        let mut seen = 0usize;
+        let mut exhausted = true;
+        visit_global_root_slots(|slot| unsafe {
+            if seen < cursor.global_seen {
+                seen += 1;
+                return;
+            }
+            if remaining == 0 {
+                exhausted = false;
+                return;
+            }
+
+            let bits = slot.read();
+            record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
+            if bits != 0 {
+                mark_global_root_bits(bits, valid_ptrs);
+            }
+            seen += 1;
+            cursor.global_seen = seen;
+            remaining -= 1;
+        });
+        if !exhausted {
+            return false;
+        }
+        cursor.global_done = true;
+    }
+
+    true
+}
+
 #[inline]
 pub(super) fn shadow_slot_pointer_root(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
@@ -1658,6 +1825,7 @@ pub(super) fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
 }
 
 /// Mark mutable roots (shadow-stack slots and registered globals).
+#[allow(dead_code)]
 pub(super) fn mark_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
     mut shadow_stats: Option<&mut ShadowRootTraceStats>,
@@ -1818,10 +1986,12 @@ pub(super) fn visit_ffi_mutable_registered_roots_with_sources(
 }
 
 /// Run registered runtime-owned scanners that expose mutable slots.
+#[allow(dead_code)]
 pub(super) fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     mark_mutable_registered_roots_with_sources(valid_ptrs, None);
 }
 
+#[allow(dead_code)]
 pub(super) fn mark_mutable_registered_roots_with_sources(
     valid_ptrs: &ValidPointerSet,
     mut root_sources: Option<&mut RootSourcesTraceStats>,
@@ -1864,6 +2034,7 @@ pub(super) fn mark_mutable_registered_roots_with_sources(
 /// Run legacy copy-only root scanners. When evacuation is enabled,
 /// every discovered root is pinned because the scanner API gives us no
 /// slot to rewrite after forwarding.
+#[allow(dead_code)]
 pub(super) fn mark_registered_roots(
     valid_ptrs: &ValidPointerSet,
     pin_discoveries: bool,

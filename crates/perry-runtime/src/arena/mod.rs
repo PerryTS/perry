@@ -90,7 +90,7 @@ pub(crate) use page_meta::{
     old_page_account_promoted_object, old_page_account_swept_object, old_page_clear_dirty,
     old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
     old_pages_reset_sweep_accounting, unregister_old_object_pages, HeapGeneration, HeapSpace,
-    OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
 };
 
 #[cfg(test)]

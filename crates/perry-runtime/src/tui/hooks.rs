@@ -20,6 +20,7 @@
 //! perry-codegen NativeModSig rows that map the receiver class to the
 //! runtime FFI symbol — same pattern as `state(0).get()`.
 
+use std::any::Any;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -120,6 +121,49 @@ pub fn scan_hook_slot_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
             HookSlot::Effect { .. } | HookSlot::Focus { .. } => {}
         }
     }
+}
+
+#[derive(Default)]
+pub(crate) struct HookSlotRootScanState {
+    index: usize,
+}
+
+pub(crate) fn new_hook_slot_root_scan_state() -> Box<dyn Any> {
+    Box::<HookSlotRootScanState>::default()
+}
+
+pub(crate) fn scan_hook_slot_roots_mut_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut dyn Any,
+    remaining: &mut usize,
+) -> bool {
+    let state = state
+        .downcast_mut::<HookSlotRootScanState>()
+        .expect("tui hook root scanner state type");
+    let mut slots = crate::gc::lock_gc_root_registry(&SLOTS);
+    while *remaining > 0 && state.index < slots.len() {
+        match &mut slots[state.index] {
+            HookSlot::State { value_bits } => {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
+            HookSlot::Memo {
+                value_bits,
+                computed,
+                ..
+            } => {
+                if *computed {
+                    visitor.visit_nanbox_u64_slot(value_bits);
+                }
+            }
+            HookSlot::Ref { value_bits } => {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
+            HookSlot::Effect { .. } | HookSlot::Focus { .. } => {}
+        }
+        state.index += 1;
+        *remaining -= 1;
+    }
+    state.index >= slots.len()
 }
 
 #[cfg(test)]

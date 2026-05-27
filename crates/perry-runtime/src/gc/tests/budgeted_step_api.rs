@@ -7,6 +7,8 @@ fn reset_old_reclaim_pressure() {
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
 }
 
+fn synchronous_only_test_root_scanner(_visitor: &mut RuntimeRootVisitor<'_>) {}
+
 #[test]
 fn no_pressure_budgeted_step_reports_idle_without_starting_cycle() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -66,6 +68,27 @@ fn arena_pressure_budgeted_step_starts_bounded_minor_cycle() {
     assert_eq!(js_gc_step_status(&mut result), JS_GC_STEP_STATUS_IDLE);
     assert_eq!(result.active, 0);
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+}
+
+#[test]
+fn synchronous_only_registered_scanner_blocks_budgeted_step_start() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+    gc_register_mutable_root_scanner(synchronous_only_test_root_scanner);
+
+    let live = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(live));
+    trigger_guard.make_arena_trigger_due();
+
+    let mut result = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_work_units(1, &mut result),
+        JS_GC_STEP_STATUS_SKIPPED
+    );
+    assert_eq!(result.active, 0);
+    assert_eq!(result.completed, 0);
+    assert_eq!(js_gc_step_status(&mut result), JS_GC_STEP_STATUS_IDLE);
 }
 
 #[test]

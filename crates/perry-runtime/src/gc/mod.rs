@@ -244,13 +244,25 @@ pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
 }
 
 pub fn gc_init() {
-    gc_register_mutable_root_scanner_with_source(
+    gc_register_budgeted_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,
+        scan_runtime_handle_roots_mut_step,
+        new_runtime_handle_root_scan_state,
         MutableRootScannerSource::RuntimeHandles,
     );
     gc_register_mutable_root_scanner(crate::promise::scan_native_async_completion_roots_mut);
-    gc_register_mutable_root_scanner(promise_mutable_root_scanner);
-    gc_register_mutable_root_scanner(timer_mutable_root_scanner);
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        promise_mutable_root_scanner,
+        crate::promise::scan_promise_roots_mut_step,
+        crate::promise::new_promise_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        timer_mutable_root_scanner,
+        crate::timer::scan_timer_roots_mut_step,
+        crate::timer::new_timer_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
     gc_register_mutable_root_scanner(exception_mutable_root_scanner);
     gc_register_mutable_root_scanner(async_context_mutable_root_scanner);
     gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);
@@ -327,8 +339,18 @@ pub fn gc_init() {
     // the next allocation triggered minor GC, and the array was
     // reclaimed because nothing else held it — `messages.map(…)` on
     // the stale pointer produced an empty render.
-    gc_register_mutable_root_scanner(crate::tui::hooks::scan_hook_slot_roots_mut);
-    gc_register_mutable_root_scanner(crate::tui::state::scan_state_slot_roots_mut);
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::tui::hooks::scan_hook_slot_roots_mut,
+        crate::tui::hooks::scan_hook_slot_roots_mut_step,
+        crate::tui::hooks::new_hook_slot_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::tui::state::scan_state_slot_roots_mut,
+        crate::tui::state::scan_state_slot_roots_mut_step,
+        crate::tui::state::new_state_slot_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
     #[cfg(feature = "ohos-napi")]
     gc_register_mutable_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
 }

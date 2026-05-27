@@ -53,6 +53,7 @@ pub use native_async::{
     PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
+pub(crate) use scanners::{new_promise_root_scan_state, scan_promise_roots_mut_step};
 pub(crate) use then::js_promise_attach_handlers;
 pub use then::{
     js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free, js_promise_new,
@@ -64,7 +65,7 @@ pub use then::{
 pub(crate) use scanners::{
     test_async_step_thunk_cache, test_clear_promise_scanner_roots, test_current_microtask_value,
     test_promise_context_keys, test_promise_scanner_snapshot, test_seed_async_step_thunk_cache,
-    test_seed_promise_context, test_seed_promise_scanner_roots,
+    test_seed_many_promise_task_roots, test_seed_promise_context, test_seed_promise_scanner_roots,
     test_store_with_resolvers_result_fields, TestPromiseScannerSnapshot,
 };
 
@@ -394,7 +395,7 @@ pub(crate) enum Task {
 // `Vec` with `.pop()` produces LIFO ordering, breaking every test
 // that prints inside multiple parallel promise chains.
 thread_local! {
-    pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
+pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
         = const { RefCell::new(std::collections::VecDeque::new()) };
 
     // TODO: Move this snapshot into `Promise` once generational evacuation
@@ -403,8 +404,8 @@ thread_local! {
     // pending snapshots from the sweep path. With `PERRY_GEN_GC_EVACUATE=1`,
     // however, promise addresses can change and this key will not be rewritten,
     // so a pre-evacuation `.then()` snapshot can be missed after settlement.
-    pub(crate) static PROMISE_CONTEXTS: RefCell<HashMap<usize, AsyncContextSnapshot>> =
-        RefCell::new(HashMap::new());
+    pub(crate) static PROMISE_CONTEXTS: RefCell<PromiseContextStore> =
+        RefCell::new(PromiseContextStore::default());
 
     pub(crate) static MICROTASK_PREV_CONTEXTS: RefCell<Vec<AsyncContextSnapshot>>
         = const { RefCell::new(Vec::new()) };
@@ -471,6 +472,93 @@ pub(crate) struct AsyncStepGuard {
 /// false positives, low enough to terminate quickly when the bug fires.
 pub(crate) const ASYNC_STEP_REENTRY_BOUND: u32 = 10_000;
 
+#[derive(Default)]
+pub(crate) struct PromiseContextStore {
+    entries: HashMap<usize, AsyncContextSnapshot>,
+    keys: Vec<usize>,
+}
+
+impl PromiseContextStore {
+    pub(crate) fn insert(&mut self, key: usize, snapshot: AsyncContextSnapshot) {
+        if !self.entries.contains_key(&key) {
+            self.keys.push(key);
+        }
+        self.entries.insert(key, snapshot);
+    }
+
+    pub(crate) fn get(&self, key: &usize) -> Option<&AsyncContextSnapshot> {
+        self.entries.get(key)
+    }
+
+    pub(crate) fn get_mut(&mut self, key: &usize) -> Option<&mut AsyncContextSnapshot> {
+        self.entries.get_mut(key)
+    }
+
+    pub(crate) fn remove(&mut self, key: &usize) -> Option<AsyncContextSnapshot> {
+        let removed = self.entries.remove(key);
+        if removed.is_some() {
+            if let Some(pos) = self.keys.iter().position(|candidate| candidate == key) {
+                self.keys.swap_remove(pos);
+            }
+        }
+        removed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.keys.clear();
+    }
+
+    pub(crate) fn key_at(&self, index: usize) -> Option<usize> {
+        self.keys.get(index).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &usize> {
+        self.keys.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn first(&self) -> Option<(usize, &AsyncContextSnapshot)> {
+        self.keys
+            .first()
+            .and_then(|key| self.entries.get(key).map(|snapshot| (*key, snapshot)))
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(usize, &mut AsyncContextSnapshot) -> bool) {
+        let mut index = 0;
+        while index < self.keys.len() {
+            let key = self.keys[index];
+            let retain = self
+                .entries
+                .get_mut(&key)
+                .is_some_and(|snapshot| keep(key, snapshot));
+            if retain {
+                index += 1;
+            } else {
+                self.keys.swap_remove(index);
+                self.entries.remove(&key);
+            }
+        }
+    }
+
+    fn rekey(&mut self, old_key: usize, new_key: usize) {
+        if old_key == new_key {
+            return;
+        }
+        let Some(context) = self.entries.remove(&old_key) else {
+            return;
+        };
+        if let Some(pos) = self.keys.iter().position(|key| *key == old_key) {
+            self.keys[pos] = new_key;
+        } else if !self.entries.contains_key(&new_key) {
+            self.keys.push(new_key);
+        }
+        self.entries.insert(new_key, context);
+    }
+}
+
 pub(crate) fn set_promise_callback_context(promise: *mut Promise) {
     if promise.is_null() {
         return;
@@ -518,7 +606,7 @@ pub(crate) fn cleanup_copied_minor_promise_contexts_for_gc() {
     PROMISE_CONTEXTS.with(|contexts| {
         let mut contexts = contexts.borrow_mut();
         let mut moved = Vec::new();
-        contexts.retain(|&key, _| {
+        contexts.retain(|key, _| {
             let space = crate::arena::classify_heap_space(key);
             let in_from_space = matches!(space, crate::arena::HeapSpace::NurseryEden)
                 || space == crate::arena::active_survivor_space();
@@ -544,9 +632,7 @@ pub(crate) fn cleanup_copied_minor_promise_contexts_for_gc() {
             false
         });
         for (old_key, new_key) in moved {
-            if let Some(context) = contexts.remove(&old_key) {
-                contexts.insert(new_key, context);
-            }
+            contexts.rekey(old_key, new_key);
         }
     });
 }

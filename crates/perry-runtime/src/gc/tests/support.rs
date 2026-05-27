@@ -260,6 +260,7 @@ fn reset_copying_nursery_runtime_test_state() {
     crate::set::test_clear_set_roots();
     crate::os::test_clear_process_event_listeners();
     crate::promise::test_clear_promise_scanner_roots();
+    crate::timer::test_clear_all_timer_scanner_roots();
     crate::closure::test_clear_singleton_closure_caches();
     crate::closure::test_clear_closure_side_tables();
     crate::r#box::test_clear_box_registry();

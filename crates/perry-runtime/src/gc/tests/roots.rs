@@ -34,8 +34,18 @@ fn ensure_lock_safe_runtime_scanners_registered() {
         if registered.get() {
             return;
         }
-        gc_register_mutable_root_scanner(crate::tui::hooks::scan_hook_slot_roots_mut);
-        gc_register_mutable_root_scanner(crate::tui::state::scan_state_slot_roots_mut);
+        gc_register_budgeted_mutable_root_scanner_with_source(
+            crate::tui::hooks::scan_hook_slot_roots_mut,
+            crate::tui::hooks::scan_hook_slot_roots_mut_step,
+            crate::tui::hooks::new_hook_slot_root_scan_state,
+            MutableRootScannerSource::RuntimeMutableScanner,
+        );
+        gc_register_budgeted_mutable_root_scanner_with_source(
+            crate::tui::state::scan_state_slot_roots_mut,
+            crate::tui::state::scan_state_slot_roots_mut_step,
+            crate::tui::state::new_state_slot_root_scan_state,
+            MutableRootScannerSource::RuntimeMutableScanner,
+        );
         #[cfg(feature = "ohos-napi")]
         {
             gc_register_mutable_root_scanner(

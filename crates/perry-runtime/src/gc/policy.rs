@@ -1071,12 +1071,14 @@ fn gc_budgeted_start_blocked() -> bool {
     GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
         || gc_blocked_by_unsafe_zone()
         || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+        || registered_root_scanners_block_budgeted_gc()
 }
 
 fn gc_budgeted_resume_blocked() -> bool {
     GC_FLAGS.with(|f| f.get()) & GC_FLAG_SUPPRESSED != 0
         || gc_blocked_by_unsafe_zone()
         || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+        || registered_root_scanners_block_budgeted_gc()
 }
 
 pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
