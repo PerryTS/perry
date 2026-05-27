@@ -932,12 +932,6 @@
     "category": "bug-open",
     "reason": "node:stream: cork / uncork return type wrong. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/constructor/stream-legacy": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.Stream legacy constructor not exposed as the default export. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/destroy/destroy-string": {
     "issue": "1532",
     "added": "2026-05-23",

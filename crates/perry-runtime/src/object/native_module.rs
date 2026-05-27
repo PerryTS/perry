@@ -377,6 +377,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream", "Duplex")
             | ("stream", "Transform")
             | ("stream", "PassThrough")
+            | ("stream", "Stream")
             | ("string_decoder", "StringDecoder")
             | ("assert", "ok")
             | ("assert", "fail")
@@ -1651,6 +1652,7 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "stream" => match property {
+            "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(unsafe {
                 crate::node_submodules::js_node_submodule_namespace(
                     b"stream_promises".as_ptr(),
