@@ -1330,7 +1330,48 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                     b"byteOffset" => return JSValue::number(0.0),
                     b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
-                    _ => {}
+                    b"constructor" => {
+                        let name = crate::typedarray::name_for_kind(kind);
+                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    // #2061: a non-index (method-name) key must resolve against
+                    // %TypedArray%.prototype, not be swallowed as an element
+                    // index. Bind a callable closure so `typeof
+                    // int8arr.copyWithin === "function"` and the call routes
+                    // through `js_native_call_method`'s typed-array arm.
+                    _ => {
+                        if let Ok(name) = std::str::from_utf8(key_bytes) {
+                            if crate::typedarray::is_typed_array_method_name(name) {
+                                // Heap-copy the name so the bound closure's
+                                // capture outlives this StringHeader (mirrors
+                                // the Buffer method-bind path).
+                                let heap_name = {
+                                    let layout = std::alloc::Layout::from_size_align(
+                                        key_bytes.len().max(1),
+                                        1,
+                                    )
+                                    .unwrap();
+                                    let ptr = std::alloc::alloc(layout);
+                                    std::ptr::copy_nonoverlapping(
+                                        key_bytes.as_ptr(),
+                                        ptr,
+                                        key_bytes.len(),
+                                    );
+                                    ptr
+                                };
+                                // Bind with the RAW pointer (top16 == 0). The
+                                // bound-method dispatcher passes capture-0
+                                // unchanged to js_native_call_method, whose
+                                // typed-array arm matches on `top16 == 0` — a
+                                // POINTER_TAG box would miss it.
+                                let this_f64 = f64::from_bits(obj as u64);
+                                let result =
+                                    js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                                return JSValue::from_bits(result.to_bits());
+                            }
+                        }
+                    }
                 }
             }
             return JSValue::undefined();

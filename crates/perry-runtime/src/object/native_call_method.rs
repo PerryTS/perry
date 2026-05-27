@@ -543,6 +543,20 @@ pub unsafe extern "C" fn js_native_call_method(
                         std::ptr::null()
                     }
                 };
+                let arg_n = |i: usize| -> Option<f64> {
+                    if i < args_len && !args_ptr.is_null() {
+                        Some(unsafe { *args_ptr.add(i) })
+                    } else {
+                        None
+                    }
+                };
+                let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let to_ta = |p: *mut crate::typedarray::TypedArrayHeader| -> f64 {
+                    f64::from_bits(p as u64)
+                };
+                let to_str = |p: *mut crate::string::StringHeader| -> f64 {
+                    f64::from_bits(crate::value::js_nanbox_string(p as i64).to_bits())
+                };
                 match method_name {
                     "length" => {
                         return crate::typedarray::js_typed_array_length(ta) as f64;
@@ -596,10 +610,117 @@ pub unsafe extern "C" fn js_native_call_method(
                         }
                         return crate::typedarray::js_typed_array_find_last_index(ta, cb);
                     }
+                    // #2061: the remaining common %TypedArray%.prototype
+                    // methods. Indexed/range args are pre-resolved here
+                    // (absent `start` → 0, absent `end` → length) so the
+                    // runtime helpers only normalize negatives + clamp.
+                    "fill" => {
+                        let len = crate::typedarray::js_typed_array_length(ta) as f64;
+                        let value = arg_n(0).unwrap_or(undef);
+                        let start = arg_n(1).unwrap_or(0.0);
+                        let end = arg_n(2).unwrap_or(len);
+                        return to_ta(crate::typedarray::js_typed_array_fill(
+                            ta, value, start, end,
+                        ));
+                    }
+                    "copyWithin" => {
+                        let len = crate::typedarray::js_typed_array_length(ta) as f64;
+                        let target = arg_n(0).unwrap_or(0.0);
+                        let start = arg_n(1).unwrap_or(0.0);
+                        let end = arg_n(2).unwrap_or(len);
+                        return to_ta(crate::typedarray::js_typed_array_copy_within(
+                            ta, target, start, end,
+                        ));
+                    }
+                    "slice" => {
+                        let len = crate::typedarray::js_typed_array_length(ta) as f64;
+                        let start = arg_n(0).unwrap_or(0.0);
+                        let end = arg_n(1).unwrap_or(len);
+                        return to_ta(crate::typedarray::js_typed_array_slice(ta, start, end));
+                    }
+                    "subarray" => {
+                        let len = crate::typedarray::js_typed_array_length(ta) as f64;
+                        let start = arg_n(0).unwrap_or(0.0);
+                        let end = arg_n(1).unwrap_or(len);
+                        return to_ta(crate::typedarray::js_typed_array_subarray(ta, start, end));
+                    }
+                    "indexOf" => {
+                        let value = arg_n(0).unwrap_or(undef);
+                        let from = arg_n(1).unwrap_or(0.0);
+                        return crate::typedarray::js_typed_array_index_of(ta, value, from);
+                    }
+                    "lastIndexOf" => {
+                        let value = arg_n(0).unwrap_or(undef);
+                        // Absent fromIndex → search from the last element.
+                        let from = arg_n(1).unwrap_or(f64::INFINITY);
+                        return crate::typedarray::js_typed_array_last_index_of(ta, value, from);
+                    }
+                    "includes" => {
+                        let value = arg_n(0).unwrap_or(undef);
+                        let from = arg_n(1).unwrap_or(0.0);
+                        return crate::typedarray::js_typed_array_includes(ta, value, from);
+                    }
+                    "join" => {
+                        let sep = arg_n(0).unwrap_or(undef);
+                        return to_str(crate::typedarray::js_typed_array_join(ta, sep));
+                    }
+                    "toString" | "toLocaleString" => {
+                        return to_str(crate::typedarray::js_typed_array_join(ta, undef));
+                    }
+                    "reverse" => {
+                        return to_ta(crate::typedarray::js_typed_array_reverse(ta));
+                    }
+                    "set" => {
+                        let source = arg_n(0).unwrap_or(undef);
+                        let offset = arg_n(1).unwrap_or(0.0);
+                        return crate::typedarray::js_typed_array_set_from(ta, source, offset);
+                    }
+                    "forEach" => {
+                        return crate::typedarray::js_typed_array_for_each(ta, arg_closure(0));
+                    }
+                    "map" => {
+                        return to_ta(crate::typedarray::js_typed_array_map(ta, arg_closure(0)));
+                    }
+                    "filter" => {
+                        return to_ta(crate::typedarray::js_typed_array_filter(ta, arg_closure(0)));
+                    }
+                    "some" => {
+                        return crate::typedarray::js_typed_array_some(ta, arg_closure(0));
+                    }
+                    "every" => {
+                        return crate::typedarray::js_typed_array_every(ta, arg_closure(0));
+                    }
+                    "find" => {
+                        return crate::typedarray::js_typed_array_find(ta, arg_closure(0));
+                    }
+                    "findIndex" => {
+                        return crate::typedarray::js_typed_array_find_index(ta, arg_closure(0));
+                    }
+                    "reduce" => {
+                        let has_init = if args_len >= 2 { 1 } else { 0 };
+                        let init = arg_n(1).unwrap_or(undef);
+                        return crate::typedarray::js_typed_array_reduce(
+                            ta,
+                            arg_closure(0),
+                            init,
+                            has_init,
+                        );
+                    }
+                    "reduceRight" => {
+                        let has_init = if args_len >= 2 { 1 } else { 0 };
+                        let init = arg_n(1).unwrap_or(undef);
+                        return crate::typedarray::js_typed_array_reduce_right(
+                            ta,
+                            arg_closure(0),
+                            init,
+                            has_init,
+                        );
+                    }
                     _ => {
-                        // Fall through. Other methods aren't handled here
-                        // yet; they hit the primitive-method catch-all
-                        // below — better than silent no-op.
+                        // Fall through. Remaining methods (keys/values/
+                        // entries iterators) aren't handled here yet; they
+                        // hit the primitive-method catch-all below — better
+                        // than silent no-op.
                     }
                 }
             }

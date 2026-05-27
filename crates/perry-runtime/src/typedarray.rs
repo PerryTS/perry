@@ -901,6 +901,687 @@ pub extern "C" fn js_typed_array_find_last_index(
     }
 }
 
+/// True for any name that is a method on `%TypedArray%.prototype`. The
+/// field-by-name resolver (#2061) uses this to bind a callable closure for
+/// `int8arr.copyWithin` (so `typeof int8arr.copyWithin === "function"` and
+/// the call routes through `js_native_call_method`) instead of coercing the
+/// key to an element index. Accessor properties (`length`, `byteLength`,
+/// `byteOffset`, `BYTES_PER_ELEMENT`, `buffer`, `constructor`) are handled
+/// separately by the caller and are intentionally NOT listed here.
+pub fn is_typed_array_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "at" | "copyWithin"
+            | "entries"
+            | "every"
+            | "fill"
+            | "filter"
+            | "find"
+            | "findIndex"
+            | "findLast"
+            | "findLastIndex"
+            | "forEach"
+            | "includes"
+            | "indexOf"
+            | "join"
+            | "keys"
+            | "lastIndexOf"
+            | "map"
+            | "reduce"
+            | "reduceRight"
+            | "reverse"
+            | "set"
+            | "slice"
+            | "some"
+            | "sort"
+            | "subarray"
+            | "toLocaleString"
+            | "toReversed"
+            | "toSorted"
+            | "toString"
+            | "values"
+    )
+}
+
+/// Normalize a relative index argument: `ToIntegerOrInfinity` then clamp to
+/// `[0, len]`. `NaN` → 0; negatives count back from the end. Saturating
+/// arithmetic keeps ±Infinity and out-of-range finite values in bounds.
+#[inline]
+fn norm_rel_index(idx: f64, len: usize) -> usize {
+    let len_i = len as i64;
+    let mut i = if idx.is_nan() {
+        0
+    } else if idx == f64::INFINITY {
+        len_i
+    } else if idx == f64::NEG_INFINITY {
+        0
+    } else {
+        idx as i64
+    };
+    if i < 0 {
+        i = i.saturating_add(len_i);
+    }
+    i.clamp(0, len_i) as usize
+}
+
+/// Interpret a search value (for `indexOf`/`lastIndexOf`/`includes`) as the
+/// JS number it represents, or `None` if it isn't a number — typed-array
+/// elements are always numbers, so a non-number target can never match under
+/// strict equality (`indexOf`) / SameValueZero (`includes`).
+#[inline]
+fn search_as_number(v: f64) -> Option<f64> {
+    let bits = v.to_bits();
+    let top16 = bits >> 48;
+    // INT32-tagged small integers are numbers.
+    if top16 == 0x7FFE {
+        return Some(((bits & 0xFFFF_FFFF) as i32) as f64);
+    }
+    // Any other NaN-box tag (undefined/null/bool/string/pointer/bigint and
+    // SSO short-strings) is a non-number.
+    if (0x7FFA..0x8000).contains(&top16) || top16 == 0x7FF9 {
+        return None;
+    }
+    // Plain double (incl. negatives and canonical NaN).
+    Some(v)
+}
+
+/// `ta.fill(value, start, end)` — in place, returns `ta`. `start`/`end` are
+/// pre-resolved by the caller (absent `start` → 0, absent `end` → length).
+#[no_mangle]
+pub extern "C" fn js_typed_array_fill(
+    ta: *mut TypedArrayHeader,
+    value: f64,
+    start: f64,
+    end: f64,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
+    if ta.is_null() {
+        return ta;
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        let s = norm_rel_index(start, len);
+        let e = norm_rel_index(end, len);
+        let v = jsvalue_to_f64(value);
+        for i in s..e {
+            store_at(ta, i, v);
+        }
+        ta
+    }
+}
+
+/// `ta.copyWithin(target, start, end)` — in place, returns `ta`. Copies the
+/// sequence `[start, end)` to `target`, handling overlap via a temporary.
+#[no_mangle]
+pub extern "C" fn js_typed_array_copy_within(
+    ta: *mut TypedArrayHeader,
+    target: f64,
+    start: f64,
+    end: f64,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
+    if ta.is_null() {
+        return ta;
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        let t = norm_rel_index(target, len);
+        let s = norm_rel_index(start, len);
+        let e = norm_rel_index(end, len);
+        let count = e.saturating_sub(s).min(len.saturating_sub(t));
+        if count > 0 {
+            let tmp: Vec<f64> = (0..count).map(|k| load_at(ta, s + k)).collect();
+            for (k, v) in tmp.into_iter().enumerate() {
+                store_at(ta, t + k, v);
+            }
+        }
+        ta
+    }
+}
+
+/// `ta.slice(start, end)` — new typed array of the same kind with the
+/// `[start, end)` elements copied out.
+#[no_mangle]
+pub extern "C" fn js_typed_array_slice(
+    ta: *const TypedArrayHeader,
+    start: f64,
+    end: f64,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return typed_array_alloc(KIND_FLOAT64, 0);
+    }
+    unsafe {
+        let kind = (*ta).kind;
+        let len = (*ta).length as usize;
+        let s = norm_rel_index(start, len);
+        let e = norm_rel_index(end, len);
+        let count = e.saturating_sub(s);
+        let out = typed_array_alloc(kind, count as u32);
+        for k in 0..count {
+            store_at(out, k, load_at(ta, s + k));
+        }
+        out
+    }
+}
+
+/// `ta.subarray(start, end)`. Node returns a *view* sharing the backing
+/// buffer; Perry typed arrays own their storage, so this returns an
+/// independent copy (mutations through the result do not write back to the
+/// source). Full shared-buffer view semantics are tracked by the
+/// %TypedArray%.prototype reification follow-up (#793).
+#[no_mangle]
+pub extern "C" fn js_typed_array_subarray(
+    ta: *const TypedArrayHeader,
+    start: f64,
+    end: f64,
+) -> *mut TypedArrayHeader {
+    js_typed_array_slice(ta, start, end)
+}
+
+/// `ta.indexOf(value, fromIndex)` — strict-equality forward search. `from`
+/// is pre-resolved (absent → 0). Returns the index or -1.
+#[no_mangle]
+pub extern "C" fn js_typed_array_index_of(
+    ta: *const TypedArrayHeader,
+    value: f64,
+    from: f64,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return -1.0;
+    }
+    let Some(target) = search_as_number(value) else {
+        return -1.0;
+    };
+    unsafe {
+        let len = (*ta).length as usize;
+        let start = norm_rel_index(from, len);
+        for i in start..len {
+            // `==` never matches NaN, matching indexOf semantics.
+            if load_at(ta, i) == target {
+                return i as f64;
+            }
+        }
+        -1.0
+    }
+}
+
+/// `ta.lastIndexOf(value, fromIndex)` — strict-equality backward search.
+/// `from` is pre-resolved (absent → +Infinity sentinel). Returns index or -1.
+#[no_mangle]
+pub extern "C" fn js_typed_array_last_index_of(
+    ta: *const TypedArrayHeader,
+    value: f64,
+    from: f64,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return -1.0;
+    }
+    let Some(target) = search_as_number(value) else {
+        return -1.0;
+    };
+    unsafe {
+        let len = (*ta).length as i64;
+        if len == 0 {
+            return -1.0;
+        }
+        let mut start = if from == f64::INFINITY {
+            len - 1
+        } else if from.is_nan() {
+            0
+        } else if from == f64::NEG_INFINITY {
+            return -1.0;
+        } else {
+            from as i64
+        };
+        if start < 0 {
+            start += len;
+        }
+        if start >= len {
+            start = len - 1;
+        }
+        let mut i = start;
+        while i >= 0 {
+            if load_at(ta, i as usize) == target {
+                return i as f64;
+            }
+            i -= 1;
+        }
+        -1.0
+    }
+}
+
+/// `ta.includes(value, fromIndex)` — SameValueZero search (NaN matches NaN).
+/// Returns a NaN-boxed JS boolean.
+#[no_mangle]
+pub extern "C" fn js_typed_array_includes(
+    ta: *const TypedArrayHeader,
+    value: f64,
+    from: f64,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    let mut found = false;
+    if !ta.is_null() {
+        let target = search_as_number(value);
+        unsafe {
+            let len = (*ta).length as usize;
+            let start = norm_rel_index(from, len);
+            for i in start..len {
+                let e = load_at(ta, i);
+                match target {
+                    Some(t) if t.is_nan() => {
+                        if e.is_nan() {
+                            found = true;
+                            break;
+                        }
+                    }
+                    Some(t) => {
+                        if e == t {
+                            found = true;
+                            break;
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+    f64::from_bits(crate::value::JSValue::bool(found).bits())
+}
+
+/// `ta.reverse()` — reverse in place, returns `ta`.
+#[no_mangle]
+pub extern "C" fn js_typed_array_reverse(ta: *mut TypedArrayHeader) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
+    if ta.is_null() {
+        return ta;
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        for i in 0..len / 2 {
+            let a = load_at(ta, i);
+            let b = load_at(ta, len - 1 - i);
+            store_at(ta, i, b);
+            store_at(ta, len - 1 - i, a);
+        }
+        ta
+    }
+}
+
+/// `ta.join(separator)` — `separator` is the raw JS arg (TAG_UNDEFINED →
+/// default `","`). Each element is rendered like `String(number)`.
+#[no_mangle]
+pub extern "C" fn js_typed_array_join(
+    ta: *const TypedArrayHeader,
+    separator: f64,
+) -> *mut crate::string::StringHeader {
+    let ta = clean_ta_ptr(ta);
+    let sep = if separator.to_bits() == crate::value::TAG_UNDEFINED {
+        ",".to_string()
+    } else {
+        let s_ptr = crate::builtins::js_string_coerce(separator);
+        if s_ptr.is_null() {
+            String::new()
+        } else {
+            unsafe {
+                let bytes =
+                    (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let len = (*s_ptr).byte_len as usize;
+                String::from_utf8_lossy(std::slice::from_raw_parts(bytes, len)).into_owned()
+            }
+        }
+    };
+    let mut out = String::new();
+    if !ta.is_null() {
+        unsafe {
+            let kind = (*ta).kind;
+            let len = (*ta).length as usize;
+            for i in 0..len {
+                if i > 0 {
+                    out.push_str(&sep);
+                }
+                out.push_str(&format_typed_value(kind, load_at(ta, i)));
+            }
+        }
+    }
+    crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
+
+/// `ta.set(source, offset)` — copy elements from an Array or typed-array
+/// `source` into `ta` starting at `offset` (pre-resolved, absent → 0).
+/// Out-of-range writes are skipped. Returns undefined.
+#[no_mangle]
+pub extern "C" fn js_typed_array_set_from(
+    ta: *mut TypedArrayHeader,
+    source: f64,
+    offset: f64,
+) -> f64 {
+    let ta = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
+    if ta.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let off = if offset.is_nan() || offset < 0.0 {
+        0usize
+    } else {
+        offset as usize
+    };
+    let src_addr = strip_nanbox(source.to_bits());
+    if src_addr < 0x1000 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    unsafe {
+        let dst_len = (*ta).length as usize;
+        if let Some(_k) = lookup_typed_array_kind(src_addr) {
+            let src = src_addr as *const TypedArrayHeader;
+            let slen = (*src).length as usize;
+            for i in 0..slen {
+                if off + i < dst_len {
+                    store_at(ta, off + i, load_at(src, i));
+                }
+            }
+        } else {
+            let arr = src_addr as *const ArrayHeader;
+            let slen = crate::array::js_array_length(arr) as usize;
+            for i in 0..slen {
+                if off + i < dst_len {
+                    let v = crate::array::js_array_get_f64(arr, i as u32);
+                    store_at(ta, off + i, jsvalue_to_f64(v));
+                }
+            }
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// NaN-boxed (POINTER_TAG-free) receiver for passing `ta` as the 3rd
+/// callback argument `(value, index, array)`. Typed arrays flow as raw
+/// f64-bitcast pointers, so this is just `from_bits`.
+#[inline]
+fn ta_as_callback_arg(ta: *const TypedArrayHeader) -> f64 {
+    f64::from_bits(ta as u64)
+}
+
+/// `ta.forEach(cb)` — returns undefined.
+#[no_mangle]
+pub extern "C" fn js_typed_array_for_each(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if !ta.is_null() {
+        unsafe {
+            let len = (*ta).length as usize;
+            let arr = ta_as_callback_arg(ta);
+            for i in 0..len {
+                crate::closure::js_closure_call3(callback, load_at(ta, i), i as f64, arr);
+            }
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `ta.map(cb)` — new typed array of the same kind.
+#[no_mangle]
+pub extern "C" fn js_typed_array_map(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return typed_array_alloc(KIND_FLOAT64, 0);
+    }
+    unsafe {
+        let kind = (*ta).kind;
+        let len = (*ta).length as usize;
+        let arr = ta_as_callback_arg(ta);
+        let out = typed_array_alloc(kind, len as u32);
+        for i in 0..len {
+            let r = crate::closure::js_closure_call3(callback, load_at(ta, i), i as f64, arr);
+            store_at(out, i, jsvalue_to_f64(r));
+        }
+        out
+    }
+}
+
+/// `ta.filter(cb)` — new typed array of the same kind holding the elements
+/// for which `cb` returned truthy.
+#[no_mangle]
+pub extern "C" fn js_typed_array_filter(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return typed_array_alloc(KIND_FLOAT64, 0);
+    }
+    unsafe {
+        let kind = (*ta).kind;
+        let len = (*ta).length as usize;
+        let arr = ta_as_callback_arg(ta);
+        let mut kept: Vec<f64> = Vec::new();
+        for i in 0..len {
+            let v = load_at(ta, i);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, arr);
+            if crate::value::js_is_truthy(r) != 0 {
+                kept.push(v);
+            }
+        }
+        let out = typed_array_alloc(kind, kept.len() as u32);
+        for (i, v) in kept.into_iter().enumerate() {
+            store_at(out, i, v);
+        }
+        out
+    }
+}
+
+/// `ta.some(cb)` — NaN-boxed boolean.
+#[no_mangle]
+pub extern "C" fn js_typed_array_some(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    let mut result = false;
+    if !ta.is_null() {
+        unsafe {
+            let len = (*ta).length as usize;
+            let arr = ta_as_callback_arg(ta);
+            for i in 0..len {
+                let r = crate::closure::js_closure_call3(callback, load_at(ta, i), i as f64, arr);
+                if crate::value::js_is_truthy(r) != 0 {
+                    result = true;
+                    break;
+                }
+            }
+        }
+    }
+    f64::from_bits(crate::value::JSValue::bool(result).bits())
+}
+
+/// `ta.every(cb)` — NaN-boxed boolean.
+#[no_mangle]
+pub extern "C" fn js_typed_array_every(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    let mut result = true;
+    if !ta.is_null() {
+        unsafe {
+            let len = (*ta).length as usize;
+            let arr = ta_as_callback_arg(ta);
+            for i in 0..len {
+                let r = crate::closure::js_closure_call3(callback, load_at(ta, i), i as f64, arr);
+                if crate::value::js_is_truthy(r) == 0 {
+                    result = false;
+                    break;
+                }
+            }
+        }
+    }
+    f64::from_bits(crate::value::JSValue::bool(result).bits())
+}
+
+/// `ta.find(cb)` — the matched element (plain f64) or undefined.
+#[no_mangle]
+pub extern "C" fn js_typed_array_find(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if !ta.is_null() {
+        unsafe {
+            let len = (*ta).length as usize;
+            let arr = ta_as_callback_arg(ta);
+            for i in 0..len {
+                let v = load_at(ta, i);
+                let r = crate::closure::js_closure_call3(callback, v, i as f64, arr);
+                if crate::value::js_is_truthy(r) != 0 {
+                    return v;
+                }
+            }
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `ta.findIndex(cb)` — matched index (plain f64) or -1.
+#[no_mangle]
+pub extern "C" fn js_typed_array_find_index(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if !ta.is_null() {
+        unsafe {
+            let len = (*ta).length as usize;
+            let arr = ta_as_callback_arg(ta);
+            for i in 0..len {
+                let r = crate::closure::js_closure_call3(callback, load_at(ta, i), i as f64, arr);
+                if crate::value::js_is_truthy(r) != 0 {
+                    return i as f64;
+                }
+            }
+        }
+    }
+    -1.0
+}
+
+/// `ta.reduce(cb, initialValue?)`. `has_init` is 0 when no initial value was
+/// supplied. Empty array with no initial value returns undefined (Node
+/// throws a TypeError; this is the documented divergence).
+#[no_mangle]
+pub extern "C" fn js_typed_array_reduce(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    init: f64,
+    has_init: i32,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        let arr = ta_as_callback_arg(ta);
+        let mut acc;
+        let mut start;
+        if has_init != 0 {
+            acc = init;
+            start = 0;
+        } else {
+            if len == 0 {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            acc = load_at(ta, 0);
+            start = 1;
+        }
+        while start < len {
+            acc = crate::closure::js_closure_call4(
+                callback,
+                acc,
+                load_at(ta, start),
+                start as f64,
+                arr,
+            );
+            start += 1;
+        }
+        acc
+    }
+}
+
+/// `ta.reduceRight(cb, initialValue?)`.
+#[no_mangle]
+pub extern "C" fn js_typed_array_reduce_right(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    init: f64,
+    has_init: i32,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        let arr = ta_as_callback_arg(ta);
+        let mut acc;
+        let mut i: i64;
+        if has_init != 0 {
+            acc = init;
+            i = len as i64 - 1;
+        } else {
+            if len == 0 {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            acc = load_at(ta, len - 1);
+            i = len as i64 - 2;
+        }
+        while i >= 0 {
+            acc = crate::closure::js_closure_call4(
+                callback,
+                acc,
+                load_at(ta, i as usize),
+                i as f64,
+                arr,
+            );
+            i -= 1;
+        }
+        acc
+    }
+}
+
+/// `ta[key]` where `key` has an unknown static type (#2061). Codegen routes
+/// the ambiguous-index case here so a string method-name key resolves a
+/// prototype method/accessor (via `js_object_get_field_by_name_f64`) while a
+/// numeric key still reads an element. Without this, codegen `fptosi`'d the
+/// NaN-boxed string key to 0 and returned element 0 (a number), so
+/// `int8arr[m]` where `m` held `"copyWithin"` reported `typeof === "number"`.
+#[no_mangle]
+pub extern "C" fn js_typed_array_member_get(ta: *const TypedArrayHeader, index: f64) -> f64 {
+    let idx_bits = index.to_bits();
+    let top16 = idx_bits >> 48;
+    // STRING_TAG (0x7FFF) or SSO short-string (0x7FF9) → property/method.
+    if top16 == 0x7FFF || top16 == 0x7FF9 {
+        let key_ptr = crate::value::js_get_string_pointer_unified(index)
+            as *const crate::string::StringHeader;
+        if key_ptr.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        return crate::object::js_object_get_field_by_name_f64(
+            ta as *const crate::object::ObjectHeader,
+            key_ptr,
+        );
+    }
+    // Numeric key → element read (per-kind; OOB → undefined).
+    if index.is_nan() || index.is_infinite() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    js_typed_array_get(ta, index as i32)
+}
+
 /// Format a typed array Node-style: `Int32Array(N) [ a, b, c ]`. Used by
 /// `format_jsvalue` in builtins.rs.
 pub fn format_typed_array(ta: *const TypedArrayHeader) -> String {

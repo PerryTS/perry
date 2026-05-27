@@ -408,45 +408,86 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(I64, &key_handle)],
                 ));
             }
+            // #2061: a non-index (method-name) key on a typed array must
+            // resolve against %TypedArray%.prototype, not be coerced to a
+            // numeric element index. The width-tracked element-load path below
+            // `fptosi`s the key — a NaN-boxed string coerces to 0, so
+            // `int8arr["copyWithin"]` returned element 0 (a number) and
+            // `typeof int8arr.copyWithin === "number"`.
+            //
+            // Three index shapes:
+            //   * provably string  → fall through to the generic
+            //     `js_object_get_field_by_name_f64` resolver below (binds
+            //     typed-array prototype methods + length/byteLength/etc.).
+            //   * provably numeric  → the existing element fast path.
+            //   * ambiguous (`any`, e.g. a `for..of` loop var whose element
+            //     type wasn't propagated) → runtime tag dispatch via
+            //     `js_typed_array_member_get`, which reads an element for a
+            //     numeric key and resolves a property for a string key.
             if is_width_tracked_typed_array_receiver(ctx, object) {
-                if let Some(value) = lower_typed_array_load(ctx, object, index)? {
-                    return Ok(materialize_js_value(
-                        ctx,
-                        value,
-                        MaterializationReason::RuntimeApi,
+                let index_is_string =
+                    matches!(index.as_ref(), Expr::String(_)) || is_string_expr(ctx, index);
+                if !index_is_string {
+                    let index_is_numeric =
+                        matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_))
+                            || is_numeric_expr(ctx, index);
+                    if index_is_numeric {
+                        // Provably-numeric index → the element fast path.
+                        if let Some(value) = lower_typed_array_load(ctx, object, index)? {
+                            return Ok(materialize_js_value(
+                                ctx,
+                                value,
+                                MaterializationReason::RuntimeApi,
+                            ));
+                        }
+
+                        // Width-aware typed-array native lowering is only sound
+                        // for tracked fresh views with proven/guarded element
+                        // bounds. All aliases, reassigned locals, and unknown
+                        // bounds stay on the runtime helper, with artifact
+                        // evidence for the fallback.
+                        let arr_box = lower_expr(ctx, object)?;
+                        let idx_double = lower_expr(ctx, index)?;
+                        let blk = ctx.block();
+                        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                        let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
+                        let result = blk.call(
+                            DOUBLE,
+                            "js_typed_array_get",
+                            &[(I64, &arr_i64), (I32, &idx_i32)],
+                        );
+                        let slow = LoweredValue::js_value(result.clone());
+                        ctx.record_lowered_value_with_access_mode(
+                            "TypedArrayGet",
+                            None,
+                            "TypedArrayGet.slow_path",
+                            &slow,
+                            Some(BoundsState::Unknown),
+                            None,
+                            Some(BufferAccessMode::DynamicFallback),
+                            Some(buffer_access_materialization_reason(ctx, object)),
+                            false,
+                            false,
+                            vec!["typed_array_fallback=untracked_or_unproven".to_string()],
+                        );
+                        return Ok(result);
+                    }
+                    // Ambiguous (`any`) index → runtime tag dispatch: a numeric
+                    // key reads an element, a string key resolves a property /
+                    // prototype method.
+                    let obj_box = lower_expr(ctx, object)?;
+                    let idx_box = lower_expr(ctx, index)?;
+                    let blk = ctx.block();
+                    let obj_handle = unbox_to_i64(blk, &obj_box);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_typed_array_member_get",
+                        &[(I64, &obj_handle), (DOUBLE, &idx_box)],
                     ));
                 }
-
-                // Width-aware typed-array native lowering is only sound for
-                // tracked fresh views with proven/guarded element bounds. All
-                // aliases, reassigned locals, and unknown bounds stay on the
-                // runtime helper, with artifact evidence for the fallback.
-                let arr_box = lower_expr(ctx, object)?;
-                let idx_double = lower_expr(ctx, index)?;
-                let blk = ctx.block();
-                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                let result = blk.call(
-                    DOUBLE,
-                    "js_typed_array_get",
-                    &[(I64, &arr_i64), (I32, &idx_i32)],
-                );
-                let slow = LoweredValue::js_value(result.clone());
-                ctx.record_lowered_value_with_access_mode(
-                    "TypedArrayGet",
-                    None,
-                    "TypedArrayGet.slow_path",
-                    &slow,
-                    Some(BoundsState::Unknown),
-                    None,
-                    Some(BufferAccessMode::DynamicFallback),
-                    Some(buffer_access_materialization_reason(ctx, object)),
-                    false,
-                    false,
-                    vec!["typed_array_fallback=untracked_or_unproven".to_string()],
-                );
-                return Ok(result);
+                // Provably-string index → fall through to the generic
+                // property/method resolver below.
             }
             // Scalar-replaced array literal: `arr[k]` where arr was bound to
             // `[...]` and never escaped, and k is a compile-time index in

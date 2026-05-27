@@ -1029,6 +1029,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_typed_array_new", I64, &[I32, DOUBLE]);
     module.declare_function("js_typed_array_length", I32, &[I64]);
     module.declare_function("js_typed_array_get", DOUBLE, &[I64, I32]);
+    // #2061: tag-aware `ta[key]` for ambiguous (`any`) keys — numeric reads an
+    // element, string resolves a prototype method/accessor.
+    module.declare_function("js_typed_array_member_get", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_typed_array_at", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_typed_array_set", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_uint8array_get", I32, &[I64, I32]);
