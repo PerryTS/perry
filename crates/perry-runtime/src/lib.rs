@@ -261,6 +261,7 @@ mod stdlib_pump {
                 func();
             }
         }
+        let _ = crate::gc::gc_runtime_safepoint();
     }
 
     static STDLIB_HAS_ACTIVE_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());

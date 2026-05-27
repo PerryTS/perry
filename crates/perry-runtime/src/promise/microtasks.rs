@@ -597,6 +597,8 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
 
     crate::exception::js_try_end();
 
+    let _ = crate::gc::gc_runtime_safepoint();
+
     ran
 }
 

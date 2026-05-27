@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 mod types;
 pub use types::*;
 mod policy;
+pub(crate) use policy::gc_runtime_safepoint;
 pub use policy::*;
 mod telemetry;
 pub use telemetry::*;

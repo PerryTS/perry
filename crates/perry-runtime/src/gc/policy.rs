@@ -1401,6 +1401,18 @@ fn gc_mutator_assist_step_work_units_inner_with_progress(
     gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind, true)
 }
 
+pub(crate) fn gc_runtime_safepoint() -> JsGcStepResult {
+    let budget = gc_progress_contract().budget_for(GcProgressKind::NormalIncremental);
+    let Some(work_units) = budget.work_units else {
+        return gc_budgeted_status_result();
+    };
+    gc_budgeted_step_work_units_inner_with_progress(
+        work_units,
+        GcProgressKind::NormalIncremental,
+        false,
+    )
+}
+
 fn write_gc_step_result(out: *mut JsGcStepResult, result: JsGcStepResult) -> u32 {
     if !out.is_null() {
         unsafe {
@@ -1437,6 +1449,12 @@ pub extern "C" fn js_gc_step_us(budget_us: u64, out: *mut JsGcStepResult) -> u32
 #[no_mangle]
 pub extern "C" fn js_gc_step_status(out: *mut JsGcStepResult) -> u32 {
     let result = gc_budgeted_status_result();
+    write_gc_step_result(out, result)
+}
+
+#[no_mangle]
+pub extern "C" fn js_gc_safepoint(out: *mut JsGcStepResult) -> u32 {
+    let result = gc_runtime_safepoint();
     write_gc_step_result(out, result)
 }
 

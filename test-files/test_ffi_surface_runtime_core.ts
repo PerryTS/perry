@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 346 unique FFI names, 347 declarations.
+// Inventory entries: 347 unique FFI names, 348 declarations.
 
 const testFfiSurfaceRuntimeCoreVersion = 1;
 if (testFfiSurfaceRuntimeCoreVersion !== 1) {
@@ -172,6 +172,7 @@ crates/perry-runtime/src/gc.rs:
   - js_gc_exit_unsafe_zone
   - js_gc_init
   - js_gc_register_global_root
+  - js_gc_safepoint
   - js_gc_stats
   - js_shadow_frame_pop
   - js_shadow_frame_push
