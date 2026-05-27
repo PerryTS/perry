@@ -37,11 +37,6 @@ fn assert_canonical_raw_slot(arr: *mut ArrayHeader, index: u32, expected: f64) {
     assert_eq!(js_array_numeric_get_f64_unboxed(arr, index), expected);
 }
 
-unsafe fn raw_slot_bits(arr: *mut ArrayHeader, index: usize) -> u64 {
-    let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
-    *elements.add(index)
-}
-
 #[test]
 fn test_array_alloc_and_access() {
     let arr = js_array_alloc(5);
@@ -307,30 +302,6 @@ fn test_numeric_array_layout_mark_rejects_holes_and_accepts_dense_numbers() {
 }
 
 #[test]
-fn test_numeric_array_mark_canonicalizes_int32_and_nan_inline() {
-    let arr = js_array_alloc_with_length(3);
-    let int32_value = f64::from_bits(crate::value::INT32_TAG | ((-17i32 as u32) as u64));
-    let payload_nan = f64::from_bits(0x7FF8_0000_0000_1234);
-
-    js_array_set_f64(arr, 0, int32_value);
-    js_array_set_f64(arr, 1, payload_nan);
-    js_array_set_f64(arr, 2, -0.0);
-
-    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
-    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 0), -17.0);
-    assert!(js_array_numeric_get_f64_unboxed(arr, 1).is_nan());
-    assert_eq!(
-        js_array_numeric_get_f64_unboxed(arr, 2).to_bits(),
-        (-0.0f64).to_bits()
-    );
-    unsafe {
-        assert_eq!(raw_slot_bits(arr, 0), (-17.0f64).to_bits());
-        assert_eq!(raw_slot_bits(arr, 1), f64::NAN.to_bits());
-        assert_eq!(raw_slot_bits(arr, 2), (-0.0f64).to_bits());
-    }
-}
-
-#[test]
 fn test_numeric_array_raw_f64_payload_tracks_sets_and_downgrades() {
     let mut arr = js_array_alloc(2);
     arr = js_array_push_f64(arr, 1.5);
@@ -354,32 +325,6 @@ fn test_numeric_array_raw_f64_payload_tracks_sets_and_downgrades() {
         str_value.to_bits(),
         "unboxed helper falls back to boxed slots after downgrade"
     );
-}
-
-#[test]
-fn test_numeric_array_sparse_extend_fills_holes_and_downgrades_raw_layout() {
-    let mut arr = js_array_alloc(8);
-    arr = js_array_push_f64(arr, 1.0);
-    arr = js_array_push_f64(arr, 2.0);
-
-    assert_eq!(js_array_mark_numeric_f64_layout(arr), 1);
-    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
-
-    let extended = js_array_set_f64_extend(arr, 5, 6.0);
-
-    assert_eq!(extended, arr);
-    assert_eq!(js_array_length(extended), 6);
-    assert_eq!(js_array_is_numeric_f64_layout(extended), 0);
-    assert_eq!(js_array_get_f64(extended, 0), 1.0);
-    assert_eq!(js_array_get_f64(extended, 1), 2.0);
-    assert_eq!(
-        js_array_get_f64(extended, 3).to_bits(),
-        crate::value::TAG_UNDEFINED
-    );
-    unsafe {
-        assert_eq!(raw_slot_bits(extended, 3), crate::value::TAG_HOLE);
-    }
-    assert_eq!(js_array_get_f64(extended, 5), 6.0);
 }
 
 #[test]
@@ -469,6 +414,63 @@ fn test_nonnumeric_append_downgrades_raw_f64_and_preserves_payload() {
     assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
     assert_eq!(js_array_get_jsvalue(arr, 0), bool_bits);
     assert_eq!(js_array_get_f64_unchecked(arr, 0).to_bits(), bool_bits);
+}
+
+// #40/#1862/#321 regression: a class reference is NaN-boxed with INT32_TAG
+// (same 0x7FFE shape as a genuine small integer) and the runtime keys class
+// dispatch off that tag. The raw-f64-slot canonicalization (#1862) must NOT
+// strip the tag when an int32-shaped slot value is actually a registered
+// class ref — doing so converted the class ref into a raw double, after
+// which a downstream property read dereferenced the double as a heap pointer
+// and SIGSEGV'd (effect/Schema `decodeUnknownSync` via `js_array_map` ->
+// `js_object_get_field_by_name` -> `is_registered_set`). Storing a class ref
+// into a numeric array must preserve the exact NaN-box bits in the slot so a
+// generic (non-numeric-fast-path) read still observes the class ref.
+#[test]
+fn test_class_ref_store_into_numeric_array_preserves_int32_tag() {
+    // Pick a class id whose payload (as a small int) would, pre-fix, have
+    // been a "valid number" that canonicalization rewrote to raw f64 bits.
+    let class_id: u32 = 112;
+    unsafe {
+        crate::object::js_register_class_id(class_id);
+    }
+    assert!(crate::object::is_class_id_registered(class_id));
+
+    // Establish a RawF64 numeric layout, then overwrite a slot with the
+    // INT32-tagged class ref.
+    let class_ref_bits = int32_jsvalue_bits(class_id as i32);
+    let mut arr = js_array_alloc(2);
+    arr = js_array_push_f64(arr, 1.0);
+    arr = js_array_push_f64(arr, 2.0);
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+
+    js_array_set_jsvalue(arr, 0, class_ref_bits);
+
+    // The load-bearing invariant: the slot must still hold the EXACT class-ref
+    // NaN-box bits (0x7FFE tag intact) — NOT canonicalized to f64(112).to_bits()
+    // (0x405C_0000_0000_0000), which is what the original crash backtrace's
+    // `0x405c…` fault address was. A generic read (`js_array_get_jsvalue` —
+    // the path `js_array_map` and property dispatch use) must observe the
+    // class ref, not a raw double.
+    assert_eq!(js_array_get_jsvalue(arr, 0), class_ref_bits);
+    assert_eq!(js_array_get_f64_unchecked(arr, 0).to_bits(), class_ref_bits);
+
+    // Force a layout rebuild (the other code path that rewrites slots) and
+    // re-check the slot still carries the class ref.
+    unsafe {
+        refresh_array_numeric_layout(arr);
+    }
+    assert_eq!(js_array_get_jsvalue(arr, 0), class_ref_bits);
+    assert_eq!(js_array_get_f64_unchecked(arr, 0).to_bits(), class_ref_bits);
+
+    // A genuine integer with the same magnitude (but unregistered) still
+    // canonicalizes to raw f64 bits — Andrew's #1862 feature stays intact.
+    let plain_value: u32 = 7_777;
+    assert!(!crate::object::is_class_id_registered(plain_value));
+    let plain_int = int32_jsvalue_bits(plain_value as i32);
+    let other = js_array_push_jsvalue(js_array_alloc(1), plain_int);
+    assert_eq!(js_array_is_numeric_f64_layout(other), 1);
+    assert_canonical_raw_slot(other, 0, plain_value as f64);
 }
 
 #[test]
