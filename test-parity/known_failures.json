@@ -1412,12 +1412,6 @@
     "category": "bug-open",
     "reason": "node:stream: objectMode Readable.read() does not return single object per call. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-buffer-direct": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(Buffer) — Buffer is iterated byte-by-byte instead of emitted as single chunk. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/map-async-rejection": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -2695,12 +2689,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose 2-stage err — composite 'error' event not fired. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/readable/from-buffer-emits-single": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(Buffer) — not single Buffer chunk (iterates byte-by-byte). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/push-string-with-encoding-set": {
     "issue": "1532",
