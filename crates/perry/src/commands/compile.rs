@@ -2475,6 +2475,27 @@ pub fn run_with_parse_cache(
                         }
                     }
 
+                    // Issue #35 (#321): companion to the HIR-side change in
+                    // `module_decl.rs` (Named specifier now registers
+                    // `(local, local)`, so an ALIASED named import's
+                    // `ExternFuncRef` carries the unique LOCAL name). The
+                    // origin module still emits its symbol under the EXPORTED
+                    // name, so map `local → exported_name` (or the deeper
+                    // re-export origin name when one applies) here so codegen
+                    // forms `perry_fn_<src>__<exported>` rather than
+                    // `perry_fn_<src>__<local>`. Mirrors the #901 Default-import
+                    // override below. Only needed when `local != exported`
+                    // (the alias case); the no-alias case carries the export
+                    // name verbatim. Skip if the re-export-rename block above
+                    // already inserted a (deeper) override for this local.
+                    if matches!(spec, perry_hir::ImportSpecifier::Named { .. })
+                        && local_name != exported_name
+                        && !import_function_origin_names.contains_key(&local_name)
+                    {
+                        import_function_origin_names
+                            .insert(local_name.clone(), exported_name.clone());
+                    }
+
                     // Issue #901: companion to the HIR-side change at
                     // `crates/perry-hir/src/lower.rs`'s Default specifier
                     // (which now registers `(local, local)` instead of
