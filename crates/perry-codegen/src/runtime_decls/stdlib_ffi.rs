@@ -875,6 +875,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_destroy", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_node_stream_method_readable", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_readable_ended", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_readable_flowing", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_cork", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_uncork", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_writable_corked", DOUBLE, &[I64]);

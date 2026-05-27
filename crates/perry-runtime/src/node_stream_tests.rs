@@ -213,6 +213,35 @@ fn stream_method_closure_capture_wins_over_stale_implicit_this() {
 }
 
 #[test]
+fn data_listener_marks_readable_flowing() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    assert_eq!(
+        js_node_stream_method_readable_flowing(handle).to_bits(),
+        TAG_NULL
+    );
+
+    let listener = js_closure_alloc(noop_listener as *const u8, 0);
+    crate::closure::js_register_closure_arity(noop_listener as *const u8, 0);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("data"),
+        box_pointer(listener as *const u8),
+    );
+
+    assert_eq!(
+        js_node_stream_method_readable_flowing(handle).to_bits(),
+        TAG_TRUE
+    );
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableFlowing")).to_bits(),
+        TAG_TRUE
+    );
+}
+
+#[test]
 fn stream_methods_dispatch_through_dynamic_method_call() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     unsafe {

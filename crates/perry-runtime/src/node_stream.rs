@@ -461,6 +461,17 @@ pub extern "C" fn js_node_stream_method_readable_ended(stream_handle: i64) -> f6
     }
 }
 
+/// `stream.readableFlowing` property getter on a typed readable-side instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_flowing(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    get_hidden_value(stream, hidden_readable_flowing_key())
+        .unwrap_or_else(|| f64::from_bits(TAG_NULL))
+}
+
 /// `stream.writableHighWaterMark` property getter on a typed instance
 /// (#1539).
 #[no_mangle]
@@ -1275,6 +1286,11 @@ fn hidden_writable_buffered_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_readable_flag_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_FLAG_KEY)
+}
+
+#[inline]
+fn hidden_readable_flowing_key() -> *mut crate::string::StringHeader {
+    hidden_key(b"readableFlowing")
 }
 
 #[inline]
@@ -2094,6 +2110,18 @@ fn set_visible_readable_ended(stream: f64, ended: bool) {
     }
 }
 
+fn set_visible_readable_flowing(stream: f64, value: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        set_hidden_value(stream, hidden_readable_flowing_key(), value);
+    }
+}
+
+pub(super) fn mark_readable_flowing_on_data_listener(stream: f64, event: f64) {
+    if string_value_eq(event, b"data") {
+        set_visible_readable_flowing(stream, f64::from_bits(TAG_TRUE));
+    }
+}
+
 fn mark_stream_ended(stream: f64) {
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     set_visible_readable(stream, false);
@@ -2153,6 +2181,7 @@ fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
     set_visible_readable(stream, true);
     set_visible_readable_ended(stream, false);
+    set_visible_readable_flowing(stream, f64::from_bits(TAG_NULL));
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.

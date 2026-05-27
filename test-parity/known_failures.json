@@ -1124,12 +1124,6 @@
     "category": "bug-open",
     "reason": "node:stream: readable.map(asyncFn) — rejection in fn does not abort iteration / propagate as throw. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/events/data-listener-auto-resume": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: adding 'data' listener does not flip readableFlowing to true. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/async-iter/iterator-next-direct": {
     "issue": "1531",
     "added": "2026-05-24",
