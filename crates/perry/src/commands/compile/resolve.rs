@@ -36,7 +36,14 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{CompilationContext, NativeFunctionDecl, NativeLibraryManifest, TargetNativeConfig};
+use super::{
+    CompilationContext, NativeBackend, NativeBackendConfig, NativeBackendPackageMetadata,
+    NativeFunctionDecl, NativeLibraryManifest, TargetNativeConfig,
+};
+
+mod native_library;
+use native_library::native_manifest_target_key;
+pub(crate) use native_library::validate_native_library_manifest_value;
 
 /// Find the Perry workspace root by searching upward from the executable location.
 pub fn find_perry_workspace_root() -> Option<PathBuf> {
@@ -143,20 +150,7 @@ pub(super) fn parse_native_library_manifest(
     let functions = parse_native_library_functions(&package_json, native_lib)?;
 
     // Parse target config
-    let target_key = match target {
-        Some("ios-simulator") | Some("ios") => "ios",
-        Some("visionos-simulator") | Some("visionos") => "visionos",
-        Some("android") => "android",
-        Some("tvos-simulator") | Some("tvos") => "tvos",
-        Some("watchos-simulator") | Some("watchos") => "watchos",
-        Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
-        Some("linux") => "linux",
-        Some("windows") => "windows",
-        Some("web") => "web",
-        None if cfg!(target_os = "linux") => "linux",
-        None if cfg!(target_os = "windows") => "windows",
-        _ => "macos",
-    };
+    let target_key = native_manifest_target_key(target);
 
     // Issue #860 — prebuilt distribution (esbuild / sharp / swc /
     // lightningcss pattern) needs per-arch target keys so a single
@@ -174,93 +168,17 @@ pub(super) fn parse_native_library_manifest(
         .and_then(|k| targets_block.and_then(|t| t.get(k)))
         .or_else(|| targets_block.and_then(|t| t.get(target_key)));
 
-    let target_config = target_value.map(|tc| TargetNativeConfig {
-        crate_path: package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")),
-        lib_name: tc
-            .get("lib")
-            .and_then(|l| l.as_str())
-            .unwrap_or("")
-            .to_string(),
-        prebuilt: tc
-            .get("prebuilt")
-            .and_then(|p| p.as_str())
-            .and_then(|spec| resolve_prebuilt_path(package_dir, spec)),
-        frameworks: tc
-            .get("frameworks")
-            .and_then(|f| f.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        // Issue #1304 — vendored-SDK frameworks gated on an env var.
-        // Accept both camelCase (`optionalFrameworks`/`frameworksEnv`,
-        // matching `libDirs`/`pkgConfig`) and snake_case
-        // (`optional_frameworks`/`frameworks_env`, matching
-        // `swift_sources`/`metal_sources`) so package authors don't get
-        // tripped up by the manifest's mixed casing convention.
-        optional_frameworks: tc
-            .get("optionalFrameworks")
-            .or_else(|| tc.get("optional_frameworks"))
-            .and_then(|f| f.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        frameworks_env: tc
-            .get("frameworksEnv")
-            .or_else(|| tc.get("frameworks_env"))
-            .and_then(|v| v.as_str())
-            .map(String::from),
-        libs: tc
-            .get("libs")
-            .and_then(|l| l.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        lib_dirs: tc
-            .get("libDirs")
-            .and_then(|l| l.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        pkg_config: tc
-            .get("pkgConfig")
-            .and_then(|p| p.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        swift_sources: tc
-            .get("swift_sources")
-            .and_then(|s| s.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        metal_sources: tc
-            .get("metal_sources")
-            .and_then(|s| s.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                    .collect()
-            })
-            .unwrap_or_default(),
-    });
+    let target_config = target_value
+        .map(|tc| {
+            parse_target_native_config(
+                package_dir,
+                module_name,
+                target_key,
+                &format!("perry.nativeLibrary.targets.{target_key}"),
+                tc,
+            )
+        })
+        .transpose()?;
 
     Ok(Some(NativeLibraryManifest {
         module: module_name.to_string(),
@@ -614,6 +532,492 @@ fn invalid_native_abi_error(
         spelling,
         reason
     )
+}
+
+fn parse_target_native_config(
+    package_dir: &Path,
+    module_name: &str,
+    target_key: &str,
+    manifest_path: &str,
+    tc: &serde_json::Value,
+) -> Result<TargetNativeConfig> {
+    let Some(obj) = tc.as_object() else {
+        return Err(anyhow!(
+            "native library `{}` has invalid `{}`: expected object",
+            module_name,
+            manifest_path
+        ));
+    };
+
+    let available =
+        optional_bool_field(obj, "available", module_name, manifest_path)?.unwrap_or(true);
+    let unavailable_reason = optional_alias_string_field(
+        obj,
+        "unavailableReason",
+        "unavailable_reason",
+        module_name,
+        manifest_path,
+    )?;
+
+    if !available {
+        return Ok(TargetNativeConfig {
+            available,
+            unavailable_reason,
+            crate_path: PathBuf::new(),
+            lib_name: String::new(),
+            prebuilt: None,
+            frameworks: Vec::new(),
+            optional_frameworks: Vec::new(),
+            frameworks_env: None,
+            libs: Vec::new(),
+            lib_dirs: Vec::new(),
+            pkg_config: Vec::new(),
+            resources: Vec::new(),
+            shader_outputs: Vec::new(),
+            backends: Vec::new(),
+            swift_sources: Vec::new(),
+            metal_sources: Vec::new(),
+        });
+    }
+
+    let prebuilt =
+        parse_optional_path_spec(package_dir, obj.get("prebuilt"), module_name, manifest_path)?;
+    let backends = parse_backend_configs(package_dir, module_name, target_key, manifest_path, obj)?;
+
+    let has_crate = obj.get("crate").is_some();
+    let has_lib = obj.get("lib").is_some();
+    if prebuilt.is_none() && (has_crate ^ has_lib) {
+        return Err(anyhow!(
+            "native library `{}` has incomplete `{}`: `crate` and `lib` must be declared together when `prebuilt` is absent",
+            module_name,
+            manifest_path
+        ));
+    }
+
+    Ok(TargetNativeConfig {
+        available,
+        unavailable_reason,
+        crate_path: package_dir.join(
+            optional_string_field(obj, "crate", module_name, manifest_path)?.unwrap_or_default(),
+        ),
+        lib_name: optional_string_field(obj, "lib", module_name, manifest_path)?
+            .unwrap_or_default(),
+        prebuilt,
+        frameworks: parse_optional_string_array(obj, "frameworks", module_name, manifest_path)?,
+        // Issue #1304 — vendored-SDK frameworks gated on an env var.
+        // Accept both camelCase (`optionalFrameworks`/`frameworksEnv`,
+        // matching `libDirs`/`pkgConfig`) and snake_case
+        // (`optional_frameworks`/`frameworks_env`, matching
+        // `swift_sources`/`metal_sources`) so package authors don't get
+        // tripped up by the manifest's mixed casing convention.
+        optional_frameworks: parse_optional_alias_string_array(
+            obj,
+            "optionalFrameworks",
+            "optional_frameworks",
+            module_name,
+            manifest_path,
+        )?,
+        frameworks_env: optional_alias_string_field(
+            obj,
+            "frameworksEnv",
+            "frameworks_env",
+            module_name,
+            manifest_path,
+        )?,
+        libs: parse_optional_string_array(obj, "libs", module_name, manifest_path)?,
+        lib_dirs: parse_optional_path_array(
+            obj,
+            "libDirs",
+            package_dir,
+            module_name,
+            manifest_path,
+        )?,
+        pkg_config: parse_optional_string_array(obj, "pkgConfig", module_name, manifest_path)?,
+        resources: parse_optional_path_array(
+            obj,
+            "resources",
+            package_dir,
+            module_name,
+            manifest_path,
+        )?,
+        shader_outputs: parse_optional_alias_path_array(
+            obj,
+            "shaderOutputs",
+            "shader_outputs",
+            package_dir,
+            module_name,
+            manifest_path,
+        )?,
+        backends,
+        swift_sources: parse_optional_path_array(
+            obj,
+            "swift_sources",
+            package_dir,
+            module_name,
+            manifest_path,
+        )?,
+        metal_sources: parse_optional_path_array(
+            obj,
+            "metal_sources",
+            package_dir,
+            module_name,
+            manifest_path,
+        )?,
+    })
+}
+
+fn parse_backend_configs(
+    package_dir: &Path,
+    module_name: &str,
+    target_key: &str,
+    manifest_path: &str,
+    target_obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<NativeBackendConfig>> {
+    let Some(backends_value) = target_obj.get("backends") else {
+        return Ok(Vec::new());
+    };
+    let Some(backends_obj) = backends_value.as_object() else {
+        return Err(anyhow!(
+            "native library `{}` has invalid `{}.backends`: expected object",
+            module_name,
+            manifest_path
+        ));
+    };
+
+    let mut backends = Vec::with_capacity(backends_obj.len());
+    for (name, value) in backends_obj {
+        let backend = parse_backend_name(name).ok_or_else(|| {
+            anyhow!(
+                "native library `{}` has unsupported backend `{}.backends.{}`. \
+                 Supported backends are `metal`, `vulkan`, and `d3d12`.",
+                module_name,
+                manifest_path,
+                name
+            )
+        })?;
+        if !backend_supported_on_target(backend, target_key) {
+            return Err(anyhow!(
+                "native library `{}` declares backend `{}` under `{}` but `{}` is not supported on target `{}`. \
+                 Metal is Apple-only, Vulkan is supported on macos/linux/windows/android/harmonyos, and D3D12 is Windows-only.",
+                module_name,
+                backend.as_str(),
+                manifest_path,
+                backend.as_str(),
+                target_key
+            ));
+        }
+        let backend_path = format!("{manifest_path}.backends.{name}");
+        let backend_obj = value.as_object().ok_or_else(|| {
+            anyhow!(
+                "native library `{}` has invalid `{}`: expected object",
+                module_name,
+                backend_path
+            )
+        })?;
+        let available = optional_bool_field(backend_obj, "available", module_name, &backend_path)?
+            .unwrap_or(true);
+        let unavailable_reason = optional_alias_string_field(
+            backend_obj,
+            "unavailableReason",
+            "unavailable_reason",
+            module_name,
+            &backend_path,
+        )?;
+        if !available {
+            backends.push(NativeBackendConfig {
+                backend,
+                available,
+                unavailable_reason,
+                prebuilt: None,
+                frameworks: Vec::new(),
+                libs: Vec::new(),
+                lib_dirs: Vec::new(),
+                pkg_config: Vec::new(),
+                shader_sources: Vec::new(),
+                shader_outputs: Vec::new(),
+                resources: Vec::new(),
+                package: NativeBackendPackageMetadata::default(),
+            });
+            continue;
+        }
+
+        backends.push(NativeBackendConfig {
+            backend,
+            available,
+            unavailable_reason,
+            prebuilt: parse_optional_path_spec(
+                package_dir,
+                backend_obj.get("prebuilt"),
+                module_name,
+                &backend_path,
+            )?,
+            frameworks: parse_optional_string_array(
+                backend_obj,
+                "frameworks",
+                module_name,
+                &backend_path,
+            )?,
+            libs: parse_optional_string_array(backend_obj, "libs", module_name, &backend_path)?,
+            lib_dirs: parse_optional_path_array(
+                backend_obj,
+                "libDirs",
+                package_dir,
+                module_name,
+                &backend_path,
+            )?,
+            pkg_config: parse_optional_string_array(
+                backend_obj,
+                "pkgConfig",
+                module_name,
+                &backend_path,
+            )?,
+            shader_sources: parse_optional_alias_path_array(
+                backend_obj,
+                "shaderSources",
+                "shader_sources",
+                package_dir,
+                module_name,
+                &backend_path,
+            )?,
+            shader_outputs: parse_optional_alias_path_array(
+                backend_obj,
+                "shaderOutputs",
+                "shader_outputs",
+                package_dir,
+                module_name,
+                &backend_path,
+            )?,
+            resources: parse_optional_path_array(
+                backend_obj,
+                "resources",
+                package_dir,
+                module_name,
+                &backend_path,
+            )?,
+            package: parse_backend_package_metadata(backend_obj, module_name, &backend_path)?,
+        });
+    }
+    Ok(backends)
+}
+
+fn parse_backend_package_metadata(
+    backend_obj: &serde_json::Map<String, serde_json::Value>,
+    module_name: &str,
+    backend_path: &str,
+) -> Result<NativeBackendPackageMetadata> {
+    let Some(package) = backend_obj.get("package") else {
+        return Ok(NativeBackendPackageMetadata::default());
+    };
+    let Some(package_obj) = package.as_object() else {
+        return Err(anyhow!(
+            "native library `{}` has invalid `{}.package`: expected object",
+            module_name,
+            backend_path
+        ));
+    };
+    Ok(NativeBackendPackageMetadata {
+        name: optional_string_field(
+            package_obj,
+            "name",
+            module_name,
+            &format!("{backend_path}.package"),
+        )?,
+        version: optional_string_field(
+            package_obj,
+            "version",
+            module_name,
+            &format!("{backend_path}.package"),
+        )?,
+        kind: optional_string_field(
+            package_obj,
+            "kind",
+            module_name,
+            &format!("{backend_path}.package"),
+        )?,
+    })
+}
+
+fn parse_backend_name(name: &str) -> Option<NativeBackend> {
+    match name {
+        "metal" => Some(NativeBackend::Metal),
+        "vulkan" => Some(NativeBackend::Vulkan),
+        "d3d12" => Some(NativeBackend::D3d12),
+        _ => None,
+    }
+}
+
+fn backend_supported_on_target(backend: NativeBackend, target_key: &str) -> bool {
+    match backend {
+        NativeBackend::Metal => matches!(
+            target_key,
+            "macos" | "ios" | "tvos" | "watchos" | "visionos"
+        ),
+        NativeBackend::Vulkan => matches!(
+            target_key,
+            "macos" | "linux" | "windows" | "android" | "harmonyos"
+        ),
+        NativeBackend::D3d12 => target_key == "windows",
+    }
+}
+
+fn optional_string_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Option<String>> {
+    let Some(value) = obj.get(field) else {
+        return Ok(None);
+    };
+    value.as_str().map(|s| Some(s.to_string())).ok_or_else(|| {
+        anyhow!(
+            "native library `{}` has invalid `{}.{}`: expected string",
+            module_name,
+            manifest_path,
+            field
+        )
+    })
+}
+
+fn optional_alias_string_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Option<String>> {
+    if obj.contains_key(camel) {
+        optional_string_field(obj, camel, module_name, manifest_path)
+    } else {
+        optional_string_field(obj, snake, module_name, manifest_path)
+    }
+}
+
+fn optional_bool_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Option<bool>> {
+    let Some(value) = obj.get(field) else {
+        return Ok(None);
+    };
+    value.as_bool().map(Some).ok_or_else(|| {
+        anyhow!(
+            "native library `{}` has invalid `{}.{}`: expected boolean",
+            module_name,
+            manifest_path,
+            field
+        )
+    })
+}
+
+fn parse_optional_string_array(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Vec<String>> {
+    let Some(value) = obj.get(field) else {
+        return Ok(Vec::new());
+    };
+    parse_string_array_value(value, module_name, &format!("{manifest_path}.{field}"))
+}
+
+fn parse_optional_alias_string_array(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Vec<String>> {
+    if obj.contains_key(camel) {
+        parse_optional_string_array(obj, camel, module_name, manifest_path)
+    } else {
+        parse_optional_string_array(obj, snake, module_name, manifest_path)
+    }
+}
+
+fn parse_string_array_value(
+    value: &serde_json::Value,
+    module_name: &str,
+    path: &str,
+) -> Result<Vec<String>> {
+    let Some(arr) = value.as_array() else {
+        return Err(anyhow!(
+            "native library `{}` has invalid `{}`: expected array of strings",
+            module_name,
+            path
+        ));
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, item) in arr.iter().enumerate() {
+        let Some(s) = item.as_str() else {
+            return Err(anyhow!(
+                "native library `{}` has invalid `{}[{}]`: expected string",
+                module_name,
+                path,
+                idx
+            ));
+        };
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+fn parse_optional_path_array(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    package_dir: &Path,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Vec<PathBuf>> {
+    let values = parse_optional_string_array(obj, field, module_name, manifest_path)?;
+    Ok(values.into_iter().map(|p| package_dir.join(p)).collect())
+}
+
+fn parse_optional_alias_path_array(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+    package_dir: &Path,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Vec<PathBuf>> {
+    if obj.contains_key(camel) {
+        parse_optional_path_array(obj, camel, package_dir, module_name, manifest_path)
+    } else {
+        parse_optional_path_array(obj, snake, package_dir, module_name, manifest_path)
+    }
+}
+
+fn parse_optional_path_spec(
+    package_dir: &Path,
+    value: Option<&serde_json::Value>,
+    module_name: &str,
+    manifest_path: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let spec = value.as_str().ok_or_else(|| {
+        anyhow!(
+            "native library `{}` has invalid `{}.prebuilt`: expected string",
+            module_name,
+            manifest_path
+        )
+    })?;
+    resolve_prebuilt_path(package_dir, spec)
+        .map(Some)
+        .ok_or_else(|| {
+            anyhow!(
+                "native library `{}` could not resolve `{}.prebuilt` value `{}`. \
+                 Use a relative path, an absolute path, or an installed node_modules subpath.",
+                module_name,
+                manifest_path,
+                spec
+            )
+        })
 }
 
 /// Map a Perry target string to the architecture token used in

@@ -46,17 +46,12 @@ pub fn collect_native_archives_for_lock(
         return Ok(Vec::new());
     }
 
-    let mut parse_error = None;
     for_each_native_library_package(&node_modules, &mut |pkg_dir, pkg_name| {
-        let manifest = match parse_native_library_manifest(pkg_dir, pkg_name, target) {
-            Ok(manifest) => manifest,
-            Err(err) => {
-                parse_error = Some(err);
-                return;
-            }
-        };
-        if let Some(manifest) = manifest {
+        if let Some(manifest) = parse_native_library_manifest(pkg_dir, pkg_name, target)? {
             if let Some(tc) = manifest.target_config.as_ref() {
+                if !tc.available {
+                    return Ok(());
+                }
                 if let Some(prebuilt) = tc.prebuilt.as_ref() {
                     if prebuilt.exists() {
                         archives.push(ArchiveEntry {
@@ -66,12 +61,28 @@ pub fn collect_native_archives_for_lock(
                         });
                     }
                 }
+                for backend in &tc.backends {
+                    if !backend.available {
+                        continue;
+                    }
+                    if let Some(prebuilt) = backend.prebuilt.as_ref() {
+                        if prebuilt.exists() {
+                            archives.push(ArchiveEntry {
+                                package: format!(
+                                    "{}:{}",
+                                    manifest.module,
+                                    backend.backend.as_str()
+                                ),
+                                target_key: derive_target_key(target),
+                                path: prebuilt.clone(),
+                            });
+                        }
+                    }
+                }
             }
         }
-    });
-    if let Some(err) = parse_error {
-        return Err(err);
-    }
+        Ok(())
+    })?;
 
     Ok(archives)
 }
@@ -80,9 +91,12 @@ pub fn collect_native_archives_for_lock(
 /// `@scope/*` sub-children), invoking `cb(pkg_dir, pkg_name)` for
 /// each directory that has a `package.json` declaring a
 /// `perry.nativeLibrary` block.
-fn for_each_native_library_package(node_modules: &Path, cb: &mut dyn FnMut(&Path, &str)) {
+fn for_each_native_library_package(
+    node_modules: &Path,
+    cb: &mut dyn FnMut(&Path, &str) -> Result<()>,
+) -> Result<()> {
     let Ok(entries) = fs::read_dir(node_modules) else {
-        return;
+        return Ok(());
     };
     for entry in entries.flatten() {
         let Ok(ft) = entry.file_type() else { continue };
@@ -104,14 +118,15 @@ fn for_each_native_library_package(node_modules: &Path, cb: &mut dyn FnMut(&Path
                     let pkg_dir = scope_entry.path();
                     let full_name = format!("{}/{}", name, sub_name);
                     if has_perry_native_library(&pkg_dir) {
-                        cb(&pkg_dir, &full_name);
+                        cb(&pkg_dir, &full_name)?;
                     }
                 }
             }
         } else if has_perry_native_library(&path) {
-            cb(&path, &name);
+            cb(&path, &name)?;
         }
     }
+    Ok(())
 }
 
 /// Map a Perry target string into the per-arch lockfile key used in
@@ -170,6 +185,9 @@ pub(crate) fn run_lock_verify_for_compile(
     let mut archives: Vec<ArchiveEntry> = Vec::new();
     for manifest in &ctx.native_libraries {
         if let Some(tc) = manifest.target_config.as_ref() {
+            if !tc.available {
+                continue;
+            }
             if let Some(prebuilt) = tc.prebuilt.as_ref() {
                 if prebuilt.exists() {
                     archives.push(ArchiveEntry {
@@ -177,6 +195,20 @@ pub(crate) fn run_lock_verify_for_compile(
                         target_key: derive_target_key(target),
                         path: prebuilt.clone(),
                     });
+                }
+            }
+            for backend in &tc.backends {
+                if !backend.available {
+                    continue;
+                }
+                if let Some(prebuilt) = backend.prebuilt.as_ref() {
+                    if prebuilt.exists() {
+                        archives.push(ArchiveEntry {
+                            package: format!("{}:{}", manifest.module, backend.backend.as_str()),
+                            target_key: derive_target_key(target),
+                            path: prebuilt.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -281,5 +313,54 @@ mod lock_integration_tests {
         // boxes and x86_64 Linux CI runners.
         assert_eq!(archives[0].target_key, derive_target_key(Some("macos")));
         assert_eq!(archives[0].path, archive_path);
+    }
+
+    #[test]
+    fn collect_archives_includes_backend_prebuilt_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let pkg_dir = project.join("node_modules/@bloom/engine");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let target_archive_path = pkg_dir.join("libengine.a");
+        let backend_archive_path = pkg_dir.join("libengine_vulkan.a");
+        fs::write(&target_archive_path, b"target-static-archive-bytes").unwrap();
+        fs::write(&backend_archive_path, b"vulkan-static-archive-bytes").unwrap();
+        let manifest = serde_json::json!({
+            "name": "@bloom/engine",
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "lib": "engine",
+                            "prebuilt": "./libengine.a",
+                            "backends": {
+                                "vulkan": {
+                                    "prebuilt": "./libengine_vulkan.a"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let mut archives =
+            collect_native_archives_for_lock(project, None, Some("linux"), OutputFormat::Json)
+                .expect("scan");
+        archives.sort_by(|a, b| a.package.cmp(&b.package));
+
+        assert_eq!(archives.len(), 2);
+        assert_eq!(archives[0].package, "@bloom/engine");
+        assert_eq!(archives[0].target_key, derive_target_key(Some("linux")));
+        assert_eq!(archives[0].path, target_archive_path);
+        assert_eq!(archives[1].package, "@bloom/engine:vulkan");
+        assert_eq!(archives[1].target_key, derive_target_key(Some("linux")));
+        assert_eq!(archives[1].path, backend_archive_path);
     }
 }

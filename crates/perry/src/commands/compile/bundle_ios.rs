@@ -19,6 +19,7 @@ use crate::OutputFormat;
 use super::apple_info_plist::{
     inject_google_auth_info_plist, inject_ios_app_group_entitlement, inject_ios_deeplinks,
 };
+use super::resources::stage_native_library_artifacts;
 use super::targets::compile_metallib_for_bundle;
 use super::widget_build;
 use super::CompilationContext;
@@ -710,6 +711,7 @@ pub(super) fn build_ios_app_bundle(
     }
 
     compile_metallib_for_bundle(&ctx, target, &app_dir, format)?;
+    stage_native_library_artifacts(ctx, &app_dir, format)?;
 
     // Issue #676: build any [[widget]] entries declared in perry.toml,
     // embedding each produced .appex into <app>.app/Frameworks/<Name>.appex/.

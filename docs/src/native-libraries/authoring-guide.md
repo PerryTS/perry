@@ -124,9 +124,9 @@ The `perry.nativeLibrary` block tells Perry's compiler about every
         }
       ],
       "targets": {
-        "macos":   { "cargo_features": [] },
-        "linux":   { "cargo_features": [] },
-        "windows": { "cargo_features": [] }
+        "macos":   { "crate": "native", "lib": "perry_ext_my_bindings" },
+        "linux":   { "crate": "native", "lib": "perry_ext_my_bindings" },
+        "windows": { "crate": "native", "lib": "perry_ext_my_bindings" }
       }
     }
   }
@@ -271,8 +271,61 @@ find a prebuilt for the user's compile target:
 }
 ```
 
-If the prebuilt path doesn't exist on disk at compile time, Perry
-falls back to `cargo build --release`.
+If a `prebuilt` field is present, Perry treats the archive as required
+for that target and fails with a diagnostic when it cannot be resolved
+or linked. Omit `prebuilt` and provide `crate` / `lib` when the target
+should build from source instead.
+
+### Backend-aware packaging
+
+Graphics or compute wrappers can describe backend-owned artifacts
+without adding app-specific APIs to Perry. Put backend metadata under
+the target that can actually use it:
+
+```json
+{
+  "perry": {
+    "nativeLibrary": {
+      "targets": {
+        "ios": {
+          "prebuilt": "./prebuilt/ios/libdemo.a",
+          "backends": {
+            "metal": {
+              "frameworks": ["Metal", "QuartzCore"],
+              "shaderSources": ["shaders/default.metal"],
+              "shaderOutputs": ["prebuilt/default.metallib"],
+              "resources": ["resources/metal"]
+            }
+          }
+        },
+        "linux": {
+          "prebuilt": "./prebuilt/linux/libdemo.a",
+          "backends": {
+            "vulkan": {
+              "libs": ["vulkan"],
+              "shaderOutputs": ["prebuilt/default.spv"]
+            }
+          }
+        },
+        "windows": {
+          "prebuilt": "./prebuilt/windows/demo.lib",
+          "backends": {
+            "d3d12": {
+              "libs": ["d3d12", "dxgi", "dxguid"],
+              "shaderOutputs": ["prebuilt/default.dxil"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Perry validates the backend/target pairing early: Metal is Apple-only,
+Vulkan is available on macOS/Linux/Windows/Android/HarmonyOS, and D3D12
+is Windows-only. Precompiled shader outputs and resources are copied
+under `NativeLibraries/<package>/<backend>/` in app bundles.
 
 ## 6. Update over time
 

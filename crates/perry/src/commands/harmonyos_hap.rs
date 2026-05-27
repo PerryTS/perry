@@ -94,6 +94,12 @@ pub struct HapBuildArgs<'a> {
     /// `Image()` / `ImageFile()` calls into the `$rawfile()` form.
     /// `None` skips the copy.
     pub assets_dir: Option<&'a Path>,
+
+    /// Staged `NativeLibraries/` directory produced by compile's native
+    /// artifact packaging. When present it is copied into
+    /// `resources/rawfile/NativeLibraries/` so backend resources and
+    /// shaders are included in the HAP.
+    pub native_resources_dir: Option<&'a Path>,
 }
 
 pub struct HapBuildResult {
@@ -127,6 +133,9 @@ pub fn build_hap(args: &HapBuildArgs) -> Result<HapBuildResult> {
     write_resources(&staging, args.stem)?;
     if let Some(assets) = args.assets_dir {
         copy_assets_to_rawfile(&staging, assets)?;
+    }
+    if let Some(native_resources) = args.native_resources_dir {
+        copy_native_resources_to_rawfile(&staging, native_resources)?;
     }
     copy_so(&staging, args.so_path)?;
     copy_ets(&staging, args.ets_dir)?;
@@ -459,6 +468,17 @@ fn copy_assets_to_rawfile(staging: &Path, assets: &Path) -> Result<()> {
     walk(assets, &dest_root, assets)
 }
 
+fn copy_native_resources_to_rawfile(staging: &Path, native_resources: &Path) -> Result<()> {
+    if !native_resources.is_dir() {
+        return Ok(());
+    }
+    let dest_root = staging
+        .join("resources")
+        .join("rawfile")
+        .join("NativeLibraries");
+    copy_dir_recursive(native_resources, &dest_root)
+}
+
 fn copy_so(staging: &Path, so_path: &Path) -> Result<()> {
     // HarmonyOS expects .so libs under libs/<abi>/; the only ABI we target
     // today is arm64-v8a (physical device) and x86_64 (emulator). Perry's
@@ -783,8 +803,14 @@ mod build_hap_tests {
         let tmp = std::env::temp_dir().join(format!("perry-hap-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("ets/entryability")).unwrap();
+        fs::create_dir_all(tmp.join("NativeLibraries/_scope_demo/vulkan")).unwrap();
         fs::write(tmp.join("libhi.so"), b"fake so").unwrap();
         fs::write(tmp.join("ets/entryability/EntryAbility.ets"), "// ability").unwrap();
+        fs::write(
+            tmp.join("NativeLibraries/_scope_demo/vulkan/default.spv"),
+            b"spv",
+        )
+        .unwrap();
 
         // Scrub signing env so we stay on the unsigned path regardless of
         // whatever the host developer may have exported.
@@ -803,6 +829,7 @@ mod build_hap_tests {
 
         let so = tmp.join("libhi.so");
         let ets = tmp.join("ets");
+        let native_resources = tmp.join("NativeLibraries");
         let args = HapBuildArgs {
             so_path: &so,
             ets_dir: &ets,
@@ -815,6 +842,7 @@ mod build_hap_tests {
             profile: None,
             key_alias: None,
             assets_dir: None,
+            native_resources_dir: Some(native_resources.as_path()),
         };
         let res = build_hap(&args).expect("build_hap failed");
         assert!(!res.signed, "no P12 env → unsigned");
@@ -837,6 +865,7 @@ mod build_hap_tests {
             "resources/base/media/icon.png",
             "resources/base/string/string.json",
             "resources/base/color/color.json",
+            "resources/rawfile/NativeLibraries/_scope_demo/vulkan/default.spv",
         ];
         for r in required {
             assert!(
@@ -971,6 +1000,7 @@ mod build_hap_tests {
             profile: Some(&fake_profile),
             key_alias: Some("ciKey"),
             assets_dir: None,
+            native_resources_dir: None,
         };
         // Signing will fail (no real keystore / no java reachable in CI
         // environment baseline), so the result is `signed: false`. The

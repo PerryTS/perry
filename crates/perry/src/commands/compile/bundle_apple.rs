@@ -14,7 +14,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::i18n_emit::write_lproj_localized_strings;
-use super::resources::{copy_bundle_resource_dirs, find_project_root_for_resources};
+use super::resources::{
+    copy_bundle_resource_dirs, find_project_root_for_resources, stage_native_library_artifacts,
+};
 use super::targets::{compile_metallib_for_bundle, lookup_bundle_id_from_toml};
 use super::CompilationContext;
 
@@ -90,6 +92,7 @@ pub(super) fn bundle_for_watchos(
     }
 
     compile_metallib_for_bundle(ctx, target, &app_dir, format)?;
+    stage_native_library_artifacts(ctx, &app_dir, format)?;
 
     match format {
         OutputFormat::Text => {
@@ -175,6 +178,7 @@ pub(super) fn bundle_for_tvos(
     fs::write(app_dir.join("Info.plist"), info_plist)?;
 
     compile_metallib_for_bundle(ctx, target, &app_dir, format)?;
+    stage_native_library_artifacts(ctx, &app_dir, format)?;
 
     match format {
         OutputFormat::Text => {
@@ -423,6 +427,8 @@ pub(super) fn bundle_for_visionos(
         let project_root = find_project_root_for_resources(&src_dir, true);
         copy_bundle_resource_dirs(&project_root, &app_dir);
     }
+    compile_metallib_for_bundle(ctx, target, &app_dir, format)?;
+    stage_native_library_artifacts(ctx, &app_dir, format)?;
 
     write_lproj_localized_strings(&app_dir, i18n_table, i18n_config);
 

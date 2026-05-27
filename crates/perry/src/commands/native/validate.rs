@@ -50,6 +50,16 @@ pub fn run(args: ValidateArgs, format: OutputFormat, _use_color: bool) -> Result
         .pointer("/perry/nativeLibrary")
         .ok_or_else(|| anyhow!("no `perry.nativeLibrary` block in {}", pkg_path.display()))?;
 
+    let package_name = pkg
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>");
+    crate::commands::compile::validate_native_library_manifest_value(
+        &args.path,
+        package_name,
+        manifest,
+    )?;
+
     let declared_funcs: Vec<String> = manifest
         .pointer("/functions")
         .and_then(|v| v.as_array())
@@ -275,5 +285,45 @@ mod tests {
         std::fs::write(dir.path().join("Cargo.toml"), cargo).unwrap();
         let n = read_crate_name(dir.path()).expect("read");
         assert_eq!(n, "perry-ext-foo");
+    }
+
+    #[test]
+    fn invalid_backend_metadata_fails_before_cargo_lookup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = serde_json::json!({
+            "name": "bad-backend",
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "crate": "native",
+                            "lib": "bad_backend",
+                            "backends": {
+                                "d3d12": { "libs": ["d3d12"] }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            dir.path().join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let err = run(
+            ValidateArgs {
+                path: dir.path().to_path_buf(),
+                no_build: true,
+            },
+            OutputFormat::Json,
+            false,
+        )
+        .expect_err("invalid backend should fail");
+        let msg = err.to_string();
+        assert!(msg.contains("d3d12"), "got: {msg}");
+        assert!(msg.contains("Windows-only"), "got: {msg}");
     }
 }

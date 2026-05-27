@@ -343,6 +343,18 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "Set false when this package intentionally does not ship the selected target. Perry skips the target config without requiring crate/lib/prebuilt metadata."
+        },
+        "unavailableReason": {
+          "type": "string",
+          "description": "Human-readable reason shown when available is false."
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "description": "Snake_case alias for unavailableReason."
+        },
         "crate": {
           "type": "string",
           "description": "Path (relative to package.json) to the Cargo crate that produces the staticlib."
@@ -365,6 +377,36 @@
           "type": "array",
           "items": { "type": "string" }
         },
+        "libDirs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional library search paths, relative to package.json unless absolute."
+        },
+        "resources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Native resource files/directories copied into NativeLibraries/<package>/ in the target bundle or output staging directory."
+        },
+        "shaderOutputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Precompiled shader/resource outputs copied into NativeLibraries/<package>/ in the target bundle or output staging directory."
+        },
+        "shader_outputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Snake_case alias for shaderOutputs."
+        },
+        "backends": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "metal": { "$ref": "#/$defs/backendConfig" },
+            "vulkan": { "$ref": "#/$defs/backendConfig" },
+            "d3d12": { "$ref": "#/$defs/backendConfig" }
+          },
+          "description": "Backend-specific packaging metadata. Metal is Apple-only; Vulkan is supported on macOS/Linux/Windows/Android/HarmonyOS; D3D12 is Windows-only."
+        },
         "swift_sources": {
           "type": "array",
           "items": { "type": "string" }
@@ -376,6 +418,74 @@
         "prebuilt": {
           "type": "string",
           "description": "Path to a pre-built .a archive. When set, Perry skips `cargo build`."
+        }
+      }
+    },
+    "backendConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "Set false when this backend is intentionally unavailable for this target."
+        },
+        "unavailableReason": {
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "type": "string"
+        },
+        "prebuilt": {
+          "type": "string",
+          "description": "Backend-specific archive to link in addition to the target-level archive."
+        },
+        "frameworks": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "libs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "libDirs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "pkgConfig": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "shaderSources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Source shaders compiled during packaging with xcrun metal, glslc, or dxc. Override discovery with PERRY_XCRUN, PERRY_GLSLC, or PERRY_DXC."
+        },
+        "shader_sources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Snake_case alias for shaderSources."
+        },
+        "shaderOutputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "shader_outputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "resources": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "package": {
+          "type": "object",
+          "description": "Optional descriptive backend artifact metadata emitted as perry-backend-package.json inside NativeLibraries/<package>/<backend>/.",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "kind": { "type": "string" }
+          }
         }
       }
     }

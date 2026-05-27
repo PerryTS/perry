@@ -41,6 +41,124 @@ mod platform_cmd;
 
 pub use platform_cmd::select_linker_command;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeBackendLinkMetadata {
+    backend: super::NativeBackend,
+    prebuilt: Option<PathBuf>,
+    frameworks: Vec<String>,
+    libs: Vec<String>,
+    lib_dirs: Vec<PathBuf>,
+    pkg_config: Vec<String>,
+}
+
+fn select_available_backend_link_metadata(
+    target_config: &super::TargetNativeConfig,
+) -> Vec<NativeBackendLinkMetadata> {
+    if !target_config.available {
+        return Vec::new();
+    }
+
+    target_config
+        .backends
+        .iter()
+        .filter(|backend| backend.available)
+        .map(|backend| NativeBackendLinkMetadata {
+            backend: backend.backend,
+            prebuilt: backend.prebuilt.clone(),
+            frameworks: backend.frameworks.clone(),
+            libs: backend.libs.clone(),
+            lib_dirs: backend.lib_dirs.clone(),
+            pkg_config: backend.pkg_config.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod native_package_selection_tests {
+    use super::*;
+    use crate::commands::compile::{
+        NativeBackend, NativeBackendConfig, NativeBackendPackageMetadata, TargetNativeConfig,
+    };
+
+    fn target_config() -> TargetNativeConfig {
+        TargetNativeConfig {
+            available: true,
+            unavailable_reason: None,
+            crate_path: PathBuf::from("crate"),
+            lib_name: "demo".to_string(),
+            prebuilt: Some(PathBuf::from("target/libdemo.a")),
+            frameworks: vec!["Metal".to_string()],
+            optional_frameworks: Vec::new(),
+            frameworks_env: None,
+            libs: vec!["z".to_string()],
+            lib_dirs: vec![PathBuf::from("vendor/lib")],
+            pkg_config: vec!["openssl".to_string()],
+            resources: vec![PathBuf::from("resources/common.dat")],
+            shader_outputs: vec![PathBuf::from("shaders/common.spv")],
+            backends: Vec::new(),
+            swift_sources: Vec::new(),
+            metal_sources: vec![PathBuf::from("shaders/default.metal")],
+        }
+    }
+
+    fn backend_config(backend: NativeBackend, available: bool) -> NativeBackendConfig {
+        NativeBackendConfig {
+            backend,
+            available,
+            unavailable_reason: if available {
+                None
+            } else {
+                Some("not shipped".to_string())
+            },
+            prebuilt: Some(PathBuf::from(format!("backend/{}.a", backend.as_str()))),
+            frameworks: vec![format!("{}Framework", backend.as_str())],
+            libs: vec![format!("{}_sys", backend.as_str())],
+            lib_dirs: vec![PathBuf::from(format!("vendor/{}/lib", backend.as_str()))],
+            pkg_config: vec![format!("{}-pkg", backend.as_str())],
+            shader_sources: vec![PathBuf::from(format!("shaders/{}.src", backend.as_str()))],
+            shader_outputs: vec![PathBuf::from(format!("shaders/{}.bin", backend.as_str()))],
+            resources: vec![PathBuf::from(format!("resources/{}", backend.as_str()))],
+            package: NativeBackendPackageMetadata {
+                name: Some(format!("demo-{}", backend.as_str())),
+                version: Some("1.0.0".to_string()),
+                kind: Some("shader-package".to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn selection_includes_available_backend_link_metadata() {
+        let mut tc = target_config();
+        tc.backends
+            .push(backend_config(NativeBackend::Vulkan, true));
+        tc.backends
+            .push(backend_config(NativeBackend::D3d12, false));
+
+        let selection = select_available_backend_link_metadata(&tc);
+
+        assert_eq!(selection.len(), 1);
+        let backend = &selection[0];
+        assert_eq!(backend.backend, NativeBackend::Vulkan);
+        assert_eq!(backend.prebuilt, Some(PathBuf::from("backend/vulkan.a")));
+        assert_eq!(backend.frameworks, vec!["vulkanFramework".to_string()]);
+        assert_eq!(backend.libs, vec!["vulkan_sys".to_string()]);
+        assert_eq!(backend.lib_dirs, vec![PathBuf::from("vendor/vulkan/lib")]);
+        assert_eq!(backend.pkg_config, vec!["vulkan-pkg".to_string()]);
+    }
+
+    #[test]
+    fn unavailable_target_selects_no_backend_link_metadata() {
+        let mut tc = target_config();
+        tc.available = false;
+        tc.backends
+            .push(backend_config(NativeBackend::Vulkan, true));
+
+        let selection = select_available_backend_link_metadata(&tc);
+
+        assert!(selection.is_empty());
+    }
+}
+
 /// Construct the platform-specific linker command, append every required
 /// argument (object files, libraries, frameworks, system libs, native libs,
 /// geisterhand libs), invoke it, and bail on non-zero status.
@@ -1147,6 +1265,18 @@ pub(super) fn build_and_run_link(
         std::collections::HashSet::new();
     for native_lib in &ctx.native_libraries {
         if let Some(ref target_config) = native_lib.target_config {
+            if !target_config.available {
+                if let (OutputFormat::Text, Some(reason)) =
+                    (format, target_config.unavailable_reason.as_deref())
+                {
+                    println!(
+                        "Skipping native library {} for this target: {}",
+                        native_lib.module, reason
+                    );
+                }
+                continue;
+            }
+
             match format {
                 OutputFormat::Text => {
                     println!("Building native library: {} ...", native_lib.module)
@@ -1414,6 +1544,74 @@ pub(super) fn build_and_run_link(
                 }
             }
 
+            for backend in &target_config.backends {
+                if !backend.available {
+                    if let (OutputFormat::Text, Some(reason)) =
+                        (format, backend.unavailable_reason.as_deref())
+                    {
+                        println!(
+                            "Skipping {} backend for {}: {}",
+                            backend.backend.as_str(),
+                            native_lib.module,
+                            reason
+                        );
+                    }
+                }
+            }
+
+            for backend in select_available_backend_link_metadata(target_config) {
+                if let Some(prebuilt) = backend.prebuilt.as_ref() {
+                    if !prebuilt.exists() {
+                        return Err(anyhow!(
+                            "Prebuilt {} backend library declared by {} not found at {}. \
+                             Install the matching optional dependency or update \
+                             perry.nativeLibrary.targets.<target>.backends.{}.prebuilt.",
+                            backend.backend.as_str(),
+                            native_lib.module,
+                            prebuilt.display(),
+                            backend.backend.as_str()
+                        ));
+                    }
+                    cmd.arg(prebuilt);
+                    match format {
+                        OutputFormat::Text => println!(
+                            "Linking prebuilt {} backend library: {}",
+                            backend.backend.as_str(),
+                            prebuilt.display()
+                        ),
+                        OutputFormat::Json => {}
+                    }
+                }
+
+                for framework in &backend.frameworks {
+                    cmd.arg("-framework").arg(framework);
+                }
+                for lib_dir in &backend.lib_dirs {
+                    if is_windows {
+                        cmd.arg(format!("/LIBPATH:{}", lib_dir.display()));
+                    } else {
+                        cmd.arg(format!("-L{}", lib_dir.display()));
+                    }
+                }
+                for lib in &backend.libs {
+                    if is_windows {
+                        cmd.arg(format!("{}.lib", lib));
+                    } else {
+                        cmd.arg(format!("-l{}", lib));
+                    }
+                }
+                for pkg in &backend.pkg_config {
+                    if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
+                        if output.status.success() {
+                            let libs = String::from_utf8_lossy(&output.stdout);
+                            for flag in libs.trim().split_whitespace() {
+                                cmd.arg(flag);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Compile manifest-declared Swift sources to object files and
             // append them to the link line. Used by `--features watchos-swift-app`
             // so a native lib can ship its own `@main struct App: App`.
@@ -1514,10 +1712,12 @@ pub(super) fn build_and_run_link(
                         | Some("tvos-simulator")
                         | Some("watchos")
                         | Some("watchos-simulator")
+                        | Some("visionos")
+                        | Some("visionos-simulator")
                 )
             {
                 return Err(anyhow!(
-                    "perry.nativeLibrary.targets.<target>.metal_sources is only supported on ios / ios-simulator / tvos / tvos-simulator / watchos / watchos-simulator"
+                    "perry.nativeLibrary.targets.<target>.metal_sources is only supported on ios / ios-simulator / tvos / tvos-simulator / watchos / watchos-simulator / visionos / visionos-simulator"
                 ));
             }
         }

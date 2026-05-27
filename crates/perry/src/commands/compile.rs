@@ -80,6 +80,7 @@ use post_link::{
     summarize_codegen_cache_stats,
 };
 pub use resolve::find_perry_workspace_root;
+pub(crate) use resolve::validate_native_library_manifest_value;
 use resolve::{
     cached_resolve_import, compute_module_prefix, extract_compile_package_dir,
     has_perry_native_library, is_declaration_file, is_in_compile_package,
@@ -4816,6 +4817,8 @@ pub fn run_with_parse_cache(
             // ctx.harmonyos_index_ets has the harvested ArkUI (if any). We just
             // pass it through to the EntryAbility/Index.ets writer.
             let index_ets = ctx.harmonyos_index_ets.as_deref();
+            resources::stage_native_library_artifacts(&ctx, output_dir, format)?;
+            let native_resources_dir = output_dir.join("NativeLibraries");
             match emit_harmonyos_arkts_stubs(output_dir, so_filename, index_ets) {
                 Err(e) => eprintln!("Warning: failed to emit ArkTS shim: {}", e),
                 Ok(()) => {
@@ -4859,6 +4862,7 @@ pub fn run_with_parse_cache(
                         profile: args.harmonyos_profile.as_deref(),
                         key_alias: args.harmonyos_key_alias.as_deref(),
                         assets_dir: assets_dir.as_deref(),
+                        native_resources_dir: Some(native_resources_dir.as_path()),
                     };
                     match crate::commands::harmonyos_hap::build_hap(&hap_args) {
                         Ok(res) => {
@@ -5038,6 +5042,9 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+            }
+            if !is_harmonyos {
+                resources::stage_native_library_artifacts(&ctx, output_dir, format)?;
             }
         }
 

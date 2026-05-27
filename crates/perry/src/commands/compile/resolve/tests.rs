@@ -683,6 +683,387 @@ mod manifest_parse_tests {
         assert!(tc.optional_frameworks.is_empty());
         assert!(tc.frameworks_env.is_none());
     }
+
+    #[test]
+    fn parses_metal_backend_target_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "ios": {
+                            "crate": "crate-ios",
+                            "lib": "demo",
+                            "backends": {
+                                "metal": {
+                                    "frameworks": ["Metal", "QuartzCore"],
+                                    "shaderSources": ["shaders/default.metal"],
+                                    "shaderOutputs": ["prebuilt/default.metallib"],
+                                    "resources": ["resources/metal"],
+                                    "package": {
+                                        "name": "demo-metal",
+                                        "version": "1.0.0",
+                                        "kind": "metallib"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("ios"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        let backend = tc.backends.first().expect("metal backend");
+        assert_eq!(backend.backend, NativeBackend::Metal);
+        assert_eq!(backend.frameworks, vec!["Metal", "QuartzCore"]);
+        assert_eq!(
+            backend.shader_sources,
+            vec![pkg_dir.join("shaders/default.metal")]
+        );
+        assert_eq!(
+            backend.shader_outputs,
+            vec![pkg_dir.join("prebuilt/default.metallib")]
+        );
+        assert_eq!(backend.resources, vec![pkg_dir.join("resources/metal")]);
+        assert_eq!(backend.package.name.as_deref(), Some("demo-metal"));
+        assert_eq!(backend.package.kind.as_deref(), Some("metallib"));
+    }
+
+    #[test]
+    fn parses_vulkan_backend_target_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "crate": "crate-linux",
+                            "lib": "demo",
+                            "backends": {
+                                "vulkan": {
+                                    "libs": ["vulkan"],
+                                    "libDirs": ["vendor/vulkan/lib"],
+                                    "shaderOutputs": ["shaders/default.spv"]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("linux"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        let backend = tc.backends.first().expect("vulkan backend");
+        assert_eq!(backend.backend, NativeBackend::Vulkan);
+        assert_eq!(backend.libs, vec!["vulkan"]);
+        assert_eq!(backend.lib_dirs, vec![pkg_dir.join("vendor/vulkan/lib")]);
+        assert_eq!(
+            backend.shader_outputs,
+            vec![pkg_dir.join("shaders/default.spv")]
+        );
+    }
+
+    #[test]
+    fn parses_d3d12_backend_target_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "windows": {
+                            "prebuilt": "./prebuilt/demo.lib",
+                            "backends": {
+                                "d3d12": {
+                                    "libs": ["d3d12", "dxgi", "dxguid"],
+                                    "shaderSources": ["shaders/default.hlsl"],
+                                    "shaderOutputs": ["shaders/default.dxil"]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("windows"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert_eq!(
+            tc.prebuilt.as_ref().expect("prebuilt"),
+            &pkg_dir.join("./prebuilt/demo.lib")
+        );
+        let backend = tc.backends.first().expect("d3d12 backend");
+        assert_eq!(backend.backend, NativeBackend::D3d12);
+        assert_eq!(backend.libs, vec!["d3d12", "dxgi", "dxguid"]);
+        assert_eq!(
+            backend.shader_sources,
+            vec![pkg_dir.join("shaders/default.hlsl")]
+        );
+    }
+
+    #[test]
+    fn rejects_d3d12_backend_on_linux_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "crate": "crate-linux",
+                            "lib": "demo",
+                            "backends": { "d3d12": { "libs": ["d3d12"] } }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let err = parse_native_library_manifest(pkg_dir, "demo", Some("linux"))
+            .expect_err("d3d12 on linux must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("d3d12"), "got: {msg}");
+        assert!(msg.contains("Windows-only"), "got: {msg}");
+    }
+
+    #[test]
+    fn rejects_unknown_backend_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "crate": "crate-linux",
+                            "lib": "demo",
+                            "backends": { "cuda": {} }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let err = parse_native_library_manifest(pkg_dir, "demo", Some("linux"))
+            .expect_err("unknown backend must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("cuda"), "got: {msg}");
+        assert!(msg.contains("metal"), "got: {msg}");
+        assert!(msg.contains("vulkan"), "got: {msg}");
+        assert!(msg.contains("d3d12"), "got: {msg}");
+    }
+
+    #[test]
+    fn parses_target_gated_backend_fixture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            include_str!("../fixtures/native-target-packaging/target-gated-backends.package.json"),
+        )
+        .expect("write fixture package.json");
+        std::fs::create_dir_all(pkg_dir.join("prebuilt/windows"))
+            .expect("create prebuilt fixture dir");
+        std::fs::write(pkg_dir.join("prebuilt/windows/demo.lib"), b"fixture")
+            .expect("write prebuilt fixture lib");
+
+        let linux = parse_native_library_manifest(pkg_dir, "@scope/demo-native", Some("linux"))
+            .expect("parse linux manifest")
+            .expect("linux manifest");
+        let linux_tc = linux.target_config.expect("linux target_config");
+        assert!(linux_tc.available);
+        assert_eq!(linux_tc.lib_name, "demo_linux");
+        assert_eq!(
+            linux_tc.resources,
+            vec![pkg_dir.join("assets/linux-config.json")]
+        );
+        let vulkan = linux_tc.backends.first().expect("vulkan backend");
+        assert_eq!(vulkan.backend, NativeBackend::Vulkan);
+        assert_eq!(vulkan.libs, vec!["vulkan"]);
+        assert_eq!(vulkan.lib_dirs, vec![pkg_dir.join("vendor/vulkan/lib")]);
+        assert_eq!(
+            vulkan.shader_sources,
+            vec![pkg_dir.join("shaders/default.comp")]
+        );
+        assert_eq!(
+            vulkan.shader_outputs,
+            vec![pkg_dir.join("prebuilt/default.spv")]
+        );
+        assert_eq!(vulkan.resources, vec![pkg_dir.join("resources/vulkan")]);
+        assert_eq!(vulkan.package.name.as_deref(), Some("demo-vulkan"));
+        assert_eq!(vulkan.package.kind.as_deref(), Some("spirv"));
+
+        let android = parse_native_library_manifest(pkg_dir, "@scope/demo-native", Some("android"))
+            .expect("parse android manifest")
+            .expect("android manifest");
+        let android_tc = android.target_config.expect("android target_config");
+        assert!(!android_tc.available);
+        assert_eq!(
+            android_tc.unavailable_reason.as_deref(),
+            Some("Android native package ships separately")
+        );
+        assert!(android_tc.backends.is_empty());
+
+        let windows = parse_native_library_manifest(pkg_dir, "@scope/demo-native", Some("windows"))
+            .expect("parse windows manifest")
+            .expect("windows manifest");
+        let windows_tc = windows.target_config.expect("windows target_config");
+        assert_eq!(
+            windows_tc.prebuilt.as_ref().expect("windows prebuilt"),
+            &pkg_dir.join("./prebuilt/windows/demo.lib")
+        );
+        let d3d12 = windows_tc.backends.first().expect("d3d12 backend");
+        assert_eq!(d3d12.backend, NativeBackend::D3d12);
+        assert_eq!(d3d12.libs, vec!["d3d12", "dxgi", "dxguid"]);
+        assert_eq!(
+            d3d12.shader_sources,
+            vec![pkg_dir.join("shaders/default.hlsl")]
+        );
+        assert_eq!(d3d12.package.kind.as_deref(), Some("dxil"));
+    }
+
+    #[test]
+    fn unavailable_target_skips_without_build_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "available": false,
+                            "unavailableReason": "GPU SDK not distributed for this target"
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("linux"))
+            .expect("parse manifest")
+            .expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert!(!tc.available);
+        assert_eq!(
+            tc.unavailable_reason.as_deref(),
+            Some("GPU SDK not distributed for this target")
+        );
+        assert!(tc.backends.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_target_available_type() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "available": "false",
+                            "crate": "crate-linux",
+                            "lib": "demo"
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let err = parse_native_library_manifest(pkg_dir, "demo", Some("linux"))
+            .expect_err("string available must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("targets.linux.available"), "got: {msg}");
+        assert!(msg.contains("expected boolean"), "got: {msg}");
+    }
+
+    #[test]
+    fn rejects_invalid_backend_available_type() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "linux": {
+                            "crate": "crate-linux",
+                            "lib": "demo",
+                            "backends": {
+                                "vulkan": {
+                                    "available": "yes",
+                                    "libs": ["vulkan"]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let err = parse_native_library_manifest(pkg_dir, "demo", Some("linux"))
+            .expect_err("string backend available must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("backends.vulkan.available"), "got: {msg}");
+        assert!(msg.contains("expected boolean"), "got: {msg}");
+    }
 }
 
 #[cfg(test)]

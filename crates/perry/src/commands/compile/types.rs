@@ -690,9 +690,70 @@ pub struct NativeFunctionDecl {
     pub returns: perry_api_manifest::NativeAbiType,
 }
 
+/// Backend package metadata a native library can attach to a target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NativeBackend {
+    Metal,
+    Vulkan,
+    D3d12,
+}
+
+impl NativeBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NativeBackend::Metal => "metal",
+            NativeBackend::Vulkan => "vulkan",
+            NativeBackend::D3d12 => "d3d12",
+        }
+    }
+}
+
+/// Optional package metadata for backend-owned artifacts. This is
+/// intentionally descriptive: Perry packages and copies artifacts but
+/// does not create an app-level graphics API surface from this block.
+#[derive(Debug, Clone, Default)]
+pub struct NativeBackendPackageMetadata {
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub kind: Option<String>,
+}
+
+/// Backend-specific packaging metadata nested under
+/// `perry.nativeLibrary.targets.<target>.backends.<backend>`.
+#[derive(Debug, Clone)]
+pub struct NativeBackendConfig {
+    pub backend: NativeBackend,
+    /// False means the backend is intentionally unavailable for this
+    /// target and should not add link/resource metadata.
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+    /// Optional backend-specific archive to link in addition to the
+    /// target-level `prebuilt` / `crate` output.
+    pub prebuilt: Option<PathBuf>,
+    pub frameworks: Vec<String>,
+    pub libs: Vec<String>,
+    pub lib_dirs: Vec<PathBuf>,
+    pub pkg_config: Vec<String>,
+    /// Source shaders that may require backend tools (`xcrun metal`,
+    /// `glslc`, `dxc`) to build during packaging.
+    pub shader_sources: Vec<PathBuf>,
+    /// Precompiled shader/resource outputs (`.metallib`, `.spv`,
+    /// `.cso`/`.dxil`, etc.) that Perry should package directly.
+    pub shader_outputs: Vec<PathBuf>,
+    /// Backend-owned resource files or directories copied into bundle
+    /// resource output when the target has one.
+    pub resources: Vec<PathBuf>,
+    pub package: NativeBackendPackageMetadata,
+}
+
 /// Target-specific native library build configuration
 #[derive(Debug, Clone)]
 pub struct TargetNativeConfig {
+    /// False means the package explicitly does not ship this target.
+    /// Compile/link should skip it without treating missing crate/lib
+    /// metadata as an error.
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
     pub crate_path: PathBuf,
     pub lib_name: String,
     /// If set, the absolute path to a prebuilt static library that the
@@ -739,6 +800,14 @@ pub struct TargetNativeConfig {
     /// against the package, not the user's cwd.
     pub lib_dirs: Vec<PathBuf>,
     pub pkg_config: Vec<String>,
+    /// Target-level resource files or directories copied into bundle
+    /// resource output when the target has one.
+    pub resources: Vec<PathBuf>,
+    /// Target-level precompiled shader/resource outputs copied into
+    /// bundle resource output when the target has one.
+    pub shader_outputs: Vec<PathBuf>,
+    /// Backend-specific packaging metadata for Metal, Vulkan, and D3D12.
+    pub backends: Vec<NativeBackendConfig>,
     /// Swift sources (absolute paths) to compile via swiftc and link into the
     /// final binary. Used by `--features watchos-swift-app` so a native lib
     /// can ship its own `@main struct App: App` SwiftUI root.

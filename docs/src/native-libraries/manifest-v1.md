@@ -242,6 +242,11 @@ as their device counterpart (`ios` covers both `ios-simulator` and
 | `libs`          | array of string  | no       | System libraries to pass to the linker (`-lcurl`, etc.). |
 | `libDirs`       | array of paths   | no       | Extra linker search paths. Emitted before `libs` as `-L<dir>` (or `/LIBPATH:<dir>` on Windows MSVC). Relative entries resolve against `package.json`. |
 | `pkgConfig`     | array of string  | no       | pkg-config package names. The compiler runs `pkg-config --libs` and forwards the output. |
+| `available`     | boolean          | no       | Set `false` when the package intentionally does not ship this target. Perry skips it without requiring `crate` / `lib` / `prebuilt`. |
+| `unavailableReason` | string       | no       | Optional diagnostic text shown when `available: false`. Snake_case `unavailable_reason` also accepted. |
+| `resources`     | array of paths   | no       | Native resource files/directories copied into `NativeLibraries/<package>/` in the target bundle or output staging directory. |
+| `shaderOutputs` | array of paths   | no       | Precompiled shader/resource files copied into `NativeLibraries/<package>/`. Snake_case `shader_outputs` also accepted. |
+| `backends`      | object           | no       | Backend-specific packaging blocks for `metal`, `vulkan`, and `d3d12`; see below. |
 | `swift_sources` | array of paths   | no       | Swift sources to compile via `swiftc` and link in. Used by SwiftUI wrappers. |
 | `metal_sources` | array of paths   | no       | Metal shader sources to compile via `xcrun metal` into `<app>.app/default.metallib`. |
 | `prebuilt`      | path string      | no       | Path (relative to package.json) to a pre-built `.a` archive. When present, Perry uses this instead of running `cargo build`. |
@@ -249,6 +254,87 @@ as their device counterpart (`ios` covers both `ios-simulator` and
 When both `prebuilt` and `crate`/`lib` are absent for the user's
 compile target, the wrapper is silently skipped on that target —
 useful for platform-specific bindings that only exist on macOS, etc.
+
+### Backend packaging (`backends`)
+
+`targets.<target>.backends` describes backend-owned packaging without
+adding app-specific graphics APIs to Perry. The keys are:
+
+| Backend | Valid target keys |
+|---------|-------------------|
+| `metal` | `macos`, `ios`, `tvos`, `watchos`, `visionos` |
+| `vulkan` | `macos`, `linux`, `windows`, `android`, `harmonyos` |
+| `d3d12` | `windows` |
+
+Unsupported combinations fail during manifest parsing or
+`perry native validate`, before any SDK-specific tool is invoked.
+
+Each backend block accepts:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `available` | boolean | Set `false` to document an intentionally unavailable backend for that target. |
+| `unavailableReason` | string | Optional skip reason. Snake_case alias accepted. |
+| `prebuilt` | path string | Backend-specific archive linked in addition to the target-level archive. |
+| `frameworks` | array of string | Apple framework names for Metal packaging. |
+| `libs` | array of string | System libraries such as `vulkan`, `d3d12`, `dxgi`, `dxguid`. |
+| `libDirs` | array of paths | Extra backend library search paths. |
+| `pkgConfig` | array of string | Backend pkg-config packages. |
+| `shaderSources` | array of paths | Source shaders that require backend tools (`xcrun metal`, `glslc`, `dxc`) when Perry packages them. Snake_case alias accepted. |
+| `shaderOutputs` | array of paths | Precompiled shader outputs (`.metallib`, `.spv`, `.dxil`, `.cso`) copied into the target bundle or output staging directory. Snake_case alias accepted. |
+| `resources` | array of paths | Backend-owned resource files/directories copied into `NativeLibraries/<package>/<backend>/`. |
+| `package` | object | Optional descriptive metadata: `name`, `version`, `kind`. Perry writes it to `NativeLibraries/<package>/<backend>/perry-backend-package.json`; native code owns interpretation. |
+
+Example:
+
+```json
+"targets": {
+  "macos": {
+    "prebuilt": "./prebuilt/macos/libdemo.a",
+    "backends": {
+      "metal": {
+        "frameworks": ["Metal", "QuartzCore"],
+        "shaderSources": ["shaders/default.metal"],
+        "shaderOutputs": ["prebuilt/default.metallib"],
+        "resources": ["resources/metal"],
+        "package": {
+          "name": "demo-metal",
+          "version": "1.0.0",
+          "kind": "metallib"
+        }
+      },
+      "vulkan": {
+        "libs": ["vulkan"],
+        "shaderOutputs": ["prebuilt/default.spv"]
+      }
+    }
+  },
+  "windows": {
+    "prebuilt": "./prebuilt/windows/demo.lib",
+    "backends": {
+      "d3d12": {
+        "libs": ["d3d12", "dxgi", "dxguid"],
+        "shaderOutputs": ["prebuilt/default.dxil"]
+      },
+      "vulkan": {
+        "libs": ["vulkan-1"],
+        "shaderOutputs": ["prebuilt/default.spv"]
+      }
+    }
+  }
+}
+```
+
+For Apple app-bundle targets, Metal shader sources are compiled into
+`default.metallib`. Set `PERRY_XCRUN=/path/to/fake-or-real-xcrun` to
+override tool discovery in tests. Vulkan shader sources are compiled
+with `glslc` into `NativeLibraries/<package>/vulkan/<source>.spv`;
+set `PERRY_GLSLC=/path/to/glslc` to override discovery. D3D12 shader
+sources are compiled with `dxc` into
+`NativeLibraries/<package>/d3d12/<source>.dxil`; set
+`PERRY_DXC=/path/to/dxc` to override discovery. If your shader build
+needs custom profiles, entry points, or flags, ship prebuilt
+`shaderOutputs` from your package build instead.
 
 ### Vendored frameworks (`optionalFrameworks` + `frameworksEnv`)
 

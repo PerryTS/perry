@@ -21,7 +21,7 @@ use std::process::Command;
 
 use crate::OutputFormat;
 
-use super::{CompilationContext, CompileArgs, CompileResult};
+use super::{CompilationContext, CompileArgs, CompileResult, NativeBackend};
 
 pub(super) fn generate_js_bundle(ctx: &CompilationContext, output_dir: &Path) -> Result<PathBuf> {
     let bundle_path = output_dir.join("__perry_js_bundle.js");
@@ -771,6 +771,17 @@ pub(super) fn compile_metallib_for_bundle(
                     sources.push((src.clone(), native_lib.module.clone()));
                 }
             }
+            for backend in &tc.backends {
+                if backend.backend != NativeBackend::Metal || !backend.available {
+                    continue;
+                }
+                for src in &backend.shader_sources {
+                    let canonical = src.canonicalize().unwrap_or_else(|_| src.clone());
+                    if seen.insert(canonical) {
+                        sources.push((src.clone(), native_lib.module.clone()));
+                    }
+                }
+            }
         }
     }
     if sources.is_empty() {
@@ -784,13 +795,19 @@ pub(super) fn compile_metallib_for_bundle(
         Some("ios") => "iphoneos",
         Some("tvos-simulator") => "appletvsimulator",
         Some("tvos") => "appletvos",
+        Some("visionos-simulator") => "xrsimulator",
+        Some("visionos") => "xros",
         other => {
             return Err(anyhow!(
-                "metal_sources is only supported on ios/tvos/watchos (got {:?})",
+                "metal_sources is only supported on ios/tvos/watchos/visionos (got {:?})",
                 other
             ))
         }
     };
+
+    let xcrun = std::env::var_os("PERRY_XCRUN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("xcrun"));
 
     let air_dir = std::env::temp_dir().join(format!("perry_metal_{}", std::process::id()));
     std::fs::create_dir_all(&air_dir).ok();
@@ -806,7 +823,7 @@ pub(super) fn compile_metallib_for_bundle(
         }
         let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("shader");
         let air_out = air_dir.join(format!("{}.air", stem));
-        let status = Command::new("xcrun")
+        let status = Command::new(&xcrun)
             .args(["-sdk", metal_sdk, "metal", "-c"])
             .arg(src)
             .arg("-o")
@@ -823,7 +840,7 @@ pub(super) fn compile_metallib_for_bundle(
     }
 
     let metallib_out = app_dir.join("default.metallib");
-    let mut link_cmd = Command::new("xcrun");
+    let mut link_cmd = Command::new(&xcrun);
     link_cmd
         .args(["-sdk", metal_sdk, "metallib", "-o"])
         .arg(&metallib_out);
@@ -950,6 +967,163 @@ pub(super) fn compile_for_android_widget(
         is_dylib: false,
         codegen_cache_stats: None,
     })
+}
+
+#[cfg(test)]
+mod native_shader_tool_tests {
+    use super::*;
+    use crate::commands::compile::{
+        NativeBackendConfig, NativeBackendPackageMetadata, NativeFunctionDecl,
+        NativeLibraryManifest, TargetNativeConfig,
+    };
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn empty_target_config(shader: PathBuf) -> TargetNativeConfig {
+        TargetNativeConfig {
+            available: true,
+            unavailable_reason: None,
+            crate_path: PathBuf::new(),
+            lib_name: String::new(),
+            prebuilt: None,
+            frameworks: Vec::new(),
+            optional_frameworks: Vec::new(),
+            frameworks_env: None,
+            libs: Vec::new(),
+            lib_dirs: Vec::new(),
+            pkg_config: Vec::new(),
+            resources: Vec::new(),
+            shader_outputs: Vec::new(),
+            backends: vec![NativeBackendConfig {
+                backend: NativeBackend::Metal,
+                available: true,
+                unavailable_reason: None,
+                prebuilt: None,
+                frameworks: Vec::new(),
+                libs: Vec::new(),
+                lib_dirs: Vec::new(),
+                pkg_config: Vec::new(),
+                shader_sources: vec![shader],
+                shader_outputs: Vec::new(),
+                resources: Vec::new(),
+                package: NativeBackendPackageMetadata::default(),
+            }],
+            swift_sources: Vec::new(),
+            metal_sources: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metallib_compile_uses_fake_xcrun_from_env() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_xcrun = dir.path().join("fake-xcrun");
+        std::fs::write(
+            &fake_xcrun,
+            "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then mkdir -p \"$(dirname \"$out\")\"; printf fake > \"$out\"; fi\nexit 0\n",
+        )
+        .expect("write fake xcrun");
+        let mut perms = std::fs::metadata(&fake_xcrun)
+            .expect("fake metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_xcrun, perms).expect("chmod fake xcrun");
+
+        let shader = dir.path().join("default.metal");
+        std::fs::write(&shader, "kernel void k() {}\n").expect("write shader");
+        let app_dir = dir.path().join("Demo.app");
+        std::fs::create_dir_all(&app_dir).expect("mkdir app");
+
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_libraries.push(NativeLibraryManifest {
+            module: "demo".to_string(),
+            package_dir: dir.path().to_path_buf(),
+            abi_version: None,
+            functions: Vec::<NativeFunctionDecl>::new(),
+            target_config: Some(empty_target_config(shader)),
+        });
+
+        let old = std::env::var_os("PERRY_XCRUN");
+        std::env::set_var("PERRY_XCRUN", &fake_xcrun);
+        let result =
+            compile_metallib_for_bundle(&ctx, Some("ios-simulator"), &app_dir, OutputFormat::Json);
+        match old {
+            Some(value) => std::env::set_var("PERRY_XCRUN", value),
+            None => std::env::remove_var("PERRY_XCRUN"),
+        }
+
+        result.expect("compile metallib");
+        assert!(app_dir.join("default.metallib").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metallib_compile_supports_visionos_simulator_sdk() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_xcrun = dir.path().join("fake-xcrun");
+        let log_path = dir.path().join("xcrun.log");
+        std::fs::write(
+            &fake_xcrun,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$PERRY_FAKE_XCRUN_LOG\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then mkdir -p \"$(dirname \"$out\")\"; printf fake > \"$out\"; fi\nexit 0\n",
+        )
+        .expect("write fake xcrun");
+        let mut perms = std::fs::metadata(&fake_xcrun)
+            .expect("fake metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_xcrun, perms).expect("chmod fake xcrun");
+
+        let shader = dir.path().join("default.metal");
+        std::fs::write(&shader, "kernel void k() {}\n").expect("write shader");
+        let app_dir = dir.path().join("Demo.app");
+        std::fs::create_dir_all(&app_dir).expect("mkdir app");
+
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_libraries.push(NativeLibraryManifest {
+            module: "demo".to_string(),
+            package_dir: dir.path().to_path_buf(),
+            abi_version: None,
+            functions: Vec::<NativeFunctionDecl>::new(),
+            target_config: Some(empty_target_config(shader)),
+        });
+
+        let old_xcrun = std::env::var_os("PERRY_XCRUN");
+        let old_log = std::env::var_os("PERRY_FAKE_XCRUN_LOG");
+        std::env::set_var("PERRY_XCRUN", &fake_xcrun);
+        std::env::set_var("PERRY_FAKE_XCRUN_LOG", &log_path);
+        let result = compile_metallib_for_bundle(
+            &ctx,
+            Some("visionos-simulator"),
+            &app_dir,
+            OutputFormat::Json,
+        );
+        match old_xcrun {
+            Some(value) => std::env::set_var("PERRY_XCRUN", value),
+            None => std::env::remove_var("PERRY_XCRUN"),
+        }
+        match old_log {
+            Some(value) => std::env::set_var("PERRY_FAKE_XCRUN_LOG", value),
+            None => std::env::remove_var("PERRY_FAKE_XCRUN_LOG"),
+        }
+
+        result.expect("compile visionOS metallib");
+        assert!(app_dir.join("default.metallib").exists());
+        let log = std::fs::read_to_string(log_path).expect("read fake xcrun log");
+        assert!(log.contains("xrsimulator"), "got: {log}");
+    }
 }
 
 /// Compile for Wear OS tile target: emit Kotlin Tiles source + JNI bridge
