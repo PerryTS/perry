@@ -1131,12 +1131,26 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     if top16 == 0x7FFD {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
         if raw_addr != 0 && raw_addr >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
-            // #1175: objects allocated with a null prototype
-            // (Object.create(null), querystring.parse) report null here.
             unsafe {
                 let obj = raw_addr as *const ObjectHeader;
                 let gc = gc_header_for(obj);
+                // #1175: objects allocated with a null prototype
+                // (Object.create(null), querystring.parse) report null here.
                 if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                    return f64::from_bits(TAG_NULL);
+                }
+                // #489: a function/constructor receiver has no walkable
+                // [[Prototype]] in Perry's model. This is reached when a
+                // prototype-chain walk hits a built-in constructor — e.g.
+                // drizzle's `is(value, type)` does
+                // `cls = Object.getPrototypeOf(arr).constructor` (the global
+                // `Array` closure) then loops `cls = Object.getPrototypeOf(cls)`
+                // until it hits null. Returning the closure itself here makes
+                // `getPrototypeOf(cls) === cls`, an infinite self-cycle that
+                // hangs the walk. JS terminates it at null (Function.prototype
+                // → Object.prototype → null); Perry doesn't model those, so
+                // return null directly to break the cycle.
+                if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
                     return f64::from_bits(TAG_NULL);
                 }
             }
@@ -1149,6 +1163,11 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 let obj = bits as *const ObjectHeader;
                 let gc = gc_header_for(obj);
                 if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                    return f64::from_bits(TAG_NULL);
+                }
+                // #489: function/constructor receiver — see the 0x7FFD branch
+                // above. Break the prototype-chain self-cycle with null.
+                if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
                     return f64::from_bits(TAG_NULL);
                 }
             }
