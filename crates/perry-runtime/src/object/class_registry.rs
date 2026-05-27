@@ -831,21 +831,37 @@ pub unsafe extern "C" fn js_new_function_construct(
             _ => {}
         }
     }
-    // #1789: `new (classObjectValue)(args)` — the callee is a heap class
-    // object (the value a class EXPRESSION evaluates to, e.g.
-    // `const C = make(x); new C()`). Read its class_id (the compile-time
-    // template) and allocate an instance of it, so instance methods
-    // dispatch and `x instanceof C` matches. The template's constructor
-    // body / field initializers are emitted on the static `new ClassName()`
-    // path, not this dynamic helper, so a dynamically-constructed instance
-    // starts with no own props (constructor-run on dynamic new is a
-    // refinement); fields written afterward and prototype methods work.
+    // #1789/#1787: `new (classObjectValue)(args)` — the callee is a heap
+    // class object (the value a class EXPRESSION evaluates to, e.g.
+    // `const C = mk(x); new C()`). Read its class_id (the compile-time
+    // template) and allocate an instance stamped with it, so instance
+    // methods dispatch and `x instanceof C` matches.
+    //
+    // #1787: then REPLAY the class's constructor on the instance. The
+    // constructor can't be inlined at the `new` site — the callee is a
+    // runtime value, and the class's captured environment lived where the
+    // class EXPRESSION was evaluated (e.g. inside the `mk(tag)` factory),
+    // not at the (possibly far-away) construction site. So the codegen
+    // ClassExprFresh lowering snapshots those captures onto this class
+    // object as the `__perry_ctor_caps` own array, and registers the
+    // standalone `<prefix>__<class>_constructor` symbol in
+    // `CLASS_CONSTRUCTORS`. Replaying it here runs the instance-field
+    // initializers (literal AND captured) and the constructor body —
+    // matching what the static `new ClassName()` path does inline.
     if is_class_object_value(func_value) {
         let obj =
             crate::value::JSValue::from_bits(func_value.to_bits()).as_pointer::<ObjectHeader>();
         let class_cid = js_object_get_class_id(obj);
         if class_cid != 0 {
             let inst = js_object_alloc(class_cid, 0);
+            // Replay the class's registered constructor (instance-field
+            // initializers + body) on the fresh instance, filling the
+            // capture params from the snapshotted `__perry_ctor_caps`. The
+            // mechanism lives in `class_constructors` to keep this file under
+            // the 2,000-line CI gate.
+            super::class_constructors::replay_class_object_constructor(
+                func_value, class_cid, inst, args_ptr, args_len,
+            );
             return crate::value::js_nanbox_pointer(inst as i64);
         }
     }

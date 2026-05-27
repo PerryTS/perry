@@ -322,6 +322,17 @@ pub enum Expr {
         template: String,
         named_statics: Vec<(String, Expr)>,
         symbol_statics: Vec<(Expr, Expr)>,
+        /// #1787: the captured outer-scope values this class expression
+        /// closes over, in the synthesized constructor's capture-param
+        /// order (see `synthesize_class_captures`). Each entry is a
+        /// `LocalGet(outer_id)` evaluated at the class-expression
+        /// evaluation site (where the captures are still live). Codegen
+        /// snapshots them onto the heap class object so a later
+        /// `new <classObjectValue>()` can replay the instance-field
+        /// initializers / constructor body with the right captured
+        /// environment — which the static `new ClassName()` inlining
+        /// can't do once the class escapes its defining scope.
+        captured_args: Vec<Expr>,
     },
 
     // Issue #711 part 2: `<func_expr>.prototype = <obj_expr>` pattern,

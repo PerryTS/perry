@@ -512,6 +512,7 @@ where
         Expr::ClassExprFresh {
             named_statics,
             symbol_statics,
+            captured_args,
             ..
         } => {
             for (_, v) in named_statics {
@@ -520,6 +521,9 @@ where
             for (k, v) in symbol_statics {
                 f(k);
                 f(v);
+            }
+            for a in captured_args {
+                f(a);
             }
         }
         Expr::SetFunctionPrototype { func, proto } => {

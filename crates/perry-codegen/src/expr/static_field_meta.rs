@@ -165,6 +165,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             template,
             named_statics,
             symbol_statics,
+            captured_args,
         } => {
             let template_cid = ctx.class_ids.get(template).copied().unwrap_or(0);
             let tcid_str = template_cid.to_string();
@@ -190,6 +191,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.call_void(
                     "js_object_set_field_by_name",
                     &[(I64, &obj), (I64, &key_raw), (DOUBLE, &v)],
+                );
+            }
+            // #1787: snapshot the captured outer-scope values onto the class
+            // object as the `__perry_ctor_caps` own array (in the constructor's
+            // capture-param order). `new <thisClassObjectValue>()` reads it back
+            // in `js_new_function_construct` and replays the constructor with the
+            // right captured environment — which the static `new ClassName()`
+            // inlining can't do once the class escapes its defining scope.
+            if !captured_args.is_empty() {
+                let cap_len = captured_args.len().to_string();
+                let mut caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
+                for arg in captured_args {
+                    let v = lower_expr(ctx, arg)?;
+                    caps_arr = ctx.block().call(
+                        I64,
+                        "js_array_push_f64",
+                        &[(I64, &caps_arr), (DOUBLE, &v)],
+                    );
+                }
+                let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
+                let key_idx = ctx.strings.intern("__perry_ctor_caps");
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+                blk.call_void(
+                    "js_object_set_field_by_name",
+                    &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
                 );
             }
             let obj_box = nanbox_pointer_inline(ctx.block(), &obj);

@@ -306,6 +306,13 @@ pub(super) fn emit_string_pool(
     // static methods (`class Sub extends make(...) {}; Sub.greet()`); has_rest
     // tells the dispatcher to bundle trailing args for a `...rest` param.
     let mut static_method_triples: Vec<(u32, String, String, u32, bool)> = Vec::new();
+    // #1787: (cid, standalone-constructor symbol, total_param_count).
+    // Registered into CLASS_CONSTRUCTORS so `new <classObjectValue>()` (a
+    // class-expression value constructed dynamically) can replay the class's
+    // constructor + field initializers on the new instance. Only consulted by
+    // the heap-class-object arm of `js_new_function_construct`, so it's
+    // behavior-neutral for top-level class declarations (INT32 ref `new`).
+    let mut ctor_triples: Vec<(u32, String, u32)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (class_table now contains both the
         // canonical name and self-binding aliases like `_X` from
@@ -362,6 +369,23 @@ pub(super) fn emit_string_pool(
                 has_rest,
             ));
         }
+        // #1787: the standalone constructor `<prefix>__<class>_constructor`
+        // (emitted unconditionally in `artifacts.rs`). Its arity is the
+        // constructor's full param list — user params plus the synthesized
+        // `__perry_cap_<id>` capture params (`synthesize_class_captures`).
+        // Class-expression templates with no own/synthesized constructor (no
+        // captures) have arity 0 — the standalone ctor then just runs the
+        // literal field initializers.
+        let ctor_params = class
+            .constructor
+            .as_ref()
+            .map(|c| c.params.len() as u32)
+            .unwrap_or(0);
+        ctor_triples.push((
+            cid,
+            format!("{}__{}_constructor", module_prefix, class_name),
+            ctor_params,
+        ));
     }
     method_triples.sort_unstable();
     for (cid, method_name, llvm_name, param_count) in method_triples {
@@ -416,6 +440,22 @@ pub(super) fn emit_string_pool(
                 (I64, &func_i64),
                 (I64, &param_count.to_string()),
                 (I64, has_rest_str),
+            ],
+        );
+    }
+    // #1787: register each class's standalone constructor into
+    // CLASS_CONSTRUCTORS. ptrtoint @symbol both stores the function pointer
+    // and keeps the constructor alive past dead-code elimination.
+    ctor_triples.sort_unstable();
+    for (cid, ctor_symbol, ctor_params) in ctor_triples {
+        let func_ref = format!("@{}", ctor_symbol);
+        let func_i64 = blk.ptrtoint(&func_ref, I64);
+        blk.call_void(
+            "js_register_class_constructor",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &func_i64),
+                (I64, &ctor_params.to_string()),
             ],
         );
     }

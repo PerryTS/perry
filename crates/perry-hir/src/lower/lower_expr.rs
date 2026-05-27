@@ -1391,10 +1391,23 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             if parent_expr.is_none()
                 && (!named_statics.is_empty() || !static_symbol_registrations.is_empty())
             {
+                // #1787: snapshot the class's captured outer-scope values so a
+                // later `new <classObjectValue>()` can run the instance-field
+                // initializers / constructor body with the right environment.
+                // `synthesize_class_captures` (run during `lower_class_from_ast`
+                // above) appended one `__perry_cap_<id>` constructor param per
+                // captured outer id, in `captures_vec` order — read them back in
+                // that same order as `LocalGet(outer_id)`, evaluated here where
+                // the captures are still live.
+                let captured_args: Vec<Expr> = ctx
+                    .lookup_class_captures(&synthetic_name)
+                    .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
+                    .unwrap_or_default();
                 return Ok(Expr::ClassExprFresh {
                     template: synthetic_name,
                     named_statics,
                     symbol_statics: static_symbol_registrations,
+                    captured_args,
                 });
             }
             let mut seq: Vec<Expr> = Vec::new();

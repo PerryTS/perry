@@ -777,6 +777,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::ClassExprFresh {
             named_statics,
             symbol_statics,
+            captured_args,
             ..
         } => {
             for (_, v) in named_statics {
@@ -785,6 +786,9 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             for (k, v) in symbol_statics {
                 walk(k, out);
                 walk(v, out);
+            }
+            for a in captured_args {
+                walk(a, out);
             }
         }
         Expr::RegisterClassParentDynamic { parent_expr, .. } => {

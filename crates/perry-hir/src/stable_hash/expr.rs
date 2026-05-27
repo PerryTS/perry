@@ -548,7 +548,7 @@ impl SH for Expr {
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 465); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
-            Expr::ClassExprFresh { template, named_statics, symbol_statics, } => { tag(h, 466); template.hash(h); for (n, v) in named_statics { n.hash(h); v.hash(h); } for (k, v) in symbol_statics { k.hash(h); v.hash(h); } }
+            Expr::ClassExprFresh { template, named_statics, symbol_statics, captured_args, } => { tag(h, 466); template.hash(h); for (n, v) in named_statics { n.hash(h); v.hash(h); } for (k, v) in symbol_statics { k.hash(h); v.hash(h); } for a in captured_args { a.hash(h); } }
             Expr::SetFunctionPrototype { func, proto } => { tag(h, 448); func.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::RegisterPrototypeMethod { class_name, method_name, value, } => { tag(h, 463); class_name.hash(h); method_name.hash(h); value.as_ref().hash(h); }
             Expr::RegisterFunctionPrototypeMethod { func, method_name, value, } => { tag(h, 464); func.as_ref().hash(h); method_name.hash(h); value.as_ref().hash(h); }
