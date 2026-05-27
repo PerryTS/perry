@@ -687,6 +687,14 @@ pub fn gc_init() {
     // under concurrent load) must rewrite the cell, or the body's next
     // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
     gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
+    // Issue #1790 (epic #1785 class-object dispatch / design #1772): the class
+    // static-inheritance side-tables CLASS_PROTOTYPE_OBJECTS and
+    // CLASS_PARENT_CLOSURES hold the heap parent (`class Sub extends make(...)`
+    // / `extends Context.Tag(..)()`) as a raw `usize` pointer. Root + rewrite
+    // them so a parent reachable only through the table survives collection and
+    // its address is fixed up after a copying-nursery / evacuation move,
+    // keeping `Sub.ast` and inherited static methods resolvable.
+    gc_register_mutable_root_scanner(crate::object::scan_class_inheritance_roots_mut);
     // #1934: live `child_process.spawn` ChildProcess objects are reachable only
     // from the reactor's registry (the event loop holds no JSValue root for a
     // fire-and-forget spawn). Scan + rewrite them so a GC between ticks doesn't

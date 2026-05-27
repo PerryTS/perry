@@ -1769,11 +1769,21 @@ run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
 run_test test-files/test_memory_json_churn.ts      290 "done, checksum=637747500" 315
 run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
 run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
+# #1790: 1,000,000 create-and-discard class-EXPRESSION objects
+# (OBJECT_TYPE_CLASS). Per-evaluation class objects with no subclass must NOT
+# be retained by any side-table — RSS must plateau (measured ~106 MB macOS
+# arm64 across all four modes; limit set with headroom for Linux CI's higher
+# RSS accounting, mirroring the json_churn note above).
+run_test test-files/test_memory_class_object_churn.ts 200 "done, kept=999999 hasSink=true" 230
 
 echo ""
 echo "=== GC-aggression regression tests (no crash + correct result) ==="
 run_test test-files/test_gc_aggressive_forced.ts    50 "done, acc=8022890"
 run_test test-files/test_gc_deep_recursion.ts       30 "done, result=320400"
+# #1790: `class Sub extends make(...)` parent class object survives forced
+# evacuation — inherited mixed pointer/scalar static fields + static methods
+# (incl. a 2-level chain) must still resolve via the rewritten side-table ptr.
+run_test test-files/test_gc_class_object_forced.ts  50 "done: alpha|alpha|7|7|d:alpha:7|mid|d:mid:3"
 
 echo ""
 echo "=== Server GC unsafe-zone regression tests ==="
