@@ -1418,12 +1418,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_zlib_brotli_decompress": {
-    "issue": null,
-    "added": "2026-05-18",
-    "category": "ci-env",
-    "reason": "Brotli decompression path under node:zlib not yet implemented (cf. existing test_parity_zlib module-inventory entry). Same failure observed on #1038 pre-merge — not a regression."
-  },
   "node-suite/stream/imports/promises-ns": {
     "issue": "1533",
     "added": "2026-05-23",
