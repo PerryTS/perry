@@ -2514,6 +2514,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "readableEnded", true, None),
     method("stream", "writableHighWaterMark", true, None),
     method("stream", "readableAborted", true, None),
+    method("stream", "readableDidRead", true, None),
     method("stream", "writableCorked", true, None),
     method("stream", "writable", true, None),
     method("stream", "writableEnded", true, None),

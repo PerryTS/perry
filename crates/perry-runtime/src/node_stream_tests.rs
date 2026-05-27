@@ -555,6 +555,24 @@ fn readable_lifecycle_flags_reflect_ended_state() {
         js_object_get_field_by_name_f64(obj, hidden_key(b"readableEnded")).to_bits(),
         TAG_FALSE
     );
+    assert_eq!(
+        js_node_stream_method_readable_did_read(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableDidRead")).to_bits(),
+        TAG_FALSE
+    );
+
+    let _ = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(
+        js_node_stream_method_readable_did_read(handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableDidRead")).to_bits(),
+        TAG_TRUE
+    );
 
     let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
     assert_eq!(js_node_stream_method_readable(handle).to_bits(), TAG_FALSE);

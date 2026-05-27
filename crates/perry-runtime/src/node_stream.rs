@@ -475,6 +475,17 @@ pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> 
     readable_aborted_value(stream_value_from_handle(stream_handle))
 }
 
+/// `stream.readableDidRead` property getter on typed readable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_did_read(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    f64::from_bits(if has_truthy_hidden(stream, hidden_disturbed_key()) {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
+}
+
 /// `stream.writableCorked` property getter on a typed writable-side instance.
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_writable_corked(stream_handle: i64) -> f64 {
@@ -1301,6 +1312,7 @@ fn hidden_hwm_key() -> *mut crate::string::StringHeader {
 /// `Readable.isDisturbed(s)` (#1534).
 fn mark_disturbed(stream: f64) {
     set_hidden_value(stream, hidden_disturbed_key(), f64::from_bits(TAG_TRUE));
+    set_visible_readable_did_read(stream, true);
 }
 
 fn hidden_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
@@ -1427,6 +1439,9 @@ fn drain_readable_from_events(stream: f64) {
     if let Some(chunks) = readable_hidden_chunks(stream) {
         let mut values = Vec::new();
         push_chunk_values(chunks, &mut values, 0);
+        if !values.is_empty() {
+            mark_disturbed(stream);
+        }
         for chunk in values {
             let _ = emit_stream_event(stream, data_event, &[chunk]);
         }
@@ -2094,6 +2109,17 @@ fn set_visible_readable_ended(stream: f64, ended: bool) {
     }
 }
 
+fn set_visible_readable_did_read(stream: f64, did_read: bool) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        let value = if did_read { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(
+            stream,
+            hidden_key(b"readableDidRead"),
+            f64::from_bits(value),
+        );
+    }
+}
+
 fn mark_stream_ended(stream: f64) {
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     set_visible_readable(stream, false);
@@ -2153,6 +2179,7 @@ fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
     set_visible_readable(stream, true);
     set_visible_readable_ended(stream, false);
+    set_visible_readable_did_read(stream, false);
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.

@@ -884,12 +884,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.prototype.compose(stream) instance method — not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flags/readable-did-read": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: readable.readableDidRead getter (Node 16.7+) — not exposed. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/readable/read-size-passed-to-_read": {
     "issue": "1531",
     "added": "2026-05-24",
