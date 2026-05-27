@@ -276,6 +276,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             // Guarded raw-f64 slots are pointer-free by typed
                             // shape descriptor; non-number writes miss the
                             // guard and use the boxed setter fallback.
+                            // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
+                            // slots contain numbers only.
                             blk.store(DOUBLE, &val_double, &field_ptr);
                         } else {
                             let field_addr = blk.ptrtoint(&field_ptr, I64);
