@@ -144,11 +144,13 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         trigger,
         trace,
         start,
+        trigger.kind.progress_kind(GcCollectionKind::Minor),
         prev_in_alloc,
         previous_pause_us,
         current_rss_bytes,
         evacuation_policy_allowed,
         force_evacuation,
+        EVACUATION_POLICY_DISABLED_REASON,
         old_page_selection,
         old_page_source_blocks,
     )

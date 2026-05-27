@@ -57,11 +57,13 @@ fn start_minor_fallback_state(trigger: GcTriggerSnapshot) -> GcCycleState {
         trigger,
         trace,
         start,
+        trigger.kind.progress_kind(GcCollectionKind::Minor),
         prev_in_alloc,
         previous_pause_us,
         current_rss_bytes,
         evacuation_policy_allowed,
         force_evacuation,
+        EVACUATION_POLICY_DISABLED_REASON,
         old_page_selection,
         old_page_source_blocks,
     )
@@ -160,6 +162,91 @@ fn bounded_minor_fallback_preserves_age_and_trace_fields() {
     assert_eq!(
         trace.copying_nursery.fallback_reason,
         CopiedMinorFallbackReason::NotAttempted
+    );
+}
+
+#[test]
+fn budgeted_minor_fallback_ignores_forced_evacuation_and_stays_non_moving() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");
+
+    let _old_block_filler =
+        crate::arena::arena_alloc_gc_old(2 * 1024 * 1024 - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
+    let (old_parent, _) = unsafe { alloc_old_test_object(0) };
+    let old_parent_header = unsafe { header_from_user_ptr(old_parent as *const u8) };
+    let old_parent_total = unsafe { (*old_parent_header).size as usize };
+    let mut old_parent_pages = crate::fast_hash::new_ptr_hash_set();
+    for (page, _) in
+        crate::arena::old_object_page_overlaps(old_parent_header as usize, old_parent_total)
+    {
+        old_parent_pages.insert(page);
+    }
+    let _dead_old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING);
+    unsafe {
+        (*old_parent_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    let _ = sweep_with_age_bump(false);
+    let selected_before = select_old_page_defrag_pages(true);
+    assert!(
+        old_parent_pages
+            .iter()
+            .any(|page| selected_before.pages.contains(page)),
+        "test must seed an old-page defrag candidate"
+    );
+
+    js_shadow_slot_set(0, ptr_bits(old_parent as usize));
+    let (nursery_candidate, _) = unsafe { alloc_nursery_test_object(0) };
+    let nursery_candidate_user = nursery_candidate as usize;
+    let nursery_candidate_header = unsafe { header_from_user_ptr(nursery_candidate as *const u8) };
+    unsafe {
+        (*nursery_candidate_header).gc_flags |= GC_FLAG_TENURED;
+    }
+    js_shadow_slot_set(1, ptr_bits(nursery_candidate_user));
+
+    let mut state = test_start_budgeted_minor_fallback_state_with_trace(
+        GcTriggerKind::ArenaBytes,
+        GcProgressKind::NormalIncremental,
+    );
+    run_cycle_in_single_unit_steps(&mut state);
+    let outcome = state.take_outcome().expect("cycle should complete");
+    let trace = outcome.trace.expect("test requested GC trace capture");
+
+    assert_eq!(
+        js_shadow_slot_get(1) & POINTER_MASK,
+        nursery_candidate_user as u64,
+        "budgeted low-pause minor GC must not move a forced nursery candidate"
+    );
+    unsafe {
+        assert_eq!(
+            (*nursery_candidate_header).gc_flags & GC_FLAG_FORWARDED,
+            0,
+            "budgeted low-pause minor GC must not leave a forwarding stub"
+        );
+    }
+    assert_eq!(trace.progress_kind, GcProgressKind::NormalIncremental);
+    assert!(!trace.evacuation_policy.allowed);
+    assert!(!trace.evacuation_policy.force);
+    assert!(!trace.evacuation_policy.considered);
+    assert!(!trace.evacuation_policy.enabled);
+    assert_eq!(
+        trace.evacuation_policy.reason,
+        EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON
+    );
+    assert_eq!(
+        trace.evacuation_policy.snapshot.old_page_selected_pages, 0,
+        "budgeted low-pause startup must skip old-page defrag selection"
+    );
+    assert_eq!(trace.evacuation.moved_objects, 0);
+    assert_eq!(trace.evacuation.moved_bytes, 0);
+    assert_eq!(trace.evacuation.old_page_moved_objects, 0);
+    assert_eq!(trace.evacuation.old_page_moved_bytes, 0);
+    assert_eq!(trace.phase_us.get("evacuation").copied(), Some(0));
+    assert_eq!(trace.phase_us.get("reference_rewrite").copied(), Some(0));
+    assert_eq!(
+        js_shadow_slot_get(0) & POINTER_MASK,
+        old_parent as u64,
+        "old root should remain valid without evacuation"
     );
 }
 

@@ -296,6 +296,7 @@ struct MinorCycleContext {
     malloc_sweep_due: bool,
     evacuation_policy_allowed: bool,
     force_evacuation: bool,
+    evacuation_policy_disabled_reason: &'static str,
     old_page_selection: OldPageDefragSelection,
     old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
     evacuation_policy: EvacuationPolicyDecision,
@@ -326,6 +327,7 @@ impl ReclaimCycleState {
 
 pub(super) struct GcCycleState {
     collection_kind: GcCollectionKind,
+    progress_kind: GcProgressKind,
     phase: GcCyclePhase,
     trace: Option<GcCycleTrace>,
     active_elapsed: Duration,
@@ -351,6 +353,7 @@ impl GcCycleState {
         clear_mark_seeds();
         Self {
             collection_kind: GcCollectionKind::Full,
+            progress_kind: trigger.kind.progress_kind(GcCollectionKind::Full),
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
             active_elapsed: start.elapsed(),
@@ -373,17 +376,20 @@ impl GcCycleState {
         trigger: GcTriggerSnapshot,
         trace: Option<GcCycleTrace>,
         start: Instant,
+        progress_kind: GcProgressKind,
         prev_in_alloc: u8,
         previous_pause_us: u64,
         current_rss_bytes: u64,
         evacuation_policy_allowed: bool,
         force_evacuation: bool,
+        evacuation_policy_disabled_reason: &'static str,
         old_page_selection: OldPageDefragSelection,
         old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
     ) -> Self {
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
         Self {
             collection_kind: GcCollectionKind::Minor,
+            progress_kind,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
             active_elapsed: start.elapsed(),
@@ -399,6 +405,7 @@ impl GcCycleState {
                 malloc_sweep_due,
                 evacuation_policy_allowed,
                 force_evacuation,
+                evacuation_policy_disabled_reason,
                 old_page_selection,
                 old_page_source_blocks,
                 evacuation_policy: EvacuationPolicyDecision::default(),
@@ -423,6 +430,7 @@ impl GcCycleState {
     }
 
     pub(super) fn set_progress_kind(&mut self, progress_kind: GcProgressKind) {
+        self.progress_kind = progress_kind;
         if let Some(trace) = self.trace.as_mut() {
             trace.progress_kind = progress_kind;
         }
@@ -539,6 +547,7 @@ impl GcCycleState {
                 active_elapsed_us,
                 minor.evacuation_policy_allowed,
                 minor.force_evacuation,
+                minor.evacuation_policy_disabled_reason,
                 old_to_young_tracking_complete(),
                 minor.old_page_selection.selected_pages,
             );
@@ -679,6 +688,7 @@ impl GcCycleState {
         }
 
         let active_elapsed_us = self.active_elapsed_us();
+        let progress_kind = self.progress_kind;
         let minor = self.minor.as_mut().expect("minor context exists");
         if minor.evacuation_policy.considered {
             let snapshot = evacuation_policy_snapshot_after_mark(
@@ -695,6 +705,10 @@ impl GcCycleState {
         if let Some(trace) = self.trace.as_mut() {
             trace.evacuation_policy = minor.evacuation_policy;
         }
+        assert!(
+            !progress_kind.is_budgeted() || !minor.evacuation_policy.enabled,
+            "budgeted low-pause minor GC must remain non-moving"
+        );
 
         let mut evacuation = EvacuationTraceStats::default();
         let mut evacuation_sticky = StickyRememberedSet::default();

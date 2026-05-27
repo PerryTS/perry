@@ -6,6 +6,8 @@ pub(super) const MIN_CANDIDATE_RATIO_PCT: u64 = 25;
 pub(super) const RSS_PRESSURE_BYTES: u64 = 192 * 1024 * 1024;
 pub(super) const RSS_HARD_PRESSURE_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) const MAX_PREVIOUS_PAUSE_US: u64 = 20_000;
+pub(super) const EVACUATION_POLICY_DISABLED_REASON: &str = "disabled";
+pub(super) const EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON: &str = "low_pause_non_moving";
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct EvacuationPolicySnapshot {
@@ -187,6 +189,7 @@ pub(super) fn evacuation_policy_initial_decision(
     pre_evac_pause_us: u64,
     allowed: bool,
     force: bool,
+    disabled_reason: &'static str,
     old_to_young_tracking_complete: bool,
     old_page_selected_pages: usize,
 ) -> EvacuationPolicyDecision {
@@ -201,7 +204,7 @@ pub(super) fn evacuation_policy_initial_decision(
         return EvacuationPolicyDecision {
             allowed,
             force,
-            reason: "disabled",
+            reason: disabled_reason,
             snapshot,
             ..EvacuationPolicyDecision::default()
         };
@@ -371,7 +374,9 @@ pub(super) fn evacuation_policy_final_decision(
     decision.snapshot = snapshot;
     decision.enabled = false;
     if !decision.allowed {
-        decision.reason = "disabled";
+        if decision.reason == "not_evaluated" {
+            decision.reason = EVACUATION_POLICY_DISABLED_REASON;
+        }
         return decision;
     }
     if !decision.considered {
