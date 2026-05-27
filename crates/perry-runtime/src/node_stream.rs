@@ -31,6 +31,8 @@ use crate::object::{
 };
 use crate::value::JSValue;
 
+mod async_iterator;
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -1496,7 +1498,7 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // WRITABLE_SHAPE_ID.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 30] {
+fn readable_methods() -> [(&'static str, StubFn); 31] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_on2)),
@@ -1531,6 +1533,7 @@ fn readable_methods() -> [(&'static str, StubFn); 30] {
         ("flatMap", cast2(ns_iter_flat_map)),
         ("take", cast1(ns_iter_take)),
         ("drop", cast1(ns_iter_drop)),
+        ("iterator", cast0(async_iterator::ns_async_iterator)),
         // #1539 — push() backpressure return + readable.compose() instance form.
         ("push", cast1(ns_push1)),
         ("compose", cast1(ns_compose1)),
@@ -1691,19 +1694,20 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
 
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
-/// `readableHighWaterMark` property (#1534/#1539).
+/// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
 fn init_readable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_readable_flag_key(), f64::from_bits(TAG_TRUE));
+    set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
     let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
 }
 
-/// Initialize the writable side: direction flag and the visible
-/// `writableHighWaterMark` property (#1534/#1539).
+/// Initialize the writable side: direction flag and visible stream flags.
 fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_writable_flag_key(), f64::from_bits(TAG_TRUE));
+    set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
 }
@@ -1718,6 +1722,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
         js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
     }
     init_readable_state(readable, opts);
+    async_iterator::install_readable_async_iterator_symbol(readable);
     readable
 }
 
@@ -1747,6 +1752,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     }
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
+    async_iterator::install_readable_async_iterator_symbol(duplex);
     duplex
 }
 
