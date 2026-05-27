@@ -149,13 +149,11 @@ use timers::{
     timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
 
-// node:sys is a deprecated alias for node:util — point each export at
-// the same thunks until util's named-export surface is wired up. The
-// parity test compares `sys.format === util.format` for identity; for
-// now both report `typeof === "function"` (passing the typeof gate) but
-// the strict-equality check still diverges. That divergence is
-// pre-existing (node:util's named exports lower to NativeModuleRef =>
-// `typeof === "object"` today) — it's the parent-module half of #793.
+// node:sys is a deprecated alias for node:util. Known util-backed
+// exports are rebound to util's callable singletons below so identity
+// checks like `sys.format === util.format` match Node; these thunks
+// remain as fallbacks for sys names Perry does not yet expose through
+// the util native module table.
 thunk!(thunk_sys_format, "node:sys.format is not yet implemented in Perry (use node:util.format; node:sys is deprecated).");
 thunk!(thunk_sys_inspect, "node:sys.inspect is not yet implemented in Perry (use node:util.inspect; node:sys is deprecated).");
 thunk!(thunk_sys_debuglog, "node:sys.debuglog is not yet implemented in Perry (use node:util.debuglog; node:sys is deprecated).");
@@ -643,6 +641,30 @@ thread_local! {
 // every cycle. Using `AtomicI64` instead of `AtomicBool` so the scanner
 // can also use it as a release fence against the thread_local writes.
 static ANY_SINGLETON_ALLOCATED: AtomicI64 = AtomicI64::new(0);
+static SYS_DEPRECATION_WARNED: AtomicI64 = AtomicI64::new(0);
+
+fn emit_sys_deprecation_warning_once() {
+    if SYS_DEPRECATION_WARNED
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let pid = std::process::id();
+    eprintln!(
+        "(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use `node:util` instead."
+    );
+    eprintln!("(Use `node --trace-deprecation ...` to show where the warning was created)");
+}
+
+fn sys_util_export_value(name: &str) -> Option<f64> {
+    match name {
+        "format" | "inspect" | "deprecate" | "promisify" | "callbackify" => Some(
+            crate::object::bound_native_callable_export_value("util", name),
+        ),
+        _ => None,
+    }
+}
 
 fn ensure_export_singleton(
     submod: &'static SubmoduleSpec,
@@ -699,9 +721,15 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     // produce — that's what `js_object_keys` / spread / Reflect.ownKeys
     // walks at runtime.
     for spec in submod.exports {
-        let closure_ptr = ensure_export_singleton(submod, spec);
-        let value_bits = JSValue::pointer(closure_ptr as *const u8).bits();
-        let value_f64 = f64::from_bits(value_bits);
+        let value_f64 = if submod.key == "sys" {
+            sys_util_export_value(spec.name).unwrap_or_else(|| {
+                let closure_ptr = ensure_export_singleton(submod, spec);
+                f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
+            })
+        } else {
+            let closure_ptr = ensure_export_singleton(submod, spec);
+            f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
+        };
         unsafe {
             let name_bytes = spec.name.as_bytes();
             let name_header = js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
@@ -853,6 +881,12 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         Some(s) => s,
         None => return f64::from_bits(JSValue::bool(true).bits()),
     };
+    if submod.key == "sys" {
+        emit_sys_deprecation_warning_once();
+        if let Some(value) = sys_util_export_value(name) {
+            return value;
+        }
+    }
     if submod.key == "stream_promises" && name == "default" {
         let obj = ensure_namespace_singleton(submod);
         return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
@@ -929,6 +963,9 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
         Some(s) => s,
         None => return crate::object::js_unresolved_namespace_stub(),
     };
+    if submod.key == "sys" {
+        emit_sys_deprecation_warning_once();
+    }
     let obj = ensure_namespace_singleton(submod);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
@@ -1069,6 +1106,46 @@ mod tests {
         };
 
         assert_eq!(value.to_bits(), crate::value::TAG_TRUE);
+    }
+
+    #[test]
+    fn sys_format_export_reuses_util_callable() {
+        let sys_format = unsafe {
+            js_node_submodule_export_as_function(
+                b"sys".as_ptr(),
+                "sys".len() as u32,
+                b"format".as_ptr(),
+                "format".len() as u32,
+            )
+        };
+        let util_format = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"util".as_ptr(),
+                "util".len(),
+                b"format".as_ptr(),
+                "format".len(),
+            )
+        };
+
+        assert_eq!(sys_format.to_bits(), util_format.to_bits());
+    }
+
+    #[test]
+    fn sys_namespace_reuses_util_callable() {
+        let value = unsafe { js_node_submodule_namespace(b"sys".as_ptr(), "sys".len() as u32) };
+        let ns = object_ptr_from_value(value).expect("sys namespace should be an object");
+        let ns_value = boxed_ptr(ns as *const u8);
+        let sys_inspect = get_object_property(ns_value, b"inspect").unwrap();
+        let util_inspect = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"util".as_ptr(),
+                "util".len(),
+                b"inspect".as_ptr(),
+                "inspect".len(),
+            )
+        };
+
+        assert_eq!(sys_inspect.to_bits(), util_inspect.to_bits());
     }
 
     #[test]

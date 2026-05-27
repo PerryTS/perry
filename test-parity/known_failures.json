@@ -218,12 +218,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_sys": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:sys` (legacy alias for util) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_test": {
     "issue": "793",
     "added": "2026-05-15",
