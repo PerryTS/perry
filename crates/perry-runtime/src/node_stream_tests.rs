@@ -267,6 +267,8 @@ fn stream_listener_count_and_listeners_reflect_data_end_storage() {
     let on = js_object_get_field_by_name_f64(obj, hidden_key(b"on"));
     let listener_count = js_object_get_field_by_name_f64(obj, hidden_key(b"listenerCount"));
     let listeners = js_object_get_field_by_name_f64(obj, hidden_key(b"listeners"));
+    let add_listener = js_object_get_field_by_name_f64(obj, hidden_key(b"addListener"));
+    assert_eq!(on.to_bits(), add_listener.to_bits());
 
     let cb1 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
     let cb2 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);

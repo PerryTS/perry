@@ -892,12 +892,22 @@ fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader 
     // the f64 form for `return this` semantics.
     let this_bits = JSValue::pointer(obj as *const u8).bits();
 
-    for (i, (_name, func)) in methods.iter().enumerate() {
+    let mut on_method: Option<JSValue> = None;
+    for (i, (name, func)) in methods.iter().enumerate() {
+        if *name == "addListener" {
+            if let Some(val) = on_method {
+                js_object_set_field(obj, i as u32, val);
+                continue;
+            }
+        }
         let closure = js_closure_alloc(*func as *const u8, 1);
         // Reuse `set_capture_ptr` (i64 payload). We only need 64 bits
         // and the NaN-boxed pattern fits cleanly when reinterpreted.
         crate::closure::js_closure_set_capture_ptr(closure, 0, this_bits as i64);
         let val = JSValue::pointer(closure as *const u8);
+        if *name == "on" {
+            on_method = Some(val);
+        }
         js_object_set_field(obj, i as u32, val);
     }
     obj

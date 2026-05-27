@@ -841,6 +841,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     // Fall through — let the regular member access path
                     // below handle the user-declared subclass field.
+                } else if module_name == "stream" && is_classic_stream_method_name(&property_name) {
+                    // Classic Node streams materialize EventEmitter methods as
+                    // closure-valued fields on the stream object. A bare method
+                    // read (`r.on`, `r.addListener`) must return that callable
+                    // value, not invoke the native receiver method with no args.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1513,6 +1523,26 @@ fn is_stream_api_member(module: &str, prop: &str) -> bool {
         "transform_stream" => matches!(prop, "readable" | "writable"),
         _ => false,
     }
+}
+
+fn is_classic_stream_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "emit"
+            | "listeners"
+            | "rawListeners"
+            | "eventNames"
+            | "listenerCount"
+            | "removeListener"
+            | "off"
+            | "removeAllListeners"
+            | "setMaxListeners"
+            | "getMaxListeners"
+    )
 }
 
 /// #1378: `process.features` literal. Boolean capability flags Node

@@ -81,6 +81,36 @@ fn is_map_method_name(name: &str) -> bool {
     )
 }
 
+fn is_classic_stream_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "emit"
+            | "listeners"
+            | "rawListeners"
+            | "eventNames"
+            | "listenerCount"
+            | "removeListener"
+            | "off"
+            | "removeAllListeners"
+            | "setMaxListeners"
+            | "getMaxListeners"
+    )
+}
+
+fn is_classic_stream_instance_method(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
+    if !is_classic_stream_method_name(property) {
+        return false;
+    }
+    matches!(
+        receiver_class_name(ctx, object).as_deref(),
+        Some("Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" | "Stream")
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Integer(i) => Ok(double_literal(*i as f64)),
@@ -156,6 +186,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if (is_set_expr(ctx, object) && is_set_method_name(property))
                         || (is_map_expr(ctx, object) && is_map_method_name(property))
                     {
+                        Some("function")
+                    } else if is_classic_stream_instance_method(ctx, object, property) {
                         Some("function")
                     } else if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                         if ctx.namespace_imports.contains(name)

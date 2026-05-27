@@ -101,6 +101,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ty = Type::Named("TextEncoder".to_string());
                             } else if class_name == "TextDecoder" {
                                 ty = Type::Named("TextDecoder".to_string());
+                            } else if matches!(
+                                class_name,
+                                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+                            ) {
+                                ty = Type::Named(class_name.to_string());
                             } else if class_name == "Uint8Array" || class_name == "Buffer" {
                                 ty = Type::Named("Uint8Array".to_string());
                             } else if matches!(
