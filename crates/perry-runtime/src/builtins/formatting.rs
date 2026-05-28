@@ -170,10 +170,9 @@ pub(crate) fn format_bigint_literal(val: f64) -> String {
 
 /// Per-thread override for the depth at which nested objects/arrays
 /// collapse to `[Object]` / `[Array]`. Defaults to Node's `util.inspect`
-/// default of 2. The `%o` format specifier raises this temporarily so
-/// `console.log("%o", deep)` renders deeper than `%O` / a bare arg
-/// (Node distinguishes them: `%o` is effectively unbounded, `%O` uses
-/// the default cap of 2).
+/// default of 2. The `%o` format specifier raises this temporarily to
+/// Node's object-format depth of 4, while `%O` uses the current inspect
+/// options unchanged.
 thread_local! {
     static INSPECT_DEPTH_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(2) };
 }
@@ -423,6 +422,7 @@ impl Drop for InspectCustomInspectGuard {
 thread_local! {
     static INSPECT_GETTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_SORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INSPECT_COMPACT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 fn inspect_getters_enabled() -> bool {
@@ -431,6 +431,10 @@ fn inspect_getters_enabled() -> bool {
 
 fn inspect_sorted_enabled() -> bool {
     INSPECT_SORTED.with(|c| c.get())
+}
+
+fn inspect_compact_enabled() -> bool {
+    INSPECT_COMPACT.with(|c| c.get())
 }
 
 pub(crate) struct InspectGettersGuard(bool);
@@ -460,6 +464,21 @@ impl InspectSortedGuard {
 impl Drop for InspectSortedGuard {
     fn drop(&mut self) {
         INSPECT_SORTED.with(|c| c.set(self.0));
+    }
+}
+
+pub(crate) struct InspectCompactGuard(bool);
+
+impl InspectCompactGuard {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let prev = INSPECT_COMPACT.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectCompactGuard {
+    fn drop(&mut self) {
+        INSPECT_COMPACT.with(|c| c.set(self.0));
     }
 }
 
@@ -723,7 +742,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     }
                     let inner = parts.join(", ");
                     // Node uses multi-line when length > 6 or single-line exceeds breakLength (76)
-                    let use_multiline = length > 6 || inner.len() + 4 > 76;
+                    let use_multiline =
+                        !inspect_compact_enabled() || length > 6 || inner.len() + 4 > 76;
                     let body_str = if !use_multiline {
                         format!("[ {} ]", inner)
                     } else if all_numeric {
@@ -1154,7 +1174,7 @@ unsafe fn format_object_as_json(
     // indent prefix, producing a left-aligned inner body inside an indented
     // outer body.
     let any_child_multiline = parts.iter().any(|p| p.contains('\n'));
-    if !any_child_multiline && single_line.len() <= 72 {
+    if inspect_compact_enabled() && !any_child_multiline && single_line.len() <= 72 {
         return single_line;
     }
     let indent = "  ";
@@ -1704,11 +1724,12 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'o' => {
-                    // Node's `%o` uses an effectively unbounded inspect
-                    // depth (showHidden + showProxy with no depth cap on
-                    // the typical fixtures used in the parity suite), so
-                    // raise the per-thread depth limit just for this call.
-                    let _guard = InspectDepthLimitGuard::new(usize::MAX);
+                    // Node's `%o` overlays util.inspect options with
+                    // showHidden/showProxy and depth: 4. Perry does not expose
+                    // showProxy yet, but showHidden and the depth budget are
+                    // observable in current parity fixtures.
+                    let _depth_guard = InspectDepthLimitGuard::new(4);
+                    let _hidden_guard = InspectShowHiddenGuard::new(true);
                     out.push_str(&format_jsvalue(val, 0));
                 }
                 b'O' => {
@@ -1752,7 +1773,35 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_format_with_options(
+    options: f64,
+    arr_ptr: *const crate::array::ArrayHeader,
+) -> f64 {
+    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
+    let show_hidden =
+        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
+    let custom_inspect =
+        unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
+    let getters =
+        unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
+    let sorted =
+        unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
+    let compact =
+        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
+    let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
+    let _getters_guard = InspectGettersGuard::new(getters);
+    let _sorted_guard = InspectSortedGuard::new(sorted);
+    let _compact_guard = InspectCompactGuard::new(compact);
+    js_util_format(arr_ptr)
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
+    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
+    let show_hidden =
+        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
     // `util.inspect` defaults to `customInspect: true`; an explicit
     // `{ customInspect: false }` opts out and surfaces the hook as a
     // symbol property. Refs #1201.
@@ -1762,9 +1811,14 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
         unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
     let sorted =
         unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
+    let compact =
+        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     let _getters_guard = InspectGettersGuard::new(getters);
     let _sorted_guard = InspectSortedGuard::new(sorted);
+    let _compact_guard = InspectCompactGuard::new(compact);
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     let out = if jv.is_any_string() {
         let s = jsvalue_string_content(value).unwrap_or_default();

@@ -897,7 +897,7 @@ pub extern "C" fn js_console_clear() {
 /// # Safety
 ///
 /// `options_value` must be a valid NaN-boxed JSValue.
-unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
+pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
     let jsval = JSValue::from_bits(options_value.to_bits());
     if !jsval.is_pointer() {
         return None;
@@ -1047,11 +1047,13 @@ pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: 
     let custom_inspect = decode_dir_bool_option(options_value, "customInspect").unwrap_or(false);
     let getters = decode_dir_bool_option(options_value, "getters").unwrap_or(false);
     let sorted = decode_dir_bool_option(options_value, "sorted").unwrap_or(false);
+    let compact = decode_dir_bool_option(options_value, "compact").unwrap_or(true);
     let _depth_guard = InspectDepthLimitGuard::new(max_depth);
     let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     let _getters_guard = InspectGettersGuard::new(getters);
     let _sorted_guard = InspectSortedGuard::new(sorted);
+    let _compact_guard = InspectCompactGuard::new(compact);
     println!("{}", format_jsvalue(value, 0));
 }
 

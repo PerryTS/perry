@@ -866,7 +866,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             for i in 1..args_len {
                 arr = crate::array::js_array_push_f64(arr, arg(i));
             }
-            crate::builtins::js_util_format(arr)
+            crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
         ("util", "isDeepStrictEqual") => {
