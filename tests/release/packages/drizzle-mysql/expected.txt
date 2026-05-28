@@ -1,0 +1,4 @@
+count=2
+alice.age=31
+after_delete=1
+join_rows=2
