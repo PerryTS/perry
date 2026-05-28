@@ -166,6 +166,14 @@ jobs:
         # - perry-ui-android: needs Android NDK.
         # - perry-ui-windows: needs win32 headers.
         run: |
+          (
+            while sleep 60; do
+              echo "cargo-test still running at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            done
+          ) &
+          cargo_test_heartbeat_pid=$!
+          trap 'kill "$cargo_test_heartbeat_pid" 2>/dev/null || true' EXIT
+
           # #1444: perry-runtime's tests share process-global state — the
           # per-thread arena/GC, the timer queues, and the `NOTIFIED` flag are
           # process singletons. Running them across the default test-harness
