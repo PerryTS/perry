@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1033 — allowlist class_registry.rs for the file-size lint gate
+
+`crates/perry-runtime/src/object/class_registry.rs` crossed the 2000-line
+limit after #1787 instance-field init replay (#2074) + #1545 web-stream
+class wiring landed (#1641/#2110), pushing it to 2007 lines. The
+`scripts/check_file_size.sh` CI gate started failing lint on every PR
+opened or rebased against `main`. Adding the file to the allowlist with
+a rationale + tracking-issue pointer (#1435) unblocks the queue while
+the topical split is done as a separate refactor. No code change.
+
 ## v0.5.1032 — child_process execSync/execFileSync buffer-encoding parity test (#1958)
 
 Add a node-suite parity test (`child_process/sync/sync-encoding-buffer.ts`)
