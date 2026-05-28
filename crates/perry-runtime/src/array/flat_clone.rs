@@ -234,10 +234,11 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         0
     };
 
-    // Buffer headers can live in the small-buffer slab, not behind a GC
-    // header. Check the Buffer registry before probing GC metadata so
-    // Array.from(buffer) always materializes byte values.
-    if raw_addr >= 0x10000 && crate::buffer::is_registered_buffer(raw_addr) {
+    // Buffers allocated from the small-buffer slab do not carry a GC header.
+    // Detect them before any GC-header probing below; otherwise arbitrary slab
+    // bytes immediately before the BufferHeader can be misread as a String or
+    // Object header and `Array.from(buf)` materializes nonsense.
+    if raw_addr != 0 && crate::buffer::is_registered_buffer(raw_addr) {
         return crate::buffer::buffer_to_array(raw_addr as *const crate::buffer::BufferHeader);
     }
 

@@ -172,16 +172,69 @@ mod tests {
     }
 
     fn http_server(handler: i64, listeners: HashMap<String, Vec<i64>>) -> HttpServer {
-        HttpServer {
-            handler,
-            listeners,
-            bound_port: 0,
-            bound_host: String::new(),
-            listening: false,
-            shutdown_tx: None,
-            request_rx: None,
-            upgrade_rx: None,
-        }
+        let mut s = HttpServer::with_handler(handler);
+        s.listeners = listeners;
+        s
+    }
+
+    /// Issue #2210 — `HttpServer::with_handler` seeds Node's
+    /// documented timeout defaults so a fresh server reads back the
+    /// same numbers Node returns when no options are passed.
+    #[test]
+    fn http_server_seeds_node_timeout_defaults() {
+        let s = HttpServer::with_handler(0);
+        assert_eq!(s.headers_timeout, 60_000.0);
+        assert_eq!(s.keep_alive_timeout, 5_000.0);
+        assert_eq!(s.request_timeout, 300_000.0);
+        assert_eq!(s.idle_timeout, 0.0);
+        assert_eq!(s.max_headers_count, 2000.0);
+        assert_eq!(s.max_requests_per_socket, 0.0);
+        assert!(s.no_delay);
+        assert!(!s.keep_alive);
+        assert_eq!(s.keep_alive_initial_delay, 0.0);
+    }
+
+    /// Issue #2210 — the FFI getter/setter pair round-trips a value
+    /// through the per-handle storage. Sanity-pins the macro-expanded
+    /// `js_node_http_server_*` exports against future refactors.
+    #[test]
+    fn http_server_timeout_setter_round_trips() {
+        let handle = register_handle(HttpServer::with_handler(0));
+        // Sanity: defaults visible through the FFI getter.
+        assert_eq!(
+            crate::server::js_node_http_server_headers_timeout(handle),
+            60_000.0
+        );
+        // Set then read back.
+        crate::server::js_node_http_server_set_headers_timeout(handle, 0.0);
+        crate::server::js_node_http_server_set_idle_timeout(handle, 45_000.0);
+        crate::server::js_node_http_server_set_max_requests_per_socket(handle, 100.0);
+        assert_eq!(
+            crate::server::js_node_http_server_headers_timeout(handle),
+            0.0
+        );
+        assert_eq!(
+            crate::server::js_node_http_server_idle_timeout(handle),
+            45_000.0
+        );
+        assert_eq!(
+            crate::server::js_node_http_server_max_requests_per_socket(handle),
+            100.0,
+        );
+        // `setTimeout(ms, cb)` updates the idle timeout and registers
+        // the cb as a `'timeout'` listener — returns the handle for chaining.
+        let chained =
+            crate::server::js_node_http_server_set_timeout_method(handle, 9_999.0, 0xCAFE);
+        assert_eq!(chained, handle);
+        assert_eq!(
+            crate::server::js_node_http_server_idle_timeout(handle),
+            9_999.0
+        );
+        let listener_count = get_handle::<HttpServer>(handle)
+            .and_then(|s| s.listeners.get("timeout").map(|v| v.len()))
+            .unwrap_or(0);
+        assert_eq!(listener_count, 1);
+        drop_handle(handle);
     }
 
     #[test]
