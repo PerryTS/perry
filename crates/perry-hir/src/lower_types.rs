@@ -20,6 +20,102 @@ fn filehandle_type() -> Type {
     Type::Named("FileHandle".to_string())
 }
 
+fn typed_array_name_for_name(name: &str) -> Option<&'static str> {
+    match name {
+        "Int8Array" => Some("Int8Array"),
+        "Uint8Array" => Some("Uint8Array"),
+        "Uint8ClampedArray" => Some("Uint8ClampedArray"),
+        "Int16Array" => Some("Int16Array"),
+        "Uint16Array" => Some("Uint16Array"),
+        "Int32Array" => Some("Int32Array"),
+        "Uint32Array" => Some("Uint32Array"),
+        "Float32Array" => Some("Float32Array"),
+        "Float64Array" => Some("Float64Array"),
+        _ => None,
+    }
+}
+
+fn native_arena_global_is_shadowed(ctx: &LoweringContext) -> bool {
+    ctx.lookup_local("NativeArena").is_some()
+        || ctx.lookup_func("NativeArena").is_some()
+        || ctx.lookup_imported_func("NativeArena").is_some()
+        || ctx.lookup_class("NativeArena").is_some()
+}
+
+fn native_arena_owner_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name) if name == "NativeArena" || name == "NativeArenaOwner")
+}
+
+fn native_arena_view_type_from_kind(ctx: &LoweringContext, expr: &ast::Expr) -> Option<Type> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(s)) => {
+            typed_array_name_for_name(s.value.as_str().unwrap_or(""))
+        }
+        ast::Expr::Ident(ident)
+            if ctx.lookup_local(ident.sym.as_ref()).is_none()
+                && ctx.lookup_func(ident.sym.as_ref()).is_none()
+                && ctx.lookup_imported_func(ident.sym.as_ref()).is_none()
+                && ctx.lookup_class(ident.sym.as_ref()).is_none() =>
+        {
+            typed_array_name_for_name(ident.sym.as_ref())
+        }
+        ast::Expr::Paren(paren) => return native_arena_view_type_from_kind(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => return native_arena_view_type_from_kind(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            return native_arena_view_type_from_kind(ctx, &ts_assert.expr);
+        }
+        ast::Expr::TsNonNull(non_null) => {
+            return native_arena_view_type_from_kind(ctx, &non_null.expr);
+        }
+        ast::Expr::TsConstAssertion(const_assert) => {
+            return native_arena_view_type_from_kind(ctx, &const_assert.expr);
+        }
+        _ => None,
+    }
+    .map(|name| Type::Named(name.to_string()))
+}
+
+fn infer_native_arena_call_return_type(
+    call: &ast::CallExpr,
+    ctx: &LoweringContext,
+) -> Option<Type> {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Member(member) = callee.as_ref() else {
+        return None;
+    };
+    let ast::MemberProp::Ident(method) = &member.prop else {
+        return None;
+    };
+    let method_name = method.sym.as_ref();
+
+    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena")
+        && method_name == "alloc"
+        && !native_arena_global_is_shadowed(ctx)
+    {
+        return Some(Type::Named("NativeArena".to_string()));
+    }
+
+    if !native_arena_owner_type(&infer_type_from_expr(&member.obj, ctx)) {
+        return None;
+    }
+
+    match method_name {
+        "view" => call
+            .args
+            .first()
+            .and_then(|arg| native_arena_view_type_from_kind(ctx, arg.expr.as_ref()))
+            .or(Some(Type::Any)),
+        "podView" => Some(Type::Generic {
+            base: "PerryPodView".to_string(),
+            type_args: vec![Type::Any],
+        }),
+        "dispose" => Some(Type::Void),
+        _ => None,
+    }
+}
+
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     match expr {
         // Literals
@@ -154,6 +250,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
 
         // Function calls → look up known return types
         ast::Expr::Call(call) => {
+            if let Some(ty) = infer_native_arena_call_return_type(call, ctx) {
+                return ty;
+            }
             if let ast::Callee::Expr(callee) = &call.callee {
                 infer_call_return_type(callee, ctx)
             } else {

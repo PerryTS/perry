@@ -148,6 +148,8 @@ pub fn emit_dts(_perry_version: &str) -> String {
         by_module.len()
     );
     let _ = writeln!(out);
+    emit_native_memory_globals(&mut out);
+    let _ = writeln!(out);
 
     for (module, entries) in &by_module {
         let module_decl = module_declaration_name(module);
@@ -264,6 +266,93 @@ fn group_by_module() -> BTreeMap<&'static str, Vec<&'static ApiEntry>> {
         entries.sort_by_key(|e| (kind_order(&e.kind), e.name));
     }
     by_module
+}
+
+fn emit_native_memory_globals(out: &mut String) {
+    let _ = writeln!(
+        out,
+        "type PerryU32 = number & {{ readonly __perryU32?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryU64 = number & {{ readonly __perryU64?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryUSize = number & {{ readonly __perryUSize?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryI32 = number & {{ readonly __perryI32?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryI64 = number & {{ readonly __perryI64?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryF32 = number & {{ readonly __perryF32?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryF64 = number & {{ readonly __perryF64?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryBufferLen = number & {{ readonly __perryBufferLen?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryHandleId = number & {{ readonly __perryHandleId?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryPod<T> = T & {{ readonly __perryPod?: never }};"
+    );
+    let _ = writeln!(out, "interface PerryPodView<T> {{");
+    let _ = writeln!(out, "  readonly length: number;");
+    let _ = writeln!(out, "  readonly [index: number]: T;");
+    let _ = writeln!(out, "  readonly __perryPodView?: never;");
+    let _ = writeln!(out, "}}");
+    let _ = writeln!(out, "interface NativeArena {{");
+    for (ctor, ret) in native_arena_view_overloads() {
+        let _ = writeln!(
+            out,
+            "  view(kind: typeof {}, byteOffset: number, length: number): {};",
+            ctor, ret
+        );
+    }
+    for (name, ret) in native_arena_view_overloads() {
+        let _ = writeln!(
+            out,
+            "  view(kind: \"{}\", byteOffset: number, length: number): {};",
+            name, ret
+        );
+    }
+    let _ = writeln!(
+        out,
+        "  podView<T extends PerryPod<any>>(byteOffset: number, count: number): PerryPodView<T>;"
+    );
+    let _ = writeln!(out, "  dispose(): void;");
+    let _ = writeln!(out, "}}");
+    let _ = writeln!(out, "interface NativeArenaConstructor {{");
+    let _ = writeln!(out, "  alloc(byteLength: number): NativeArena;");
+    let _ = writeln!(out, "}}");
+    let _ = writeln!(out, "declare const NativeArena: NativeArenaConstructor;");
+}
+
+fn native_arena_view_overloads() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("Int8Array", "Int8Array"),
+        ("Uint8Array", "Uint8Array"),
+        ("Uint8ClampedArray", "Uint8ClampedArray"),
+        ("Int16Array", "Int16Array"),
+        ("Uint16Array", "Uint16Array"),
+        ("Int32Array", "Int32Array"),
+        ("Uint32Array", "Uint32Array"),
+        ("Float32Array", "Float32Array"),
+        ("Float64Array", "Float64Array"),
+    ]
 }
 
 fn kind_order(kind: &ApiKind) -> u8 {

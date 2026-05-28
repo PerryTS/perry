@@ -29,12 +29,12 @@ function controlAllocationChurn(): number {
   control_allocation_churn:
   for (let i = 0; i < CHURN; i++) {
     const boxed = new Number(i + 0.5);
-    const owner: any = __perry_native_arena_alloc(8);
-    const view = __perry_native_arena_view(owner, "Uint8Array", 0, 8) as Uint8Array;
+    const arena = NativeArena.alloc(8);
+    const view = arena.view(Uint8Array, 0, 8);
     view[0] = i & 255;
     checksum = (checksum + view[0]) | 0;
     controlBoxes.push(boxed);
-    __perry_native_arena_dispose(owner);
+    arena.dispose();
   }
   gc();
   return checksum;

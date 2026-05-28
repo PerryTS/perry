@@ -306,7 +306,7 @@ pub(super) fn try_embed_wasm(ctx: &LoweringContext, call: &ast::CallExpr) -> Res
     Ok(None)
 }
 
-fn native_arena_kind_from_expr(expr: &ast::Expr) -> Option<u8> {
+fn native_arena_hidden_kind_from_expr(expr: &ast::Expr) -> Option<u8> {
     match expr {
         ast::Expr::Lit(ast::Lit::Str(s)) => {
             crate::ir::typed_array_kind_for_name(s.value.as_str().unwrap_or(""))
@@ -318,6 +318,161 @@ fn native_arena_kind_from_expr(expr: &ast::Expr) -> Option<u8> {
                 .then_some(raw as u8)
         }
         _ => None,
+    }
+}
+
+fn native_arena_public_kind_from_expr(ctx: &LoweringContext, expr: &ast::Expr) -> Option<u8> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(s)) => {
+            crate::ir::typed_array_kind_for_name(s.value.as_str().unwrap_or(""))
+        }
+        ast::Expr::Ident(ident)
+            if ctx.lookup_local(ident.sym.as_ref()).is_none()
+                && ctx.lookup_func(ident.sym.as_ref()).is_none()
+                && ctx.lookup_imported_func(ident.sym.as_ref()).is_none()
+                && ctx.lookup_class(ident.sym.as_ref()).is_none() =>
+        {
+            crate::ir::typed_array_kind_for_name(ident.sym.as_ref())
+        }
+        ast::Expr::Paren(paren) => native_arena_public_kind_from_expr(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => native_arena_public_kind_from_expr(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            native_arena_public_kind_from_expr(ctx, &ts_assert.expr)
+        }
+        ast::Expr::TsNonNull(non_null) => native_arena_public_kind_from_expr(ctx, &non_null.expr),
+        ast::Expr::TsConstAssertion(const_assert) => {
+            native_arena_public_kind_from_expr(ctx, &const_assert.expr)
+        }
+        _ => None,
+    }
+}
+
+fn native_arena_global_is_shadowed(ctx: &LoweringContext) -> bool {
+    ctx.lookup_local("NativeArena").is_some()
+        || ctx.lookup_func("NativeArena").is_some()
+        || ctx.lookup_imported_func("NativeArena").is_some()
+        || ctx.lookup_class("NativeArena").is_some()
+}
+
+fn is_native_arena_alloc_call(ctx: &LoweringContext, call: &ast::CallExpr) -> bool {
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = callee_expr.as_ref() else {
+        return false;
+    };
+    matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena")
+        && matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "alloc")
+        && !native_arena_global_is_shadowed(ctx)
+}
+
+fn native_arena_owner_type(ty: &perry_types::Type) -> bool {
+    matches!(ty, perry_types::Type::Named(name) if name == "NativeArena" || name == "NativeArenaOwner")
+}
+
+fn is_native_arena_owner_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Ident(ident) => ctx
+            .lookup_local_type(ident.sym.as_ref())
+            .is_some_and(native_arena_owner_type),
+        ast::Expr::Call(call) => is_native_arena_alloc_call(ctx, call),
+        ast::Expr::Paren(paren) => is_native_arena_owner_expr(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => is_native_arena_owner_expr(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => is_native_arena_owner_expr(ctx, &ts_assert.expr),
+        ast::Expr::TsNonNull(non_null) => is_native_arena_owner_expr(ctx, &non_null.expr),
+        ast::Expr::TsConstAssertion(const_assert) => {
+            is_native_arena_owner_expr(ctx, &const_assert.expr)
+        }
+        _ => false,
+    }
+}
+
+/// Public compile-time NativeArena API. The runtime still exposes only the
+/// internal helpers; these direct dot-call shapes lower to the same HIR nodes.
+pub(super) fn try_native_arena_public_api(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    has_spread: bool,
+) -> Result<Option<Expr>> {
+    if has_spread {
+        return Ok(None);
+    }
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    let ast::Expr::Member(member) = callee_expr.as_ref() else {
+        return Ok(None);
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return Ok(None);
+    };
+    let method = prop.sym.as_ref();
+
+    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena") {
+        if method != "alloc" || native_arena_global_is_shadowed(ctx) {
+            return Ok(None);
+        }
+        if call.args.len() != 1 {
+            crate::lower_bail!(
+                call.span,
+                "NativeArena.alloc(byteLength) expects exactly one argument"
+            );
+        }
+        return Ok(Some(Expr::NativeArenaAlloc(Box::new(lower_expr(
+            ctx,
+            &call.args[0].expr,
+        )?))));
+    }
+
+    if !is_native_arena_owner_expr(ctx, member.obj.as_ref()) {
+        return Ok(None);
+    }
+
+    match method {
+        "view" => {
+            if call.args.len() != 3 {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeArena.view(kind, byteOffset, length) expects exactly three arguments"
+                );
+            }
+            let Some(kind) = native_arena_public_kind_from_expr(ctx, call.args[0].expr.as_ref())
+            else {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeArena.view kind must be a typed-array constructor or string literal"
+                );
+            };
+            Ok(Some(Expr::NativeArenaView {
+                owner: Box::new(lower_expr(ctx, member.obj.as_ref())?),
+                kind,
+                byte_offset: Box::new(lower_expr(ctx, &call.args[1].expr)?),
+                length: Box::new(lower_expr(ctx, &call.args[2].expr)?),
+            }))
+        }
+        "podView" => {
+            if call.args.len() != 2 {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeArena.podView(byteOffset, count) expects exactly two arguments"
+                );
+            }
+            Ok(Some(Expr::NativePodView {
+                owner: Box::new(lower_expr(ctx, member.obj.as_ref())?),
+                byte_offset: Box::new(lower_expr(ctx, &call.args[0].expr)?),
+                count: Box::new(lower_expr(ctx, &call.args[1].expr)?),
+            }))
+        }
+        "dispose" => {
+            if !call.args.is_empty() {
+                crate::lower_bail!(call.span, "NativeArena.dispose() expects no arguments");
+            }
+            Ok(Some(Expr::NativeArenaDispose(Box::new(lower_expr(
+                ctx,
+                member.obj.as_ref(),
+            )?))))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -377,7 +532,7 @@ pub(super) fn try_native_arena_intrinsics(
                     "__perry_native_arena_view(owner, kind, byteOffset, length) expects exactly four arguments"
                 );
             }
-            let Some(kind) = native_arena_kind_from_expr(call.args[1].expr.as_ref()) else {
+            let Some(kind) = native_arena_hidden_kind_from_expr(call.args[1].expr.as_ref()) else {
                 crate::lower_bail!(
                     call.span,
                     "__perry_native_arena_view kind must be a typed-array name or kind literal"

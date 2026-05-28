@@ -2,6 +2,48 @@
 // Source: perry-api-manifest::API_MANIFEST
 // Coverage: 1512 entries across 83 modules
 
+type PerryU32 = number & { readonly __perryU32?: never };
+type PerryU64 = number & { readonly __perryU64?: never };
+type PerryUSize = number & { readonly __perryUSize?: never };
+type PerryI32 = number & { readonly __perryI32?: never };
+type PerryI64 = number & { readonly __perryI64?: never };
+type PerryF32 = number & { readonly __perryF32?: never };
+type PerryF64 = number & { readonly __perryF64?: never };
+type PerryBufferLen = number & { readonly __perryBufferLen?: never };
+type PerryHandleId = number & { readonly __perryHandleId?: never };
+type PerryPod<T> = T & { readonly __perryPod?: never };
+interface PerryPodView<T> {
+  readonly length: number;
+  readonly [index: number]: T;
+  readonly __perryPodView?: never;
+}
+interface NativeArena {
+  view(kind: typeof Int8Array, byteOffset: number, length: number): Int8Array;
+  view(kind: typeof Uint8Array, byteOffset: number, length: number): Uint8Array;
+  view(kind: typeof Uint8ClampedArray, byteOffset: number, length: number): Uint8ClampedArray;
+  view(kind: typeof Int16Array, byteOffset: number, length: number): Int16Array;
+  view(kind: typeof Uint16Array, byteOffset: number, length: number): Uint16Array;
+  view(kind: typeof Int32Array, byteOffset: number, length: number): Int32Array;
+  view(kind: typeof Uint32Array, byteOffset: number, length: number): Uint32Array;
+  view(kind: typeof Float32Array, byteOffset: number, length: number): Float32Array;
+  view(kind: typeof Float64Array, byteOffset: number, length: number): Float64Array;
+  view(kind: "Int8Array", byteOffset: number, length: number): Int8Array;
+  view(kind: "Uint8Array", byteOffset: number, length: number): Uint8Array;
+  view(kind: "Uint8ClampedArray", byteOffset: number, length: number): Uint8ClampedArray;
+  view(kind: "Int16Array", byteOffset: number, length: number): Int16Array;
+  view(kind: "Uint16Array", byteOffset: number, length: number): Uint16Array;
+  view(kind: "Int32Array", byteOffset: number, length: number): Int32Array;
+  view(kind: "Uint32Array", byteOffset: number, length: number): Uint32Array;
+  view(kind: "Float32Array", byteOffset: number, length: number): Float32Array;
+  view(kind: "Float64Array", byteOffset: number, length: number): Float64Array;
+  podView<T extends PerryPod<any>>(byteOffset: number, count: number): PerryPodView<T>;
+  dispose(): void;
+}
+interface NativeArenaConstructor {
+  alloc(byteLength: number): NativeArena;
+}
+declare const NativeArena: NativeArenaConstructor;
+
 declare module "@perryts/pdf" {
   /** stdlib */
   export function createPdf(opts: any): number;

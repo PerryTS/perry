@@ -3133,6 +3133,12 @@ pub fn run_with_parse_cache(
                     | "globalThis" | "this"
                     // Perry runtime / UI / system primitives
                     | "Widget" | "Color" | "Font" | "Image"
+                    // Perry native-memory marker types
+                    | "NativeArena" | "NativeArenaOwner"
+                    | "PerryPod" | "PerryPodView"
+                    | "PerryU32" | "PerryU64" | "PerryUSize"
+                    | "PerryF32" | "PerryF64" | "PerryI32" | "PerryI64"
+                    | "PerryBufferLen" | "PerryHandleId"
                 )
             }
             let mut local_known: std::collections::HashSet<String> =

@@ -1,0 +1,187 @@
+use perry_diagnostics::SourceCache;
+use perry_hir::{lower_module, Expr, Module, Stmt};
+use perry_parser::parse_typescript_with_cache;
+use perry_types::Type;
+
+fn lower_src(src: &str) -> Result<Module, String> {
+    let src = src.to_string();
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            let mut cache = SourceCache::new();
+            let parsed = parse_typescript_with_cache(&src, "native_arena_test.ts", &mut cache)
+                .map_err(|e| e.to_string())?;
+            lower_module(&parsed.module, "test", "native_arena_test.ts").map_err(|e| e.to_string())
+        })
+        .expect("spawn lower thread")
+        .join()
+        .expect("lower thread panicked")
+}
+
+fn find_let<'m>(module: &'m Module, name: &str) -> &'m Stmt {
+    module
+        .init
+        .iter()
+        .find(|stmt| matches!(stmt, Stmt::Let { name: n, .. } if n == name))
+        .unwrap_or_else(|| panic!("let `{}` not found in init: {:?}", name, module.init))
+}
+
+fn expr_any(expr: &Expr, pred: &impl Fn(&Expr) -> bool) -> bool {
+    if pred(expr) {
+        return true;
+    }
+    match expr {
+        Expr::NativeArenaAlloc(inner) | Expr::NativeArenaDispose(inner) => expr_any(inner, pred),
+        Expr::NativeArenaView {
+            owner,
+            byte_offset,
+            length,
+            ..
+        } => expr_any(owner, pred) || expr_any(byte_offset, pred) || expr_any(length, pred),
+        Expr::NativePodView {
+            owner,
+            byte_offset,
+            count,
+        } => expr_any(owner, pred) || expr_any(byte_offset, pred) || expr_any(count, pred),
+        Expr::Call { callee, args, .. } => {
+            expr_any(callee, pred) || args.iter().any(|arg| expr_any(arg, pred))
+        }
+        Expr::PropertyGet { object, .. } => expr_any(object, pred),
+        Expr::Object(fields) => fields.iter().any(|(_, value)| expr_any(value, pred)),
+        Expr::Array(items) => items.iter().any(|item| expr_any(item, pred)),
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            expr_any(left, pred) || expr_any(right, pred)
+        }
+        Expr::LocalSet(_, value) => expr_any(value, pred),
+        _ => false,
+    }
+}
+
+fn stmt_any(stmt: &Stmt, pred: &impl Fn(&Expr) -> bool) -> bool {
+    match stmt {
+        Stmt::Let {
+            init: Some(init), ..
+        }
+        | Stmt::Expr(init) => expr_any(init, pred),
+        Stmt::Return(Some(value)) => expr_any(value, pred),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_any(condition, pred)
+                || then_branch.iter().any(|s| stmt_any(s, pred))
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|branch| branch.iter().any(|s| stmt_any(s, pred)))
+        }
+        _ => false,
+    }
+}
+
+fn module_any(module: &Module, pred: impl Fn(&Expr) -> bool) -> bool {
+    module.init.iter().any(|stmt| stmt_any(stmt, &pred))
+        || module
+            .functions
+            .iter()
+            .any(|func| func.body.iter().any(|stmt| stmt_any(stmt, &pred)))
+}
+
+#[test]
+fn native_arena_public_alloc_view_and_dispose_lower() {
+    let module = lower_src(
+        r#"
+        const arena = NativeArena.alloc(64);
+        const view = arena.view(Float64Array, 0, 8);
+        const bytes = arena.view("Uint8Array", 0, 8);
+        arena.dispose();
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    assert!(matches!(
+        find_let(&module, "arena"),
+        Stmt::Let {
+            init: Some(Expr::NativeArenaAlloc(_)),
+            ty: Type::Named(name),
+            ..
+        } if name == "NativeArena"
+    ));
+    assert!(matches!(
+        find_let(&module, "view"),
+        Stmt::Let {
+            init: Some(Expr::NativeArenaView { kind, .. }),
+            ty: Type::Named(name),
+            ..
+        } if *kind == perry_hir::TYPED_ARRAY_KIND_FLOAT64 && name == "Float64Array"
+    ));
+    assert!(matches!(
+        find_let(&module, "bytes"),
+        Stmt::Let {
+            init: Some(Expr::NativeArenaView { kind, .. }),
+            ty: Type::Named(name),
+            ..
+        } if *kind == perry_hir::TYPED_ARRAY_KIND_UINT8 && name == "Uint8Array"
+    ));
+    assert!(module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeArenaDispose(_)
+    )));
+}
+
+#[test]
+fn native_arena_public_pod_view_lowers_with_annotation() {
+    let module = lower_src(
+        r#"
+        type Packet = PerryPod<{ tag: PerryU32; gain: PerryF32; }>;
+        const arena = NativeArena.alloc(16);
+        const view: PerryPodView<Packet> = arena.podView(0, 1);
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    assert!(matches!(
+        find_let(&module, "view"),
+        Stmt::Let {
+            init: Some(Expr::NativePodView { .. }),
+            ty: Type::Generic { base, .. },
+            ..
+        } if base == "PerryPodView"
+    ));
+}
+
+#[test]
+fn native_arena_public_api_respects_shadowing() {
+    let module = lower_src(
+        r#"
+        const NativeArena: any = { alloc: (byteLength: number) => byteLength };
+        const value = NativeArena.alloc(64);
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    assert!(!module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeArenaAlloc(_)
+            | Expr::NativeArenaView { .. }
+            | Expr::NativePodView { .. }
+            | Expr::NativeArenaDispose(_)
+    )));
+}
+
+#[test]
+fn native_arena_public_view_rejects_dynamic_kind() {
+    let err = lower_src(
+        r#"
+        const arena = NativeArena.alloc(64);
+        const Kind = Float64Array;
+        const view = arena.view(Kind, 0, 8);
+        "#,
+    )
+    .expect_err("dynamic kind should fail lowering");
+
+    assert!(
+        err.contains("NativeArena.view kind must be a typed-array constructor or string literal"),
+        "unexpected error: {err}"
+    );
+}

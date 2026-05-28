@@ -1,7 +1,7 @@
 function nativeOwnedPositive(): number {
   const n = 16;
-  const owner: any = __perry_native_arena_alloc(n * 8);
-  const view = __perry_native_arena_view(owner, "Float64Array", 0, n) as Float64Array;
+  const arena = NativeArena.alloc(n * 8);
+  const view = arena.view(Float64Array, 0, n);
 
   native_owned_positive_write:
   for (let i: number = 0; i < n; i++) {
@@ -14,17 +14,17 @@ function nativeOwnedPositive(): number {
     sum = sum + view[i];
   }
 
-  __perry_native_arena_dispose(owner);
+  arena.dispose();
   return sum;
 }
 
 function nativeOwnedKinds(): number {
-  const owner: any = __perry_native_arena_alloc(96);
-  const u8 = __perry_native_arena_view(owner, "Uint8Array", 0, 8) as Uint8Array;
-  const i16 = __perry_native_arena_view(owner, "Int16Array", 8, 4) as Int16Array;
-  const u32 = __perry_native_arena_view(owner, "Uint32Array", 16, 4) as Uint32Array;
-  const f32 = __perry_native_arena_view(owner, "Float32Array", 32, 4) as Float32Array;
-  const f64 = __perry_native_arena_view(owner, "Float64Array", 48, 4) as Float64Array;
+  const arena = NativeArena.alloc(96);
+  const u8 = arena.view(Uint8Array, 0, 8);
+  const i16 = arena.view(Int16Array, 8, 4);
+  const u32 = arena.view(Uint32Array, 16, 4);
+  const f32 = arena.view(Float32Array, 32, 4);
+  const f64 = arena.view(Float64Array, 48, 4);
 
   u8[0] = 7;
   i16[1] = -11;
@@ -33,14 +33,14 @@ function nativeOwnedKinds(): number {
   f64[0] = 9.25;
 
   const sum = i16[1] + u32[2] + f32[3] + f64[0];
-  __perry_native_arena_dispose(owner);
+  arena.dispose();
   return sum;
 }
 
 function disposedFallback(): number {
-  const owner: any = __perry_native_arena_alloc(64);
-  const view = __perry_native_arena_view(owner, "Float64Array", 0, 8) as Float64Array;
-  __perry_native_arena_dispose(owner);
+  const arena = NativeArena.alloc(64);
+  const view = arena.view(Float64Array, 0, 8);
+  arena.dispose();
   try {
     return view[0];
   } catch (_err) {
@@ -49,31 +49,31 @@ function disposedFallback(): number {
 }
 
 function staleLengthFallback(): number {
-  const owner: any = __perry_native_arena_alloc(64);
+  const arena = NativeArena.alloc(64);
   let len = 8;
-  const view = __perry_native_arena_view(owner, "Float64Array", 0, len) as Float64Array;
+  const view = arena.view(Float64Array, 0, len);
   len = 4;
   const value = view[0];
-  __perry_native_arena_dispose(owner);
+  arena.dispose();
   return value;
 }
 
 function mutableAliasFallback(): number {
-  const owner: any = __perry_native_arena_alloc(64);
-  const view = __perry_native_arena_view(owner, "Float64Array", 0, 8) as Float64Array;
+  const arena = NativeArena.alloc(64);
+  const view = arena.view(Float64Array, 0, 8);
   const alias = view;
   alias[0] = 3.5;
   const value = alias[0];
-  __perry_native_arena_dispose(owner);
+  arena.dispose();
   return value;
 }
 
 function missingOwnerRootFallback(): number {
-  let owner: any = __perry_native_arena_alloc(64);
-  const view = __perry_native_arena_view(owner, "Float64Array", 0, 8) as Float64Array;
-  owner = __perry_native_arena_alloc(64);
+  let arena = NativeArena.alloc(64);
+  const view = arena.view(Float64Array, 0, 8);
+  arena = NativeArena.alloc(64);
   const value = view[0];
-  __perry_native_arena_dispose(owner);
+  arena.dispose();
   return value;
 }
 
@@ -82,11 +82,11 @@ function escapeNativeView(_value: any): number {
 }
 
 function escapingUnownedPointerFallback(): number {
-  const owner: any = __perry_native_arena_alloc(64);
-  const view = __perry_native_arena_view(owner, "Float64Array", 0, 8) as Float64Array;
+  const arena = NativeArena.alloc(64);
+  const view = arena.view(Float64Array, 0, 8);
   escapeNativeView(view);
   const value = view[0];
-  __perry_native_arena_dispose(owner);
+  arena.dispose();
   return value;
 }
 
