@@ -3098,6 +3098,56 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (`js_node_http_server_address_json`) but missing from both
     // `NATIVE_MODULE_TABLE` and the manifest.
     method("http", "address", true, Some("HttpServer")),
+    // #2210 — `createServer(handler, options)` 2nd-arg + Server-instance
+    // timeout/keep-alive accessors. Synthetic `__get_<name>` / `__set_<name>`
+    // methods (HIR rewrites bare reads/writes) plus their bare-name twins
+    // for sites where the rewrite doesn't fire. Phase 1 only round-trips
+    // the values; hyper-side enforcement is Phase 2.
+    method("http", "__get_headersTimeout", true, Some("HttpServer")),
+    method("http", "__set_headersTimeout", true, Some("HttpServer")),
+    method("http", "headersTimeout", true, Some("HttpServer")),
+    method("http", "__get_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__set_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__get_requestTimeout", true, Some("HttpServer")),
+    method("http", "__set_requestTimeout", true, Some("HttpServer")),
+    method("http", "requestTimeout", true, Some("HttpServer")),
+    method("http", "__get_timeout", true, Some("HttpServer")),
+    method("http", "__set_timeout", true, Some("HttpServer")),
+    method("http", "timeout", true, Some("HttpServer")),
+    method("http", "__get_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "__set_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "maxHeadersCount", true, Some("HttpServer")),
+    method(
+        "http",
+        "__get_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method(
+        "http",
+        "__set_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method("http", "maxRequestsPerSocket", true, Some("HttpServer")),
+    method(
+        "http",
+        "__get_keepAliveInitialDelay",
+        true,
+        Some("HttpServer"),
+    ),
+    method(
+        "http",
+        "__set_keepAliveInitialDelay",
+        true,
+        Some("HttpServer"),
+    ),
+    method("http", "keepAliveInitialDelay", true, Some("HttpServer")),
+    method("http", "__get_noDelay", true, Some("HttpServer")),
+    method("http", "__set_noDelay", true, Some("HttpServer")),
+    method("http", "noDelay", true, Some("HttpServer")),
+    method("http", "__set_keepAlive", true, Some("HttpServer")),
     method("http", "on", true, Some("IncomingMessage")),
     method("http", "addListener", true, Some("IncomingMessage")),
     method("http", "pause", true, Some("IncomingMessage")),
