@@ -89,6 +89,8 @@ const WRITABLE_BUFFERED_KEY: &[u8] = b"__perryWritableBuffered";
 const WRITABLE_LENGTH_KEY: &[u8] = b"__perryWritableLength";
 const WRITABLE_NEED_DRAIN_KEY: &[u8] = b"__perryWritableNeedDrain";
 const WRITABLE_OBJECT_MODE_KEY: &[u8] = b"__perryWritableObjectMode";
+const WRITABLE_DECODE_STRINGS_KEY: &[u8] = b"__perryWritableDecodeStrings";
+const WRITABLE_DEFAULT_ENCODING_KEY: &[u8] = b"__perryWritableDefaultEncoding";
 const WRITABLE_PENDING_FINISH_CALLBACK_KEY: &[u8] = b"__perryWritablePendingFinishCallback";
 const WRITABLE_WRITEV_KEY: &[u8] = b"__perryWritableWritev";
 const TRANSFORM_CALLBACK_KEY: &[u8] = b"__perryTransformCallback";
@@ -556,19 +558,23 @@ fn throw_readable_from_invalid_iterable() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn normalize_write_args(chunk: f64, enc: f64, cb: f64) -> (f64, f64, f64) {
+fn normalize_write_args(stream: f64, chunk: f64, enc: f64, cb: f64) -> (f64, f64, f64) {
     let (encoding, callback) = if is_callable_value(enc) {
         (f64::from_bits(TAG_UNDEFINED), enc)
     } else {
         (enc, cb)
     };
-    let (chunk, encoding) = normalize_writable_write_chunk(chunk, encoding);
+    let (chunk, encoding) = normalize_writable_write_chunk(stream, chunk, encoding);
     (chunk, encoding, callback)
 }
 
-fn normalize_writable_write_chunk(chunk: f64, encoding: f64) -> (f64, f64) {
+fn normalize_writable_write_chunk(stream: f64, chunk: f64, encoding: f64) -> (f64, f64) {
     let value = JSValue::from_bits(chunk.to_bits());
     if value.is_any_string() {
+        let encoding = normalize_writable_string_encoding(stream, encoding);
+        if !writable_should_decode_string(stream) {
+            return (chunk, encoding);
+        }
         let enc_tag = crate::buffer::js_encoding_tag_from_value(encoding);
         let buf = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, enc_tag);
         return (box_pointer(buf as *const u8), string_value(b"buffer"));
@@ -580,6 +586,24 @@ fn normalize_writable_write_chunk(chunk: f64, encoding: f64) -> (f64, f64) {
     (chunk, encoding)
 }
 
+fn normalize_writable_string_encoding(stream: f64, encoding: f64) -> f64 {
+    if JSValue::from_bits(encoding.to_bits()).is_any_string() {
+        encoding
+    } else {
+        writable_default_encoding(stream)
+    }
+}
+
+fn writable_should_decode_string(stream: f64) -> bool {
+    !has_truthy_hidden(stream, hidden_writable_object_mode_key())
+        && has_truthy_hidden(stream, hidden_writable_decode_strings_key())
+}
+
+fn writable_default_encoding(stream: f64) -> f64 {
+    get_hidden_value(stream, hidden_writable_default_encoding_key())
+        .unwrap_or_else(|| string_value(b"utf8"))
+}
+
 fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
     if stream_hidden_ended(stream) {
         let err = writable_write_after_end_error();
@@ -589,7 +613,7 @@ fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
     if JSValue::from_bits(chunk.to_bits()).is_null() {
         throw_writable_null_chunk();
     }
-    let (chunk, enc, callback) = normalize_write_args(chunk, enc, cb);
+    let (chunk, enc, callback) = normalize_write_args(stream, chunk, enc, cb);
     let len = writable_chunk_len(stream, chunk);
     add_writable_length(stream, len);
     let ret = writable_backpressure_return(stream);
@@ -1784,6 +1808,16 @@ fn hidden_writable_object_mode_key() -> *mut crate::string::StringHeader {
 }
 
 #[inline]
+fn hidden_writable_decode_strings_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_DECODE_STRINGS_KEY)
+}
+
+#[inline]
+fn hidden_writable_default_encoding_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_DEFAULT_ENCODING_KEY)
+}
+
+#[inline]
 fn hidden_writable_pending_finish_callback_key() -> *mut crate::string::StringHeader {
     hidden_key(WRITABLE_PENDING_FINISH_CALLBACK_KEY)
 }
@@ -2767,8 +2801,7 @@ fn buffer_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
 
 fn writev_record_chunk(chunk: f64, enc: f64) -> (f64, f64) {
     if JSValue::from_bits(chunk.to_bits()).is_any_string() {
-        let buffer = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, 0);
-        (box_pointer(buffer as *const u8), string_value(b"buffer"))
+        (chunk, enc)
     } else {
         let raw = raw_ptr_from_value(chunk);
         if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
@@ -3596,6 +3629,20 @@ fn init_writable_state(stream: f64, opts: f64) {
         } else {
             TAG_FALSE
         }),
+    );
+    let decode_strings = !get_hidden_value(opts, hidden_key(b"decodeStrings"))
+        .is_some_and(|v| v.to_bits() == TAG_FALSE);
+    set_hidden_value(
+        stream,
+        hidden_writable_decode_strings_key(),
+        f64::from_bits(if decode_strings { TAG_TRUE } else { TAG_FALSE }),
+    );
+    let default_encoding =
+        opt_string_value(opts, b"defaultEncoding").unwrap_or_else(|| string_value(b"utf8"));
+    set_hidden_value(
+        stream,
+        hidden_writable_default_encoding_key(),
+        default_encoding,
     );
     set_writable_length(stream, 0.0);
     set_writable_need_drain(stream, false);

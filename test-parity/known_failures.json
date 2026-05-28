@@ -368,12 +368,6 @@
     "category": "bug-open",
     "reason": "node:stream: `readable` event (paused-mode trigger) doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/options/decode-strings-false": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: decodeStrings:false option not honored (writes still arrive as Buffer). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/wrap-old-stream": {
     "issue": "1532",
     "added": "2026-05-23",

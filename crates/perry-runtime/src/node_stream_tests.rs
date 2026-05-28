@@ -9,6 +9,7 @@ thread_local! {
     static WRITEV_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static WRITEV_BUFFER_SHAPE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static WRITE_ENCODINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static WRITE_CHUNK_STRING_FLAGS: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static WRITE_CALLBACK_COUNT: RefCell<usize> = const { RefCell::new(0) };
     pub(super) static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     pub(super) static READABLE_READ_CAPTURED: RefCell<Vec<Option<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
@@ -94,6 +95,11 @@ extern "C" fn write_capture_encoding(
     let bytes = js_node_stream_collect_bytes(readable);
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().push(bytes));
     WRITE_ENCODINGS.with(|encodings| encodings.borrow_mut().push(string_contents(enc)));
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| {
+        flags
+            .borrow_mut()
+            .push(JSValue::from_bits(chunk.to_bits()).is_any_string())
+    });
     unsafe {
         let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
     }
@@ -907,6 +913,52 @@ fn writable_cork_uses_writev_for_multi_chunk_flush() {
 }
 
 #[test]
+fn writable_cork_with_decode_strings_false_preserves_writev_strings() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITEV_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITEV_BUFFER_SHAPE.with(|shape| shape.borrow_mut().clear());
+
+    let opts = crate::object::js_object_alloc(0, 3);
+    let write = js_closure_alloc(write_capture as *const u8, 0);
+    let writev = js_closure_alloc(writev_capture as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    crate::closure::js_register_closure_arity(writev_capture as *const u8, 2);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"writev"),
+        f64::from_bits(JSValue::pointer(writev as *const u8).bits()),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"decodeStrings"),
+        f64::from_bits(TAG_FALSE),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+
+    let _ = js_node_stream_method_cork(handle);
+    let _ = js_node_stream_method_write(handle, string_value("a"), undefined, undefined);
+    let _ = js_node_stream_method_write(handle, string_value("b"), undefined, undefined);
+    let _ = js_node_stream_method_uncork(handle);
+
+    WRITE_CAPTURED.with(|captured| assert!(captured.borrow().is_empty()));
+    WRITEV_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"a".to_vec(), b"b".to_vec()]
+        );
+    });
+    WRITEV_BUFFER_SHAPE.with(|shape| assert_eq!(shape.borrow().as_slice(), &[false, false]));
+}
+
+#[test]
 fn writable_write_after_end_emits_error_without_calling_write() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
     ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
@@ -947,6 +999,7 @@ fn writable_write_after_end_emits_error_without_calling_write() {
 fn writable_write_decodes_string_chunks_and_runs_callback() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
     WRITE_ENCODINGS.with(|encodings| encodings.borrow_mut().clear());
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| flags.borrow_mut().clear());
     WRITE_CALLBACK_COUNT.with(|count| *count.borrow_mut() = 0);
 
     let opts = crate::object::js_object_alloc(0, 1);
@@ -983,6 +1036,62 @@ fn writable_write_decodes_string_chunks_and_runs_callback() {
             encodings.borrow().as_slice(),
             &["buffer".to_string(), "buffer".to_string()]
         );
+    });
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| {
+        assert_eq!(flags.borrow().as_slice(), &[false, false]);
+    });
+    WRITE_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 2));
+}
+
+#[test]
+fn writable_decode_strings_false_preserves_string_chunks() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITE_ENCODINGS.with(|encodings| encodings.borrow_mut().clear());
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| flags.borrow_mut().clear());
+    WRITE_CALLBACK_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let opts = crate::object::js_object_alloc(0, 2);
+    let write = js_closure_alloc(write_capture_encoding as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture_encoding as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"decodeStrings"),
+        f64::from_bits(TAG_FALSE),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let cb = js_closure_alloc(capture_write_callback as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_write_callback as *const u8, 0);
+    let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+
+    let result =
+        js_node_stream_method_write3(handle, string_value("6869"), string_value("hex"), cb_value);
+    assert_eq!(result.to_bits(), TAG_TRUE);
+
+    let result = js_node_stream_method_write3(handle, string_value("plain"), cb_value, undefined);
+    assert_eq!(result.to_bits(), TAG_TRUE);
+
+    WRITE_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"6869".to_vec(), b"plain".to_vec()]
+        );
+    });
+    WRITE_ENCODINGS.with(|encodings| {
+        assert_eq!(
+            encodings.borrow().as_slice(),
+            &["hex".to_string(), "utf8".to_string()]
+        );
+    });
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| {
+        assert_eq!(flags.borrow().as_slice(), &[true, true]);
     });
     WRITE_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 2));
 }
