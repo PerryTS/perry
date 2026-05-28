@@ -1481,6 +1481,26 @@ pub extern "C" fn js_object_get_field_by_name(
                         crate::closure::closure_arity(obj as *const crate::closure::ClosureHeader);
                     return JSValue::number(arity.unwrap_or(0) as f64);
                 }
+                // #2145: `fn.__proto__` is the closure's [[Prototype]]
+                // — `Int8Array.__proto__ === %TypedArray%` after
+                // `populate_global_this_builtins` wired the static-proto
+                // side-table. Spec models `__proto__` as a
+                // `Object.prototype` accessor that returns
+                // `[[GetPrototypeOf]](this)`; for closures Perry resolves
+                // that off the same side-table `Object.setPrototypeOf`
+                // writes to. Walking `closure_get_dynamic_prop` would
+                // instead look for a `__proto__` own-prop on the parent,
+                // which is the wrong thing — the proto IS the answer.
+                // Returns undefined (not null) when no proto is recorded,
+                // matching the closure-receiver `getPrototypeOf` arm
+                // semantics for non-wired closures.
+                if name_bytes == b"__proto__" {
+                    if let Some(proto_bits) = crate::closure::closure_static_prototype(obj as usize)
+                    {
+                        return JSValue::from_bits(proto_bits);
+                    }
+                    return JSValue::undefined();
+                }
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
                     // User-attached own property (`fn.x = 1`) takes precedence.
                     let val = crate::closure::closure_get_dynamic_prop(obj as usize, name_str);

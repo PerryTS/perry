@@ -1254,18 +1254,33 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                     return f64::from_bits(TAG_NULL);
                 }
-                // #489: a function/constructor receiver has no walkable
-                // [[Prototype]] in Perry's model. This is reached when a
-                // prototype-chain walk hits a built-in constructor — e.g.
-                // drizzle's `is(value, type)` does
-                // `cls = Object.getPrototypeOf(arr).constructor` (the global
-                // `Array` closure) then loops `cls = Object.getPrototypeOf(cls)`
-                // until it hits null. Returning the closure itself here makes
-                // `getPrototypeOf(cls) === cls`, an infinite self-cycle that
-                // hangs the walk. JS terminates it at null (Function.prototype
-                // → Object.prototype → null); Perry doesn't model those, so
-                // return null directly to break the cycle.
+                // #2145: per-kind typed-array `.prototype` objects share a
+                // single `%TypedArray%.prototype` parent. Resolved off the
+                // cached intrinsic pointer (also a GC root) so the chain holds
+                // through copying GC.
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+                    let p = crate::object::typed_array_intrinsic_proto_ptr();
+                    if !p.is_null() {
+                        return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
+                    }
+                }
+                // #489 / #2145: a function/constructor receiver has no
+                // walkable [[Prototype]] in Perry's model UNLESS its
+                // closure-static-prototype side-table has been set
+                // (`Object.setPrototypeOf(closure, parent)` — effect's
+                // TagClass and Perry's `%TypedArray%`-chain typed-array
+                // constructors use this). Returning the recorded parent
+                // satisfies drizzle's `cls = getPrototypeOf(cls)` walk
+                // (which terminates when the parent has no further
+                // recorded proto) and the test262 `__proto__` chain. When
+                // no static prototype is recorded, return null to break
+                // the would-be `getPrototypeOf(cls) === cls` self-cycle.
                 if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                    if let Some(proto_bits) =
+                        crate::closure::closure_static_prototype(raw_addr as usize)
+                    {
+                        return f64::from_bits(proto_bits);
+                    }
                     return f64::from_bits(TAG_NULL);
                 }
             }
@@ -1280,9 +1295,22 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                     return f64::from_bits(TAG_NULL);
                 }
-                // #489: function/constructor receiver — see the 0x7FFD branch
-                // above. Break the prototype-chain self-cycle with null.
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+                    let p = crate::object::typed_array_intrinsic_proto_ptr();
+                    if !p.is_null() {
+                        return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
+                    }
+                }
+                // #489 / #2145: function/constructor receiver — see the
+                // 0x7FFD branch above. Return the recorded static
+                // prototype if any, else null to break the chain-walk
+                // self-cycle.
                 if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                    if let Some(proto_bits) =
+                        crate::closure::closure_static_prototype(bits as usize)
+                    {
+                        return f64::from_bits(proto_bits);
+                    }
                     return f64::from_bits(TAG_NULL);
                 }
             }

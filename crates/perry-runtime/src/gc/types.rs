@@ -723,6 +723,12 @@ pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+// #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
+// `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
+// `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
+// `TYPED_ARRAY_INTRINSIC_PROTO_PTR` (a single object shared across all
+// 11 typed-array kinds) when this bit is set.
+pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
 /// Array payload is stored as canonical raw `f64` values, not NaN-boxed
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.

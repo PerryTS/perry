@@ -424,6 +424,64 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
     }
 }
 
+/// Allocate the shared `%TypedArray%` intrinsic constructor (a closure) and
+/// its `.prototype` object, cache both in the GC-rooted atomics, and wire the
+/// closure's `prototype` dynamic-prop to point at the shared prototype.
+///
+/// Spec: `%TypedArray%` is the abstract parent constructor for `Int8Array`,
+/// `Uint8Array`, … — `Int8Array.__proto__ === %TypedArray%` and
+/// `Object.getPrototypeOf(Int8Array.prototype) === %TypedArray%.prototype`.
+/// Perry didn't model this before #2145, so test262's TypedArray-prototype
+/// walks read `null.prototype` and the constructor's `__proto__` returned the
+/// `0.0` no-value placeholder (`typeof Int8Array.__proto__ === "number"`).
+///
+/// Idempotent: subsequent calls return the cached pointer. Called from
+/// `populate_global_this_builtins` (single-threaded under the singleton CAS),
+/// so the AtomicI64 stores don't need to race-resolve.
+fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut ObjectHeader) {
+    let existing_ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire);
+    let existing_proto = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+    if existing_ctor != 0 && existing_proto != 0 {
+        return (
+            existing_ctor as *mut crate::closure::ClosureHeader,
+            existing_proto as *mut ObjectHeader,
+        );
+    }
+    let ctor = crate::closure::js_closure_alloc(global_this_builtin_noop_thunk as *const u8, 0);
+    let proto = js_object_alloc(0, 0);
+    if ctor.is_null() || proto.is_null() {
+        return (std::ptr::null_mut(), std::ptr::null_mut());
+    }
+    // Wire `%TypedArray%.prototype` so `getPrototypeOf(Int8Array).prototype`
+    // hits a real object instead of undefined.
+    let proto_key_bytes = b"prototype";
+    let proto_key =
+        crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
+    // #2060: the four reflectable `length`/`byteLength`/`byteOffset`/`buffer`
+    // accessor descriptors are own properties of `%TypedArray%.prototype` per
+    // spec, NOT of the per-kind proto. Pre-#2145 they were installed on each
+    // per-kind proto because `getPrototypeOf(per_kind_proto)` returned the
+    // per-kind proto itself (identity), so the same lookup happened to land
+    // there. After #2145 wires the per-kind protos to share the intrinsic
+    // proto, the descriptors must live on the intrinsic itself for
+    // `Object.getOwnPropertyDescriptor(getPrototypeOf(Int8Array.prototype),
+    // "length")` to keep working.
+    install_typed_array_proto_accessors(proto);
+    crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
+    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+    (ctor, proto)
+}
+
+/// Public accessor for the `%TypedArray%.prototype` object. Returns the cached
+/// pointer if `populate_global_this_builtins` has run (so the intrinsic is
+/// initialised), else null. Used by `js_object_get_prototype_of` to resolve
+/// `Object.getPrototypeOf(Int8Array.prototype)` to the shared prototype.
+pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
+    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as *mut ObjectHeader
+}
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -441,6 +499,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     let proto_key_bytes = b"prototype";
     let proto_key =
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
+    // #2145: pre-allocate the shared `%TypedArray%` intrinsic so per-kind
+    // typed-array constructors can link their `__proto__` to it as they're
+    // built below, and the per-kind `.prototype` objects can be flagged with
+    // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
+    let (typed_array_intrinsic_ctor, _) = ensure_typed_array_intrinsic();
     // Constructors: ClosureHeader-backed so typeof is "function".
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         let func_ptr = if name == "String" {
@@ -470,6 +533,38 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // entry point — works in tandem with `.call`/`.apply` since
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
+            // #2145: link per-kind typed-array constructors into the
+            // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
+            // and `Object.getPrototypeOf(Int8Array.prototype) ===
+            // %TypedArray%.prototype`. Both reads are resolved off this
+            // wiring (closure static-prototype side-table for the ctor;
+            // `OBJ_FLAG_TYPED_ARRAY_PROTO` + the cached
+            // `TYPED_ARRAY_INTRINSIC_PROTO_PTR` for the per-kind proto).
+            if !typed_array_intrinsic_ctor.is_null()
+                && matches!(
+                    name,
+                    "Int8Array"
+                        | "Uint8Array"
+                        | "Uint8ClampedArray"
+                        | "Int16Array"
+                        | "Uint16Array"
+                        | "Int32Array"
+                        | "Uint32Array"
+                        | "Float32Array"
+                        | "Float64Array"
+                        | "BigInt64Array"
+                        | "BigUint64Array"
+                )
+            {
+                let intrinsic_bits =
+                    crate::value::js_nanbox_pointer(typed_array_intrinsic_ctor as i64).to_bits();
+                crate::closure::closure_set_static_prototype(closure_ptr as usize, intrinsic_bits);
+                unsafe {
+                    let gc = (proto_obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE)
+                        as *mut crate::gc::GcHeader;
+                    (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                }
+            }
         }
         let name_bytes = name.as_bytes();
         let name_key =
@@ -831,14 +926,23 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(proto_obj, &[("toString", 0)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        // Typed-array constructors: install the `%TypedArray%.prototype`
-        // accessor descriptors (`length`/`byteLength`/`byteOffset`/`buffer`)
-        // on the per-kind prototype object (#2060), plus the shared
-        // %TypedArray%.prototype method set (#2142).
+        // Typed-array constructors: keep the reified per-kind prototype
+        // method set (#2142) on each per-kind `.prototype` so direct
+        // reads like `Int8Array.prototype.at` continue to return a
+        // function. The accessor descriptors
+        // (`length`/`byteLength`/`byteOffset`/`buffer`) are installed
+        // *only* on the shared `%TypedArray%.prototype` (#2145, in
+        // `ensure_typed_array_intrinsic`) — reached via
+        // `Object.getPrototypeOf(Int8Array.prototype) ===
+        // %TypedArray%.prototype`. Pre-#2145 they were also stamped on
+        // each per-kind proto because `getPrototypeOf(per_kind)`
+        // returned identity; now that it walks to the intrinsic, they
+        // belong on the parent (matches Node's
+        // `getOwnPropertyDescriptor(Int8Array.prototype, "length")` =
+        // `undefined`).
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
         | "BigUint64Array" => {
-            install_typed_array_proto_accessors(proto_obj);
             install_noop_proto_methods(
                 proto_obj,
                 &[

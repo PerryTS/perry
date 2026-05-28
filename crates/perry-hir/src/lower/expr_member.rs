@@ -1087,23 +1087,26 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 if obj_ident.sym.as_ref() == property.as_str() {
-                    // #2060 / #2142: `<Ctor>.prototype` must keep reading the
-                    // constructor closure's *real* prototype object. Each
-                    // built-in constructor closure carries a populated proto
-                    // (allocated in `populate_global_this_builtins`, populated
-                    // by `populate_builtin_prototype_methods`) — that is where
+                    // #2060 / #2142 / #2145: `<Ctor>.prototype` and
+                    // `<Ctor>.__proto__` must keep reading the constructor
+                    // closure's real proto / static-prototype. Each built-in
+                    // constructor closure carries a populated proto (allocated
+                    // in `populate_global_this_builtins`, populated by
+                    // `populate_builtin_prototype_methods`) — that is where
                     // typed-array accessor descriptors AND the reified
-                    // built-in prototype method values live. Collapsing to
-                    // `PropertyGet { GlobalGet(0), "prototype" }` would instead
-                    // read `globalThis.prototype` (undefined), losing every
-                    // method-value reachable through `<Ctor>.prototype.<m>`
-                    // (which is the value-read form of #2142, distinct from
-                    // the typeof-fold which fires at AST level).
-                    let outer_is_prototype = matches!(
+                    // built-in prototype method values live. For
+                    // `__proto__`, typed-array constructors are linked to the
+                    // shared `%TypedArray%` intrinsic via
+                    // `closure_set_static_prototype` (#2145); collapsing here
+                    // would drop the receiver, and codegen lowers
+                    // `globalThis.__proto__` through the no-name path → literal
+                    // `0.0` (a number), which is the symptom reported in #2145.
+                    let outer_is_prototype_or_proto = matches!(
                         &member.prop,
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
+                            || p.sym.as_ref() == "__proto__"
                     );
-                    if !outer_is_prototype {
+                    if !outer_is_prototype_or_proto {
                         object_expr = Expr::GlobalGet(0);
                     }
                 }

@@ -76,6 +76,15 @@ static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
 static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
+// #2145: the `%TypedArray%` intrinsic constructor (a closure) and its
+// `.prototype` (an object). Lazily allocated by
+// `populate_global_this_builtins` so the per-kind typed-array constructors
+// (`Int8Array`, ...) can chain `__proto__` to `%TypedArray%`, and each per-kind
+// `.prototype` carries `OBJ_FLAG_TYPED_ARRAY_PROTO` whose
+// `js_object_get_prototype_of` returns the shared `%TypedArray%.prototype` here.
+// Both are mutable roots scanned by `scan_object_cache_roots_mut`.
+pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -1178,6 +1187,16 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         Ordering::Relaxed,
     );
     visitor.visit_atomic_i64_slot(&GLOBAL_THIS_PTR, Ordering::Acquire, Ordering::Release);
+    visitor.visit_atomic_i64_slot(
+        &TYPED_ARRAY_INTRINSIC_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
+    visitor.visit_atomic_i64_slot(
+        &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
+        Ordering::Acquire,
+        Ordering::Release,
+    );
 }
 
 #[cfg(test)]
