@@ -55,7 +55,8 @@ pub(crate) unsafe fn apply_reviver(
 
     // If value is an object, recurse into its properties first
     if let Some(ptr) = extract_pointer(bits) {
-        if is_object_pointer(ptr) {
+        let obj_type = gc_obj_type(ptr);
+        if obj_type == crate::gc::GC_TYPE_OBJECT {
             let obj = (value_handle.get_nanbox_u64() & POINTER_MASK) as *const crate::ObjectHeader;
             let num_fields = (*obj).field_count;
             let keys_arr = (*obj).keys_array;
@@ -87,8 +88,7 @@ pub(crate) unsafe fn apply_reviver(
                 *fields_ptr.add(f as usize) = f64::from_bits(revived_child.bits());
                 crate::gc::layout_note_slot(obj as usize, f as usize, revived_child.bits());
             }
-        } else {
-            // Check if it's an array
+        } else if obj_type == crate::gc::GC_TYPE_ARRAY {
             let arr = (value_handle.get_nanbox_u64() & POINTER_MASK) as *const crate::ArrayHeader;
             if !arr.is_null() {
                 let len = (*arr).length;
