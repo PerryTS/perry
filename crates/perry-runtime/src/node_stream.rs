@@ -271,6 +271,12 @@ extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
     read_stream_default_size(stream)
 }
 
+extern "C" fn ns_set_encoding1(closure: *const ClosureHeader, encoding: f64) -> f64 {
+    let stream = this_value(closure);
+    set_visible_readable_encoding(stream, normalize_readable_encoding(encoding));
+    stream
+}
+
 /// Shared `push(chunk)` accounting (#1539): track the buffered byte count and
 /// return `true` while it stays below `highWaterMark`, `false` once it
 /// reaches/exceeds it — matching Node's backpressure signal. Pushing
@@ -455,6 +461,15 @@ fn throw_writable_null_chunk() -> ! {
     let msg = b"May not write null values to stream";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_NULL_VALUES");
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[cold]
+fn throw_readable_from_invalid_iterable() -> ! {
+    let msg = b"The \"iterable\" argument must be an instance of Iterable.";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
     let err = crate::error::js_typeerror_new(s);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
@@ -663,6 +678,14 @@ pub extern "C" fn js_node_stream_method_readable_length(stream_handle: i64) -> f
     get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0)
 }
 
+/// `stream.readableObjectMode` property getter on a typed instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_object_mode(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"readableObjectMode"))
+        .unwrap_or_else(|| f64::from_bits(TAG_FALSE))
+}
+
 /// `stream.readable` property getter on a typed readable-side instance.
 /// Mirrors `Readable.isReadable(stream)` for the current stub state.
 #[no_mangle]
@@ -679,6 +702,16 @@ pub extern "C" fn js_node_stream_method_readable_ended(stream_handle: i64) -> f6
     } else {
         f64::from_bits(TAG_FALSE)
     }
+}
+
+/// `stream.readableEncoding` property getter on typed readable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_encoding(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    readable_encoding_value(stream)
 }
 
 /// `stream.writableHighWaterMark` property getter on a typed instance
@@ -706,6 +739,14 @@ pub extern "C" fn js_node_stream_method_writable_need_drain(stream_handle: i64) 
     })
 }
 
+/// `stream.writableObjectMode` property getter on a typed instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_object_mode(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"writableObjectMode"))
+        .unwrap_or_else(|| f64::from_bits(TAG_FALSE))
+}
+
 /// `stream.readableAborted` property getter on a typed readable-side instance.
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> f64 {
@@ -720,6 +761,24 @@ pub extern "C" fn js_node_stream_method_closed(stream_handle: i64) -> f64 {
         hidden_key(b"closed"),
     )
     .unwrap_or(f64::from_bits(TAG_FALSE))
+}
+
+/// `stream.errored` property getter on typed stream instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_errored(stream_handle: i64) -> f64 {
+    readable_hidden_error(stream_value_from_handle(stream_handle))
+        .unwrap_or(f64::from_bits(TAG_NULL))
+}
+
+/// `stream.readableDidRead` property getter on typed readable-side instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_did_read(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    f64::from_bits(if has_truthy_hidden(stream, hidden_disturbed_key()) {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
 }
 
 /// `stream.writableCorked` property getter on a typed writable-side instance.
@@ -777,7 +836,15 @@ pub extern "C" fn js_node_stream_method_allow_half_open(stream_handle: i64) -> f
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    mark_disturbed(stream);
     read_stream_default_size(stream)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_set_encoding(stream_handle: i64, encoding: f64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    set_visible_readable_encoding(stream, normalize_readable_encoding(encoding));
+    stream
 }
 
 #[no_mangle]
@@ -1683,6 +1750,7 @@ fn readable_flowing_key() -> *mut crate::string::StringHeader {
 /// `Readable.isDisturbed(s)` (#1534).
 fn mark_disturbed(stream: f64) {
     set_hidden_value(stream, hidden_disturbed_key(), f64::from_bits(TAG_TRUE));
+    set_visible_readable_did_read(stream, true);
 }
 
 fn push_json_number(buf: &mut String, value: f64) {
@@ -2257,6 +2325,9 @@ fn drain_readable_from_events(stream: f64) {
     if let Some(chunks) = readable_hidden_chunks(stream) {
         let mut values = Vec::new();
         push_chunk_values(chunks, &mut values, 0);
+        if !values.is_empty() {
+            mark_disturbed(stream);
+        }
         for chunk in values {
             emit_readable_data(stream, chunk);
         }
@@ -2567,6 +2638,11 @@ fn is_single_chunk_value(value: f64) -> bool {
     raw >= 0x10000 && crate::buffer::is_registered_buffer(raw)
 }
 
+fn is_non_iterable_primitive_for_readable_from(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    (jsval.is_number() || jsval.is_int32() || jsval.is_bool()) && !jsval.is_any_string()
+}
+
 fn uint8array_byte_chunks(raw: usize) -> f64 {
     let arr = crate::array::js_array_alloc(0);
     if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
@@ -2600,6 +2676,21 @@ fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
     Some(box_pointer(out as *const u8))
 }
 
+fn collection_iterable_chunks(raw: usize) -> Option<f64> {
+    if raw < 0x10000 {
+        return None;
+    }
+    if crate::set::is_registered_set(raw) {
+        let chunks = crate::set::js_set_to_array(raw as *const crate::set::SetHeader);
+        return Some(box_pointer(chunks as *const u8));
+    }
+    if crate::map::is_registered_map(raw) {
+        let chunks = crate::map::js_map_entries(raw as *const crate::map::MapHeader);
+        return Some(box_pointer(chunks as *const u8));
+    }
+    None
+}
+
 fn normalize_readable_from_input(iterable: f64) -> f64 {
     if let Some(chunks) = readable_hidden_chunks(iterable) {
         return chunks;
@@ -2613,6 +2704,9 @@ fn normalize_readable_from_input(iterable: f64) -> f64 {
         return uint8array_byte_chunks(raw);
     }
     if let Some(chunks) = typed_uint8array_byte_chunks(raw) {
+        return chunks;
+    }
+    if let Some(chunks) = collection_iterable_chunks(raw) {
         return chunks;
     }
     if is_array_like_value(iterable) {
@@ -2826,7 +2920,7 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // Writable, and Duplex method tables stay in distinct shape bands.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 37] {
+fn readable_methods() -> [(&'static str, StubFn); 38] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_once2)),
@@ -2846,10 +2940,11 @@ fn readable_methods() -> [(&'static str, StubFn); 37] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_unpipe1)),
+        ("wrap", cast1(ns_chain1)),
         ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
         ("destroy", cast1(ns_destroy1)),
-        ("setEncoding", cast1(ns_chain1)),
+        ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_is_paused0)),
         // #1558 — async iterator helpers. The consuming helpers accept a
         // trailing `{ signal }` options arg; the lazy transforms accept one
@@ -2901,7 +2996,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
     ]
 }
 
-fn duplex_methods() -> [(&'static str, StubFn); 28] {
+fn duplex_methods() -> [(&'static str, StubFn); 29] {
     // Union of readable + writable, deduped (`on/once/off/addListener/
     // removeListener/removeAllListeners/emit/listenerCount/listeners/
     // destroy` appear once each).
@@ -2924,9 +3019,10 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("read", cast1(ns_read1)),
         ("pipe", cast1(ns_pipe1)),
         ("unpipe", cast1(ns_unpipe1)),
+        ("wrap", cast1(ns_chain1)),
         ("pause", cast0(ns_pause0)),
         ("resume", cast0(ns_resume0)),
-        ("setEncoding", cast1(ns_chain1)),
+        ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_is_paused0)),
         ("write", cast3(ns_write3)),
         ("end", cast3(ns_end3)),
@@ -3001,10 +3097,24 @@ fn opt_number(opts: f64, key: &[u8]) -> Option<f64> {
     jsvalue_as_f64(get_hidden_value(opts, hidden_key(key))?)
 }
 
+/// Read a string constructor option and preserve the existing JS string value.
+fn opt_string_value(opts: f64, key: &[u8]) -> Option<f64> {
+    let value = get_hidden_value(opts, hidden_key(key))?;
+    if JSValue::from_bits(value.to_bits()).is_any_string() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 /// Read a boolean constructor option, returning `true` only when the option
 /// is present and truthy.
 fn opt_bool(opts: f64, key: &[u8]) -> bool {
     get_hidden_value(opts, hidden_key(key)).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+}
+
+fn resolve_object_mode(opts: f64, specific_object_mode: &[u8]) -> bool {
+    opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode")
 }
 
 // #1537: the platform-default highWaterMark, settable at runtime via
@@ -3034,7 +3144,7 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
     if let Some(v) = opt_number(opts, specific).or_else(|| opt_number(opts, b"highWaterMark")) {
         return v;
     }
-    let object_mode = opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode");
+    let object_mode = resolve_object_mode(opts, specific_object_mode);
     default_hwm(object_mode)
 }
 
@@ -3060,6 +3170,35 @@ fn set_visible_readable_ended(stream: f64, ended: bool) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
         let value = if ended { TAG_TRUE } else { TAG_FALSE };
         set_hidden_value(stream, hidden_key(b"readableEnded"), f64::from_bits(value));
+    }
+}
+
+fn set_visible_readable_did_read(stream: f64, did_read: bool) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        let value = if did_read { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(
+            stream,
+            hidden_key(b"readableDidRead"),
+            f64::from_bits(value),
+        );
+    }
+}
+
+fn readable_encoding_value(stream: f64) -> f64 {
+    get_hidden_value(stream, hidden_key(b"readableEncoding")).unwrap_or(f64::from_bits(TAG_NULL))
+}
+
+fn normalize_readable_encoding(encoding: f64) -> f64 {
+    if JSValue::from_bits(encoding.to_bits()).is_any_string() {
+        encoding
+    } else {
+        f64::from_bits(TAG_NULL)
+    }
+}
+
+fn set_visible_readable_encoding(stream: f64, encoding: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        set_hidden_value(stream, hidden_key(b"readableEncoding"), encoding);
     }
 }
 
@@ -3127,6 +3266,16 @@ fn init_readable_state(stream: f64, opts: f64) {
     );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
     set_hidden_value(stream, hidden_key(b"readableLength"), 0.0);
+    let readable_object_mode = resolve_object_mode(opts, b"readableObjectMode");
+    set_hidden_value(
+        stream,
+        hidden_key(b"readableObjectMode"),
+        f64::from_bits(if readable_object_mode {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
     let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
@@ -3143,12 +3292,25 @@ fn init_readable_state(stream: f64, opts: f64) {
     );
     set_visible_readable(stream, true);
     set_visible_readable_ended(stream, false);
+    set_visible_readable_did_read(stream, false);
+    let encoding = opt_string_value(opts, b"encoding").unwrap_or(f64::from_bits(TAG_NULL));
+    set_visible_readable_encoding(stream, encoding);
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.
 fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_writable_flag_key(), f64::from_bits(TAG_TRUE));
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    let writable_object_mode = resolve_object_mode(opts, b"writableObjectMode");
+    set_hidden_value(
+        stream,
+        hidden_key(b"writableObjectMode"),
+        f64::from_bits(if writable_object_mode {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
     let writable_object_mode =
@@ -3289,6 +3451,11 @@ pub extern "C" fn js_node_stream_passthrough_new(_opts: f64) -> f64 {
 /// `node:stream/consumers` can drain the current stub stream surface.
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_from(iterable: f64) -> f64 {
+    if matches!(iterable.to_bits(), TAG_NULL | TAG_UNDEFINED)
+        || is_non_iterable_primitive_for_readable_from(iterable)
+    {
+        throw_readable_from_invalid_iterable();
+    }
     let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let raw = raw_ptr_from_value(readable);
     if raw >= 0x10000 {

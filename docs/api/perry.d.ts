@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1386 entries across 82 modules
+// Coverage: 1392 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */

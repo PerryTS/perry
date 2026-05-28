@@ -24,10 +24,16 @@ static KEEP_NS_READABLE_HWM: extern "C" fn(i64) -> f64 = super::js_node_stream_m
 static KEEP_NS_READABLE_LENGTH: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_readable_length;
 #[used]
+static KEEP_NS_READABLE_OBJECT_MODE: extern "C" fn(i64) -> f64 =
+    super::js_node_stream_method_readable_object_mode;
+#[used]
 static KEEP_NS_METHOD_READABLE: extern "C" fn(i64) -> f64 = super::js_node_stream_method_readable;
 #[used]
 static KEEP_NS_METHOD_READABLE_ENDED: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_readable_ended;
+#[used]
+static KEEP_NS_METHOD_READABLE_ENCODING: extern "C" fn(i64) -> f64 =
+    super::js_node_stream_method_readable_encoding;
 #[used]
 static KEEP_NS_WRITABLE_HWM: extern "C" fn(i64) -> f64 = super::js_node_stream_method_writable_hwm;
 #[used]
@@ -37,10 +43,18 @@ static KEEP_NS_WRITABLE_LENGTH: extern "C" fn(i64) -> f64 =
 static KEEP_NS_WRITABLE_NEED_DRAIN: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_writable_need_drain;
 #[used]
+static KEEP_NS_WRITABLE_OBJECT_MODE: extern "C" fn(i64) -> f64 =
+    super::js_node_stream_method_writable_object_mode;
+#[used]
 static KEEP_NS_READABLE_ABORTED: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_readable_aborted;
 #[used]
 static KEEP_NS_METHOD_CLOSED: extern "C" fn(i64) -> f64 = super::js_node_stream_method_closed;
+#[used]
+static KEEP_NS_METHOD_ERRORED: extern "C" fn(i64) -> f64 = super::js_node_stream_method_errored;
+#[used]
+static KEEP_NS_READABLE_DID_READ: extern "C" fn(i64) -> f64 =
+    super::js_node_stream_method_readable_did_read;
 #[used]
 static KEEP_NS_WRITABLE_CORKED: extern "C" fn(i64) -> f64 =
     super::js_node_stream_method_writable_corked;
@@ -59,6 +73,9 @@ static KEEP_NS_METHOD_ALLOW_HALF_OPEN: extern "C" fn(i64) -> f64 =
 static KEEP_NS_METHOD_PAUSE: extern "C" fn(i64) -> f64 = super::js_node_stream_method_pause;
 #[used]
 static KEEP_NS_METHOD_RESUME: extern "C" fn(i64) -> f64 = super::js_node_stream_method_resume;
+#[used]
+static KEEP_NS_METHOD_SET_ENCODING: extern "C" fn(i64, f64) -> f64 =
+    super::js_node_stream_method_set_encoding;
 #[used]
 static KEEP_NS_METHOD_DESTROY: extern "C" fn(i64, f64) -> f64 =
     super::js_node_stream_method_destroy;

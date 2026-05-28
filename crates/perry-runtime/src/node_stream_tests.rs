@@ -257,6 +257,58 @@ fn readable_from_typed_uint8array_retains_numeric_byte_chunks() {
 }
 
 #[test]
+fn readable_from_set_retains_values_in_insertion_order() {
+    let mut set = crate::set::js_set_alloc(3);
+    set = crate::set::js_set_add(set, 10.0);
+    set = crate::set::js_set_add(set, 20.0);
+    set = crate::set::js_set_add(set, 30.0);
+
+    let readable = js_node_stream_readable_from(box_pointer(set as *const u8));
+    let chunks = readable_hidden_chunks(readable).expect("readable chunks");
+    let mut values = Vec::new();
+    push_chunk_values(chunks, &mut values, 0);
+
+    assert_eq!(values, vec![10.0, 20.0, 30.0]);
+}
+
+#[test]
+fn readable_from_map_retains_entry_pairs_in_insertion_order() {
+    let mut map = crate::map::js_map_alloc(2);
+    map = crate::map::js_map_set(map, string_value("a"), 1.0);
+    map = crate::map::js_map_set(map, string_value("b"), 2.0);
+
+    let readable = js_node_stream_readable_from(box_pointer(map as *const u8));
+    let chunks = readable_hidden_chunks(readable).expect("readable chunks");
+    let arr = raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader;
+
+    assert_eq!(crate::array::js_array_length(arr), 2);
+
+    let first = crate::array::js_array_get_f64(arr, 0);
+    let first_pair = raw_ptr_from_value(first) as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(first_pair), 2);
+    let mut first_key = Vec::new();
+    append_chunk_bytes(
+        crate::array::js_array_get_f64(first_pair, 0),
+        &mut first_key,
+        0,
+    );
+    assert_eq!(first_key, b"a");
+    assert_eq!(crate::array::js_array_get_f64(first_pair, 1), 1.0);
+
+    let second = crate::array::js_array_get_f64(arr, 1);
+    let second_pair = raw_ptr_from_value(second) as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(second_pair), 2);
+    let mut second_key = Vec::new();
+    append_chunk_bytes(
+        crate::array::js_array_get_f64(second_pair, 0),
+        &mut second_key,
+        0,
+    );
+    assert_eq!(second_key, b"b");
+    assert_eq!(crate::array::js_array_get_f64(second_pair, 1), 2.0);
+}
+
+#[test]
 fn writable_options_write_callback_is_invoked_by_stub_write() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
     let opts = crate::object::js_object_alloc(0, 1);
@@ -410,6 +462,19 @@ fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
     assert!(pipe_destination_is_missing(f64::from_bits(TAG_UNDEFINED)));
     assert!(pipe_destination_is_missing(f64::from_bits(TAG_NULL)));
     assert!(!pipe_destination_is_missing(dest));
+}
+
+#[test]
+fn readable_wrap_method_is_present_and_chainable() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let wrap = js_object_get_field_by_name_f64(obj, hidden_key(b"wrap"));
+    assert_ne!(wrap.to_bits(), TAG_UNDEFINED);
+
+    let wrapped = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let args = [wrapped];
+    let result = unsafe { crate::closure::js_native_call_value(wrap, args.as_ptr(), args.len()) };
+    assert_eq!(result.to_bits(), stream.to_bits());
 }
 
 #[test]
@@ -1166,6 +1231,24 @@ fn readable_lifecycle_flags_reflect_ended_state() {
         js_object_get_field_by_name_f64(obj, hidden_key(b"readableEnded")).to_bits(),
         TAG_FALSE
     );
+    assert_eq!(
+        js_node_stream_method_readable_did_read(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableDidRead")).to_bits(),
+        TAG_FALSE
+    );
+
+    let _ = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(
+        js_node_stream_method_readable_did_read(handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableDidRead")).to_bits(),
+        TAG_TRUE
+    );
 
     let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
     assert_eq!(js_node_stream_method_readable(handle).to_bits(), TAG_FALSE);
@@ -1183,7 +1266,6 @@ fn readable_lifecycle_flags_reflect_ended_state() {
     );
 }
 
-#[test]
 fn duplex_allow_half_open_defaults_true_and_honors_false_option() {
     let stream = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
@@ -1213,6 +1295,87 @@ fn duplex_allow_half_open_defaults_true_and_honors_false_option() {
     assert_eq!(
         js_node_stream_method_allow_half_open(handle).to_bits(),
         TAG_FALSE
+    );
+}
+
+#[test]
+fn readable_encoding_tracks_constructor_and_set_encoding() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+
+    assert_eq!(
+        js_node_stream_method_readable_encoding(handle).to_bits(),
+        TAG_NULL
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableEncoding")).to_bits(),
+        TAG_NULL
+    );
+
+    assert_eq!(
+        js_node_stream_method_set_encoding(handle, string_value("utf8")).to_bits(),
+        stream.to_bits()
+    );
+    assert!(string_value_eq(
+        js_node_stream_method_readable_encoding(handle),
+        b"utf8"
+    ));
+    assert!(string_value_eq(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"readableEncoding")),
+        b"utf8"
+    ));
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"encoding"), string_value("hex"));
+    let from_opts = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    assert!(string_value_eq(
+        js_node_stream_method_readable_encoding(raw_ptr_from_value(from_opts) as i64),
+        b"hex"
+    ));
+}
+
+#[test]
+fn stream_object_mode_fields_reflect_defaults_and_options() {
+    let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let readable_obj = raw_ptr_from_value(readable) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(readable_obj, hidden_key(b"readableObjectMode")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(raw_ptr_from_value(readable) as i64).to_bits(),
+        TAG_FALSE
+    );
+
+    let writable = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let writable_obj = raw_ptr_from_value(writable) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(writable_obj, hidden_key(b"writableObjectMode")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_writable_object_mode(raw_ptr_from_value(writable) as i64).to_bits(),
+        TAG_FALSE
+    );
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"objectMode"), f64::from_bits(TAG_TRUE));
+    let object_readable = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let object_readable_obj = raw_ptr_from_value(object_readable) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(object_readable_obj, hidden_key(b"readableObjectMode"))
+            .to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(raw_ptr_from_value(object_readable) as i64)
+            .to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_hwm(raw_ptr_from_value(object_readable) as i64),
+        16.0
     );
 }
 
@@ -1443,12 +1606,20 @@ fn stream_destroy_with_error_marks_errored_state() {
     );
     let err = string_value("boom");
 
+    assert_eq!(
+        js_node_stream_method_errored(raw_ptr_from_value(stream) as i64).to_bits(),
+        TAG_NULL
+    );
     let ret = unsafe { crate::closure::js_native_call_value(destroy, &err, 1) };
 
     assert_eq!(ret.to_bits(), stream.to_bits());
     assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_FALSE);
     let _ = crate::promise::js_promise_run_microtasks();
     assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_TRUE);
+    assert_eq!(
+        js_node_stream_method_errored(raw_ptr_from_value(stream) as i64).to_bits(),
+        err.to_bits()
+    );
 }
 
 #[test]

@@ -872,6 +872,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_from_web", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_method_readable_aborted", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_closed", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_errored", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_readable_did_read", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_destroyed", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_destroy", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_node_stream_method_pause", DOUBLE, &[I64]);
@@ -884,6 +886,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_pause", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_is_paused", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_resume", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_readable_encoding", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_cork", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_uncork", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_writable_corked", DOUBLE, &[I64]);
@@ -893,6 +896,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_writable_ended", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_writable_finished", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_allow_half_open", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_set_encoding", DOUBLE, &[I64, DOUBLE]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);

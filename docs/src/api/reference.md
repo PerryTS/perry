@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1386 entries across 82 modules.
+Total: 1392 entries across 82 modules.
 
 ## Modules
 
@@ -1721,6 +1721,7 @@ Total: 1386 entries across 82 modules.
 - `duplexPair` — module
 - `emit` — instance
 - `end` — instance
+- `errored` — instance
 - `eventNames` — instance
 - `finished` — module
 - `from` — module
@@ -1747,14 +1748,18 @@ Total: 1386 entries across 82 modules.
 - `read` — instance
 - `readable` — instance
 - `readableAborted` — instance
+- `readableDidRead` — instance
+- `readableEncoding` — instance
 - `readableEnded` — instance
 - `readableFlowing` — instance
 - `readableHighWaterMark` — instance
 - `readableLength` — instance
+- `readableObjectMode` — instance
 - `removeAllListeners` — instance
 - `removeListener` — instance
 - `resume` — instance
 - `setDefaultHighWaterMark` — module
+- `setEncoding` — instance
 - `setMaxListeners` — instance
 - `toWeb` — module
 - `uncork` — instance
@@ -1766,6 +1771,7 @@ Total: 1386 entries across 82 modules.
 - `writableHighWaterMark` — instance
 - `writableLength` — instance
 - `writableNeedDrain` — instance
+- `writableObjectMode` — instance
 - `write` — instance
 
 ### Properties
