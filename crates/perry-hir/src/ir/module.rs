@@ -75,6 +75,14 @@ pub struct Module {
     /// returning a Promise (no busy-wait pump needed). Populated by the
     /// transform pass; consumed by codegen.
     pub async_step_closures: std::collections::HashSet<perry_types::FuncId>,
+    /// Issue #2076: display name overrides for `fn.name`/`console.log`.
+    /// Populated at lowering for two cases the binding-name registration
+    /// path can't see:
+    ///   • named function expressions (`const x = function f(){}` → `"f"`)
+    ///   • object-literal shorthand/method properties (`{m(){}}` → `"m"`)
+    /// Keyed by the closure/function's HIR FuncId; consumed by codegen
+    /// when emitting `js_register_function_name` calls.
+    pub closure_display_names: std::collections::HashMap<perry_types::FuncId, String>,
 }
 
 impl Module {
@@ -102,6 +110,7 @@ impl Module {
             has_top_level_await: false,
             init_kind: ModuleInitKind::Eager,
             async_step_closures: std::collections::HashSet::new(),
+            closure_display_names: std::collections::HashMap::new(),
         }
     }
 }

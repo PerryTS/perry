@@ -348,6 +348,11 @@ pub fn lower_module_full(
         for func in ctx.pending_functions.drain(..) {
             module.functions.push(func);
         }
+        // Flush #2076 display-name overrides recorded for named fn
+        // expressions and object-literal methods.
+        for (id, name) in ctx.closure_display_names.drain() {
+            module.closure_display_names.insert(id, name);
+        }
         // Flush any pending classes created during expression lowering
         // (e.g., class expressions in `new (class extends Command { ... })()`)
         for class in ctx.pending_classes.drain(..) {

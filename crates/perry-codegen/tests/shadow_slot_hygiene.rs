@@ -118,6 +118,7 @@ fn shadow_hygiene_module() -> Module {
         has_top_level_await: false,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
     }
 }
 
@@ -168,6 +169,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         has_top_level_await: false,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
     }
 }
 
@@ -247,6 +249,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         has_top_level_await: false,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
     }
 }
 
@@ -298,6 +301,7 @@ fn reassigned_any_shadow_module() -> Module {
         has_top_level_await: false,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
     }
 }
 
@@ -364,6 +368,7 @@ fn mixed_any_alias_shadow_module() -> Module {
         has_top_level_await: false,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
     }
 }
 
@@ -435,6 +440,7 @@ fn closure_captured_write_shadow_module() -> Module {
         has_top_level_await: false,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
     }
 }
 

@@ -141,6 +141,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         has_top_level_await: false,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
     }
 }
 

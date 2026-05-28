@@ -32,6 +32,7 @@ impl SH for Module {
             has_top_level_await,
             init_kind,
             async_step_closures,
+            closure_display_names,
         } = self;
         name.hash(h);
         imports.hash(h);
@@ -58,6 +59,14 @@ impl SH for Module {
         let mut ids: Vec<u32> = async_step_closures.iter().copied().collect();
         ids.sort_unstable();
         ids.hash(h);
+        // HashMap has nondeterministic iteration order; sort by key.
+        let mut display_pairs: Vec<(u32, &String)> =
+            closure_display_names.iter().map(|(k, v)| (*k, v)).collect();
+        display_pairs.sort_unstable_by_key(|(k, _)| *k);
+        for (id, name) in display_pairs {
+            id.hash(h);
+            name.hash(h);
+        }
     }
 }
 
