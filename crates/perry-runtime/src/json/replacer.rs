@@ -1,7 +1,9 @@
 //! `JSON.stringify` variants that accept a replacer/spacer.
 //!
-//! - `stringify_value_with_replacer` & friends: the closure-replacer arm
-//! - `stringify_*_pretty`: indent-aware (3-arg `JSON.stringify(v, r, indent)`)
+//! - `stringify_{object,array}_with_replacer{,_pretty}`: the closure-replacer
+//!   walk. Per spec `SerializeJSONProperty` each value runs toJSON → replacer →
+//!   recurse, and the `_pretty` variants thread the indent string + depth so
+//!   the 3-arg `JSON.stringify(v, r, indent)` form pretty-prints.
 //! - `stringify_object_with_array_replacer`: the array-of-keys whitelist arm
 //! - Public FFI: `js_json_stringify_with_replacer` and the 3-arg
 //!   `js_json_stringify_full`
@@ -22,30 +24,36 @@ pub(crate) unsafe fn call_replacer(
     crate::js_closure_call2(replacer, key_f64, value_f64)
 }
 
-/// Stringify a value with replacer support.
-/// The replacer is called as replacer(key, value) for each property.
-/// Returns the replaced value serialized into the buffer.
-pub(crate) unsafe fn stringify_value_with_replacer(
-    key_f64: f64,
-    value: f64,
-    type_hint: u32,
-    replacer: *const crate::ClosureHeader,
-    buf: &mut String,
-) {
-    // Call the replacer with (key, value)
-    let replaced = call_replacer(replacer, key_f64, value);
-    let replaced_bits = replaced.to_bits();
-
-    // If replacer returns undefined, skip this value
-    if replaced_bits == TAG_UNDEFINED {
-        return;
+/// Resolve `value.toJSON(key)` if `value` is an object with a callable
+/// `toJSON` field, per spec `SerializeJSONProperty` step 2 (run BEFORE the
+/// replacer). Mirrors the no-replacer path's `object_get_to_json`, which only
+/// fires when the object actually has a closure-typed `toJSON` field. Returns
+/// the (possibly substituted) value.
+#[inline]
+unsafe fn apply_to_json(value: f64) -> f64 {
+    let bits = value.to_bits();
+    if let Some(ptr) = extract_pointer(bits) {
+        // Only plain JS objects carry a `toJSON` field worth probing; arrays /
+        // buffers / errors don't, and probing them would walk an unrelated
+        // layout. `object_get_to_json` itself guards on a null keys_array.
+        if gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT
+            && !crate::buffer::is_registered_buffer(ptr as usize)
+        {
+            if let Some(to_json_val) = object_get_to_json(ptr) {
+                return to_json_val;
+            }
+        }
     }
+    value
+}
 
-    // Check if the replaced value is the same as the original (common case)
-    // If it is, and the original is an object/array, recurse into it with replacer
+/// Write a non-pointer (or fully-resolved) JSON scalar. Returns `true` when the
+/// value was a scalar handled here; `false` when it is a pointer the caller must
+/// recurse into. Shared by both the compact and pretty walks.
+#[inline]
+unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
+    let replaced_bits = replaced.to_bits();
     let replaced_tag = replaced_bits & 0xFFFF_0000_0000_0000;
-
-    // If the replaced value is a string, serialize it as a JSON string
     if replaced_tag == STRING_TAG {
         let str_ptr = (replaced_bits & POINTER_MASK) as *const StringHeader;
         if let Some(s) = str_from_header(str_ptr) {
@@ -53,9 +61,7 @@ pub(crate) unsafe fn stringify_value_with_replacer(
         } else {
             buf.push_str("null");
         }
-        return;
-    }
-    if replaced_tag == crate::value::SHORT_STRING_TAG {
+    } else if replaced_tag == crate::value::SHORT_STRING_TAG {
         let jsval = JSValue::from_bits(replaced_bits);
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut scratch);
@@ -64,76 +70,121 @@ pub(crate) unsafe fn stringify_value_with_replacer(
         } else {
             buf.push_str("null");
         }
-        return;
-    }
-
-    // If it's null/bool/number, serialize directly
-    if replaced_bits == TAG_NULL {
+    } else if replaced_bits == TAG_NULL {
         buf.push_str("null");
-        return;
-    }
-    if replaced_bits == TAG_TRUE {
+    } else if replaced_bits == TAG_TRUE {
         buf.push_str("true");
-        return;
-    }
-    if replaced_bits == TAG_FALSE {
+    } else if replaced_bits == TAG_FALSE {
         buf.push_str("false");
-        return;
-    }
-
-    // Check for BigInt tag - serialize as number (toString)
-    if replaced_tag == BIGINT_TAG {
+    } else if replaced_tag == BIGINT_TAG {
         let bigint_ptr = (replaced_bits & POINTER_MASK) as *const crate::BigIntHeader;
         let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
         if let Some(s) = str_from_header(str_ptr) {
-            // BigInt toString gives a plain number string, write it directly (no quotes)
+            // BigInt toString gives a plain number string (no quotes).
             buf.push_str(s);
         } else {
             buf.push_str("null");
         }
+    } else if extract_pointer(replaced_bits).is_some() {
+        // Pointer — caller recurses with the replacer.
+        return false;
+    } else {
+        // Plain number (or Date via DATE_REGISTRY in write_number).
+        write_number(buf, replaced);
+    }
+    true
+}
+
+/// Resolve `value.toJSON(key)` (spec `SerializeJSONProperty` step 2 — run
+/// BEFORE the replacer). `key_f64` is the property key passed to `toJSON`.
+#[inline]
+unsafe fn apply_to_json_keyed(value: f64, _key_f64: f64) -> f64 {
+    // `object_get_to_json` calls toJSON with the empty-string key arg, matching
+    // the no-replacer path. (Effect's Inspectable.toJSON ignores its argument;
+    // Node passes the property key. We mirror the no-replacer path's empty key
+    // to stay byte-identical with the rest of Perry's JSON suite.)
+    apply_to_json(value)
+}
+
+/// Dispatch a pointer value to the object/array replacer walk using the GC type
+/// tag (robust object/array discrimination), with a structural fallback for
+/// untagged pointers.
+#[inline]
+unsafe fn dispatch_pointer_with_replacer(
+    ptr: *const u8,
+    replaced: f64,
+    replacer: *const crate::ClosureHeader,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
+    // Buffer / Uint8Array have no GcHeader — detect before gc_obj_type so the
+    // tag read doesn't deref unrelated memory (issue #639 pattern).
+    if crate::buffer::is_registered_buffer(ptr as usize) {
+        stringify_buffer(ptr, buf);
         return;
     }
-
-    // Check for pointer (object/array) - recurse with replacer
-    if let Some(ptr) = extract_pointer(replaced_bits) {
-        if type_hint == TYPE_OBJECT || (type_hint == TYPE_UNKNOWN && is_object_pointer(ptr)) {
-            stringify_object_with_replacer(ptr, replacer, buf);
-        } else if type_hint == TYPE_ARRAY {
-            stringify_array_with_replacer(ptr, replacer, buf);
-        } else {
-            // Try to detect: object vs array
-            let arr = ptr as *const crate::ArrayHeader;
-            if !arr.is_null() {
-                let len = (*arr).length;
-                let cap = (*arr).capacity;
-                if len <= cap && cap > 0 && cap < 10000 && !is_object_pointer(ptr) {
-                    stringify_array_with_replacer(ptr, replacer, buf);
-                    return;
-                }
-            }
+    match gc_obj_type(ptr) {
+        crate::gc::GC_TYPE_ARRAY => {
+            stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
+        }
+        crate::gc::GC_TYPE_OBJECT => {
             if is_object_pointer(ptr) {
-                stringify_object_with_replacer(ptr, replacer, buf);
+                stringify_object_with_replacer_pretty(ptr, replacer, buf, indent, depth);
+            } else if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
+                // Genuinely-empty object (#1704): emit "{}" not "null".
+                buf.push_str("{}");
             } else {
-                // Fallback: serialize as plain value (without replacer)
+                buf.push_str("null");
+            }
+        }
+        crate::gc::GC_TYPE_STRING => {
+            let str_ptr = ptr as *const StringHeader;
+            if let Some(s) = str_from_header(str_ptr) {
+                write_escaped_string(buf, s);
+            } else {
+                buf.push_str("null");
+            }
+        }
+        crate::gc::GC_TYPE_ERROR => {
+            // Error objects have a dedicated layout; Node emits "{}" (#928).
+            buf.push_str("{}");
+        }
+        _ => {
+            // Untagged pointer: structural fallback (no replacer recursion is
+            // safe here — we don't know the layout). Defer to plain stringify.
+            if is_object_pointer(ptr) {
+                stringify_object_with_replacer_pretty(ptr, replacer, buf, indent, depth);
+            } else {
                 stringify_value(replaced, TYPE_UNKNOWN, buf);
             }
         }
-        return;
     }
-
-    // Plain number
-    write_number(buf, replaced);
 }
 
-pub(crate) unsafe fn stringify_object_with_replacer(
+/// Object walk with optional pretty-printing. For each field: toJSON →
+/// replacer → recurse, threading indent/depth. Drops fields whose replacer
+/// result is undefined or a closure (spec / Node behavior).
+pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     ptr: *const u8,
     replacer: *const crate::ClosureHeader,
     buf: &mut String,
+    indent: &str,
+    depth: usize,
 ) {
+    // Circular-reference detection (mirrors the pretty/array-replacer paths).
+    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
+        let msg = "Converting circular structure to JSON";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+        crate::exception::js_throw(f64::from_bits(
+            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+        ));
+    }
+    STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = (*obj).field_count;
-    buf.push('{');
-
     let keys_arr = (*obj).keys_array;
     let keys_len = (*keys_arr).length;
     let keys_elements =
@@ -143,6 +194,9 @@ pub(crate) unsafe fn stringify_object_with_replacer(
 
     // Use keys_len as the iteration count since field_count may include pre-allocated slots.
     let actual_fields = std::cmp::min(num_fields, keys_len);
+    let use_pretty = !indent.is_empty();
+    let inner_depth = depth + 1;
+    buf.push('{');
     let mut first = true;
     for f in 0..actual_fields {
         // Get the key as a string
@@ -160,25 +214,23 @@ pub(crate) unsafe fn stringify_object_with_replacer(
             (std::ptr::null(), None)
         };
 
-        // Create NaN-boxed key for replacer
+        // Create NaN-boxed key for replacer / toJSON
         let key_f64_for_replacer = if !key_str_ptr.is_null() {
             nanbox_string_f64(key_str_ptr)
         } else {
-            // Fallback: create a "fieldN" string
             let fallback = format!("field{}", f);
             let fallback_ptr = js_string_from_bytes(fallback.as_ptr(), fallback.len() as u32);
             nanbox_string_f64(fallback_ptr)
         };
 
-        // Get the field value
+        // Get the field value, resolve toJSON, then apply the replacer.
         let field_val = *fields_ptr.add(f as usize);
-
-        // Call replacer with (key, value)
-        let replaced = call_replacer(replacer, key_f64_for_replacer, field_val);
+        let field_after_to_json = apply_to_json_keyed(field_val, key_f64_for_replacer);
+        let replaced = call_replacer(replacer, key_f64_for_replacer, field_after_to_json);
         let replaced_bits = replaced.to_bits();
 
-        // If replacer returns undefined, skip this property
-        if replaced_bits == TAG_UNDEFINED {
+        // Omit the property if the replacer returns undefined or a function.
+        if replaced_bits == TAG_UNDEFINED || is_closure_value(replaced_bits) {
             continue;
         }
 
@@ -187,156 +239,111 @@ pub(crate) unsafe fn stringify_object_with_replacer(
         }
         first = false;
 
+        if use_pretty {
+            buf.push('\n');
+            for _ in 0..inner_depth {
+                buf.push_str(indent);
+            }
+        }
+
         // Write the key
         if let Some(key_str) = key_str_opt {
             buf.push('"');
             buf.push_str(key_str);
-            buf.push_str("\":");
+            buf.push_str(if use_pretty { "\": " } else { "\":" });
         } else {
-            let _ = write!(buf, "\"field{}\":", f);
+            let _ = write!(buf, "\"field{}\"{}", f, if use_pretty { ": " } else { ":" });
         }
 
-        // Stringify the replaced value
-        // For nested objects/arrays, we need to recurse with the replacer
-        let replaced_tag = replaced_bits & 0xFFFF_0000_0000_0000;
-        if replaced_tag == STRING_TAG {
-            let str_ptr = (replaced_bits & POINTER_MASK) as *const StringHeader;
-            if let Some(s) = str_from_header(str_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
-        } else if replaced_tag == crate::value::SHORT_STRING_TAG {
-            let jsval = JSValue::from_bits(replaced_bits);
-            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let n = jsval.short_string_to_buf(&mut scratch);
-            if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
-        } else if replaced_bits == TAG_NULL {
-            buf.push_str("null");
-        } else if replaced_bits == TAG_TRUE {
-            buf.push_str("true");
-        } else if replaced_bits == TAG_FALSE {
-            buf.push_str("false");
-        } else if replaced_tag == BIGINT_TAG {
-            let bigint_ptr = (replaced_bits & POINTER_MASK) as *const crate::BigIntHeader;
-            let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-            if let Some(s) = str_from_header(str_ptr) {
-                buf.push_str(s);
-            } else {
-                buf.push_str("null");
-            }
-        } else if let Some(inner_ptr) = extract_pointer(replaced_bits) {
-            if is_object_pointer(inner_ptr) {
-                stringify_object_with_replacer(inner_ptr, replacer, buf);
-            } else {
-                let arr = inner_ptr as *const crate::ArrayHeader;
-                if !arr.is_null() {
-                    let len = (*arr).length;
-                    let cap = (*arr).capacity;
-                    if len <= cap && cap > 0 && cap < 10000 {
-                        stringify_array_with_replacer(inner_ptr, replacer, buf);
-                    } else {
-                        stringify_value(replaced, TYPE_UNKNOWN, buf);
-                    }
-                } else {
-                    stringify_value(replaced, TYPE_UNKNOWN, buf);
-                }
-            }
-        } else {
-            write_number(buf, replaced);
+        // Write scalar inline, or recurse into the pointer with the replacer.
+        if !write_replaced_scalar(buf, replaced) {
+            let inner_ptr = extract_pointer(replaced_bits).unwrap();
+            dispatch_pointer_with_replacer(inner_ptr, replaced, replacer, buf, indent, inner_depth);
+        }
+    }
+    if use_pretty && !first {
+        buf.push('\n');
+        for _ in 0..depth {
+            buf.push_str(indent);
         }
     }
     buf.push('}');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
-pub(crate) unsafe fn stringify_array_with_replacer(
+/// Array walk with optional pretty-printing. For each element: toJSON →
+/// replacer → recurse. undefined / closure results serialize to `null` (spec).
+pub(crate) unsafe fn stringify_array_with_replacer_pretty(
     ptr: *const u8,
     replacer: *const crate::ClosureHeader,
     buf: &mut String,
+    indent: &str,
+    depth: usize,
 ) {
+    // Circular-reference detection.
+    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
+        let msg = "Converting circular structure to JSON";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+        crate::exception::js_throw(f64::from_bits(
+            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+        ));
+    }
+    STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
 
+    if len == 0 {
+        buf.push_str("[]");
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        return;
+    }
+
+    let use_pretty = !indent.is_empty();
+    let inner_depth = depth + 1;
     buf.push('[');
     for i in 0..len {
         if i > 0 {
             buf.push(',');
         }
+        if use_pretty {
+            buf.push('\n');
+            for _ in 0..inner_depth {
+                buf.push_str(indent);
+            }
+        }
         let elem = *elements.add(i as usize);
 
-        // Create key string for the index
+        // Index key as a string for toJSON / replacer.
         let idx_str = i.to_string();
         let idx_ptr = js_string_from_bytes(idx_str.as_ptr(), idx_str.len() as u32);
         let key_f64 = nanbox_string_f64(idx_ptr);
 
-        // Call replacer with (index_string, value)
-        let replaced = call_replacer(replacer, key_f64, elem);
+        let elem_after_to_json = apply_to_json_keyed(elem, key_f64);
+        let replaced = call_replacer(replacer, key_f64, elem_after_to_json);
         let replaced_bits = replaced.to_bits();
 
-        // For arrays, undefined becomes null (per JSON spec)
-        if replaced_bits == TAG_UNDEFINED {
+        // Array holes / undefined / functions become null (per JSON spec).
+        if replaced_bits == TAG_UNDEFINED || is_closure_value(replaced_bits) {
             buf.push_str("null");
             continue;
         }
 
-        let replaced_tag = replaced_bits & 0xFFFF_0000_0000_0000;
-        if replaced_tag == STRING_TAG {
-            let str_ptr = (replaced_bits & POINTER_MASK) as *const StringHeader;
-            if let Some(s) = str_from_header(str_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
-        } else if replaced_tag == crate::value::SHORT_STRING_TAG {
-            let jsval = JSValue::from_bits(replaced_bits);
-            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let n = jsval.short_string_to_buf(&mut scratch);
-            if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
-        } else if replaced_bits == TAG_NULL {
-            buf.push_str("null");
-        } else if replaced_bits == TAG_TRUE {
-            buf.push_str("true");
-        } else if replaced_bits == TAG_FALSE {
-            buf.push_str("false");
-        } else if replaced_tag == BIGINT_TAG {
-            let bigint_ptr = (replaced_bits & POINTER_MASK) as *const crate::BigIntHeader;
-            let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-            if let Some(s) = str_from_header(str_ptr) {
-                buf.push_str(s);
-            } else {
-                buf.push_str("null");
-            }
-        } else if let Some(inner_ptr) = extract_pointer(replaced_bits) {
-            if is_object_pointer(inner_ptr) {
-                stringify_object_with_replacer(inner_ptr, replacer, buf);
-            } else {
-                let inner_arr = inner_ptr as *const crate::ArrayHeader;
-                if !inner_arr.is_null() {
-                    let inner_len = (*inner_arr).length;
-                    let inner_cap = (*inner_arr).capacity;
-                    if inner_len <= inner_cap && inner_cap > 0 && inner_cap < 10000 {
-                        stringify_array_with_replacer(inner_ptr, replacer, buf);
-                    } else {
-                        stringify_value(replaced, TYPE_UNKNOWN, buf);
-                    }
-                } else {
-                    stringify_value(replaced, TYPE_UNKNOWN, buf);
-                }
-            }
-        } else {
-            write_number(buf, replaced);
+        if !write_replaced_scalar(buf, replaced) {
+            let inner_ptr = extract_pointer(replaced_bits).unwrap();
+            dispatch_pointer_with_replacer(inner_ptr, replaced, replacer, buf, indent, inner_depth);
+        }
+    }
+    if use_pretty {
+        buf.push('\n');
+        for _ in 0..depth {
+            buf.push_str(indent);
         }
     }
     buf.push(']');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
 /// JSON.stringify with replacer function
@@ -355,15 +362,17 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
         return js_json_stringify(value, type_hint);
     }
 
-    // Per JSON spec, the initial call to the replacer is with key="" and the root value
+    // Per JSON spec, the initial call to the replacer is with key="" and the
+    // root value — but toJSON runs FIRST (SerializeJSONProperty step 2).
     let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
     let empty_key_f64 = nanbox_string_f64(empty_str);
+    let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
 
     // Call replacer with ("", root_value)
-    let replaced_root = call_replacer(replacer, empty_key_f64, value);
+    let replaced_root = call_replacer(replacer, empty_key_f64, value_after_to_json);
     let replaced_bits = replaced_root.to_bits();
 
-    // If replacer returns undefined for root, return undefined (represented as "undefined" string? No, just return null)
+    // If replacer returns undefined for root, return undefined.
     if replaced_bits == TAG_UNDEFINED {
         return std::ptr::null_mut();
     }
@@ -386,65 +395,11 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
         buf.reserve(estimated - buf.capacity());
     }
 
-    // Check what the replacer returned
-    let replaced_tag = replaced_bits & 0xFFFF_0000_0000_0000;
-    if replaced_tag == STRING_TAG {
-        let str_ptr = (replaced_bits & POINTER_MASK) as *const StringHeader;
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(&mut buf, s);
-        } else {
-            buf.push_str("null");
-        }
-    } else if replaced_tag == crate::value::SHORT_STRING_TAG {
-        let jsval = JSValue::from_bits(replaced_bits);
-        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let n = jsval.short_string_to_buf(&mut scratch);
-        if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-            write_escaped_string(&mut buf, s);
-        } else {
-            buf.push_str("null");
-        }
-    } else if replaced_bits == TAG_NULL {
-        buf.push_str("null");
-    } else if replaced_bits == TAG_TRUE {
-        buf.push_str("true");
-    } else if replaced_bits == TAG_FALSE {
-        buf.push_str("false");
-    } else if replaced_tag == BIGINT_TAG {
-        let bigint_ptr = (replaced_bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            buf.push_str(s);
-        } else {
-            buf.push_str("null");
-        }
-    } else if let Some(ptr) = extract_pointer(replaced_bits) {
-        // Object or array - recurse with replacer
-        if type_hint == TYPE_OBJECT || (type_hint == TYPE_UNKNOWN && is_object_pointer(ptr)) {
-            stringify_object_with_replacer(ptr, replacer, &mut buf);
-        } else if type_hint == TYPE_ARRAY {
-            stringify_array_with_replacer(ptr, replacer, &mut buf);
-        } else {
-            if is_object_pointer(ptr) {
-                stringify_object_with_replacer(ptr, replacer, &mut buf);
-            } else {
-                let arr = ptr as *const crate::ArrayHeader;
-                if !arr.is_null() {
-                    let len = (*arr).length;
-                    let cap = (*arr).capacity;
-                    if len <= cap && cap > 0 && cap < 10000 {
-                        stringify_array_with_replacer(ptr, replacer, &mut buf);
-                    } else {
-                        stringify_value(replaced_root, TYPE_UNKNOWN, &mut buf);
-                    }
-                } else {
-                    stringify_value(replaced_root, TYPE_UNKNOWN, &mut buf);
-                }
-            }
-        }
-    } else {
-        // Number
-        write_number(&mut buf, replaced_root);
+    // Serialize the (toJSON-resolved, replacer-applied) root value: scalars
+    // inline, pointers via the GC-tag dispatch (compact, no indent).
+    if !write_replaced_scalar(&mut buf, replaced_root) {
+        let ptr = extract_pointer(replaced_bits).unwrap();
+        dispatch_pointer_with_replacer(ptr, replaced_root, replacer, &mut buf, "", 0);
     }
 
     let result = js_string_from_bytes(buf.as_ptr(), buf.len() as u32);
@@ -969,11 +924,13 @@ pub unsafe extern "C" fn js_json_stringify_full(
             stringify_value(value, TYPE_UNKNOWN, &mut buf);
         }
     } else if let Some(closure_ptr) = closure_replacer {
-        // Function replacer — use existing with_replacer path
-        // First call replacer with ("", root_value)
+        // Function replacer. Per spec SerializeJSONProperty: toJSON FIRST, then
+        // the replacer, then serialize — threading `indent_str` so the 3-arg
+        // form (replacer + space) pretty-prints, matching Node.
         let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
         let empty_key_f64 = nanbox_string_f64(empty_str);
-        let replaced_root = call_replacer(closure_ptr, empty_key_f64, value);
+        let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
+        let replaced_root = call_replacer(closure_ptr, empty_key_f64, value_after_to_json);
         let replaced_bits = replaced_root.to_bits();
         if replaced_bits == TAG_UNDEFINED {
             STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
@@ -987,26 +944,18 @@ pub unsafe extern "C" fn js_json_stringify_full(
             STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
             return TAG_UNDEFINED as i64;
         }
-        // For simplicity: when function replacer is used with pretty, we don't
-        // interleave pretty-printing (matches simple spec behavior). Serialize
-        // normally with the replacer.
-        if let Some(ptr) = extract_pointer(replaced_bits) {
-            if is_object_pointer(ptr) {
-                stringify_object_with_replacer(ptr, closure_ptr, &mut buf);
-            } else {
-                let arr = ptr as *const crate::ArrayHeader;
-                if !arr.is_null()
-                    && (*arr).length <= (*arr).capacity
-                    && (*arr).capacity > 0
-                    && (*arr).capacity < 10000
-                {
-                    stringify_array_with_replacer(ptr, closure_ptr, &mut buf);
-                } else {
-                    stringify_value(replaced_root, TYPE_UNKNOWN, &mut buf);
-                }
-            }
-        } else {
-            stringify_value(replaced_root, TYPE_UNKNOWN, &mut buf);
+        // Serialize the root: scalars inline, pointers via the GC-tag dispatch
+        // (object vs array) so the indent threads through nested structures.
+        if !write_replaced_scalar(&mut buf, replaced_root) {
+            let ptr = extract_pointer(replaced_bits).unwrap();
+            dispatch_pointer_with_replacer(
+                ptr,
+                replaced_root,
+                closure_ptr,
+                &mut buf,
+                &indent_str,
+                0,
+            );
         }
     } else if use_pretty {
         // No replacer, but has spacer — pretty-print
