@@ -154,7 +154,30 @@ pub(crate) fn resolve_url(url_str: &str, base_str: &str) -> String {
         return url_str.to_string();
     }
 
-    let (base_protocol, base_host, _, _, base_pathname, _, _) = parse_url(base_str);
+    let (base_protocol, base_host, _, _, base_pathname, base_search, _) = parse_url(base_str);
+
+    if url_str.starts_with('?') {
+        if base_protocol == "file:" || base_host.is_empty() {
+            return format!("{}{}{}", base_protocol, base_pathname, url_str);
+        }
+        return format!(
+            "{}//{}{}{}",
+            base_protocol, base_host, base_pathname, url_str
+        );
+    }
+
+    if url_str.starts_with('#') {
+        if base_protocol == "file:" || base_host.is_empty() {
+            return format!(
+                "{}{}{}{}",
+                base_protocol, base_pathname, base_search, url_str
+            );
+        }
+        return format!(
+            "{}//{}{}{}{}",
+            base_protocol, base_host, base_pathname, base_search, url_str
+        );
+    }
 
     if url_str.starts_with("//") {
         // Protocol-relative URL
