@@ -836,12 +836,6 @@
     "category": "bug-open",
     "reason": "node:stream: finished({readable:false}) does not fire callback on writable-only close. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/dispose/sync-dispose": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Symbol.dispose presence on stream instances (Node 21+) misreports. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/duplex-pair/wired-comms": {
     "issue": "1532",
     "added": "2026-05-23",
