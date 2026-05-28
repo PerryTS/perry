@@ -519,6 +519,14 @@ pub(super) fn collect_modules(
     let (mut hir_module, new_next_class_id) = lower_result?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
+    // #2309 Stage 2: fold build-time `process.env` branches BEFORE dynamic
+    // `import()` edges are registered below, so a dead `import()` inside a
+    // statically-false branch never enters the module graph. No-op unless
+    // tree-shaking is enabled.
+    if ctx.tree_shake {
+        super::env_fold::fold_env_branches(&mut hir_module, &ctx.define, is_in_node_modules);
+    }
+
     // Issue #100: const-fold dynamic `import()` paths, register each
     // resolved target as a regular import edge (marked `is_dynamic`), and
     // detect top-level `await` so codegen can chain the init Promise on

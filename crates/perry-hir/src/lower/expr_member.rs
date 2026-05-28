@@ -588,6 +588,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 return Ok(Expr::EnvGet(var_name));
                             }
                             ast::MemberProp::Computed(computed) => {
+                                // process.env["NAME"] with a string-literal key
+                                // is a *static* access — lower to EnvGet so it
+                                // matches the dot form (and #2309 build-time
+                                // folding sees it). Non-literal keys stay
+                                // dynamic.
+                                if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
+                                    if let Some(name) = s.value.as_str() {
+                                        return Ok(Expr::EnvGet(name.to_string()));
+                                    }
+                                }
                                 // process.env[expr] (dynamic key)
                                 let key_expr = Box::new(lower_expr(ctx, &computed.expr)?);
                                 return Ok(Expr::EnvGetDynamic(key_expr));

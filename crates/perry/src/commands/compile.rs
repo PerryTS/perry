@@ -24,6 +24,7 @@ mod bundle_ios;
 mod cjs_wrap;
 mod codegen_steps;
 mod collect_modules;
+mod env_fold;
 mod harmonyos_shim;
 mod host_config;
 mod i18n_emit;
