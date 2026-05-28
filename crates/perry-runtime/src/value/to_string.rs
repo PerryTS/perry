@@ -1,7 +1,147 @@
 //! NaN-boxed value to-string conversion helpers.
 
 use super::*;
+use std::cell::Cell;
 use std::sync::atomic::Ordering;
+
+thread_local! {
+    /// Re-entrancy guard for `OrdinaryToPrimitive(string)`. A user
+    /// `toString`/`valueOf` whose body coerces `this` back to a string
+    /// (e.g. `toString() { return "" + this; }`) would recurse forever;
+    /// Node throws `RangeError: Maximum call stack size exceeded`. We cap
+    /// the depth and fall back to `[object Object]` instead of overflowing
+    /// the Rust stack (which would SIGSEGV the whole process).
+    static TO_PRIMITIVE_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// `OrdinaryToPrimitive(O, "string")` (ES2024 §7.1.1.1) — the fallback
+/// `ToPrimitive` step used by `String(obj)` / template literals / `obj + ""`
+/// when the object has no `[Symbol.toPrimitive]`. For hint "string" the
+/// method order is `toString` then `valueOf`; each is invoked with
+/// `this = obj` and the first call returning a *primitive* (non-object)
+/// value wins.
+///
+/// Returns `Some(primitive_f64)` when a callable `toString`/`valueOf` was
+/// found on the object (own property or anywhere on its prototype chain,
+/// reusing the same `js_object_get_field_by_name` resolution +
+/// `clone_closure_rebind_this` receiver-binding the method-dispatch tower
+/// uses — see #1969/#1982) and produced a primitive. Returns `None` when
+/// neither method exists / is callable / yields a primitive, so the caller
+/// falls back to `"[object Object]"`.
+///
+/// `value` MUST be a NaN-boxed `POINTER_TAG` object whose pointer is a real
+/// heap address (`>= 0x10000`); the caller has already excluded symbols,
+/// buffers, arrays, and JSX nodes (those carry their own coercion rules).
+unsafe fn ordinary_to_primitive_string(value: f64) -> Option<f64> {
+    // Bound recursion: a `toString` that itself string-coerces `this`.
+    let depth = TO_PRIMITIVE_DEPTH.with(|c| c.get());
+    if depth >= 200 {
+        return None;
+    }
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth + 1));
+    let result = ordinary_to_primitive_string_inner(value);
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth));
+    result
+}
+
+unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+
+    // Hint "string": method order is `toString` then `valueOf` (ES2024
+    // §7.1.1.1). CRITICAL: in the real spec EVERY ordinary object inherits
+    // `Object.prototype.toString` (callable, returns `"[object Object]"`),
+    // so for the string hint `toString` is *always present* — `valueOf` is
+    // reached ONLY when a custom `toString` returns a non-primitive. Perry's
+    // object model has no discoverable `Object.prototype.toString` field, so
+    // `js_object_get_field_by_name(obj, "toString")` returning undefined
+    // STANDS IN FOR that default `"[object Object]"`. We must therefore stop
+    // and fall back to `"[object Object]"` (return None) rather than
+    // proceeding to `valueOf` — otherwise `String({ valueOf() {…} })`
+    // (string hint) would wrongly use `valueOf` where Node uses the default
+    // `toString`.
+    let to_string_result = call_method_for_primitive(&scope, &value_handle, b"toString");
+    match to_string_result {
+        MethodOutcome::Primitive(p) => return Some(p),
+        // Custom toString returned a non-primitive (object): per spec, fall
+        // through to `valueOf`.
+        MethodOutcome::NonPrimitive => {}
+        // No callable custom toString — this is the default
+        // `Object.prototype.toString` → `"[object Object]"`. Stop here.
+        MethodOutcome::Absent => return None,
+    }
+
+    match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
+        MethodOutcome::Primitive(p) => Some(p),
+        // Both toString and valueOf failed to produce a primitive — Node
+        // throws `TypeError: Cannot convert object to primitive value`. We
+        // approximate by falling back to the default `"[object Object]"`.
+        MethodOutcome::NonPrimitive | MethodOutcome::Absent => None,
+    }
+}
+
+enum MethodOutcome {
+    /// Method was callable and returned a primitive.
+    Primitive(f64),
+    /// Method was callable but returned a non-primitive (object/array).
+    NonPrimitive,
+    /// No own/inherited callable method with that name was found.
+    Absent,
+}
+
+/// Resolve `obj[method_name]` (own + prototype chain) and, if it is a
+/// callable closure, invoke it with `this = obj` (no args). Returns whether
+/// the result was a primitive, a non-primitive, or whether the method was
+/// absent / non-callable.
+unsafe fn call_method_for_primitive(
+    scope: &crate::gc::RuntimeHandleScope,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+    method_name: &[u8],
+) -> MethodOutcome {
+    let recv = value_handle.get_nanbox_f64();
+    let obj_ptr = (recv.to_bits() & POINTER_MASK) as *const crate::object::ObjectHeader;
+    if obj_ptr.is_null() || (obj_ptr as usize) < 0x10000 {
+        return MethodOutcome::Absent;
+    }
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let key_handle = scope.root_string_ptr(key);
+    let method = crate::object::js_object_get_field_by_name(
+        obj_ptr,
+        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
+    );
+    // Must be a callable closure value (POINTER_TAG + CLOSURE_MAGIC).
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return MethodOutcome::Absent;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return MethodOutcome::Absent;
+    }
+    // Rebind `this` to the receiver: an INHERITED object-literal method
+    // (`Object.create(proto)`) bakes its reserved `this` slot to the
+    // prototype at construction time, and a bound-method closure carries the
+    // wrong `this` until rebound. For OWN methods the slot already is the
+    // receiver, so rebinding is a correct no-op. Mirrors #1982.
+    let recv = value_handle.get_nanbox_f64();
+    let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
+    let prev_this = crate::object::js_implicit_this_set(recv);
+    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    let ret_jsv = JSValue::from_bits(ret.to_bits());
+    let is_primitive = ret_jsv.is_any_string()
+        || ret_jsv.is_number()
+        || ret_jsv.is_int32()
+        || ret_jsv.is_bool()
+        || ret_jsv.is_null()
+        || ret_jsv.is_undefined()
+        || ret_jsv.is_bigint();
+    if is_primitive {
+        MethodOutcome::Primitive(ret)
+    } else {
+        MethodOutcome::NonPrimitive
+    }
+}
 
 /// Convert a NaN-boxed f64 value to a string pointer.
 /// Handles all value types: strings (extract pointer), numbers (convert), JS handles, etc.
@@ -97,6 +237,23 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 if (*obj).class_id == crate::jsx::JSX_NODE_CLASS_ID {
                     let html = crate::object::js_object_get_field(obj, 0);
                     return js_jsvalue_to_string(f64::from_bits(html.bits()));
+                }
+            }
+            // OrdinaryToPrimitive(obj, "string"): the object has no
+            // `[Symbol.toPrimitive]` (checked above) and is not an
+            // array/buffer/JSX/symbol with its own coercion. Per spec, call
+            // the object's own/inherited `toString` (then `valueOf`) with
+            // `this = obj`. A custom `toString` on a plain object, an
+            // `Object.create(proto)` result, or a class instance resolves
+            // here; a primitive result is re-coerced (strings pass through,
+            // numbers via `js_number_to_string`). A plain `{}` (no callable
+            // toString/valueOf) returns None and falls through to the default
+            // `"[object Object]"`. (Built-in Error/Date prototype `toString`s
+            // are not discoverable as object fields in Perry's model, so they
+            // still hit the fallback — a separate, pre-existing gap.)
+            if let Some(primitive) = unsafe { ordinary_to_primitive_string(value) } {
+                if primitive.to_bits() != value.to_bits() {
+                    return js_jsvalue_to_string(primitive);
                 }
             }
         }
