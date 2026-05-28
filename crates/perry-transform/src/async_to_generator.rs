@@ -423,10 +423,13 @@ fn rewrite_async_closures_in_expr(
 ) {
     // Match-and-rewrite at the current level.
     let should_rewrite = if let Expr::Closure {
-        func_id, is_async, ..
+        func_id,
+        is_async,
+        is_generator,
+        ..
     } = expr
     {
-        *is_async && work.contains(func_id)
+        *is_async && !*is_generator && work.contains(func_id)
     } else {
         false
     };
@@ -1560,10 +1563,11 @@ fn scan_expr_for_async_closures(
         func_id,
         body,
         is_async,
+        is_generator,
         ..
     } = expr
     {
-        if *is_async && body_contains_await(body) {
+        if *is_async && !*is_generator && body_contains_await(body) {
             found.insert(*func_id);
         }
         // Descend into the closure body too — nested async closures inside

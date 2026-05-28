@@ -320,12 +320,6 @@
     "category": "bug-open",
     "reason": "node:stream: final() constructor option not invoked before finish. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/pipeline/async-function": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline with async-generator middle stage doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/subclass/extends-readable": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -638,12 +632,6 @@
     "category": "bug-open",
     "reason": "node:stream: reduce(fn) without initial — first item not used as accumulator. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/pipeline/async-fn-sink": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline(src, async fn) — fn-as-sink form not yet wired (cb not called, collected is empty). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/unshift-after-end": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -902,12 +890,6 @@
     "category": "bug-open",
     "reason": "node:stream: events.once(stream, 'end') Promise — args shape wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipeline/async-fn-rejection-propagates": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline async-fn throwing — cb does not receive the error. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/filter-then-toarray": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1070,12 +1052,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(transform).toArray() — chain produces wrong result. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/pipeline/three-async-fns": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline with multiple async-gen stages — fails to deliver final collected output. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/destroy/_destroy-user-impl": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1124,12 +1100,6 @@
     "category": "bug-open",
     "reason": "node:stream: some() — does not short-circuit at first match (calls > N). Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/pipeline/async-iter-source": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline(asyncIterable, dst, cb) — async-iterable source not handled. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/destroyed-after-finish": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1159,12 +1129,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src,t1,t2) — output transformation order wrong. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/pipeline/async-source-throws-mid": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline(asyncGen src throws mid, dst, cb) — error not received in cb. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/compose-non-stream-throws": {
     "issue": "1531",
@@ -1261,24 +1225,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: composite 'end' event does not fire after src exhausts. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/promises/pipeline-five-stages": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: 5-stage promises-pipeline — final sink doesn't receive chunks. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/promises/pipeline-array-source-promise": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: promises.pipeline(array, dst) — sync iterable source not collected. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/promises/pipeline-with-transform-collect": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline(src, transform, asyncFnSink) — collected output wrong/empty. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/consumers/buffer-byte-exact": {
     "issue": "1532",

@@ -30,6 +30,7 @@ use crate::object::{
     ObjectHeader,
 };
 use crate::value::JSValue;
+use std::os::raw::c_int;
 
 mod async_iterator;
 
@@ -855,6 +856,326 @@ fn wire_pipeline_pair(src: f64, dest: f64, end_dest: bool) {
     let _ = emit_stream_event(dest, string_value(b"pipe"), &[src]);
     set_readable_flowing(src, f64::from_bits(TAG_TRUE));
     let _ = emit_stream_event(src, string_value(b"resume"), &[]);
+}
+
+fn pipeline_stage_has_next(value: f64) -> bool {
+    let Some(obj) = object_ptr_from_value(value) else {
+        return false;
+    };
+    unsafe {
+        own_field_by_key_bytes(obj as *const ObjectHeader, b"next").is_some_and(is_callable_value)
+    }
+}
+
+fn pipeline_needs_collected_path(stages: &[f64]) -> bool {
+    stages.iter().any(|stage| is_callable_value(*stage))
+        || stages
+            .first()
+            .is_some_and(|stage| !is_pipeline_stream(*stage) && pipeline_stage_has_next(*stage))
+}
+
+fn pipeline_empty_chunks() -> f64 {
+    box_pointer(crate::array::js_array_alloc(0) as *const u8)
+}
+
+fn pipeline_single_chunk(value: f64) -> f64 {
+    let mut arr = crate::array::js_array_alloc(1);
+    arr = crate::array::js_array_push_f64(arr, value);
+    box_pointer(arr as *const u8)
+}
+
+fn settle_pipeline_value(value: f64) -> Result<f64, f64> {
+    let value = crate::promise::adapt_foreign_promise_value(value);
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return Ok(value);
+    }
+    let promise = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
+    if promise.is_null() {
+        return Ok(value);
+    }
+    for _ in 0..100_000 {
+        unsafe {
+            if (*promise).state != crate::promise::PromiseState::Pending {
+                break;
+            }
+        }
+        if crate::promise::js_promise_run_microtasks() == 0 {
+            break;
+        }
+    }
+    unsafe {
+        match (*promise).state {
+            crate::promise::PromiseState::Fulfilled => Ok((*promise).value),
+            crate::promise::PromiseState::Rejected => Err((*promise).reason),
+            crate::promise::PromiseState::Pending => Ok(value),
+        }
+    }
+}
+
+fn catch_pipeline_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    if jumped == 0 {
+        let value = call();
+        crate::exception::js_try_end();
+        Ok(value)
+    } else {
+        let err = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        crate::exception::js_try_end();
+        Err(err)
+    }
+}
+
+fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
+    let value = settle_pipeline_value(value)?;
+    match value.to_bits() {
+        TAG_UNDEFINED | TAG_NULL => return Ok(pipeline_empty_chunks()),
+        _ => {}
+    }
+    if let Some(result) = js_node_stream_collect_chunks_result(value) {
+        let chunks = result?;
+        if pipeline_should_coalesce_chunks(value) {
+            return Ok(pipeline_coalesce_chunks(chunks));
+        }
+        return Ok(chunks);
+    }
+    let raw = raw_ptr_from_value(value);
+    if let Some(chunks) = collection_iterable_chunks(raw) {
+        return Ok(chunks);
+    }
+    if let Some(chunks) = collect_pipeline_iterator_chunks(value)? {
+        return Ok(chunks);
+    }
+    if object_ptr_from_value(value).is_some() {
+        let collected = crate::promise::js_array_from_async(value);
+        let settled = settle_pipeline_value(collected)?;
+        if is_array_like_value(settled) {
+            return Ok(settled);
+        }
+    }
+    if is_single_chunk_value(value) {
+        return Ok(pipeline_single_chunk(value));
+    }
+    Ok(pipeline_empty_chunks())
+}
+
+fn pipeline_should_coalesce_chunks(value: f64) -> bool {
+    is_transform_stream(value)
+        && !has_truthy_hidden(value, hidden_key(b"readableObjectMode"))
+        && !has_truthy_hidden(value, hidden_writable_object_mode_key())
+}
+
+fn pipeline_value_to_string(value: f64) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(value);
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn pipeline_coalesce_chunks(chunks: f64) -> f64 {
+    if !is_array_like_value(chunks) {
+        return chunks;
+    }
+    let arr = raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    if len <= 1 {
+        return chunks;
+    }
+    let mut joined = String::new();
+    for i in 0..len {
+        joined.push_str(&pipeline_value_to_string(crate::array::js_array_get_f64(
+            arr, i,
+        )));
+    }
+    let value = string_value(joined.as_bytes());
+    pipeline_single_chunk(value)
+}
+
+fn pipeline_chunks_vec(chunks: f64) -> Vec<f64> {
+    let mut values = Vec::new();
+    push_chunk_values(chunks, &mut values, 0);
+    values
+}
+
+fn pipeline_iterator_result(value: f64) -> Option<(bool, f64)> {
+    let obj = object_ptr_from_value(value)?;
+    let done = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"done"));
+    let item = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"value"));
+    Some((crate::value::js_is_truthy(done) != 0, item))
+}
+
+fn collect_pipeline_iterator_chunks(iterable: f64) -> Result<Option<f64>, f64> {
+    if !pipeline_stage_has_next(iterable) {
+        return Ok(None);
+    }
+    let mut out = crate::array::js_array_alloc(0);
+    for _ in 0..100_000 {
+        let next_result = catch_pipeline_throw(|| unsafe {
+            crate::object::js_native_call_method(
+                iterable,
+                b"next".as_ptr() as *const i8,
+                4,
+                std::ptr::null(),
+                0,
+            )
+        })?;
+        let next_result = settle_pipeline_value(next_result)?;
+        let Some((done, value)) = pipeline_iterator_result(next_result) else {
+            return Ok(Some(box_pointer(out as *const u8)));
+        };
+        if done {
+            return Ok(Some(box_pointer(out as *const u8)));
+        }
+        out = crate::array::js_array_push_f64(out, value);
+    }
+    Ok(Some(box_pointer(out as *const u8)))
+}
+
+fn call_pipeline_function_stage(stage: f64, source: f64) -> Result<f64, f64> {
+    let args = [source];
+    let result = catch_pipeline_throw(|| unsafe {
+        crate::closure::js_native_call_value(stage, args.as_ptr(), args.len())
+    })?;
+    settle_pipeline_value(result)
+}
+
+fn write_pipeline_chunks_to_stream(stream: f64, chunks: f64, end_stream: bool) -> Result<(), f64> {
+    for chunk in pipeline_chunks_vec(chunks) {
+        let _ = write_writable_chunk(
+            stream,
+            chunk,
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+        );
+        if let Some(err) = readable_hidden_error(stream) {
+            return Err(err);
+        }
+    }
+    if end_stream {
+        finish_stream_with_args(
+            stream,
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+        );
+    }
+    if let Some(err) = readable_hidden_error(stream) {
+        Err(err)
+    } else {
+        Ok(())
+    }
+}
+
+fn fail_collected_pipeline(stages: &[f64], callback: f64, err: f64) {
+    for stage in stages {
+        if is_pipeline_stream(*stage) {
+            destroy_stream(*stage, err);
+        }
+    }
+    if is_callable_value(callback) {
+        call_listener_args(f64::from_bits(TAG_UNDEFINED), callback, &[err]);
+    }
+}
+
+fn complete_collected_pipeline(callback: f64) {
+    if is_callable_value(callback) {
+        call_listener_args(f64::from_bits(TAG_UNDEFINED), callback, &[]);
+    }
+}
+
+fn run_collected_pipeline(stages: &[f64], callback: f64, options: PipelineOptions) -> f64 {
+    let last = *stages.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED));
+    let first = stages[0];
+    let mut chunks = if is_callable_value(first) {
+        match call_pipeline_function_stage(first, f64::from_bits(TAG_UNDEFINED))
+            .and_then(collect_pipeline_chunks)
+        {
+            Ok(chunks) => chunks,
+            Err(err) => {
+                fail_collected_pipeline(stages, callback, err);
+                return last;
+            }
+        }
+    } else {
+        match collect_pipeline_chunks(first) {
+            Ok(chunks) => chunks,
+            Err(err) => {
+                fail_collected_pipeline(stages, callback, err);
+                return last;
+            }
+        }
+    };
+
+    for idx in 1..stages.len() {
+        let stage = stages[idx];
+        let is_last = idx + 1 == stages.len();
+        if is_callable_value(stage) {
+            match call_pipeline_function_stage(stage, chunks) {
+                Ok(result) if is_last => {
+                    if pipeline_stage_has_next(result) {
+                        if let Err(err) = collect_pipeline_chunks(result) {
+                            fail_collected_pipeline(stages, callback, err);
+                            return last;
+                        }
+                    }
+                    complete_collected_pipeline(callback);
+                    return last;
+                }
+                Ok(result) => match collect_pipeline_chunks(result) {
+                    Ok(next_chunks) => chunks = next_chunks,
+                    Err(err) => {
+                        fail_collected_pipeline(stages, callback, err);
+                        return last;
+                    }
+                },
+                Err(err) => {
+                    fail_collected_pipeline(stages, callback, err);
+                    return last;
+                }
+            }
+            continue;
+        }
+
+        if is_pipeline_stream(stage) {
+            let end_stream = options.end_final || !is_last;
+            if let Err(err) = write_pipeline_chunks_to_stream(stage, chunks, end_stream) {
+                fail_collected_pipeline(stages, callback, err);
+                return last;
+            }
+            if is_last {
+                complete_collected_pipeline(callback);
+                return last;
+            }
+            match collect_pipeline_chunks(stage) {
+                Ok(next_chunks) => chunks = next_chunks,
+                Err(err) => {
+                    fail_collected_pipeline(stages, callback, err);
+                    return last;
+                }
+            }
+        } else {
+            match collect_pipeline_chunks(stage) {
+                Ok(next_chunks) => chunks = next_chunks,
+                Err(err) => {
+                    fail_collected_pipeline(stages, callback, err);
+                    return last;
+                }
+            }
+            if is_last {
+                complete_collected_pipeline(callback);
+                return last;
+            }
+        }
+    }
+
+    complete_collected_pipeline(callback);
+    last
 }
 
 fn start_pipeline_readable(stream: f64) {
@@ -4609,6 +4930,10 @@ pub extern "C" fn js_node_stream_pipeline(args: *const crate::array::ArrayHeader
     }
     if args.len() < 2 {
         throw_pipeline_missing_streams();
+    }
+
+    if pipeline_needs_collected_path(&args) {
+        return run_collected_pipeline(&args, callback, options);
     }
 
     let stages: Vec<f64> = args
