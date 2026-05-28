@@ -234,6 +234,14 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         0
     };
 
+    // Buffers allocated from the small-buffer slab do not carry a GC header.
+    // Detect them before any GC-header probing below; otherwise arbitrary slab
+    // bytes immediately before the BufferHeader can be misread as a String or
+    // Object header and `Array.from(buf)` materializes nonsense.
+    if raw_addr != 0 && crate::buffer::is_registered_buffer(raw_addr) {
+        return crate::buffer::buffer_to_array(raw_addr as *const crate::buffer::BufferHeader);
+    }
+
     // `Array.from(string)` iterates the source by Unicode codepoint
     // (each codepoint becomes a 1-char string element) per ECMA-262
     // §23.1.2.1. Pre-fix this fell through to the array memcpy path
@@ -361,10 +369,6 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             return crate::typedarray::typed_array_to_array(
                 raw_addr as *const crate::typedarray::TypedArrayHeader,
             );
-        }
-        // Uint8Array (legacy Buffer-backed): same materialization story.
-        if crate::buffer::is_registered_buffer(raw_addr) {
-            return crate::buffer::buffer_to_array(raw_addr as *const crate::buffer::BufferHeader);
         }
     }
     let src = clean_arr_ptr(src);
