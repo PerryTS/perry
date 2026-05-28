@@ -476,6 +476,8 @@ struct ZlibStreamState {
     /// Only used by `createUnzip` (buffer-until-end auto-detect).
     input: Vec<u8>,
     ended: bool,
+    bytes_written: usize,
+    pending_bytes_written: usize,
     /// Destinations registered via `.pipe(dest)` — stored as NaN-boxed bits;
     /// 'data'/'end' are forwarded to each via dynamic method dispatch.
     pipes: Vec<u64>,
@@ -546,6 +548,8 @@ fn create_zlib_stream(codec: Codec) -> i64 {
             codec_state: make_codec_state(codec),
             input: Vec::new(),
             ended: false,
+            bytes_written: 0,
+            pending_bytes_written: 0,
             pipes: Vec::new(),
         },
     );
@@ -799,19 +803,22 @@ pub unsafe fn zlib_stream_write(handle: i64, chunk: f64) {
     let event = {
         let mut g = ZLIB_STREAMS.lock().unwrap();
         match g.get_mut(&handle) {
-            Some(s) if !s.ended => match s.codec_state.as_mut() {
-                Some(cs) => match cs.write_chunk(&bytes) {
-                    Ok(()) => {
-                        let out = cs.drain();
-                        (!out.is_empty()).then(|| ZlibEvent::Data(handle, out))
+            Some(s) if !s.ended => {
+                s.pending_bytes_written = s.pending_bytes_written.saturating_add(bytes.len());
+                match s.codec_state.as_mut() {
+                    Some(cs) => match cs.write_chunk(&bytes) {
+                        Ok(()) => {
+                            let out = cs.drain();
+                            (!out.is_empty()).then(|| ZlibEvent::Data(handle, out))
+                        }
+                        Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
+                    },
+                    None => {
+                        s.input.extend_from_slice(&bytes);
+                        None
                     }
-                    Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
-                },
-                None => {
-                    s.input.extend_from_slice(&bytes);
-                    None
                 }
-            },
+            }
             _ => return,
         }
     };
@@ -852,6 +859,46 @@ pub fn zlib_stream_flush(handle: i64, cb: i64) {
         }
     }
     perry_runtime::event_pump::js_notify_main_thread();
+}
+
+/// `stream.params(level, strategy, cb?)` — Perry does not currently retune
+/// compression levels, but Node exposes this as a function and invokes the
+/// callback asynchronously when parameters are unchanged.
+pub fn zlib_stream_params(_handle: i64, cb: i64) {
+    if cb != 0 {
+        ZLIB_PENDING_EVENTS
+            .lock()
+            .unwrap()
+            .push(ZlibEvent::Callback(cb));
+        perry_runtime::event_pump::js_notify_main_thread();
+    }
+}
+
+/// `stream.reset()` — reset buffered codec state and byte accounting.
+pub fn zlib_stream_reset(handle: i64) {
+    let mut g = ZLIB_STREAMS.lock().unwrap();
+    if let Some(s) = g.get_mut(&handle) {
+        s.codec_state = make_codec_state(s.codec);
+        s.input.clear();
+        s.ended = false;
+        s.bytes_written = 0;
+        s.pending_bytes_written = 0;
+    }
+}
+
+pub fn zlib_stream_bytes_written(handle: i64) -> f64 {
+    ZLIB_STREAMS
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .map(|s| s.bytes_written as f64)
+        .unwrap_or(0.0)
+}
+
+fn publish_zlib_bytes_written(handle: i64) {
+    if let Some(s) = ZLIB_STREAMS.lock().unwrap().get_mut(&handle) {
+        s.bytes_written = s.pending_bytes_written;
+    }
 }
 
 fn finish_zlib_stream(handle: i64) {
@@ -1015,6 +1062,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
     for ev in events {
         match ev {
             ZlibEvent::Data(id, bytes) => {
+                publish_zlib_bytes_written(id);
                 let cbs = listeners_for(id, "data");
                 if !cbs.is_empty() {
                     if let Some(buf_f64) = make_buffer(&bytes) {
@@ -1032,6 +1080,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                 }
             }
             ZlibEvent::End(id) => {
+                publish_zlib_bytes_written(id);
                 for cb in listeners_for(id, "end") {
                     if cb != 0 {
                         js_closure_call0(cb as *const ClosureHeader);

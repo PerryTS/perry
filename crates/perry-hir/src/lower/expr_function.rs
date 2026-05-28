@@ -550,6 +550,16 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
 
     let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
 
+    // #2076: a named function expression's own ident is its `fn.name`
+    // per spec, regardless of the binding identifier it's later assigned
+    // to. `const bar = function namedBar(){}` ⇒ `bar.name === "namedBar"`.
+    if let Some(ident) = &fn_expr.ident {
+        let own_name = ident.sym.to_string();
+        if !own_name.is_empty() {
+            ctx.closure_display_names.insert(func_id, own_name);
+        }
+    }
+
     Ok(Expr::Closure {
         func_id,
         params,
