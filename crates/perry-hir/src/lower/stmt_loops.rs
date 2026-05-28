@@ -115,6 +115,55 @@ fn is_node_readable_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) ->
     )
 }
 
+fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
+    let call = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(iter_id)),
+            property: "return".to_string(),
+        }),
+        args: vec![],
+        type_args: vec![],
+    };
+    if needs_await {
+        Expr::Await(Box::new(call))
+    } else {
+        call
+    }
+}
+
+fn insert_iterator_return_before_breaks(
+    stmts: &mut Vec<Stmt>,
+    iter_id: LocalId,
+    needs_await: bool,
+) {
+    let mut rewritten = Vec::with_capacity(stmts.len());
+    for stmt in stmts.drain(..) {
+        match stmt {
+            Stmt::Break => {
+                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
+                rewritten.push(Stmt::Break);
+            }
+            Stmt::If {
+                condition,
+                mut then_branch,
+                mut else_branch,
+            } => {
+                insert_iterator_return_before_breaks(&mut then_branch, iter_id, needs_await);
+                if let Some(else_stmts) = else_branch.as_mut() {
+                    insert_iterator_return_before_breaks(else_stmts, iter_id, needs_await);
+                }
+                rewritten.push(Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                });
+            }
+            other => rewritten.push(other),
+        }
+    }
+    *stmts = rewritten;
+}
+
 pub(crate) fn lower_stmt_for_of(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -327,6 +376,9 @@ pub(crate) fn lower_stmt_for_of(
             lower_stmt(ctx, module, &for_of_stmt.body)?;
         }
         let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
+        if is_node_readable_for_await {
+            insert_iterator_return_before_breaks(&mut user_body, iter_id, needs_await);
+        }
         body_stmts.append(&mut user_body);
         // __result = __iter.next()
         body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));

@@ -1142,12 +1142,6 @@
     "category": "bug-open",
     "reason": "node:stream: reduce(fn) without initial — first item not used as accumulator. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/iterator/destroy-on-return-true-default": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: default destroyOnReturn:true — early break does not destroy stream. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/readable/read-zero-probe": {
     "issue": "1532",
     "added": "2026-05-24",

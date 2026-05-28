@@ -4,6 +4,7 @@ const READABLE_ITERATOR_SHAPE_ID: u32 = 0x7FFF_FF60;
 const READABLE_ITERATOR_STREAM_KEY: &[u8] = b"__perryReadableIteratorStream";
 const READABLE_ITERATOR_INDEX_KEY: &[u8] = b"__perryReadableIteratorIndex";
 const READABLE_ITERATOR_DONE_KEY: &[u8] = b"__perryReadableIteratorDone";
+const READABLE_ITERATOR_DESTROY_ON_RETURN_KEY: &[u8] = b"__perryReadableIteratorDestroyOnReturn";
 
 fn iterator_result(value: f64, done: bool) -> f64 {
     let obj = crate::object::js_object_alloc(0, 2);
@@ -18,6 +19,27 @@ fn iterator_result(value: f64, done: bool) -> f64 {
 
 fn readable_iterator_done() -> f64 {
     resolved_promise(iterator_result(f64::from_bits(TAG_UNDEFINED), true))
+}
+
+fn destroy_on_return_from_options(opts: f64) -> bool {
+    !matches!(
+        get_hidden_value(opts, hidden_key(b"destroyOnReturn")),
+        Some(value) if value.to_bits() == TAG_FALSE
+    )
+}
+
+fn iterator_destroys_on_return(iterator: f64) -> bool {
+    get_hidden_value(
+        iterator,
+        hidden_key(READABLE_ITERATOR_DESTROY_ON_RETURN_KEY),
+    )
+    .is_none_or(|value| crate::value::js_is_truthy(value) != 0)
+}
+
+fn iterator_has_yielded(iterator: f64) -> bool {
+    get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_INDEX_KEY))
+        .and_then(jsvalue_as_f64)
+        .is_some_and(|index| index > 0.0)
 }
 
 extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
@@ -63,11 +85,19 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
 }
 
 extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 {
+    let iterator = this_value(closure);
+    let already_done = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_DONE_KEY))
+        .is_some_and(|v| crate::value::js_is_truthy(v) != 0);
     set_hidden_value(
-        this_value(closure),
+        iterator,
         hidden_key(READABLE_ITERATOR_DONE_KEY),
         f64::from_bits(TAG_TRUE),
     );
+    if !already_done && iterator_has_yielded(iterator) && iterator_destroys_on_return(iterator) {
+        if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+            destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+        }
+    }
     readable_iterator_done()
 }
 
@@ -76,7 +106,11 @@ extern "C" fn ns_readable_iterator_self(closure: *const ClosureHeader) -> f64 {
 }
 
 pub(super) extern "C" fn ns_async_iterator(closure: *const ClosureHeader) -> f64 {
-    build_readable_async_iterator(this_value(closure))
+    build_readable_async_iterator(this_value(closure), true)
+}
+
+pub(super) extern "C" fn ns_iterator1(closure: *const ClosureHeader, opts: f64) -> f64 {
+    build_readable_async_iterator(this_value(closure), destroy_on_return_from_options(opts))
 }
 
 fn install_async_iterator_symbol(target: f64, func: extern "C" fn(*const ClosureHeader) -> f64) {
@@ -93,7 +127,7 @@ fn install_async_iterator_symbol(target: f64, func: extern "C" fn(*const Closure
     }
 }
 
-fn build_readable_async_iterator(stream: f64) -> f64 {
+fn build_readable_async_iterator(stream: f64, destroy_on_return: bool) -> f64 {
     let methods = [
         ("next", cast0(ns_readable_iterator_next)),
         ("return", cast0(ns_readable_iterator_return)),
@@ -107,10 +141,27 @@ fn build_readable_async_iterator(stream: f64) -> f64 {
         hidden_key(READABLE_ITERATOR_DONE_KEY),
         f64::from_bits(TAG_FALSE),
     );
+    set_hidden_value(
+        iterator,
+        hidden_key(READABLE_ITERATOR_DESTROY_ON_RETURN_KEY),
+        f64::from_bits(if destroy_on_return {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
     install_async_iterator_symbol(iterator, ns_readable_iterator_self);
     iterator
 }
 
 pub(super) fn install_readable_async_iterator_symbol(stream: f64) {
     install_async_iterator_symbol(stream, ns_async_iterator);
+}
+
+pub(super) fn register_arities() {
+    crate::closure::js_register_closure_arity(ns_async_iterator as *const u8, 0);
+    crate::closure::js_register_closure_arity(ns_iterator1 as *const u8, 1);
+    crate::closure::js_register_closure_arity(ns_readable_iterator_next as *const u8, 0);
+    crate::closure::js_register_closure_arity(ns_readable_iterator_return as *const u8, 0);
+    crate::closure::js_register_closure_arity(ns_readable_iterator_self as *const u8, 0);
 }
