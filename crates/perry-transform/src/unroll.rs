@@ -194,6 +194,32 @@ fn unroll_in_stmts(
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
 ) {
+    // #2308: compute the set of loop-body-declared ids that escape their
+    // loop (function-scoped `var`s read outside the loop body) ONCE per
+    // scope-entry, on the ORIGINAL (un-unrolled) body, then thread it
+    // through the recursion. Unrolling rewrites each cloned body's
+    // declarations to fresh ids via `refresh_local_ids`; an escaping `var`
+    // must instead keep its original id across every copy, otherwise the
+    // post-loop read binds to an id no copy ever writes. See the
+    // `refresh_local_ids` / `alloc_fresh` skip and the doc on
+    // `compute_loop_escaping_ids`.
+    //
+    // `stmts` here is the function/method/init/ctor body (every call site
+    // in `unroll_static_loops` passes a top-level body). The escaping set
+    // is function-scoped, so recomputing it for nested blocks would be
+    // both wasteful and wrong (a nested block can't see all the `var`'s
+    // use sites). The `_rec` variant carries the same set down.
+    let protected = compute_loop_escaping_ids(stmts);
+    unroll_in_stmts_rec(stmts, changed, next_local_id, next_func_id, &protected);
+}
+
+fn unroll_in_stmts_rec(
+    stmts: &mut Vec<Stmt>,
+    changed: &mut bool,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+    protected: &std::collections::HashSet<LocalId>,
+) {
     let mut i = 0;
     while i < stmts.len() {
         // Recurse into nested control flow first so an inner unrollable
@@ -203,9 +229,15 @@ fn unroll_in_stmts(
         // any enclosing outer loop, but the outer's body is already
         // simplified. Same end result either way for correctness; this
         // ordering is just slightly less work.
-        recurse_into_nested(&mut stmts[i], changed, next_local_id, next_func_id);
+        recurse_into_nested(
+            &mut stmts[i],
+            changed,
+            next_local_id,
+            next_func_id,
+            protected,
+        );
 
-        if let Some(unrolled) = try_unroll_for(&stmts[i], next_local_id, next_func_id) {
+        if let Some(unrolled) = try_unroll_for(&stmts[i], next_local_id, next_func_id, protected) {
             // Replace stmts[i] with `unrolled`'s contents.
             let inserted = unrolled.len();
             stmts.splice(i..=i, unrolled);
@@ -227,6 +259,7 @@ fn recurse_into_nested(
     changed: &mut bool,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
+    protected: &std::collections::HashSet<LocalId>,
 ) {
     match stmt {
         Stmt::If {
@@ -234,22 +267,22 @@ fn recurse_into_nested(
             else_branch,
             ..
         } => {
-            unroll_in_stmts(then_branch, changed, next_local_id, next_func_id);
+            unroll_in_stmts_rec(then_branch, changed, next_local_id, next_func_id, protected);
             if let Some(eb) = else_branch {
-                unroll_in_stmts(eb, changed, next_local_id, next_func_id);
+                unroll_in_stmts_rec(eb, changed, next_local_id, next_func_id, protected);
             }
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-            unroll_in_stmts(body, changed, next_local_id, next_func_id);
+            unroll_in_stmts_rec(body, changed, next_local_id, next_func_id, protected);
         }
         Stmt::For { body, .. } => {
             // Inner-first: unroll any qualifying loops inside this for's
             // body before deciding whether to unroll this for itself.
-            unroll_in_stmts(body, changed, next_local_id, next_func_id);
+            unroll_in_stmts_rec(body, changed, next_local_id, next_func_id, protected);
         }
         Stmt::Switch { cases, .. } => {
             for c in cases {
-                unroll_in_stmts(&mut c.body, changed, next_local_id, next_func_id);
+                unroll_in_stmts_rec(&mut c.body, changed, next_local_id, next_func_id, protected);
             }
         }
         Stmt::Try {
@@ -258,16 +291,16 @@ fn recurse_into_nested(
             finally,
             ..
         } => {
-            unroll_in_stmts(body, changed, next_local_id, next_func_id);
+            unroll_in_stmts_rec(body, changed, next_local_id, next_func_id, protected);
             if let Some(c) = catch {
-                unroll_in_stmts(&mut c.body, changed, next_local_id, next_func_id);
+                unroll_in_stmts_rec(&mut c.body, changed, next_local_id, next_func_id, protected);
             }
             if let Some(f) = finally {
-                unroll_in_stmts(f, changed, next_local_id, next_func_id);
+                unroll_in_stmts_rec(f, changed, next_local_id, next_func_id, protected);
             }
         }
         Stmt::Labeled { body, .. } => {
-            recurse_into_nested(body, changed, next_local_id, next_func_id);
+            recurse_into_nested(body, changed, next_local_id, next_func_id, protected);
         }
         _ => {}
     }
@@ -281,6 +314,7 @@ fn try_unroll_for(
     stmt: &Stmt,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
+    protected: &std::collections::HashSet<LocalId>,
 ) -> Option<Vec<Stmt>> {
     let (init, condition, update, body) = match stmt {
         Stmt::For {
@@ -369,7 +403,7 @@ fn try_unroll_for(
         for s in &mut cloned {
             substitute_localget_with_int_in_stmt(s, iv_id, value);
         }
-        refresh_local_ids(&mut cloned, next_local_id, next_func_id);
+        refresh_local_ids(&mut cloned, next_local_id, next_func_id, protected);
         out.extend(cloned);
     }
     Some(out)
@@ -961,6 +995,240 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
     walk_expr_children(expr, &mut |child| scan_expr_for_max_func(child, max_id));
 }
 
+/// #2308: compute the set of loop-body-declared local ids that are
+/// referenced OUTSIDE the loop body declaring them — i.e. hoisted,
+/// function-scoped `var`s whose value is read after (or otherwise outside)
+/// the loop they're declared in. The unroller must NOT rename these per
+/// copy: every unrolled copy has to write the same slot so a later read of
+/// the original id observes the last iteration's value, matching JS `var`
+/// semantics. A block-scoped `let`/`const` declared in a loop body can
+/// never be referenced outside it, so it never lands in this set and keeps
+/// getting fresh per-copy ids (preserving distinct closure captures).
+///
+/// Computed on the ORIGINAL (un-unrolled) body so reference counts are
+/// stable: `total` counts every use site in the whole scope; for each loop
+/// `inside` counts uses within that loop's body. `total > inside` for a
+/// loop-body-declared id ⇒ it's used somewhere outside the loop ⇒ escaping.
+fn compute_loop_escaping_ids(stmts: &[Stmt]) -> std::collections::HashSet<LocalId> {
+    let mut total: HashMap<LocalId, usize> = HashMap::new();
+    count_local_refs_stmts(stmts, &mut total);
+    let mut escaping = std::collections::HashSet::new();
+    collect_escaping_in_stmts(stmts, &total, &mut escaping);
+    escaping
+}
+
+fn collect_escaping_in_stmts(
+    stmts: &[Stmt],
+    total: &HashMap<LocalId, usize>,
+    escaping: &mut std::collections::HashSet<LocalId>,
+) {
+    for s in stmts {
+        if let Stmt::For { body, .. } = s {
+            let mut inside: HashMap<LocalId, usize> = HashMap::new();
+            count_local_refs_stmts(body, &mut inside);
+            let mut decls: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
+            collect_declared_ids_stmts(body, &mut decls);
+            for id in decls {
+                let t = total.get(&id).copied().unwrap_or(0);
+                let ins = inside.get(&id).copied().unwrap_or(0);
+                if t > ins {
+                    escaping.insert(id);
+                }
+            }
+        }
+        // Recurse into every nested stmt list so inner loops are analyzed
+        // against the same whole-scope `total` reference counts.
+        each_child_stmt_list(s, &mut |list| {
+            collect_escaping_in_stmts(list, total, escaping)
+        });
+    }
+}
+
+/// Collect every `Stmt::Let`-declared id in `stmts` (recursing into nested
+/// blocks, including for-loop `init`). Closure params / catch params are
+/// not `Stmt::Let` and can never escape a loop, so they're skipped.
+fn collect_declared_ids_stmts(stmts: &[Stmt], out: &mut std::collections::HashSet<LocalId>) {
+    for s in stmts {
+        if let Stmt::Let { id, .. } = s {
+            out.insert(*id);
+        }
+        if let Stmt::For { init, .. } = s {
+            if let Some(init_stmt) = init {
+                if let Stmt::Let { id, .. } = init_stmt.as_ref() {
+                    out.insert(*id);
+                }
+            }
+        }
+        each_child_stmt_list(s, &mut |list| collect_declared_ids_stmts(list, out));
+    }
+}
+
+/// Invoke `f` on each nested `&[Stmt]` directly owned by `stmt` (then/else
+/// arms, loop/switch/try bodies, labeled body). Used by the #2308
+/// escaping-id analysis to recurse without duplicating the stmt match.
+fn each_child_stmt_list<F: FnMut(&[Stmt])>(stmt: &Stmt, f: &mut F) {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            f(then_branch);
+            if let Some(eb) = else_branch {
+                f(eb);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => f(body),
+        Stmt::Switch { cases, .. } => {
+            for c in cases {
+                f(&c.body);
+            }
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            f(body);
+            if let Some(c) = catch {
+                f(&c.body);
+            }
+            if let Some(fin) = finally {
+                f(fin);
+            }
+        }
+        Stmt::Labeled { body, .. } => each_child_stmt_list(body, f),
+        _ => {}
+    }
+}
+
+/// Count local-id USE sites (reads/writes), NOT declarations, across
+/// `stmts`. Mirrors the id-bearing variants of `scan_expr_for_max_local`
+/// but accumulates per-id counts so the #2308 analysis can tell whether an
+/// id is used outside a given loop body.
+fn count_local_refs_stmts(stmts: &[Stmt], counts: &mut HashMap<LocalId, usize>) {
+    for s in stmts {
+        count_local_refs_stmt(s, counts);
+    }
+}
+
+fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, usize>) {
+    match stmt {
+        // A `Stmt::Let` id is a DECLARATION, not a use — don't count it;
+        // only walk its initializer for uses.
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                count_local_refs_expr(e, counts);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => count_local_refs_expr(e, counts),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                count_local_refs_expr(e, counts);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            count_local_refs_expr(condition, counts);
+            count_local_refs_stmts(then_branch, counts);
+            if let Some(eb) = else_branch {
+                count_local_refs_stmts(eb, counts);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            count_local_refs_expr(condition, counts);
+            count_local_refs_stmts(body, counts);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(init_stmt) = init {
+                count_local_refs_stmt(init_stmt, counts);
+            }
+            if let Some(c) = condition {
+                count_local_refs_expr(c, counts);
+            }
+            if let Some(u) = update {
+                count_local_refs_expr(u, counts);
+            }
+            count_local_refs_stmts(body, counts);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            count_local_refs_stmts(body, counts);
+            if let Some(c) = catch {
+                count_local_refs_stmts(&c.body, counts);
+            }
+            if let Some(f) = finally {
+                count_local_refs_stmts(f, counts);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            count_local_refs_expr(discriminant, counts);
+            for c in cases {
+                if let Some(t) = &c.test {
+                    count_local_refs_expr(t, counts);
+                }
+                count_local_refs_stmts(&c.body, counts);
+            }
+        }
+        Stmt::Labeled { body, .. } => count_local_refs_stmt(body, counts),
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
+}
+
+fn count_local_refs_expr(expr: &Expr, counts: &mut HashMap<LocalId, usize>) {
+    fn bump(counts: &mut HashMap<LocalId, usize>, id: LocalId) {
+        *counts.entry(id).or_insert(0) += 1;
+    }
+    match expr {
+        Expr::LocalGet(id) | Expr::Update { id, .. } => bump(counts, *id),
+        Expr::LocalSet(id, _) => bump(counts, *id),
+        Expr::ArrayPush { array_id, .. }
+        | Expr::ArrayPushSpread { array_id, .. }
+        | Expr::ArrayUnshift { array_id, .. }
+        | Expr::ArraySplice { array_id, .. }
+        | Expr::ArrayCopyWithin { array_id, .. } => bump(counts, *array_id),
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => bump(counts, *id),
+        Expr::SetAdd { set_id, .. } => bump(counts, *set_id),
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            body,
+            ..
+        } => {
+            // Closure params are declarations within the closure scope, not
+            // uses of an outer binding — skip them. Captures ARE uses of an
+            // outer binding.
+            for c in captures {
+                bump(counts, *c);
+            }
+            for c in mutable_captures {
+                bump(counts, *c);
+            }
+            count_local_refs_stmts(body, counts);
+        }
+        _ => {}
+    }
+    walk_expr_children(expr, &mut |child| count_local_refs_expr(child, counts));
+}
+
 /// Per-iteration LocalId remap pass for `try_unroll_for`.
 ///
 /// Walks `stmts` and assigns a fresh `LocalId` (drawn from `next_id`) to
@@ -981,14 +1249,39 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
 /// `Stmt::Try` and `Stmt::Labeled` are rejected by `body_is_unrollable`
 /// so they shouldn't appear here, but the walker handles them defensively
 /// in case the unrollability rules ever loosen.
-fn refresh_local_ids(stmts: &mut [Stmt], next_id: &mut LocalId, next_func_id: &mut FuncId) {
+fn refresh_local_ids(
+    stmts: &mut [Stmt],
+    next_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+    protected: &std::collections::HashSet<LocalId>,
+) {
+    // #2308: seed the remap with identity mappings for every protected
+    // (loop-escaping `var`) id. `alloc_fresh` reuses an existing remap
+    // entry instead of minting a new id, so a protected declaration keeps
+    // its ORIGINAL id across every unrolled copy and `lookup` leaves
+    // references to it untouched. The post-loop read — which still uses the
+    // original id — then binds to the slot all copies write, matching JS
+    // function-scoped `var` semantics. Non-protected (block-scoped
+    // let/const, closure params, …) ids are absent from the seed and get
+    // fresh ids as before, so per-iteration closure captures stay distinct.
     let mut remap: HashMap<LocalId, LocalId> = HashMap::new();
+    for &id in protected {
+        remap.insert(id, id);
+    }
     for s in stmts.iter_mut() {
         refresh_in_stmt(s, &mut remap, next_id, next_func_id);
     }
 }
 
 fn alloc_fresh(remap: &mut HashMap<LocalId, LocalId>, next_id: &mut LocalId, id: &mut LocalId) {
+    // A pre-seeded entry (see `refresh_local_ids`, #2308) means this id is
+    // protected — a loop-escaping `var` that must keep its original id
+    // across copies. Reuse the existing mapping rather than minting a new
+    // one. For ordinary declarations the id is absent and we allocate fresh.
+    if let Some(&existing) = remap.get(id) {
+        *id = existing;
+        return;
+    }
     let new_id = *next_id;
     *next_id = next_id.saturating_add(1);
     remap.insert(*id, new_id);
@@ -1266,7 +1559,10 @@ mod tests {
         const FUNC_START: FuncId = 10_000;
         let mut next_id: LocalId = START;
         let mut next_func_id: FuncId = FUNC_START;
-        try_unroll_for(stmt, &mut next_id, &mut next_func_id)
+        // These tests exercise a single for-loop in isolation with no
+        // enclosing scope, so there are no escaping ids to protect (#2308).
+        let protected = std::collections::HashSet::new();
+        try_unroll_for(stmt, &mut next_id, &mut next_func_id, &protected)
     }
 
     /// Test helper: wrap `unroll_in_stmts` with the same throwaway counters.
@@ -1623,5 +1919,114 @@ mod tests {
             }
             _ => panic!("expected If"),
         }
+    }
+
+    /// #2308: a `var` declared in the loop body and read AFTER the loop is
+    /// function-scoped. Every unrolled copy must keep the var's ORIGINAL id
+    /// (so the last copy's write lands in the slot the post-loop read uses).
+    #[test]
+    fn loop_escaping_var_keeps_original_id() {
+        // for (let i = 0; i < 3; i++) { var t = i; }
+        // return t;   // t escapes the loop -> must not be refreshed
+        let i = 1u32;
+        let t = 2u32;
+        let body = vec![Stmt::Let {
+            id: t,
+            name: "t".into(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(ivar(i)),
+        }];
+        let f = make_for(i, 0, 3, body, CompareOp::Lt);
+        let mut stmts = vec![f, Stmt::Return(Some(Expr::LocalGet(t)))];
+        let mut changed = false;
+        run_unroll_in_stmts(&mut stmts, &mut changed);
+        assert!(changed, "expected unroll to fire");
+        // 3 unrolled `Let { id: t }` + the trailing return.
+        assert_eq!(stmts.len(), 4);
+        for s in &stmts[0..3] {
+            match s {
+                Stmt::Let { id, .. } => assert_eq!(
+                    *id, t,
+                    "escaping var must keep its original id across copies"
+                ),
+                other => panic!("expected Stmt::Let, got {:?}", other),
+            }
+        }
+        match &stmts[3] {
+            Stmt::Return(Some(Expr::LocalGet(id))) => {
+                assert_eq!(*id, t, "post-loop read must still bind the original id")
+            }
+            other => panic!("expected Return(LocalGet(t)), got {:?}", other),
+        }
+    }
+
+    /// #2308 guard: a block-scoped `let` declared in the loop body and
+    /// referenced ONLY inside it (here, captured by a per-iteration closure)
+    /// must still get fresh ids per copy, so each closure binds a distinct
+    /// value — the long-standing behavior the escaping analysis must not
+    /// disturb.
+    #[test]
+    fn loop_local_let_still_refreshed_per_copy() {
+        // for (let i = 0; i < 3; i++) { let x = i; fns.push(() => x); }
+        let i = 1u32;
+        let x = 2u32;
+        let fns = 3u32; // declared outside the loop (not refreshed)
+        let body = vec![
+            Stmt::Let {
+                id: x,
+                name: "x".into(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(ivar(i)),
+            },
+            Stmt::Expr(Expr::ArrayPush {
+                array_id: fns,
+                value: Box::new(Expr::Closure {
+                    func_id: 0,
+                    params: vec![],
+                    return_type: Type::Number,
+                    body: vec![Stmt::Return(Some(Expr::LocalGet(x)))],
+                    captures: vec![x],
+                    mutable_captures: vec![],
+                    captures_this: false,
+                    enclosing_class: None,
+                    is_async: false,
+                    is_generator: false,
+                }),
+            }),
+        ];
+        let f = make_for(i, 0, 3, body, CompareOp::Lt);
+        let mut stmts = vec![f];
+        let mut changed = false;
+        run_unroll_in_stmts(&mut stmts, &mut changed);
+        assert!(changed, "expected unroll to fire");
+        assert_eq!(stmts.len(), 6, "3 trips * 2 body stmts");
+        // Collect the `let x` id of each copy — they must all be DISTINCT
+        // (refreshed), and the closure in each copy must capture its own id.
+        let mut let_ids = Vec::new();
+        for pair in stmts.chunks(2) {
+            let decl_id = match &pair[0] {
+                Stmt::Let { id, .. } => *id,
+                other => panic!("expected Let, got {:?}", other),
+            };
+            match &pair[1] {
+                Stmt::Expr(Expr::ArrayPush { value, .. }) => match value.as_ref() {
+                    Expr::Closure { captures, .. } => {
+                        assert_eq!(captures, &vec![decl_id], "closure captures its copy's x");
+                    }
+                    other => panic!("expected Closure, got {:?}", other),
+                },
+                other => panic!("expected ArrayPush, got {:?}", other),
+            }
+            let_ids.push(decl_id);
+        }
+        let_ids.sort_unstable();
+        let_ids.dedup();
+        assert_eq!(
+            let_ids.len(),
+            3,
+            "each copy's `let x` must be a distinct id"
+        );
     }
 }
