@@ -425,14 +425,32 @@ pub unsafe fn dispatch_buffer_method(
                 other_bits
             };
             let other = other_addr as *const crate::buffer::BufferHeader;
-            if args.len() >= 5 {
+            if args.len() >= 2 {
+                let target_len = if other.is_null() {
+                    0
+                } else {
+                    (*other).length as i32
+                };
+                let source_len = (*buf_ptr).length as i32;
+                let arg_i32_or = |i: usize, default: i32| -> i32 {
+                    if i < args.len() {
+                        let value = JSValue::from_bits(args[i].to_bits());
+                        if value.is_undefined() {
+                            default
+                        } else {
+                            args[i] as i32
+                        }
+                    } else {
+                        default
+                    }
+                };
                 i32_num(crate::buffer::js_buffer_compare_range(
                     buf_ptr,
                     other,
-                    arg_i32(1),
-                    arg_i32(2),
-                    arg_i32(3),
-                    arg_i32(4),
+                    arg_i32_or(1, 0),
+                    arg_i32_or(2, target_len),
+                    arg_i32_or(3, 0),
+                    arg_i32_or(4, source_len),
                 ))
             } else {
                 i32_num(crate::buffer::js_buffer_compare(buf_ptr, other))
