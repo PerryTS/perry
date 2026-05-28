@@ -374,12 +374,6 @@
     "category": "bug-open",
     "reason": "node:stream: final() constructor option not invoked before finish. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/pipe/pipe-chain": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: r.pipe(t).pipe(sink) chain doesn't propagate data through transforms. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipeline/async-function": {
     "issue": "1532",
     "added": "2026-05-23",
