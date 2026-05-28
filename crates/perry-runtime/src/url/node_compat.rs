@@ -36,6 +36,7 @@ pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
     let path = get_string_content(path_f64);
+    let path = crate::path::resolve_posix_str(&path);
     let mut encoded = String::new();
     for b in path.bytes() {
         match b {

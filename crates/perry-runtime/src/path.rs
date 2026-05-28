@@ -60,7 +60,7 @@ fn string_from_header_or_throw(ptr: *const StringHeader) -> String {
     unsafe { string_from_header(ptr) }.unwrap_or_else(|| throw_invalid_path_arg_type())
 }
 
-fn resolve_posix_str(path_str: &str) -> String {
+pub(crate) fn resolve_posix_str(path_str: &str) -> String {
     if path_str.is_empty() {
         return std::env::current_dir()
             .map(|cwd| cwd.to_string_lossy().to_string())
