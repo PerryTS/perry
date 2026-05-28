@@ -227,6 +227,26 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_VOID,
     },
+    // #2135: process.setgroups(groups[]) — JSValue array of numeric GIDs.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setgroups",
+        class_filter: None,
+        runtime: "js_process_setgroups",
+        args: &[NA_JSV],
+        ret: NR_VOID,
+    },
+    // #2135: process.initgroups(user, extra_gid) — username + numeric GID.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "initgroups",
+        class_filter: None,
+        runtime: "js_process_initgroups",
+        args: &[NA_JSV, NA_F64],
+        ret: NR_VOID,
+    },
     // ========== Node URL ==========
     // `new Number/String/Boolean(...)` now lowers to
     // `Expr::BoxedPrimitiveNew` (see crates/perry-hir/src/lower/expr_new.rs)

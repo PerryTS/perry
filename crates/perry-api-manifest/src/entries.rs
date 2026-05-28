@@ -2140,6 +2140,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "seteuid", false, None),
     method("process", "setgid", false, None),
     method("process", "setegid", false, None),
+    method("process", "setgroups", false, None),
+    method("process", "initgroups", false, None),
     method("process", "emitWarning", false, None),
     method("process", "on", false, None),
     method("process", "addListener", false, None),

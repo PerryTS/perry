@@ -266,6 +266,84 @@ pub extern "C" fn js_process_setegid(gid: f64) {
     }
 }
 
+/// `process.setgroups(groups)` — replace the calling process's
+/// supplementary GID list with the IDs from a JS number array. Each non-
+/// finite / out-of-range / non-numeric entry is silently skipped. On
+/// non-unix targets this is a no-op (#2135).
+#[no_mangle]
+pub extern "C" fn js_process_setgroups(groups: f64) {
+    let arr_jsval = JSValue::from_bits(groups.to_bits());
+    if !arr_jsval.is_pointer() {
+        return;
+    }
+    let arr_ptr = arr_jsval.as_pointer::<crate::array::ArrayHeader>();
+    if arr_ptr.is_null() {
+        return;
+    }
+    let len = unsafe { crate::array::js_array_length(arr_ptr) } as u32;
+    #[cfg(unix)]
+    {
+        let mut gids: Vec<libc::gid_t> = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            let v = unsafe { crate::array::js_array_get_f64(arr_ptr, i) };
+            if let Some(id) = unix_id_arg(v) {
+                gids.push(id as libc::gid_t);
+            }
+        }
+        if !gids.is_empty() {
+            unsafe {
+                libc::setgroups(gids.len() as _, gids.as_ptr());
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = len;
+    }
+}
+
+/// `process.initgroups(user, extra_gid)` — initialize the supplementary
+/// group access list using `getgrouplist(3)`-style semantics. The first
+/// argument is a username string (or numeric UID); the second is an
+/// extra group ID to include. Perry today only accepts the username-as-
+/// string + numeric extra_gid form via `libc::initgroups`; numeric user
+/// or non-string first argument silently no-ops. Non-unix targets no-op
+/// entirely (#2135).
+#[no_mangle]
+pub extern "C" fn js_process_initgroups(user: f64, extra_gid: f64) {
+    #[cfg(unix)]
+    {
+        let user_jsval = JSValue::from_bits(user.to_bits());
+        if !user_jsval.is_any_string() {
+            return;
+        }
+        let user_ptr = crate::value::js_get_string_pointer_unified(user);
+        if user_ptr == 0 {
+            return;
+        }
+        let user_str_ptr = user_ptr as *const StringHeader;
+        let len = unsafe { (*user_str_ptr).byte_len } as usize;
+        let data = unsafe { (user_str_ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
+        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+        let Ok(name) = std::str::from_utf8(bytes) else {
+            return;
+        };
+        let Some(extra) = unix_id_arg(extra_gid) else {
+            return;
+        };
+        let Ok(cname) = std::ffi::CString::new(name) else {
+            return;
+        };
+        unsafe {
+            libc::initgroups(cname.as_ptr(), extra as _);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (user, extra_gid);
+    }
+}
+
 /// `process.getgroups()` — supplementary group IDs the process is a member
 /// of, as a JS array of numbers. Wraps `libc::getgroups(2)`; on non-unix
 /// targets returns an empty array (Node throws there, but Perry's existing
