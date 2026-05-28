@@ -240,8 +240,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "base64url" => 3,
                         "latin1" | "binary" => 4,
                         "ascii" => 5,
+                        "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => 6,
                         _ => bail!(
-                            "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary",
+                            "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary, utf16le, utf-16le, ucs2, ucs-2",
                             s
                         ),
                     };
@@ -345,8 +346,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "base64url" => 3,
                             "latin1" | "binary" => 4,
                             "ascii" => 5,
+                            "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => 6,
                             _ => bail!(
-                                "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary",
+                                "perry-codegen: unknown Buffer encoding \"{}\": expected one of utf8, utf-8, hex, base64, base64url, ascii, latin1, binary, utf16le, utf-16le, ucs2, ucs-2",
                                 s
                             ),
                         };

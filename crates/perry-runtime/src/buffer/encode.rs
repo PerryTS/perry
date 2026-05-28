@@ -4,7 +4,8 @@ use super::*;
 /// range (Node semantics: `start` clamped to `[0, len]`, `end` clamped to
 /// `[start, len]`; defaults are `start=0, end=len`).
 ///
-/// `encoding`: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii.
+/// `encoding`: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url,
+/// 4 = latin1/binary, 5 = ascii, 6 = utf16le/ucs2.
 #[no_mangle]
 pub extern "C" fn js_buffer_to_string_range(
     buf_ptr: *const BufferHeader,
@@ -42,13 +43,15 @@ pub extern "C" fn js_buffer_to_string_range(
             3 => base64url_encode_into_string(bytes),
             4 => latin1_bytes_to_string(bytes),
             5 => ascii_bytes_to_string(bytes),
+            6 => utf16le_bytes_to_string(bytes),
             _ => buf_bytes_to_utf8_string(bytes),
         }
     }
 }
 
 /// Convert a buffer to a string
-/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii.
+/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url,
+/// 4 = latin1/binary, 5 = ascii, 6 = utf16le/ucs2.
 #[no_mangle]
 pub extern "C" fn js_buffer_to_string(
     buf_ptr: *const BufferHeader,
@@ -86,6 +89,7 @@ pub extern "C" fn js_buffer_to_string(
             3 => base64url_encode_into_string(bytes),
             4 => latin1_bytes_to_string(bytes),
             5 => ascii_bytes_to_string(bytes),
+            6 => utf16le_bytes_to_string(bytes),
             _ => {
                 // UTF-8 (default) — Node spec: invalid UTF-8 sequences are
                 // replaced with U+FFFD. Pre-fix this path passed the raw
@@ -120,6 +124,16 @@ fn ascii_bytes_to_string(bytes: &[u8]) -> *mut StringHeader {
     js_string_from_ascii_bytes(out.as_ptr(), out.len() as u32)
 }
 
+/// Decode UTF-16LE byte pairs. Node drops an incomplete trailing byte.
+fn utf16le_bytes_to_string(bytes: &[u8]) -> *mut StringHeader {
+    let mut units = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        units.push(u16::from_le_bytes([pair[0], pair[1]]));
+    }
+    let out = String::from_utf16_lossy(&units);
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
+
 /// Build a Perry string (validated UTF-8) from a buffer's raw bytes.
 /// Invalid UTF-8 sequences are replaced with U+FFFD per the WHATWG / Node
 /// `Buffer.toString('utf8')` contract. Issue #609.
@@ -149,8 +163,8 @@ fn buf_bytes_to_utf8_string(bytes: &[u8]) -> *mut StringHeader {
 /// - Otherwise fall through to `js_jsvalue_to_string` (encoding ignored,
 ///   matches Node behavior for non-Buffer values like numbers/objects).
 ///
-/// `enc_tag` is the i32 produced by `js_encoding_tag_from_value` (or a
-/// compile-time-folded literal): 0 = utf8, 1 = hex, 2 = base64.
+/// `enc_tag` is the i32 produced by `js_encoding_tag_from_value` or a
+/// compile-time-folded literal; see `js_buffer_to_string` for the tag table.
 #[no_mangle]
 pub extern "C" fn js_value_to_string_with_encoding(value: f64, enc_tag: i32) -> *mut StringHeader {
     let bits = value.to_bits();

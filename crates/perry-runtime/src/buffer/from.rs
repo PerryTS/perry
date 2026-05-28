@@ -1,7 +1,8 @@
 use super::*;
 
 /// Create a Buffer from a string
-/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii
+/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url,
+/// 4 = latin1/binary, 5 = ascii, 6 = utf16le/ucs2.
 #[no_mangle]
 pub extern "C" fn js_buffer_from_string(
     str_ptr: *const StringHeader,
@@ -34,6 +35,7 @@ fn buffer_from_str_bytes(str_bytes: &[u8], encoding: i32) -> *mut BufferHeader {
             1 => hex_decode_into_buffer(str_bytes),
             2 | 3 => base64_decode_into_buffer(str_bytes),
             4 | 5 => latin1_string_to_buffer(str_bytes),
+            6 => buffer_from_vec(utf16le_string_bytes(str_bytes)),
             _ => {
                 // UTF-8 (default)
                 let len = str_bytes.len();
@@ -46,19 +48,17 @@ fn buffer_from_str_bytes(str_bytes: &[u8], encoding: i32) -> *mut BufferHeader {
     }
 }
 
-/// Encode a JS string as Node's `latin1`/`binary` Buffer input encoding.
-///
-/// Perry strings are stored as UTF-8, while Node's latin1 encoder writes the
-/// low byte of each JS code point. This keeps high-bit bytes in binary-over-
-/// string payloads from being expanded into UTF-8 multibyte sequences.
-/// `ascii` uses the same input-encoding behavior in modern Node, so it
-/// shares this path.
-fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
-    let decoded = String::from_utf8_lossy(str_bytes);
-    let mut out = Vec::with_capacity(decoded.chars().count());
-    for ch in decoded.chars() {
-        out.push((ch as u32 & 0xFF) as u8);
+pub(crate) fn buffer_string_bytes_for_encoding(str_bytes: &[u8], encoding: i32) -> Vec<u8> {
+    match encoding {
+        1 => decode_hex(str_bytes),
+        2 | 3 => decode_base64(str_bytes),
+        4 | 5 => latin1_string_bytes(str_bytes),
+        6 => utf16le_string_bytes(str_bytes),
+        _ => str_bytes.to_vec(),
     }
+}
+
+fn buffer_from_vec(out: Vec<u8>) -> *mut BufferHeader {
     unsafe {
         let buf = buffer_alloc(out.len() as u32);
         (*buf).length = out.len() as u32;
@@ -67,6 +67,35 @@ fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
         }
         buf
     }
+}
+
+/// Encode a JS string as Node's `latin1`/`binary` Buffer input encoding.
+///
+/// Perry strings are stored as UTF-8, while Node's latin1 encoder writes the
+/// low byte of each JS code point. This keeps high-bit bytes in binary-over-
+/// string payloads from being expanded into UTF-8 multibyte sequences.
+/// `ascii` uses the same input-encoding behavior in modern Node, so it
+/// shares this path.
+fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
+    buffer_from_vec(latin1_string_bytes(str_bytes))
+}
+
+fn latin1_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
+    let decoded = String::from_utf8_lossy(str_bytes);
+    let mut out = Vec::with_capacity(decoded.chars().count());
+    for ch in decoded.chars() {
+        out.push((ch as u32 & 0xFF) as u8);
+    }
+    out
+}
+
+fn utf16le_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
+    let decoded = String::from_utf8_lossy(str_bytes);
+    let mut out = Vec::with_capacity(decoded.len() * 2);
+    for unit in decoded.encode_utf16() {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out
 }
 
 /// Map a JS string value (NaN-boxed, pointer-tagged, or raw `*const StringHeader`
@@ -78,6 +107,7 @@ fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
 /// - 3 = base64url encode tag (decode uses the same permissive table)
 /// - 4 = latin1 / binary
 /// - 5 = ascii
+/// - 6 = utf16le / utf-16le / ucs2 / ucs-2
 ///
 /// Used by codegen for non-literal encoding arguments to `Buffer.from(str, enc)`
 /// and `buf.toString(enc)` where the encoding expression cannot be statically
@@ -116,6 +146,12 @@ pub extern "C" fn js_encoding_tag_from_value(value: f64) -> i32 {
             4
         } else if eq_ascii_lower(bytes, b"ascii") {
             5
+        } else if eq_ascii_lower(bytes, b"utf16le")
+            || eq_ascii_lower(bytes, b"utf-16le")
+            || eq_ascii_lower(bytes, b"ucs2")
+            || eq_ascii_lower(bytes, b"ucs-2")
+        {
+            6
         } else {
             // utf8, utf-8, and unknown fall through to UTF-8.
             // Matches the runtime's `_ =>` arm in js_buffer_from_string/js_buffer_to_string.

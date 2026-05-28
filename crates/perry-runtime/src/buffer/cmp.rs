@@ -224,11 +224,7 @@ fn buffer_search_needle_with_encoding(
                 let len = (*str_ptr).byte_len as usize;
                 let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
                 let bytes = std::slice::from_raw_parts(data_ptr, len);
-                let decoded = match encoding {
-                    1 => decode_hex(bytes),
-                    2 | 3 => decode_base64(bytes),
-                    _ => bytes.to_vec(),
-                };
+                let decoded = super::from::buffer_string_bytes_for_encoding(bytes, encoding);
                 Some(decoded)
             };
         }
@@ -290,11 +286,7 @@ pub extern "C" fn js_buffer_index_of_enc(
                 let len = (*str_ptr).byte_len as usize;
                 let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
                 let bytes = std::slice::from_raw_parts(data_ptr, len);
-                let decoded = match encoding {
-                    1 => decode_hex(bytes),
-                    2 | 3 => decode_base64(bytes),
-                    _ => bytes.to_vec(),
-                };
+                let decoded = super::from::buffer_string_bytes_for_encoding(bytes, encoding);
                 return buffer_index_of_bytes(buf, &decoded, start);
             }
         }
