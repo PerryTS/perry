@@ -11,12 +11,13 @@
 //! logic changes.
 
 pub use super::class_handles::{
-    handle_method_dispatch, handle_property_dispatch, handle_property_set_dispatch,
+    event_emitter_handle_probe, handle_method_dispatch, handle_property_dispatch,
+    handle_property_set_dispatch, js_register_event_emitter_handle_probe,
     js_register_handle_method_dispatch, js_register_handle_property_dispatch,
     js_register_handle_property_set_dispatch, js_register_stream_handle_kind_probe,
     js_register_stream_handle_probe, stream_handle_kind_probe, stream_handle_probe,
-    HandleMethodDispatchFn, HandlePropertyDispatchFn, HandlePropertySetDispatchFn,
-    StreamHandleKindProbeFn, StreamHandleProbeFn,
+    EventEmitterHandleProbeFn, HandleMethodDispatchFn, HandlePropertyDispatchFn,
+    HandlePropertySetDispatchFn, StreamHandleKindProbeFn, StreamHandleProbeFn,
 };
 use super::*;
 

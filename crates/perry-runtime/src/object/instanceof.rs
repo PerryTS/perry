@@ -5,6 +5,9 @@
 
 use super::*;
 
+// Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
+const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
 /// type is a runtime value (function arg holding a class ref). Extracts
 /// the class_id from the INT32 NaN-tag (top16=0x7FFE) and dispatches to
@@ -43,15 +46,34 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
-        if module == "events"
-            && method == "EventEmitter"
-            && (crate::node_stream::is_classic_stream_instance_value(value)
-                || is_stream_event_emitter_prototype_value(value))
+        if module == "events" && method == "EventEmitter" && is_event_emitter_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
     }
     f64::from_bits(TAG_FALSE)
+}
+
+fn is_event_emitter_instance_value(value: f64) -> bool {
+    if crate::node_stream::is_classic_stream_instance_value(value)
+        || is_stream_event_emitter_prototype_value(value)
+    {
+        return true;
+    }
+
+    let bits = value.to_bits();
+    let jsval = crate::JSValue::from_bits(bits);
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let handle = (bits & crate::value::POINTER_MASK) as i64;
+    if handle <= 0 || handle >= 0x100000 {
+        return false;
+    }
+    if let Some(probe) = crate::object::event_emitter_handle_probe() {
+        return unsafe { probe(handle) };
+    }
+    false
 }
 
 /// Check if a value is an instance of a class with the given class_id
@@ -80,6 +102,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     };
     if let Some(name) = classic_stream_name {
         return if crate::node_stream::is_classic_stream_instance_of(value, name) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_EVENT_EMITTER {
+        return if is_event_emitter_instance_value(value) {
             true_val
         } else {
             false_val

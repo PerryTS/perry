@@ -127,6 +127,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(cid) = classic_stream_cid {
                         return cid;
                     }
+                    let native_event_cid = match ty.as_str() {
+                        // Keep in sync with perry-runtime/src/object/instanceof.rs.
+                        "EventEmitter" => Some(0xFFFF0076u32),
+                        _ => None,
+                    };
+                    if let Some(cid) = native_event_cid {
+                        return cid;
+                    }
                     // Issue #574: `b instanceof Lib.A` where Lib is a
                     // namespace import. The HIR captures the receiver
                     // as a dotted `ty` ("Lib.A") which `class_ids`

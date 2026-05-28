@@ -103,7 +103,7 @@ fn validate_max_listeners(n: f64) {
     }
 }
 
-use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
+use crate::common::{for_each_handle_mut_of, get_handle, get_handle_mut, register_handle, Handle};
 
 /// One registered listener: a raw closure pointer (i64 to satisfy
 /// Send + Sync — the underlying ClosureHeader is GC-managed) plus a
@@ -448,6 +448,10 @@ pub unsafe extern "C" fn js_event_emitter_new_with_options(options: f64) -> Hand
     let mut emitter = EventEmitterHandle::new();
     emitter.capture_rejections = event_emitter_options_capture_rejections(options);
     register_handle(emitter)
+}
+
+pub fn is_event_emitter_handle(handle: Handle) -> bool {
+    get_handle::<EventEmitterHandle>(handle).is_some()
 }
 
 /// EventEmitter.on(eventName, listener) — also serves as `addListener`.

@@ -1642,10 +1642,15 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         fn js_register_handle_property_set_dispatch(
             f: unsafe extern "C" fn(i64, *const u8, usize, f64),
         );
+        fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
+        crate::events::is_event_emitter_handle(handle)
+    }
+    js_register_event_emitter_handle_probe(event_emitter_probe);
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
