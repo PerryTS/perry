@@ -21,7 +21,7 @@ use crate::analysis::{
     closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_stmt, uses_this_stmt,
 };
 use crate::ir::{EnumValue, Expr, Function, Param, Stmt};
-use crate::lower_decl::lower_block_stmt;
+use crate::lower_decl::{append_synthetic_arguments_param, body_uses_arguments, lower_block_stmt};
 use crate::lower_patterns::{get_param_default, get_pat_name, is_rest_param};
 use crate::lower_types::{extract_param_type_with_ctx, extract_ts_type_with_ctx};
 
@@ -170,6 +170,32 @@ fn lower_method_prop(
         .as_ref()
         .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
+
+    // #321 / #64 / #65: synthesize legacy `arguments` for object-literal methods
+    // whose body references it. Without this, effect's Pipeable prototype
+    // methods (`pipe() { return pipeArguments(this, arguments) }` on
+    // `TypeMatcherProto`/`ValueMatcherProto` and friends) see an unbound
+    // `arguments` identifier, and `.pipe(...)` quietly drops all of its
+    // operands. Mirrors the synthesis in `class_members.rs` / `fn_decl.rs` /
+    // `expr_function.rs` — the only call site that was missing this hook.
+    let user_has_arguments_param = method
+        .function
+        .params
+        .iter()
+        .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
+    let user_has_rest = method.function.params.iter().any(|p| is_rest_param(&p.pat));
+    let needs_arguments_synth = !user_has_arguments_param
+        && !user_has_rest
+        && method
+            .function
+            .body
+            .as_ref()
+            .map(|b| body_uses_arguments(&b.stmts))
+            .unwrap_or(false);
+    if needs_arguments_synth {
+        append_synthetic_arguments_param(ctx, &mut params);
+    }
+
     let body = if let Some(ref block) = method.function.body {
         lower_block_stmt(ctx, block)?
     } else {
