@@ -973,10 +973,10 @@ unsafe fn format_object_as_json(
     }
 
     // Append symbol-keyed properties last (matches Node's enumeration order:
-    // string keys first, then symbol keys). Each entry renders as
-    // `[Symbol(<desc>)]: <value>`. By default Node prints enumerable symbol
-    // properties even without `showHidden` (they're own enumerable props).
-    // Refs #1201.
+    // string keys first, then symbol keys). Perry's symbol side table only
+    // stores enumerable own symbol props today, and Node renders those labels
+    // without brackets: `Symbol(<desc>): <value>`. Brackets are reserved for
+    // non-enumerable symbol props when `showHidden` is enabled. Refs #1201.
     let sym_entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_addr);
     for (sym_ptr_usize, val_bits) in sym_entries {
         let sym_f64 = f64::from_bits(
@@ -995,7 +995,7 @@ unsafe fn format_object_as_json(
         };
         let value = f64::from_bits(val_bits);
         let value_str = format_jsvalue_for_json(value, depth + 1);
-        parts.push(format!("[{}]: {}", sym_label, value_str));
+        parts.push(format!("{}: {}", sym_label, value_str));
     }
 
     if parts.is_empty() {
