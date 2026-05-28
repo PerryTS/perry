@@ -1400,12 +1400,6 @@
     "category": "bug-open",
     "reason": "node:stream: reduce(fn, initial) — initial value not used or wrong sum. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/iter-helpers/for-each-empty-stream": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: forEach() on empty — calls non-zero or result not undefined. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/readable/readable-stream-id-properties": {
     "issue": "1532",
     "added": "2026-05-24",

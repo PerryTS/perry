@@ -12,7 +12,23 @@ use crate::lower_types::extract_ts_type_with_ctx;
 /// Is `expr` a reference to a node:stream class constructor — bare
 /// (`Readable`) or namespaced (`stream.Readable`)? Used by
 /// [`chain_roots_at_stream`].
+fn unwrap_transparent_expr(expr: &ast::Expr) -> &ast::Expr {
+    let mut cur = expr;
+    loop {
+        match cur {
+            ast::Expr::Paren(p) => cur = &p.expr,
+            ast::Expr::TsAs(ts_as) => cur = &ts_as.expr,
+            ast::Expr::TsNonNull(ts_non_null) => cur = &ts_non_null.expr,
+            ast::Expr::TsSatisfies(ts_satisfies) => cur = &ts_satisfies.expr,
+            ast::Expr::TsTypeAssertion(ts_type_assertion) => cur = &ts_type_assertion.expr,
+            ast::Expr::TsConstAssertion(ts_const_assertion) => cur = &ts_const_assertion.expr,
+            _ => return cur,
+        }
+    }
+}
+
 fn is_stream_class_ref(expr: &ast::Expr) -> bool {
+    let expr = unwrap_transparent_expr(expr);
     let name = match expr {
         ast::Expr::Ident(i) => i.sym.as_ref(),
         ast::Expr::Member(m) => match &m.prop {
@@ -37,8 +53,8 @@ fn is_stream_class_ref(expr: &ast::Expr) -> bool {
 /// iterator-helper stubs run. AST-only (no type info) so it catches the
 /// common inline-chain form without depending on receiver inference.
 fn chain_roots_at_stream(expr: &ast::Expr) -> bool {
+    let expr = unwrap_transparent_expr(expr);
     match expr {
-        ast::Expr::Paren(p) => chain_roots_at_stream(&p.expr),
         ast::Expr::Await(a) => chain_roots_at_stream(&a.arg),
         ast::Expr::New(new) => is_stream_class_ref(&new.callee),
         ast::Expr::Call(call) => {
@@ -85,7 +101,8 @@ pub(super) fn try_array_only_methods(
                 // `Stack<T>.map`). Without this guard the lowering blindly
                 // emits `Expr::Array<Method>` and the compiled binary calls
                 // `js_array_<method>` on a class handle.
-                let recv_is_class = match member.obj.as_ref() {
+                let member_obj = unwrap_transparent_expr(member.obj.as_ref());
+                let recv_is_class = match member_obj {
                     ast::Expr::Ident(ident) => {
                         let n = ident.sym.to_string();
                         // #39 (#321): a module namespace import
@@ -312,7 +329,7 @@ pub(super) fn try_array_only_methods(
                 // transforms return a Readable, not an array, so `js_array_map`
                 // would read garbage out of the stream object's header. Bail to
                 // dynamic dispatch so the runtime's iterator-helper stubs run.
-                let recv_is_class = recv_is_class || chain_roots_at_stream(member.obj.as_ref());
+                let recv_is_class = recv_is_class || chain_roots_at_stream(member_obj);
                 match method_name {
                     "reduce" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
