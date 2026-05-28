@@ -76,6 +76,19 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             ty: substitute_type(ty, substitutions),
             field_path: field_path.clone(),
         },
+        Expr::NativePodView {
+            owner,
+            byte_offset,
+            count,
+            view_type,
+        } => Expr::NativePodView {
+            owner: Box::new(substitute_expr(owner, substitutions)),
+            byte_offset: Box::new(substitute_expr(byte_offset, substitutions)),
+            count: Box::new(substitute_expr(count, substitutions)),
+            view_type: view_type
+                .as_ref()
+                .map(|ty| substitute_type(ty, substitutions)),
+        },
         Expr::NativeMemoryFillU32 { view, value } => Expr::NativeMemoryFillU32 {
             view: Box::new(substitute_expr(view, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),

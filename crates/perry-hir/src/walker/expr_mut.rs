@@ -341,6 +341,7 @@ where
             owner,
             byte_offset,
             count,
+            ..
         } => {
             f(owner);
             f(byte_offset);

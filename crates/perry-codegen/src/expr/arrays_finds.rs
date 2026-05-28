@@ -137,6 +137,43 @@ pub(crate) fn lower_native_pod_view_with_layout(
     Ok(nanbox_pointer_inline(blk, &view))
 }
 
+pub(crate) fn lower_native_pod_view(
+    ctx: &mut FnCtx<'_>,
+    owner: &Expr,
+    byte_offset: &Expr,
+    count: &Expr,
+    expected_ty: Option<&HirType>,
+    view_type: Option<&HirType>,
+) -> Result<String> {
+    if let Some(expected_ty) = expected_ty {
+        match crate::native_value::layout_for_pod_view_type(ctx, expected_ty) {
+            Ok(layout) => {
+                return lower_native_pod_view_with_layout(ctx, owner, byte_offset, count, &layout);
+            }
+            Err(_)
+                if view_type.is_some()
+                    && matches!(expected_ty, HirType::Any | HirType::Unknown) => {}
+            Err(reason) => {
+                bail!(
+                    "__perry_native_pod_view requires PerryPodView<T> where T resolves to PerryPod<...>: {}",
+                    reason
+                );
+            }
+        }
+    }
+
+    let Some(view_type) = view_type else {
+        bail!("__perry_native_pod_view requires an explicit PerryPodView<T> type annotation");
+    };
+    let layout = crate::native_value::layout_for_pod_view_type(ctx, view_type).map_err(|reason| {
+        anyhow!(
+            "__perry_native_pod_view requires PerryPodView<T> where T resolves to PerryPod<...>: {}",
+            reason
+        )
+    })?;
+    lower_native_pod_view_with_layout(ctx, owner, byte_offset, count, &layout)
+}
+
 pub(crate) fn lower_buffer_index_get_i32(
     ctx: &mut FnCtx<'_>,
     buffer: &Expr,
@@ -888,9 +925,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &view))
         }
 
-        Expr::NativePodView { .. } => Err(anyhow!(
-            "__perry_native_pod_view requires an explicit PerryPodView<T> type annotation"
-        )),
+        Expr::NativePodView {
+            owner,
+            byte_offset,
+            count,
+            view_type,
+        } => lower_native_pod_view(ctx, owner, byte_offset, count, None, view_type.as_ref()),
 
         Expr::NativeArenaDispose(owner) => {
             let owner_value = lower_expr(ctx, owner)?;

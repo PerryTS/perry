@@ -374,6 +374,7 @@ fn native_pod_view_let(
             owner: Box::new(local(owner_id)),
             byte_offset: Box::new(byte_offset),
             count: Box::new(count),
+            view_type: None,
         }),
     }
 }

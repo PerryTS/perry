@@ -298,7 +298,7 @@ impl SH for Expr {
             Expr::TypedArrayNew { kind, arg } => { tag(h, 235); kind.hash(h); arg.hash(h); }
             Expr::NativeArenaAlloc(e) => { tag(h, 11237); e.as_ref().hash(h); }
             Expr::NativeArenaView { owner, kind, byte_offset, length } => { tag(h, 11238); owner.as_ref().hash(h); kind.hash(h); byte_offset.as_ref().hash(h); length.as_ref().hash(h); }
-            Expr::NativePodView { owner, byte_offset, count } => { tag(h, 11241); owner.as_ref().hash(h); byte_offset.as_ref().hash(h); count.as_ref().hash(h); }
+            Expr::NativePodView { owner, byte_offset, count, view_type } => { tag(h, 11241); owner.as_ref().hash(h); byte_offset.as_ref().hash(h); count.as_ref().hash(h); view_type.hash(h); }
             Expr::NativeArenaDispose(e) => { tag(h, 11242); e.as_ref().hash(h); }
             Expr::NativeMemoryFillU32 { view, value } => { tag(h, 11243); view.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::NativeMemoryCopy { dst, src } => { tag(h, 11244); dst.as_ref().hash(h); src.as_ref().hash(h); }

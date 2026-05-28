@@ -42,6 +42,7 @@ fn expr_any(expr: &Expr, pred: &impl Fn(&Expr) -> bool) -> bool {
             owner,
             byte_offset,
             count,
+            ..
         } => expr_any(owner, pred) || expr_any(byte_offset, pred) || expr_any(count, pred),
         Expr::NativeMemoryFillU32 { view, value } => expr_any(view, pred) || expr_any(value, pred),
         Expr::NativeMemoryCopy { dst, src } => expr_any(dst, pred) || expr_any(src, pred),
@@ -145,11 +146,46 @@ fn native_arena_public_pod_view_lowers_with_annotation() {
     assert!(matches!(
         find_let(&module, "view"),
         Stmt::Let {
-            init: Some(Expr::NativePodView { .. }),
+            init: Some(Expr::NativePodView {
+                view_type: None,
+                ..
+            }),
             ty: Type::Generic { base, .. },
             ..
         } if base == "PerryPodView"
     ));
+}
+
+#[test]
+fn native_arena_public_pod_view_lowers_explicit_type_arg() {
+    let module = lower_src(
+        r#"
+        type Packet = PerryPod<{ tag: PerryU32; gain: PerryF32; }>;
+        const arena = NativeArena.alloc(16);
+        const view = arena.podView<Packet>(0, 1);
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    match find_let(&module, "view") {
+        Stmt::Let {
+            init: Some(Expr::NativePodView { view_type, .. }),
+            ty,
+            ..
+        } => {
+            assert_eq!(view_type.as_ref(), Some(ty));
+            assert!(matches!(
+                ty,
+                Type::Generic { base, type_args }
+                    if base == "PerryPodView"
+                        && matches!(
+                            type_args.as_slice(),
+                            [Type::Generic { base, .. }] if base == "PerryPod"
+                        )
+            ));
+        }
+        other => panic!("expected NativePodView let, got {other:?}"),
+    }
 }
 
 #[test]

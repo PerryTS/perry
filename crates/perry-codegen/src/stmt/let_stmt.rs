@@ -941,14 +941,37 @@ pub(crate) fn lower_let(
             }
             ctx.block().store(DOUBLE, &v, &slot);
             if !mutable {
-                if let perry_hir::Expr::NativePodView { count, .. } = init_expr {
-                    let layout = crate::native_value::layout_for_pod_view_type(ctx, &refined_ty)
-                        .map_err(|reason| {
-                            anyhow::anyhow!(
+                if let perry_hir::Expr::NativePodView {
+                    count, view_type, ..
+                } = init_expr
+                {
+                    let layout = match crate::native_value::layout_for_pod_view_type(ctx, &refined_ty) {
+                        Ok(layout) => layout,
+                        Err(_)
+                            if view_type.is_some()
+                                && matches!(
+                                    refined_ty,
+                                    perry_types::Type::Any | perry_types::Type::Unknown
+                                ) =>
+                        {
+                            crate::native_value::layout_for_pod_view_type(
+                                ctx,
+                                view_type.as_ref().unwrap(),
+                            )
+                            .map_err(|reason| {
+                                anyhow::anyhow!(
+                                    "__perry_native_pod_view requires PerryPodView<T> where T resolves to PerryPod<...>: {}",
+                                    reason
+                                )
+                            })?
+                        }
+                        Err(reason) => {
+                            return Err(anyhow::anyhow!(
                                 "__perry_native_pod_view requires PerryPodView<T> where T resolves to PerryPod<...>: {}",
                                 reason
-                            )
-                        })?;
+                            ));
+                        }
+                    };
                     ctx.pod_views.insert(
                         id,
                         crate::native_value::PodViewLocal {

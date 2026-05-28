@@ -107,10 +107,21 @@ fn infer_native_arena_call_return_type(
             .first()
             .and_then(|arg| native_arena_view_type_from_kind(ctx, arg.expr.as_ref()))
             .or(Some(Type::Any)),
-        "podView" => Some(Type::Generic {
-            base: "PerryPodView".to_string(),
-            type_args: vec![Type::Any],
-        }),
+        "podView" => {
+            let Some(type_args) = call.type_args.as_ref() else {
+                return Some(Type::Generic {
+                    base: "PerryPodView".to_string(),
+                    type_args: vec![Type::Any],
+                });
+            };
+            if type_args.params.len() != 1 {
+                return Some(Type::Any);
+            }
+            Some(Type::Generic {
+                base: "PerryPodView".to_string(),
+                type_args: vec![extract_ts_type_with_ctx(&type_args.params[0], Some(ctx))],
+            })
+        }
         "dispose" => Some(Type::Void),
         _ => None,
     }

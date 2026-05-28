@@ -620,10 +620,24 @@ pub(super) fn try_native_arena_public_api(
                     "NativeArena.podView(byteOffset, count) expects exactly two arguments"
                 );
             }
+            let view_type = match call.type_args.as_ref() {
+                Some(type_args) if type_args.params.len() == 1 => Some(Type::Generic {
+                    base: "PerryPodView".to_string(),
+                    type_args: vec![extract_ts_type_with_ctx(&type_args.params[0], Some(ctx))],
+                }),
+                Some(_) => {
+                    crate::lower_bail!(
+                        call.span,
+                        "NativeArena.podView<T>(byteOffset, count) expects exactly one explicit type argument"
+                    );
+                }
+                None => None,
+            };
             Ok(Some(Expr::NativePodView {
                 owner: Box::new(lower_expr(ctx, member.obj.as_ref())?),
                 byte_offset: Box::new(lower_expr(ctx, &call.args[0].expr)?),
                 count: Box::new(lower_expr(ctx, &call.args[1].expr)?),
+                view_type,
             }))
         }
         "dispose" => {
@@ -667,6 +681,7 @@ pub(super) fn try_native_arena_intrinsics(
             owner: Box::new(lower_expr(ctx, &call.args[0].expr)?),
             byte_offset: Box::new(lower_expr(ctx, &call.args[1].expr)?),
             count: Box::new(lower_expr(ctx, &call.args[2].expr)?),
+            view_type: None,
         }));
     }
     if !name.starts_with("__perry_native_arena_") {

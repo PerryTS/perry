@@ -261,6 +261,128 @@ fn native_library_manifest_pod_view_param_lowers_to_ptr_and_count_with_proof() {
 }
 
 #[test]
+fn native_pod_view_explicit_public_type_lowers_without_left_hand_annotation() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+    ]);
+    let view_ty = pod_view_type(packet_ty);
+    let module = module(
+        "native_public_pod_view_explicit_type.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(4096), false),
+            Stmt::Let {
+                id: 2,
+                name: "view".to_string(),
+                ty: view_ty.clone(),
+                mutable: false,
+                init: Some(Expr::NativePodView {
+                    owner: Box::new(local(1)),
+                    byte_offset: Box::new(int(0)),
+                    count: Box::new(int(8)),
+                    view_type: Some(view_ty),
+                }),
+            },
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call i64 @js_native_pod_view"),
+        "explicit public podView<T> must lower without a left-hand annotation:\n{ir}"
+    );
+}
+
+#[test]
+fn native_pod_view_embedded_type_survives_any_expected_type() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+    ]);
+    let view_ty = pod_view_type(packet_ty);
+    let module = module(
+        "native_public_pod_view_any_expected_type.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(4096), false),
+            Stmt::Let {
+                id: 2,
+                name: "view".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::NativePodView {
+                    owner: Box::new(local(1)),
+                    byte_offset: Box::new(int(0)),
+                    count: Box::new(int(8)),
+                    view_type: Some(view_ty),
+                }),
+            },
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call i64 @js_native_pod_view"),
+        "embedded public podView<T> type should lower when the expected type is any:\n{ir}"
+    );
+}
+
+#[test]
+fn native_pod_view_embedded_type_lowers_without_expected_context() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+    ]);
+    let view_ty = pod_view_type(packet_ty);
+    let module = module(
+        "native_public_pod_view_no_expected_context.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(4096), false),
+            Stmt::Expr(Expr::NativePodView {
+                owner: Box::new(local(1)),
+                byte_offset: Box::new(int(0)),
+                count: Box::new(int(8)),
+                view_type: Some(view_ty),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call i64 @js_native_pod_view"),
+        "embedded public podView<T> type should lower with no expected context:\n{ir}"
+    );
+}
+
+#[test]
+fn native_pod_view_hidden_intrinsic_without_expected_type_still_errors() {
+    let module = module(
+        "native_hidden_pod_view_untyped.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(4096), false),
+            Stmt::Expr(Expr::NativePodView {
+                owner: Box::new(local(1)),
+                byte_offset: Box::new(int(0)),
+                count: Box::new(int(8)),
+                view_type: None,
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let err = compile_module(&module, empty_opts()).expect_err("hidden intrinsic must reject");
+    let err = format!("{err:?}");
+    assert!(
+        err.contains(
+            "__perry_native_pod_view requires an explicit PerryPodView<T> type annotation"
+        ),
+        "{err}"
+    );
+}
+
+#[test]
 fn native_library_manifest_pod_view_param_rejects_layout_mismatch() {
     let view_ty = pod_view_type(pod_type(&[
         ("tag", Type::Named("PerryU32".to_string())),

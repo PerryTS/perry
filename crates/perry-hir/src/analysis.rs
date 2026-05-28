@@ -1217,6 +1217,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             owner,
             byte_offset,
             count,
+            ..
         } => {
             collect_assigned_locals_expr(owner, assigned);
             collect_assigned_locals_expr(byte_offset, assigned);

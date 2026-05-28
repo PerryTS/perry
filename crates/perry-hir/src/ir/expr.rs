@@ -1082,6 +1082,7 @@ pub enum Expr {
         owner: Box<Expr>,
         byte_offset: Box<Expr>,
         count: Box<Expr>,
+        view_type: Option<Type>,
     },
     /// Compile-time POD layout constant: `sizeof<T>()`.
     PodLayoutSizeOf {
