@@ -140,14 +140,22 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
 /// Locate `xwin.exe` on PATH (Windows wizard helper). Returns `None` if
 /// not installed; the wizard then offers to install it via `cargo install xwin`.
+///
+/// `which` is not a built-in on Windows shells, so the wizard always failed
+/// to find an already-installed `xwin.exe` (#1821). Use `where.exe` on
+/// Windows — its output is one absolute path per matching extension on
+/// PATH, so take the first line.
 pub(crate) fn find_xwin_exe() -> Option<PathBuf> {
-    if let Ok(out) = Command::new("which").arg("xwin").output() {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() {
-                return Some(PathBuf::from(p));
-            }
-        }
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    let out = Command::new(lookup).arg("xwin").output().ok()?;
+    if !out.status.success() {
+        return None;
     }
-    None
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let first = stdout.lines().next()?.trim();
+    if first.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(first))
+    }
 }

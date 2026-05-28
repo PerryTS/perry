@@ -98,16 +98,7 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
             return register_handle(HttpsServer {
                 handler,
                 tls_config: None,
-                base: HttpServer {
-                    handler,
-                    listeners: HashMap::new(),
-                    bound_port: 0,
-                    bound_host: String::new(),
-                    listening: false,
-                    shutdown_tx: None,
-                    request_rx: None,
-                    upgrade_rx: None,
-                },
+                base: HttpServer::with_handler(handler),
             });
         }
     };
@@ -122,16 +113,7 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
     register_handle(HttpsServer {
         handler,
         tls_config,
-        base: HttpServer {
-            handler,
-            listeners: HashMap::new(),
-            bound_port: 0,
-            bound_host: String::new(),
-            listening: false,
-            shutdown_tx: None,
-            request_rx: None,
-            upgrade_rx: None,
-        },
+        base: HttpServer::with_handler(handler),
     })
 }
 
