@@ -96,6 +96,131 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let parent_class = match ctx.classes.get(&parent_name).copied() {
                 Some(c) => c,
                 None => {
+                    // #321 / #66 (#1787 follow-up): `class Sub extends <runtimeValueFn>`
+                    // — the parent is a runtime-value function/closure (the IIFE-
+                    // returned constructor function `Base` in Effect's `Data.Class`).
+                    // HIR's `lower_decl/class_decl.rs` already captures
+                    // `class.extends_expr` for this shape (unknown Ident super-class)
+                    // and codegen wires the class_id parent edge at module init via
+                    // `js_register_class_parent_dynamic`. The MISSING piece this arm
+                    // adds is the `super(args)` call itself: evaluate the extends
+                    // expression here, bind IMPLICIT_THIS to the current `this`, and
+                    // dispatch via `js_native_call_value` so the parent function's
+                    // body runs with `this` bound to the new instance (any
+                    // `Object.assign(this, args)` / `this.x = args.x` writes land on
+                    // the subclass instance). Falls through to the existing
+                    // stream/Error-like/no-op chain when no extends_expr is captured
+                    // (which is exactly the prior baseline).
+                    //
+                    // Gate: skip well-known built-in parent NAMES (Error/Stream
+                    // family) — HIR captures `extends_expr` for any unknown Ident,
+                    // INCLUDING the built-ins, so we'd otherwise eat the more-correct
+                    // Error-init path below. The built-in arms handle their own
+                    // semantics (Error sets this.message + this.name; streams allocate
+                    // a registry handle). Anything else with an extends_expr is a
+                    // real runtime-value parent and routes through this dispatch.
+                    let is_builtin_parent_name = matches!(
+                        parent_name.as_str(),
+                        "Error"
+                            | "TypeError"
+                            | "RangeError"
+                            | "ReferenceError"
+                            | "SyntaxError"
+                            | "URIError"
+                            | "EvalError"
+                            | "AggregateError"
+                            | "ReadableStream"
+                            | "WritableStream"
+                            | "TransformStream"
+                    );
+                    if !is_builtin_parent_name {
+                        if let Some(extends_expr) = current_class.extends_expr.as_deref() {
+                            // Lower the super-call args first so they get fresh slots
+                            // and are spilled into a flat f64 buffer for the variadic
+                            // dispatch.
+                            let mut lowered_args: Vec<String> =
+                                Vec::with_capacity(super_args.len());
+                            for a in super_args {
+                                lowered_args.push(lower_expr(ctx, a)?);
+                            }
+
+                            // Evaluate the parent expression (the runtime function
+                            // value). The HIR layer already lowered it as part of
+                            // class.extends_expr.
+                            let parent_val = lower_expr(ctx, extends_expr)?;
+
+                            // Spill args into a contiguous double[] for the
+                            // js_native_call_value(ptr, len) ABI. Mirrors the
+                            // method_override.rs override-path spilling.
+                            let user_arg_count = lowered_args.len();
+                            let (args_ptr, args_len) = if user_arg_count == 0 {
+                                ("null".to_string(), "0".to_string())
+                            } else {
+                                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, user_arg_count);
+                                for (i, a_val) in lowered_args.iter().enumerate() {
+                                    let slot = ctx.block().gep(
+                                        DOUBLE,
+                                        &buf_reg,
+                                        &[(I64, &format!("{}", i))],
+                                    );
+                                    ctx.block().store(DOUBLE, a_val, &slot);
+                                }
+                                let ptr_reg = ctx.block().next_reg();
+                                ctx.block().emit_raw(format!(
+                                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                                    ptr_reg, user_arg_count, buf_reg
+                                ));
+                                (ptr_reg, user_arg_count.to_string())
+                            };
+
+                            // Bind IMPLICIT_THIS to the current `this` so the parent
+                            // function body's `this.x = ...` writes land on the
+                            // subclass instance (non-arrow functions read `this` via
+                            // `js_implicit_this_get` when their this_stack is empty).
+                            // Save the prior IMPLICIT_THIS and restore it after — see
+                            // the #519 pattern in console_promise.rs / method_override.rs.
+                            let this_box = match ctx.this_stack.last().cloned() {
+                                Some(slot) => ctx.block().load(DOUBLE, &slot),
+                                None => {
+                                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                                }
+                            };
+                            let prev_this = ctx.block().call(
+                                DOUBLE,
+                                "js_implicit_this_set",
+                                &[(DOUBLE, &this_box)],
+                            );
+                            let _ = ctx.block().call(
+                                DOUBLE,
+                                "js_native_call_value",
+                                &[
+                                    (DOUBLE, &parent_val),
+                                    (crate::types::PTR, &args_ptr),
+                                    (I64, &args_len),
+                                ],
+                            );
+                            ctx.block().call(
+                                DOUBLE,
+                                "js_implicit_this_set",
+                                &[(DOUBLE, &prev_this)],
+                            );
+
+                            // Per JS spec: subclass field initializers run AFTER
+                            // super() returns. Same call the user-class branch makes
+                            // (line ~434 below) and the stream subclass branch makes
+                            // above. Without this, `this.foo = []` on the subclass
+                            // would never run.
+                            crate::lower_call::apply_field_initializers_recursive(
+                                ctx,
+                                &current_class_name,
+                                crate::lower_call::FieldInitMode::SelfOnly,
+                            )?;
+
+                            return Ok(double_literal(f64::from_bits(
+                                crate::nanbox::TAG_UNDEFINED,
+                            )));
+                        }
+                    }
                     // Issue #562: `class X extends WritableStream/ReadableStream/TransformStream`
                     // — `super({ ... })` allocates an underlying stream registry handle and
                     // stashes it on `this` under `__perry_stream_handle__`. Inherited methods
