@@ -552,13 +552,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             match arg.as_deref() {
                 None => {
                     let blk = ctx.block();
-                    let h = blk.call(I64, "js_buffer_alloc", &[(I32, "0"), (I32, "0")]);
+                    let h = blk.call(I64, "js_uint8array_alloc", &[(I32, "0")]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
                 Some(Expr::Integer(n)) => {
                     let size_str = (*n as i32).to_string();
                     let blk = ctx.block();
-                    let h = blk.call(I64, "js_buffer_alloc", &[(I32, &size_str), (I32, "0")]);
+                    let h = blk.call(I64, "js_uint8array_alloc", &[(I32, &size_str)]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
                 Some(Expr::Number(n))
@@ -566,7 +566,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let size_str = (*n as i32).to_string();
                     let blk = ctx.block();
-                    let h = blk.call(I64, "js_buffer_alloc", &[(I32, &size_str), (I32, "0")]);
+                    let h = blk.call(I64, "js_uint8array_alloc", &[(I32, &size_str)]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
                 Some(e) => {

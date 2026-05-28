@@ -732,8 +732,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `util.types.isArrayBufferView(value)`
 - `util.types.isArgumentsObject(value)`
 - `util.types.isAsyncFunction(value)`
-- `util.types.isBigInt64Array(value)`
-- `util.types.isBigUint64Array(value)`
 - `util.types.isBooleanObject(value)`
 - `util.types.isBoxedPrimitive(value)`
 - `util.types.isCryptoKey(value)`

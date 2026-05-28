@@ -121,24 +121,64 @@ pub extern "C" fn js_util_types_is_typed_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value).is_some())
 }
 
+#[inline]
+fn is_typed_array_kind(value: f64, kind: u8) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(kind))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_int8_array(value: f64) -> f64 {
+    is_typed_array_kind(value, crate::typedarray::KIND_INT8)
+}
+
 #[no_mangle]
 pub extern "C" fn js_util_types_is_uint8_array(value: f64) -> f64 {
-    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT8))
+    is_typed_array_kind(value, crate::typedarray::KIND_UINT8)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_uint8_clamped_array(value: f64) -> f64 {
+    is_typed_array_kind(value, crate::typedarray::KIND_UINT8_CLAMPED)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_int16_array(value: f64) -> f64 {
+    is_typed_array_kind(value, crate::typedarray::KIND_INT16)
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_uint16_array(value: f64) -> f64 {
-    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT16))
+    is_typed_array_kind(value, crate::typedarray::KIND_UINT16)
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_int32_array(value: f64) -> f64 {
-    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_INT32))
+    is_typed_array_kind(value, crate::typedarray::KIND_INT32)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_uint32_array(value: f64) -> f64 {
+    is_typed_array_kind(value, crate::typedarray::KIND_UINT32)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_float32_array(value: f64) -> f64 {
+    is_typed_array_kind(value, crate::typedarray::KIND_FLOAT32)
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_float64_array(value: f64) -> f64 {
-    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT64))
+    is_typed_array_kind(value, crate::typedarray::KIND_FLOAT64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_big_int64_array(value: f64) -> f64 {
+    is_typed_array_kind(value, crate::typedarray::KIND_BIGINT64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_big_uint64_array(value: f64) -> f64 {
+    is_typed_array_kind(value, crate::typedarray::KIND_BIGUINT64)
 }
 
 #[no_mangle]

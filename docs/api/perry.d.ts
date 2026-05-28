@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1437 entries across 82 modules
+// Coverage: 1444 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2049,15 +2049,25 @@ declare module "util/types" {
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
   /** stdlib */
+  export function isBigInt64Array(...args: any[]): any;
+  /** stdlib */
+  export function isBigUint64Array(...args: any[]): any;
+  /** stdlib */
   export function isBooleanObject(...args: any[]): any;
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
   /** stdlib */
   export function isDate(...args: any[]): any;
   /** stdlib */
+  export function isFloat32Array(...args: any[]): any;
+  /** stdlib */
   export function isFloat64Array(...args: any[]): any;
   /** stdlib */
+  export function isInt16Array(...args: any[]): any;
+  /** stdlib */
   export function isInt32Array(...args: any[]): any;
+  /** stdlib */
+  export function isInt8Array(...args: any[]): any;
   /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
@@ -2083,7 +2093,11 @@ declare module "util/types" {
   /** stdlib */
   export function isUint16Array(...args: any[]): any;
   /** stdlib */
+  export function isUint32Array(...args: any[]): any;
+  /** stdlib */
   export function isUint8Array(...args: any[]): any;
+  /** stdlib */
+  export function isUint8ClampedArray(...args: any[]): any;
 }
 
 declare module "uuid" {
