@@ -643,8 +643,19 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                             let obj_name = obj_ident.sym.as_ref();
                             let prop_name = prop_ident.sym.as_ref();
-                            if (obj_name == "Object" && is_known_object_static_method(prop_name))
-                                || (obj_name == "Array" && is_known_array_static_method(prop_name))
+                            // #2143: `typeof Promise.resolve`, `typeof Math.min`,
+                            // `typeof JSON.parse`, etc. — namespace static methods
+                            // that Perry implements as codegen direct-call
+                            // intrinsics. A bare value-read of these lowers to a
+                            // numeric fallback (typeof "number"), but Node treats
+                            // them as real functions. Folding to "function" here
+                            // unblocks feature-detection idioms and the
+                            // `.bind`/`.call`/`.apply` chain fold below. The
+                            // existing Object/Array static method lists are
+                            // subsumed by `is_known_namespace_static_function`.
+                            if ctx.lookup_local(obj_name).is_none()
+                                && ctx.lookup_func(obj_name).is_none()
+                                && is_known_namespace_static_function(obj_name, prop_name)
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
@@ -823,6 +834,37 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             && is_known_array_prototype_method(prop_name)
                         {
                             return Ok(Expr::String("function".to_string()));
+                        }
+                        // #2143: `typeof Promise.resolve.bind` /
+                        // `typeof Math.min.call` / `typeof JSON.parse.apply`.
+                        // Built-in function values don't inherit
+                        // `Function.prototype` in Perry's representation, so the
+                        // chained `.bind`/`.call`/`.apply` read falls through to
+                        // a numeric fallback (typeof "number"). Node treats
+                        // these as real functions — fold here when the inner
+                        // member names a known namespace static so feature
+                        // detection (Test262 `propertyHelper.js`, the Promise
+                        // tests cited in #793) sees callable values.
+                        if matches!(prop_name, "bind" | "call" | "apply") {
+                            if let ast::Expr::Member(inner) = member.obj.as_ref() {
+                                if let (
+                                    ast::Expr::Ident(inner_obj),
+                                    ast::MemberProp::Ident(inner_prop),
+                                ) = (inner.obj.as_ref(), &inner.prop)
+                                {
+                                    let inner_obj_name = inner_obj.sym.as_ref();
+                                    let inner_prop_name = inner_prop.sym.as_ref();
+                                    if ctx.lookup_local(inner_obj_name).is_none()
+                                        && ctx.lookup_func(inner_obj_name).is_none()
+                                        && is_known_namespace_static_function(
+                                            inner_obj_name,
+                                            inner_prop_name,
+                                        )
+                                    {
+                                        return Ok(Expr::String("function".to_string()));
+                                    }
+                                }
+                            }
                         }
                     }
                 }

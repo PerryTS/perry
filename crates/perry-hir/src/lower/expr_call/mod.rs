@@ -58,7 +58,8 @@ use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
     check_eval_function_call, try_bare_regexp_call, try_builtin_prototype_method_apply_call,
-    try_embed_wasm, try_function_return_this, try_iife_call_rewrite, try_native_arena_intrinsics,
+    try_embed_wasm, try_function_return_this, try_iife_call_rewrite,
+    try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_module_method_apply_call, try_precompile, try_require_literal_bail,
 };
 use local_array_methods::try_local_array_methods;
@@ -170,6 +171,13 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     // thisArg, …)` to `thisArg.method(…)` so the indirect prototype-borrow
     // dispatches (the bare method value otherwise reads `undefined`).
     if let Some(expr) = try_builtin_prototype_method_apply_call(ctx, call, has_spread)? {
+        return Ok(expr);
+    }
+    // #2143: `Promise.resolve.call(t, x)` / `Math.min.apply(t, [a,b])` /
+    // `(JSON.parse.bind(t, x))(y)` — drop the (unused) `thisArg` and call the
+    // namespace static directly. Built-in function values otherwise lower to a
+    // numeric fallback (no reified `Function.prototype`).
+    if let Some(expr) = try_namespace_static_method_apply_call_bind(ctx, call, has_spread)? {
         return Ok(expr);
     }
     if let Some(expr) = try_function_return_this(ctx, call, has_spread) {
