@@ -35,11 +35,11 @@ use perry_ffi::{
     js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, BufferHeader,
     GcRootVisitor, JsClosure, JsPromise, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -192,6 +192,16 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 pub(crate) fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
+        // #2154 — publish the raw-consumer vtable so perry-ext-http can drive
+        // an HTTP exchange over a socket produced by `agent.createConnection`.
+        // Runs on the first net FFI entry (any socket creation), so the
+        // vtable is in place before http could reference a socket.
+        perry_ffi::register_raw_net(perry_ffi::RawNetVtable {
+            attach: perry_net_raw_attach,
+            write: perry_net_raw_write,
+            poll_read: perry_net_raw_poll_read,
+            close: perry_net_raw_close,
+        });
     });
 }
 
@@ -224,6 +234,25 @@ pub(crate) struct SocketState {
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
     pub(crate) local_addr: Option<SocketAddr>,
+    /// #2154 — raw-consumer mode. When `Some`, `run_socket_task` buffers
+    /// inbound bytes here for `perry-ext-http` to drain via the raw-net
+    /// vtable instead of dispatching them to the socket's JS `'data'`
+    /// listeners. Set by `perry_net_raw_attach` when `http.request`
+    /// drives an HTTP exchange over a socket the user's
+    /// `agent.createConnection` override produced.
+    raw: Option<Arc<Mutex<RawReadState>>>,
+}
+
+/// #2154 — backing buffer for a socket in raw-consumer mode. `run_socket_task`
+/// pushes inbound bytes into `buf`; the raw-net `poll_read` vtable entry drains
+/// them. `closed` flips on peer-FIN / destroy / error so a drained reader sees
+/// EOF; `error` carries the transport error message if one occurred.
+#[derive(Default)]
+pub(crate) struct RawReadState {
+    buf: VecDeque<u8>,
+    closed: bool,
+    #[allow(dead_code)]
+    error: Option<String>,
 }
 
 pub(crate) enum SocketCommand {
@@ -494,6 +523,28 @@ fn mark_closed(id: i64) {
     }
 }
 
+/// #2154 — return the raw-consumer buffer for `id` if the socket is in raw
+/// mode (an `http.request` over an `agent.createConnection` socket), else
+/// `None`. Cloning the `Arc` is cheap and lets `run_socket_task` route bytes
+/// without holding the sockets-map lock across the buffer mutation.
+fn raw_state_for(id: i64) -> Option<Arc<Mutex<RawReadState>>> {
+    statics::sockets()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(&id).and_then(|s| s.raw.clone()))
+}
+
+/// #2154 — flip a raw-mode socket's buffer to closed (recording `error` if
+/// any) so a draining `poll_read` observes EOF. No-op for JS-mode sockets.
+fn raw_mark_closed(raw: &Arc<Mutex<RawReadState>>, error: Option<String>) {
+    if let Ok(mut st) = raw.lock() {
+        st.closed = true;
+        if error.is_some() {
+            st.error = error;
+        }
+    }
+}
+
 // ─── Spawning helper ─────────────────────────────────────────────────────────
 //
 // perry-ffi v0.5.x's only async-runtime entry point is `spawn_blocking`,
@@ -653,6 +704,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             pending_rx: Some(rx),
             is_open: false,
             local_addr: None,
+            raw: None,
         },
     );
     statics::listeners()
@@ -900,6 +952,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                                         pending_rx: None,
                                         is_open: true,
                                         local_addr: accepted_local,
+                                        raw: None,
                                     },
                                 );
                                 statics::listeners()
@@ -1166,6 +1219,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             pending_rx: None,
             is_open: false,
             local_addr: None,
+            raw: None,
         },
     );
     statics::listeners()
@@ -1238,21 +1292,41 @@ async fn run_socket_task(
             read_result = t.read(&mut buf) => {
                 match read_result {
                     Ok(0) => {
-                        // Issue #1852 — peer sent FIN. Fire `'end'` first
-                        // (readable side ended) then `'close'`, matching
-                        // Node's default `allowHalfOpen: false` socket
-                        // teardown order.
-                        push_event(PendingNetEvent::End(id));
-                        push_event(PendingNetEvent::Close(id));
+                        // #2154 — in raw mode `perry-ext-http` owns the byte
+                        // stream: signal EOF on the buffer and suppress the
+                        // JS `'end'`/`'close'` dispatch.
+                        if let Some(raw) = raw_state_for(id) {
+                            raw_mark_closed(&raw, None);
+                        } else {
+                            // Issue #1852 — peer sent FIN. Fire `'end'` first
+                            // (readable side ended) then `'close'`, matching
+                            // Node's default `allowHalfOpen: false` socket
+                            // teardown order.
+                            push_event(PendingNetEvent::End(id));
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
                     Ok(n) => {
-                        push_event(PendingNetEvent::Data(id, buf[..n].to_vec()));
+                        // #2154 — raw mode buffers for `poll_read`; otherwise
+                        // dispatch a `'data'` event as usual.
+                        if let Some(raw) = raw_state_for(id) {
+                            if let Ok(mut st) = raw.lock() {
+                                st.buf.extend(buf[..n].iter().copied());
+                            }
+                        } else {
+                            push_event(PendingNetEvent::Data(id, buf[..n].to_vec()));
+                        }
                     }
                     Err(e) => {
-                        push_event(PendingNetEvent::Error(id, format!("{}", e)));
-                        push_event(PendingNetEvent::Close(id));
+                        let msg = format!("{}", e);
+                        if let Some(raw) = raw_state_for(id) {
+                            raw_mark_closed(&raw, Some(msg));
+                        } else {
+                            push_event(PendingNetEvent::Error(id, msg));
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
@@ -1262,8 +1336,13 @@ async fn run_socket_task(
                 match cmd {
                     Some(SocketCommand::Write(bytes)) => {
                         if let Err(e) = t.write_all(&bytes).await {
-                            push_event(PendingNetEvent::Error(id, format!("{}", e)));
-                            push_event(PendingNetEvent::Close(id));
+                            let msg = format!("{}", e);
+                            if let Some(raw) = raw_state_for(id) {
+                                raw_mark_closed(&raw, Some(msg));
+                            } else {
+                                push_event(PendingNetEvent::Error(id, msg));
+                                push_event(PendingNetEvent::Close(id));
+                            }
                             mark_closed(id);
                             break;
                         }
@@ -1272,7 +1351,11 @@ async fn run_socket_task(
                         let _ = t.shutdown().await;
                     }
                     Some(SocketCommand::Destroy) | None => {
-                        push_event(PendingNetEvent::Close(id));
+                        if let Some(raw) = raw_state_for(id) {
+                            raw_mark_closed(&raw, None);
+                        } else {
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
@@ -1381,6 +1464,101 @@ pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
     if let Some(s) = sockets.get(&handle) {
         let _ = s.cmd_tx.send(SocketCommand::Destroy);
     }
+}
+
+// ─── #2154: raw-consumer bridge for http.Agent.createConnection ──────────────
+//
+// `perry-ext-http` drives a full HTTP/1.1 exchange over a socket the user's
+// `agent.createConnection` override produced (typically a `net.connect(...)`
+// result). These C-ABI entry points are published into perry-ffi's raw-net
+// slot (see `ensure_gc_scanner_registered`) so http can attach/write/read/
+// close the socket without a Cargo edge to this crate. They speak only raw
+// bytes — the HTTP framing lives in perry-ext-http.
+
+/// Switch socket `socket_id` into raw-consumer mode. Inbound bytes are
+/// buffered for `perry_net_raw_poll_read` instead of dispatched to JS
+/// `'data'` listeners. Returns `1` on success, `0` if the handle is unknown.
+extern "C" fn perry_net_raw_attach(socket_id: i64) -> i32 {
+    if let Ok(mut g) = statics::sockets().lock() {
+        if let Some(s) = g.get_mut(&socket_id) {
+            if s.raw.is_none() {
+                s.raw = Some(Arc::new(Mutex::new(RawReadState::default())));
+            }
+            return 1;
+        }
+    }
+    0
+}
+
+/// Enqueue `len` bytes at `ptr` to be written to socket `socket_id`. The
+/// write is buffered by the socket's command channel and flushed once the
+/// connection is established. Returns `1` if queued, `0` otherwise.
+extern "C" fn perry_net_raw_write(socket_id: i64, ptr: *const u8, len: usize) -> i32 {
+    let bytes = if len == 0 {
+        Vec::new()
+    } else if ptr.is_null() {
+        return 0;
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+    };
+    if let Ok(g) = statics::sockets().lock() {
+        if let Some(s) = g.get(&socket_id) {
+            return i32::from(s.cmd_tx.send(SocketCommand::Write(bytes)).is_ok());
+        }
+    }
+    0
+}
+
+/// Drain up to `max` buffered inbound bytes from socket `socket_id` into
+/// `out`. Returns the byte count (`> 0`), `0` for clean EOF once drained and
+/// the peer closed, or `-1` when nothing is available but the socket is still
+/// open ("would block" — the caller should yield and retry).
+extern "C" fn perry_net_raw_poll_read(socket_id: i64, out: *mut u8, max: usize) -> isize {
+    if out.is_null() || max == 0 {
+        return -1;
+    }
+    let raw = match raw_state_for(socket_id) {
+        Some(r) => r,
+        None => return -1,
+    };
+    let mut st = match raw.lock() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    if st.buf.is_empty() {
+        return if st.closed { 0 } else { -1 };
+    }
+    let n = st.buf.len().min(max);
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, n) };
+    for slot in out_slice.iter_mut() {
+        // `pop_front` can't fail: we just bounded `n` by `buf.len()`.
+        *slot = st.buf.pop_front().unwrap_or(0);
+    }
+    n as isize
+}
+
+/// Tear down socket `socket_id` (equivalent to `socket.destroy()`) and
+/// unregister it. `perry-ext-http` calls this once the HTTP exchange is
+/// done draining. Because raw mode suppresses the JS `Close` event (the
+/// path that normally removes the socket from the registry in
+/// `js_net_process_pending`), we must remove it here — otherwise the
+/// lingering entry keeps `js_net_has_pending` / `js_ext_net_has_active_handles`
+/// returning 1 and the program never exits.
+extern "C" fn perry_net_raw_close(socket_id: i64) {
+    // Signal the read/write task to stop (best-effort; dropping the
+    // SocketState below also closes the cmd channel, ending the task).
+    if let Ok(g) = statics::sockets().lock() {
+        if let Some(s) = g.get(&socket_id) {
+            let _ = s.cmd_tx.send(SocketCommand::Destroy);
+        }
+    }
+    let _ = statics::sockets().lock().map(|mut g| g.remove(&socket_id));
+    let _ = statics::listeners()
+        .lock()
+        .map(|mut g| g.remove(&socket_id));
+    let _ = statics::once_flags()
+        .lock()
+        .map(|mut g| g.remove(&socket_id));
 }
 
 // ─── FFI: chainable no-op socket/server options (issue #1852) ────────────────

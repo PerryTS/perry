@@ -430,6 +430,14 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        // #2154 — see stringify_value_depth: skip native handle ids (small
+        // POINTER_TAG values) that aren't real heap objects, so JSON.stringify
+        // of an object holding e.g. an `http.Agent` emits `null` instead of
+        // segfaulting on a low-memory deref.
+        if (ptr as usize) < 0x1000 {
+            buf.push_str("null");
+            return;
+        }
         if type_hint == TYPE_OBJECT {
             stringify_object(ptr, buf);
             return;
@@ -602,6 +610,16 @@ pub(crate) unsafe fn stringify_value_depth(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        // #2154 — a POINTER_TAG value can carry a native *handle id* (a small
+        // integer like `2`, e.g. an `http.Agent` placed in an object literal)
+        // rather than a real heap pointer. Such values aren't JSON-serializable
+        // and dereferencing them (gc_obj_type → is_object_pointer / array probe)
+        // segfaults. Emit `null`, the same way closures are dropped. Real heap
+        // objects live far above this low-memory guard (matches gc_obj_type).
+        if (ptr as usize) < 0x1000 {
+            buf.push_str("null");
+            return;
+        }
         if type_hint == TYPE_OBJECT {
             stringify_object_inner(ptr, buf, depth);
             return;
@@ -794,7 +812,12 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             } else {
                 std::ptr::null()
             };
-            if !ptr_candidate.is_null() {
+            // #2154 — a POINTER_TAG field can be a native *handle id* (a small
+            // integer, e.g. an `http.Agent` stored in an object literal), not a
+            // real heap pointer. Reading the CLOSURE_MAGIC tag at offset 12 of
+            // such a value segfaults. Skip anything in the low-memory guard
+            // range (matches gc_obj_type); real closures live far above it.
+            if (ptr_candidate as usize) >= 0x1000 {
                 let type_tag = *(ptr_candidate.add(12) as *const u32);
                 if type_tag == crate::closure::CLOSURE_MAGIC {
                     found = true;
