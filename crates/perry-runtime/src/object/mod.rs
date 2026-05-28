@@ -1505,6 +1505,28 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    let raw_addr = if jsv.is_pointer() {
+        (bits & POINTER_MASK) as usize
+    } else if bits > 0x1000 && (bits >> 48) == 0 {
+        bits as usize
+    } else {
+        0
+    };
+    if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+        let tag = if crate::buffer::is_array_buffer(raw_addr) {
+            "ArrayBuffer"
+        } else if crate::buffer::is_shared_array_buffer(raw_addr) {
+            "SharedArrayBuffer"
+        } else if crate::buffer::is_data_view(raw_addr) {
+            "DataView"
+        } else {
+            "Uint8Array"
+        };
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     if let Some(tag) = web_stream_to_string_tag(value) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();
@@ -1518,11 +1540,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     }
     // Heap-allocated pointers: discriminate Array / Error from generic
     // Object via the GC header type byte.
-    let raw_ptr = if jsv.is_pointer() {
-        (bits & POINTER_MASK) as *const u8
-    } else {
-        bits as *const u8
-    };
+    let raw_ptr = raw_addr as *const u8;
     if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;

@@ -1632,6 +1632,7 @@ pub(crate) unsafe fn get_native_module_constant(
             // packages feature-detect the Buffer surface without falling over.
             "kMaxLength" => Some(4294967296.0),
             "kStringMaxLength" => Some(536870888.0),
+            "INSPECT_MAX_BYTES" => Some(50.0),
             _ => None,
         },
         "buffer.constants" => match property {
