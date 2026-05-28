@@ -63,11 +63,11 @@ pub(crate) use reviver::test_apply_reviver_for_value;
 pub(crate) use simd::find_string_terminator;
 #[allow(unused_imports)]
 pub(crate) use stringify::{
-    build_shape_prefix_template, estimate_json_size, is_closure_value, is_object_pointer,
-    object_get_to_json, shape_template_for, stringify_array, stringify_array_depth,
-    stringify_buffer, stringify_object, stringify_object_inner, stringify_value,
-    stringify_value_depth, try_emit_shape_element, write_escaped_string, write_number,
-    ShapeTemplate,
+    arm_to_json_result_guard, build_shape_prefix_template, estimate_json_size, is_closure_value,
+    is_object_pointer, object_get_to_json, shape_template_for, stringify_array,
+    stringify_array_depth, stringify_buffer, stringify_object, stringify_object_inner,
+    stringify_value, stringify_value_depth, try_emit_shape_element, write_escaped_string,
+    write_number, ShapeTemplate,
 };
 #[allow(unused_imports)]
 pub(crate) use stringify_api::{
@@ -134,6 +134,19 @@ thread_local! {
     /// non-reentrant case — a plain `clear_shape_cache` at the outermost
     /// call's exit handles correctness without a Vec alloc/swap.
     pub(crate) static STRINGIFY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+
+    /// One-shot guard so `toJSON` is applied at most once per value (#321 /
+    /// ECMA-262 §25.5.2.2). `SerializeJSONProperty` calls `value.toJSON(key)`
+    /// once and then serializes the RESULT as an ordinary object/array —
+    /// without re-invoking `toJSON` on that result. Without this, a `toJSON`
+    /// that returns another object whose prototype/own chain also has a
+    /// `toJSON` (e.g. `{ toJSON() { return new ClassWithToJSON(); } }`) would
+    /// re-apply the inner `toJSON` and diverge from Node. We set this flag
+    /// right before serializing an OBJECT-typed `toJSON` result; the very next
+    /// `object_get_to_json` consumes (clears) it and returns `None`, so the
+    /// result object emits its own fields while its children recurse normally.
+    pub(crate) static SUPPRESS_NEXT_TO_JSON: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 
     /// GC roots for in-progress JSON.parse. Each entry is a JSValue bit pattern
     /// (stored as f64 so the scanner can hand it to the NaN-boxed mark path).

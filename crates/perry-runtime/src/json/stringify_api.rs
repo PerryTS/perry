@@ -150,6 +150,13 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
         d.set(c + 1);
         c
     });
+    // Defensive: a throw (circular-ref TypeError) during a prior stringify
+    // could longjmp past the arm/disarm pair around a `toJSON`-result recursion
+    // and leave `SUPPRESS_NEXT_TO_JSON` set. Clear it at the outermost entry so
+    // it can't leak across top-level calls.
+    if prior_depth == 0 {
+        super::SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+    }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
     } else {

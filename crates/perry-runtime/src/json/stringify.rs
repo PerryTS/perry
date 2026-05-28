@@ -269,52 +269,112 @@ pub(crate) unsafe fn is_closure_value(bits: u64) -> bool {
     }
 }
 
-/// Check if an object has a toJSON method. If so, call it and return the result as f64.
-/// Returns None if no toJSON method exists.
+/// Check if an object has a `toJSON` method — resolved as an OWN property *or*
+/// anywhere on its prototype / class-method chain. If a callable `toJSON` is
+/// found, invoke it with `this = the object` (empty-string key arg, per the
+/// rest of Perry's JSON suite) and return its result as f64. Returns `None`
+/// when no callable `toJSON` exists (the caller then serializes the object
+/// normally).
+///
+/// `SerializeJSONProperty` (ECMA-262 §25.5.2.2 step 2) calls `value.toJSON(key)`
+/// whenever `toJSON` resolves to a callable, regardless of whether it's an own
+/// property or inherited. Effect's `Inspectable` and any plain `class { toJSON()
+/// {…} }` define `toJSON` on the prototype, so an own-key-only walk (the
+/// pre-#321 behaviour) silently dropped it. We mirror the object→string
+/// coercion fix (#2102, `value/to_string.rs`) and the inherited-method dispatch
+/// (#1969/#1982): resolve via `js_object_get_field_by_name` (own + prototype),
+/// rebind `this` to the receiver with `clone_closure_rebind_this`, and call
+/// through the canonical `js_native_call_value` dispatcher.
 #[inline]
 pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
-    let obj = ptr as *const crate::ObjectHeader;
-    let keys_arr = (*obj).keys_array;
-    if keys_arr.is_null() {
+    // One-shot suppression: this object is itself the result of a `toJSON`
+    // call, so per spec we serialize its own fields WITHOUT re-invoking
+    // `toJSON`. Consume the flag and bail.
+    if SUPPRESS_NEXT_TO_JSON.with(|c| c.replace(false)) {
         return None;
     }
-    let keys_len = (*keys_arr).length;
-    let keys_elements =
-        (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-    let fields_ptr =
-        (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+    // Only resolve `toJSON` on a genuine plain object / class instance
+    // (`GC_TYPE_OBJECT`). Map/Set (`GC_TYPE_MAP`/`GC_TYPE_SET`), buffers,
+    // typed arrays, errors, regexes etc. have a DIFFERENT heap layout —
+    // `js_object_get_field_by_name` would mis-read their internals as an
+    // ObjectHeader keys/fields region and segfault (a `new Map()` reaches the
+    // catch-all object path in `stringify_value`). Those types don't carry a
+    // user-visible `toJSON` anyway, so bail to normal serialization. Mirrors
+    // the existing `gc_obj_type == GC_TYPE_OBJECT && !is_registered_buffer`
+    // guard the replacer path already applies before calling this helper.
+    if gc_obj_type(ptr) != crate::gc::GC_TYPE_OBJECT
+        || crate::buffer::is_registered_buffer(ptr as usize)
+    {
+        return None;
+    }
+    // `js_object_get_field_by_name` expects a raw (masked) heap pointer for the
+    // ordinary-object path; the receiver `this` is the same value NaN-boxed
+    // with POINTER_TAG.
+    let recv = f64::from_bits(make_pointer_bits(ptr));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
 
-    for f in 0..keys_len {
-        let key_f64 = *keys_elements.add(f as usize);
-        let key_bits = key_f64.to_bits();
-        let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-        let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
-            (key_bits & POINTER_MASK) as *const StringHeader
-        } else {
-            key_bits as *const StringHeader
-        };
-        if let Some(key_str) = str_from_header(key_ptr) {
-            if key_str == "toJSON" {
-                let field_val = *fields_ptr.add(f as usize);
-                let field_bits = field_val.to_bits();
-                // Check if this field is a closure
-                if is_closure_value(field_bits) {
-                    let closure_ptr = if (field_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
-                        (field_bits & POINTER_MASK) as *const crate::closure::ClosureHeader
-                    } else {
-                        field_bits as *const crate::closure::ClosureHeader
-                    };
-                    // Call toJSON() with no arguments (pass empty string key per spec)
-                    let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
-                    let key_f64_arg =
-                        f64::from_bits(STRING_TAG | (empty_str as u64 & POINTER_MASK));
-                    let result = crate::js_closure_call1(closure_ptr, key_f64_arg);
-                    return Some(result);
-                }
-            }
+    let key = js_string_from_bytes(b"toJSON".as_ptr(), 6);
+    let key_handle = scope.root_string_ptr(key);
+
+    let obj_ptr = recv_handle.get_nanbox_f64();
+    let obj_ptr = (obj_ptr.to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
+    let method = crate::object::js_object_get_field_by_name(
+        obj_ptr,
+        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
+    );
+
+    // Only treat it as toJSON if it actually resolved to a callable closure
+    // (POINTER_TAG + closure). A plain object with no `toJSON`, or a `toJSON`
+    // data field that isn't a function, returns `None` → serialize normally.
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return None;
+    }
+
+    // Rebind `this` to the receiver. For an OWN method or a class-instance
+    // bound-method closure this is a correct no-op; for an inherited
+    // `Object.create(proto)` method whose reserved `this` slot was baked to the
+    // prototype at construction, this restores the proper receiver (#1982).
+    let recv = recv_handle.get_nanbox_f64();
+    let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
+
+    // Per spec, `toJSON(key)` receives the property key. The pre-#321 own-key
+    // path passed the empty string, and Effect's `Inspectable.toJSON` ignores
+    // its argument, so we keep the empty-string key to stay byte-identical with
+    // the rest of Perry's JSON suite.
+    let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
+    let key_f64_arg = f64::from_bits(STRING_TAG | (empty_str as u64 & POINTER_MASK));
+
+    let prev_this = crate::object::js_implicit_this_set(recv);
+    let result = crate::closure::js_native_call_value(f64::from_bits(bound), &key_f64_arg, 1);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(result)
+}
+
+/// Serialize the RESULT of a `toJSON` call. Per ECMA-262 §25.5.2.2, `toJSON`
+/// runs at most once per value: the returned value is then serialized as an
+/// ordinary object/array WITHOUT re-invoking `toJSON` on it (only its child
+/// properties get their own `toJSON` applied). When the result is an OBJECT we
+/// arm the one-shot `SUPPRESS_NEXT_TO_JSON` guard so the result object's own
+/// probe is skipped, then always disarm it afterward so a result that never
+/// reaches an `object_get_to_json` probe (a plain `class_id == 0` literal with
+/// no own `toJSON` field) can't leak the flag onto an unrelated later object.
+/// Array/primitive results need no guard (arrays don't probe `toJSON` at the
+/// array level; their elements correctly re-apply per-property).
+#[inline]
+pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
+    if let Some(res_ptr) = extract_pointer(result.to_bits()) {
+        if gc_obj_type(res_ptr) == crate::gc::GC_TYPE_OBJECT
+            && !crate::buffer::is_registered_buffer(res_ptr as usize)
+        {
+            SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
         }
     }
-    None
 }
 
 #[inline]
@@ -396,16 +456,34 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             crate::gc::GC_TYPE_ARRAY => stringify_array(ptr, buf),
             crate::gc::GC_TYPE_OBJECT => {
                 if is_object_pointer(ptr) {
+                    // `stringify_object_inner` (via `stringify_object`) probes
+                    // the prototype `toJSON` itself, so no extra check needed.
                     stringify_object(ptr, buf);
-                } else if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
-                    // #1704: a genuinely empty object (null keys_array, e.g.
-                    // `Object.fromEntries([])` / a never-mutated `{}`) fails
-                    // `is_object_pointer`'s `keys_len > 0` guard but is valid —
-                    // emit "{}" not "null". A non-empty object that fails the
-                    // check is treated as corrupted and still emits "null".
-                    buf.push_str("{}");
                 } else {
-                    buf.push_str("null");
+                    // Object failed `is_object_pointer` (zero own enumerable
+                    // properties). A class instance with no instance fields but
+                    // a prototype `toJSON` (e.g. `class { toJSON() {…} }`) lands
+                    // here — honour `toJSON` before the empty-object fallback.
+                    // (#321) Plain `{}` / `Object.fromEntries([])` carry
+                    // `class_id == 0`, so the probe is skipped for them.
+                    if (*(ptr as *const crate::ObjectHeader)).class_id != 0 {
+                        if let Some(to_json_val) = object_get_to_json(ptr) {
+                            arm_to_json_result_guard(to_json_val);
+                            stringify_value(to_json_val, TYPE_UNKNOWN, buf);
+                            SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+                            return;
+                        }
+                    }
+                    if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
+                        // #1704: a genuinely empty object (null keys_array, e.g.
+                        // `Object.fromEntries([])` / a never-mutated `{}`) fails
+                        // `is_object_pointer`'s `keys_len > 0` guard but is valid —
+                        // emit "{}" not "null". A non-empty object that fails the
+                        // check is treated as corrupted and still emits "null".
+                        buf.push_str("{}");
+                    } else {
+                        buf.push_str("null");
+                    }
                 }
             }
             crate::gc::GC_TYPE_STRING => {
@@ -596,6 +674,20 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // empty object has no children, so it can't be part of a cycle and the
     // circular-reference tracking below is unnecessary.
     if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
+        // A null `keys_array` means no own enumerable properties — but a class
+        // instance with no instance fields (only methods, e.g. a `class {
+        // toJSON() {…} }`) still has a `toJSON` on its prototype/vtable that
+        // must be honoured before falling back to "{}". A plain empty object
+        // literal / `Object.fromEntries([])` carries `class_id == 0`, so the
+        // probe is skipped for them. (#321)
+        if (*(ptr as *const crate::ObjectHeader)).class_id != 0 {
+            if let Some(to_json_val) = object_get_to_json(ptr) {
+                arm_to_json_result_guard(to_json_val);
+                stringify_value(to_json_val, TYPE_UNKNOWN, buf);
+                SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+                return;
+            }
+        }
         buf.push_str("{}");
         return;
     }
@@ -710,14 +802,26 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         found
     };
 
-    if has_closure_field {
-        // Only objects with closure-typed fields can have a toJSON method.
-        // Check toJSON first, then filter closures in the loop below.
+    // A `toJSON` can live as an OWN closure-typed field (a plain object
+    // literal `{ toJSON() {…} }`) OR on the object's prototype / class-method
+    // chain — a `class { toJSON() {…} }` instance stores `toJSON` on the class
+    // vtable, and an `Object.create(proto)` result inherits it from `proto`.
+    // Neither of those carries an own closure field, so the cheap
+    // `has_closure_field` scan misses them; they DO carry a non-zero
+    // `class_id` linking to the prototype/vtable (a plain data object literal
+    // has `class_id == 0`), so probe `object_get_to_json` (which resolves
+    // own+prototype via `js_object_get_field_by_name`) in that case too. This
+    // is what lets `JSON.stringify` honour a prototype `toJSON` (#321 — Effect
+    // `Inspectable`).
+    let has_prototype_chain = (*obj).class_id != 0;
+    if has_closure_field || has_prototype_chain {
         if let Some(to_json_val) = object_get_to_json(ptr) {
             if depth > MAX_FAST_DEPTH {
                 STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
             }
+            arm_to_json_result_guard(to_json_val);
             stringify_value(to_json_val, TYPE_UNKNOWN, buf);
+            SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
             return;
         }
     }
@@ -895,6 +999,18 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         return None;
     }
     let obj = first_ptr as *const crate::ObjectHeader;
+    // A non-zero `class_id` means this object may resolve `toJSON` (or other
+    // serialization-affecting methods) on its prototype / class vtable — which
+    // the prefix-template emit path can't see (it only inspects own fields).
+    // Bail to the per-element slow path (`stringify_object_inner`), which
+    // probes the prototype chain via `object_get_to_json`. Plain data object
+    // literals and `JSON.parse` output carry `class_id == 0`, so the
+    // array-of-objects fast path is unaffected for them. (#321 — a homogeneous
+    // array of `class { toJSON() {…} }` instances must honour the prototype
+    // `toJSON`.)
+    if (*obj).class_id != 0 {
+        return None;
+    }
     let keys_arr = (*obj).keys_array;
     if keys_arr.is_null() {
         return None;
@@ -1054,7 +1170,9 @@ pub(crate) unsafe fn try_emit_shape_element(
     }
     if has_pointer_fields {
         if let Some(to_json_val) = object_get_to_json(elem_ptr) {
+            arm_to_json_result_guard(to_json_val);
             stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
+            SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
             return true;
         }
     }

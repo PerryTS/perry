@@ -384,6 +384,11 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
         d.set(c + 1);
         c
     });
+    // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
+    // entry so a throw during a prior stringify can't leak it across calls.
+    if prior_depth == 0 {
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+    }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
     } else {
@@ -524,7 +529,9 @@ pub(crate) unsafe fn stringify_object_pretty(
     // Check for toJSON method
     if let Some(to_json_val) = object_get_to_json(ptr) {
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        arm_to_json_result_guard(to_json_val);
         stringify_value_pretty(to_json_val, TYPE_UNKNOWN, buf, indent, depth);
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
         return;
     }
 
@@ -894,6 +901,11 @@ pub unsafe extern "C" fn js_json_stringify_full(
         d.set(c + 1);
         c
     });
+    // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
+    // entry so a throw during a prior stringify can't leak it across calls.
+    if prior_depth == 0 {
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+    }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
     } else {
