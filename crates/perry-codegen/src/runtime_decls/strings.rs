@@ -686,6 +686,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_get_utc_milliseconds", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_value_of", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_timezone_offset", DOUBLE, &[DOUBLE]);
+    // #2089: deref a Date (NaN-boxed DateCell pointer) to its ms timestamp for
+    // ordered relational compares; a plain number passes through unchanged.
+    module.declare_function("js_date_coerce_number", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_date_to_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string_or_throw", I64, &[DOUBLE]);
     module.declare_function("js_date_new_from_timestamp", DOUBLE, &[DOUBLE]);

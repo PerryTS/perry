@@ -1492,6 +1492,7 @@ pub enum Expr {
 
     // Date misc
     DateValueOf(Box<Expr>),      // date.valueOf() -> number (same as getTime)
+    DateToString(Box<Expr>),     // date.toString() / String(date) -> full date string
     DateToDateString(Box<Expr>), // date.toDateString() -> string
     DateToTimeString(Box<Expr>), // date.toTimeString() -> string
     DateToLocaleDateString(Box<Expr>), // date.toLocaleDateString() -> string

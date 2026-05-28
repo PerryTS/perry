@@ -999,9 +999,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
         ("util.types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
         ("util.types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
-        ("util.types", "isDate") => {
-            bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
-        }
+        ("util.types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
         ("util.types", "isRegExp") => {
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
@@ -1058,9 +1056,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
         ("util/types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
         ("util/types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
-        ("util/types", "isDate") => {
-            bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
-        }
+        ("util/types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
         ("util/types", "isRegExp") => {
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))

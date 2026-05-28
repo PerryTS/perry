@@ -417,6 +417,7 @@ impl SH for Expr {
             Expr::DateSetMilliseconds { date, value } => { tag(h, 484); date.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::DateSetTime { date, value } => { tag(h, 485); date.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::DateValueOf(e) => { tag(h, 338); e.as_ref().hash(h); }
+            Expr::DateToString(e) => { tag(h, 1339); e.as_ref().hash(h); }
             Expr::DateToDateString(e) => { tag(h, 339); e.as_ref().hash(h); }
             Expr::DateToTimeString(e) => { tag(h, 340); e.as_ref().hash(h); }
             Expr::DateToLocaleDateString(e) => { tag(h, 341); e.as_ref().hash(h); }

@@ -1712,6 +1712,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DecodeURI(..)
         | Expr::EncodeURIComponent(..)
         | Expr::DecodeURIComponent(..)
+        | Expr::DateToString(..)
         | Expr::DateToDateString(..)
         | Expr::DateToTimeString(..)
         | Expr::DateToLocaleDateString(..)

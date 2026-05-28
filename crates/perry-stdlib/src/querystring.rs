@@ -513,7 +513,7 @@ fn querystring_scalar_to_string(value_bits: u64) -> String {
     if value.is_undefined() || value.is_null() {
         return String::new();
     }
-    if perry_runtime::date::is_registered_date_bits(value_bits) {
+    if perry_runtime::date::is_date_value(f64::from_bits(value_bits)) {
         return String::new();
     }
     if value.is_bool() {

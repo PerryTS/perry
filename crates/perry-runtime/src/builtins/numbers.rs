@@ -334,6 +334,11 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         crate::bigint::js_bigint_to_f64(ptr)
     } else if jsval.is_pointer() {
         let id = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        // #2089: a Date is a NaN-boxed pointer to a `DateCell`. `Number(date)`
+        // / `+date` / `date - other` coerce to the millisecond timestamp.
+        if crate::date::is_date_cell_addr(id as usize) {
+            return crate::date::date_cell_timestamp(value);
+        }
         // Timer handles coerce numerically to their internal id (matches
         // Node's `+timeout` shape — Node returns `_idleTimeout`, Perry
         // returns the handle id; both are numbers and both are stable

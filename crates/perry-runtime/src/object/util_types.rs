@@ -153,7 +153,7 @@ pub extern "C" fn js_util_types_is_set(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_date(value: f64) -> f64 {
-    nanbox_bool(crate::date::is_registered_date_bits(value.to_bits()))
+    nanbox_bool(crate::date::is_date_value(value))
 }
 
 #[no_mangle]

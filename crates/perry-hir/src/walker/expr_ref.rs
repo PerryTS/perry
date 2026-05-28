@@ -254,6 +254,7 @@ where
         | Expr::DateGetUtcSeconds(v)
         | Expr::DateGetUtcMilliseconds(v)
         | Expr::DateValueOf(v)
+        | Expr::DateToString(v)
         | Expr::DateToDateString(v)
         | Expr::DateToTimeString(v)
         | Expr::DateToLocaleDateString(v)
