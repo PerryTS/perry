@@ -77,7 +77,8 @@ pub use formatting::{
 
 pub(crate) use formatting::{
     format_finite_number_js, format_jsvalue, is_negative_zero, jsvalue_string_content,
-    InspectCustomInspectGuard, InspectDepthLimitGuard, InspectShowHiddenGuard,
+    InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard,
+    InspectSortedGuard,
 };
 
 pub use globals::{

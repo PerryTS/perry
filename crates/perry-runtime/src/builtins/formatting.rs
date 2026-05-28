@@ -420,6 +420,49 @@ impl Drop for InspectCustomInspectGuard {
     }
 }
 
+thread_local! {
+    static INSPECT_GETTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INSPECT_SORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn inspect_getters_enabled() -> bool {
+    INSPECT_GETTERS.with(|c| c.get())
+}
+
+fn inspect_sorted_enabled() -> bool {
+    INSPECT_SORTED.with(|c| c.get())
+}
+
+pub(crate) struct InspectGettersGuard(bool);
+
+impl InspectGettersGuard {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let prev = INSPECT_GETTERS.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectGettersGuard {
+    fn drop(&mut self) {
+        INSPECT_GETTERS.with(|c| c.set(self.0));
+    }
+}
+
+pub(crate) struct InspectSortedGuard(bool);
+
+impl InspectSortedGuard {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let prev = INSPECT_SORTED.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectSortedGuard {
+    fn drop(&mut self) {
+        INSPECT_SORTED.with(|c| c.set(self.0));
+    }
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -911,7 +954,7 @@ unsafe fn format_object_as_json(
     let show_hidden = inspect_show_hidden();
     let descriptors_in_use = crate::object::descriptors_in_use();
 
-    let mut parts: Vec<String> = Vec::with_capacity(key_count);
+    let mut string_parts: Vec<(String, String)> = Vec::with_capacity(key_count);
 
     for i in 0..key_count {
         // Get the key (NaN-boxed string pointer)
@@ -940,17 +983,31 @@ unsafe fn format_object_as_json(
             continue;
         }
 
-        // Get the value
-        let value = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
-        let value_str = format_jsvalue_for_json(value, depth + 1);
+        let value_str =
+            if let Some(acc) = crate::object::get_accessor_descriptor(obj_addr, &key_str) {
+                format_accessor_property(acc, depth)
+            } else {
+                let value = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+                format_jsvalue_for_json(value, depth + 1)
+            };
 
-        if is_enumerable {
-            parts.push(format!("{}: {}", key_str, value_str));
+        let rendered = if is_enumerable {
+            format!("{}: {}", key_str, value_str)
         } else {
             // Node wraps non-enumerable keys in brackets under showHidden.
-            parts.push(format!("[{}]: {}", key_str, value_str));
-        }
+            format!("[{}]: {}", key_str, value_str)
+        };
+        string_parts.push((key_str, rendered));
     }
+
+    if inspect_sorted_enabled() {
+        string_parts.sort_by(|(left, _), (right, _)| left.cmp(right));
+    }
+
+    let mut parts: Vec<String> = string_parts
+        .into_iter()
+        .map(|(_, rendered)| rendered)
+        .collect();
 
     // Append symbol-keyed properties last (matches Node's enumeration order:
     // string keys first, then symbol keys). Each entry renders as
@@ -1005,6 +1062,28 @@ unsafe fn format_object_as_json(
         .collect::<Vec<_>>()
         .join(",\n");
     format!("{{\n{}\n}}", body)
+}
+
+fn format_accessor_property(acc: crate::object::AccessorDescriptor, depth: usize) -> String {
+    let has_getter = acc.get != 0;
+    let has_setter = acc.set != 0;
+    let label = match (has_getter, has_setter) {
+        (true, true) => "Getter/Setter",
+        (true, false) => "Getter",
+        (false, true) => "Setter",
+        (false, false) => return "undefined".to_string(),
+    };
+
+    if inspect_getters_enabled() && has_getter {
+        let closure =
+            (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        if !closure.is_null() {
+            let value = unsafe { crate::closure::js_closure_call0(closure) };
+            return format!("[{}: {}]", label, format_jsvalue_for_json(value, depth + 1));
+        }
+    }
+
+    format!("[{}]", label)
 }
 
 /// Format a JSValue for JSON output (strings get quotes)
@@ -1504,7 +1583,13 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
     // symbol property. Refs #1201.
     let custom_inspect =
         unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
+    let getters =
+        unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
+    let sorted =
+        unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
+    let _getters_guard = InspectGettersGuard::new(getters);
+    let _sorted_guard = InspectSortedGuard::new(sorted);
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     let out = if jv.is_any_string() {
         let s = jsvalue_string_content(value).unwrap_or_default();

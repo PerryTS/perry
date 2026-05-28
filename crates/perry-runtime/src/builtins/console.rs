@@ -1024,9 +1024,13 @@ pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: 
     // instead of invoking it. The option is overridable via the second arg.
     // Refs #1201.
     let custom_inspect = decode_dir_bool_option(options_value, "customInspect").unwrap_or(false);
+    let getters = decode_dir_bool_option(options_value, "getters").unwrap_or(false);
+    let sorted = decode_dir_bool_option(options_value, "sorted").unwrap_or(false);
     let _depth_guard = InspectDepthLimitGuard::new(max_depth);
     let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
+    let _getters_guard = InspectGettersGuard::new(getters);
+    let _sorted_guard = InspectSortedGuard::new(sorted);
     println!("{}", format_jsvalue(value, 0));
 }
 
