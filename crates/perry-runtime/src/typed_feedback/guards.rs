@@ -21,19 +21,12 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
         }
         for i in 0..key_count {
             let stored = crate::array::js_array_get(keys, i as u32);
-            if !stored.is_string() {
-                continue;
-            }
-            let string = stored.as_string_ptr();
-            if string.is_null() {
-                continue;
-            }
-            let len = (*string).byte_len as usize;
-            if len != key_bytes.len() {
-                continue;
-            }
-            let data = (string as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            if std::slice::from_raw_parts(data, len) == key_bytes {
+            // #1781: SSO-aware shape match — pre-fix the `is_string()`
+            // here returned false for a stored inline-SSO key, so the
+            // typed-feedback hot-path guard fell back to the slow
+            // generic dispatch on every read of an object whose shape
+            // included a ≤5-byte key.
+            if crate::string::js_string_key_matches_bytes(stored, key_bytes) {
                 return true;
             }
         }

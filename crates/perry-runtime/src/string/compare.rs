@@ -71,6 +71,117 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
     }
 }
 
+/// SSO-aware key match: compare a stored-key `JSValue` (which may be a
+/// `STRING_TAG` heap pointer OR a `SHORT_STRING_TAG` inline SSO value)
+/// against an incoming heap `*const StringHeader` key.
+///
+/// This is the safe replacement for the `key_val.is_string() && js_string_equals(key, key_val.as_string_ptr())`
+/// pattern that recurs in `object/field_get_set.rs`, `object/object_ops.rs`,
+/// `object/delete_rest.rs`, etc. — `is_string()` is STRING_TAG-only, so
+/// any SSO-stored key is silently skipped, which makes `Object.keys`,
+/// `key in obj`, `delete obj[k]`, `obj[k] = v`, and `Object.assign`
+/// drop or duplicate keys whose name is ≤ 5 ASCII bytes (#1781).
+///
+/// Returns `true` iff the stored value is some kind of string AND its
+/// byte contents are equal to the incoming heap key. Returns `false`
+/// for non-string stored values or a null incoming key.
+///
+/// Inline byte comparison — no allocation, no heap materialization of
+/// the SSO operand. Safe on the hot path.
+#[inline]
+pub(crate) unsafe fn js_string_key_matches(
+    stored: crate::JSValue,
+    incoming: *const StringHeader,
+) -> bool {
+    if incoming.is_null() {
+        return false;
+    }
+    // Heap-stored key: defer to the existing equals routine.
+    if stored.is_string() {
+        return js_string_equals(incoming, stored.as_string_ptr()) != 0;
+    }
+    // SSO-stored key: compare the incoming heap bytes against the
+    // inline SSO bytes without materializing the SSO to the heap.
+    if stored.is_short_string() {
+        let incoming_len = (*incoming).byte_len as usize;
+        let sso_len = stored.short_string_len();
+        if incoming_len != sso_len {
+            return false;
+        }
+        let incoming_data = (incoming as *const u8).add(std::mem::size_of::<StringHeader>());
+        let incoming_bytes = std::slice::from_raw_parts(incoming_data, incoming_len);
+        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = stored.short_string_to_buf(&mut sso_buf);
+        return &sso_buf[..n] == incoming_bytes;
+    }
+    false
+}
+
+/// SSO-aware byte-slice match for cases where the incoming key already
+/// lives as a `&[u8]` slice (typed-feedback guards, `js_object_get_own_field_or_undef`,
+/// etc.) — same SSO blind-spot fix as [`js_string_key_matches`] but
+/// without the round-trip through a heap `StringHeader` for the
+/// incoming side. Returns `true` iff the stored value is some kind of
+/// string and its bytes equal `incoming_bytes`.
+#[inline]
+pub(crate) unsafe fn js_string_key_matches_bytes(
+    stored: crate::JSValue,
+    incoming_bytes: &[u8],
+) -> bool {
+    if stored.is_string() {
+        let stored_ptr = stored.as_string_ptr();
+        if stored_ptr.is_null() {
+            return false;
+        }
+        let stored_len = (*stored_ptr).byte_len as usize;
+        if stored_len != incoming_bytes.len() {
+            return false;
+        }
+        let stored_data = (stored_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let stored_slice = std::slice::from_raw_parts(stored_data, stored_len);
+        return stored_slice == incoming_bytes;
+    }
+    if stored.is_short_string() {
+        let sso_len = stored.short_string_len();
+        if sso_len != incoming_bytes.len() {
+            return false;
+        }
+        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = stored.short_string_to_buf(&mut sso_buf);
+        return &sso_buf[..n] == incoming_bytes;
+    }
+    false
+}
+
+/// Extract the bytes of a stored-key JSValue (STRING_TAG or SHORT_STRING_TAG)
+/// into a caller-provided buffer + length. Returns `None` for non-string
+/// stored values. The slice borrowing into either the SSO buffer
+/// (`stored_buf`) or the heap pointer is the caller's responsibility.
+///
+/// Used by paths like `Object.keys` and `Object.assign` that need to
+/// materialize the key string into a usable form regardless of which
+/// representation it currently has.
+#[inline]
+pub(crate) unsafe fn js_string_key_bytes<'a>(
+    stored: crate::JSValue,
+    stored_buf: &'a mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+) -> Option<&'a [u8]> {
+    if stored.is_string() {
+        let stored_ptr = stored.as_string_ptr();
+        if stored_ptr.is_null() {
+            return None;
+        }
+        let len = (*stored_ptr).byte_len as usize;
+        let data = (stored_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        return Some(std::slice::from_raw_parts(data, len));
+    }
+    if stored.is_short_string() {
+        let n = stored.short_string_to_buf(stored_buf);
+        return Some(&stored_buf[..n]);
+    }
+    None
+}
+
 /// Check if a string starts with a prefix
 #[no_mangle]
 pub extern "C" fn js_string_starts_with(
@@ -381,4 +492,95 @@ pub extern "C" fn js_string_to_well_formed(s: *const StringHeader) -> *mut Strin
         }
     }
     js_string_from_bytes(result.as_ptr(), result.len() as u32)
+}
+
+#[cfg(test)]
+mod tests_sso_helpers {
+    use super::*;
+    use crate::value::SHORT_STRING_MAX_LEN;
+    use crate::{js_string_from_bytes, JSValue};
+
+    /// #1781: a STRING_TAG heap key and a SHORT_STRING_TAG inline key
+    /// with the same bytes must both match an incoming heap key.
+    #[test]
+    fn key_matches_heap_and_sso_for_same_bytes() {
+        for name in ["a", "id", "tag", "name", "mango"] {
+            let bytes = name.as_bytes();
+            assert!(bytes.len() <= SHORT_STRING_MAX_LEN);
+
+            let incoming = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) };
+            let heap_stored = JSValue::string_ptr(incoming);
+            let sso_stored = JSValue::try_short_string(bytes).expect("len<=5 encodes as SSO");
+            assert!(sso_stored.is_short_string(), "{name:?} should be SSO");
+
+            unsafe {
+                assert!(
+                    js_string_key_matches(heap_stored, incoming),
+                    "heap match failed for {name:?}"
+                );
+                assert!(
+                    js_string_key_matches(sso_stored, incoming),
+                    "SSO match failed for {name:?}"
+                );
+                assert!(
+                    js_string_key_matches_bytes(heap_stored, bytes),
+                    "heap bytes-match failed for {name:?}"
+                );
+                assert!(
+                    js_string_key_matches_bytes(sso_stored, bytes),
+                    "SSO bytes-match failed for {name:?}"
+                );
+            }
+        }
+    }
+
+    /// Different-length stored vs incoming must return false even when one
+    /// is SSO and the other is heap.
+    #[test]
+    fn key_matches_rejects_different_bytes_across_reps() {
+        let incoming = unsafe { js_string_from_bytes(b"id".as_ptr(), 2) };
+        let sso_other = JSValue::try_short_string(b"tag").expect("SSO");
+        let heap_other_ptr = unsafe { js_string_from_bytes(b"other".as_ptr(), 5) };
+        let heap_other = JSValue::string_ptr(heap_other_ptr);
+
+        unsafe {
+            assert!(!js_string_key_matches(sso_other, incoming));
+            assert!(!js_string_key_matches(heap_other, incoming));
+        }
+    }
+
+    /// Non-string stored values (undefined / number / pointer) must return false
+    /// without dereferencing the payload.
+    #[test]
+    fn key_matches_rejects_non_string_stored() {
+        let incoming = unsafe { js_string_from_bytes(b"id".as_ptr(), 2) };
+        for stored in [
+            JSValue::undefined(),
+            JSValue::null(),
+            JSValue::int32(42),
+            JSValue::bool(true),
+        ] {
+            unsafe {
+                assert!(!js_string_key_matches(stored, incoming));
+                assert!(!js_string_key_matches_bytes(stored, b"id"));
+            }
+        }
+    }
+
+    /// SSO key_bytes() round-trip: returns the inline bytes for SSO,
+    /// the heap bytes for STRING_TAG, None for everything else.
+    #[test]
+    fn key_bytes_round_trips_sso_and_heap() {
+        let sso = JSValue::try_short_string(b"path").expect("SSO");
+        let heap = JSValue::string_ptr(unsafe { js_string_from_bytes(b"longish".as_ptr(), 7) });
+        let mut buf = [0u8; SHORT_STRING_MAX_LEN];
+        unsafe {
+            assert_eq!(js_string_key_bytes(sso, &mut buf), Some(b"path".as_ref()));
+            assert_eq!(
+                js_string_key_bytes(heap, &mut buf),
+                Some(b"longish".as_ref())
+            );
+            assert_eq!(js_string_key_bytes(JSValue::int32(7), &mut buf), None);
+        }
+    }
 }

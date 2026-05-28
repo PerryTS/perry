@@ -354,6 +354,27 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::os::js_process_chdir(arg_event_ptr(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("process", "loadEnvFile") => {
+            crate::process::js_process_load_env_file(optional_path_str_ptr(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "getgroups") => crate::process::js_process_getgroups(),
+        ("process", "setuid") => {
+            crate::process::js_process_setuid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "seteuid") => {
+            crate::process::js_process_seteuid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setgid") => {
+            crate::process::js_process_setgid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setegid") => {
+            crate::process::js_process_setegid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "kill") => {
             crate::os::js_process_kill(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
