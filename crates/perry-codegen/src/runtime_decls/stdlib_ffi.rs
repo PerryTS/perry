@@ -391,6 +391,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_buffer_byte_length", I32, &[I64]);
     module.declare_function("js_buffer_byte_length_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_buffer_concat", I64, &[I64]);
+    module.declare_function("js_buffer_concat_with_length", I64, &[I64, DOUBLE]);
     module.declare_function("js_buffer_copy", I32, &[I64, I64, I32, I32, I32]);
     module.declare_function("js_buffer_equals", I32, &[I64, I64]);
     module.declare_function("js_buffer_fill", I64, &[I64, I32]);

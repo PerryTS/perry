@@ -230,6 +230,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::BufferAlloc { .. }
         | Expr::BufferAllocUnsafe(_)
         | Expr::BufferConcat(_)
+        | Expr::BufferConcatWithLength { .. }
         | Expr::CryptoRandomBytes(_) => Some(HirType::Named("Uint8Array".into())),
         // Compare results are now NaN-boxed booleans (TAG_TRUE/FALSE).
         // Type-refining the local as Boolean lets is_numeric_expr

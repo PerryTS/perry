@@ -419,6 +419,12 @@ pub(super) fn try_native_module_methods(
                         }
                         "concat" => {
                             let list = args.first().cloned().unwrap_or(Expr::Array(vec![]));
+                            if let Some(total_length) = args.get(1).cloned() {
+                                return Ok(Ok(Expr::BufferConcatWithLength {
+                                    list: Box::new(list),
+                                    total_length: Box::new(total_length),
+                                }));
+                            }
                             return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                         }
                         "of" => {

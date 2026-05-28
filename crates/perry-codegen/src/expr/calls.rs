@@ -60,6 +60,7 @@ fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             | Expr::BufferAlloc { .. }
             | Expr::BufferAllocUnsafe(_)
             | Expr::BufferConcat(_)
+            | Expr::BufferConcatWithLength { .. }
             | Expr::CryptoRandomBytes(_)
     ) {
         return true;

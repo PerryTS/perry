@@ -143,6 +143,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let buf_handle = blk.call(I64, "js_buffer_concat", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
+        Expr::BufferConcatWithLength { list, total_length } => {
+            let arr_box = lower_expr(ctx, list)?;
+            let total_box = lower_expr(ctx, total_length)?;
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_buffer_concat_with_length",
+                &[(I64, &arr_handle), (DOUBLE, &total_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
 
         // #1177: `buf.slice(start?, end?)` on a statically buffer-producing
         // receiver — emitted by the HIR fold at `expr_call/mod.rs:5396` when

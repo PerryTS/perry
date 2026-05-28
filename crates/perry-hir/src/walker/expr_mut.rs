@@ -307,6 +307,10 @@ where
         | Expr::TemplateRaw(v) => {
             f(v);
         }
+        Expr::BufferConcatWithLength { list, total_length } => {
+            f(list);
+            f(total_length);
+        }
 
         Expr::UrlCanParseWithBase { input, base } => {
             f(input);

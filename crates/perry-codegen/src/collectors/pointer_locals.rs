@@ -192,6 +192,7 @@ pub fn collect_pointer_typed_locals(
             | Expr::BufferFrom { .. }
             | Expr::BufferFromArrayBuffer { .. }
             | Expr::BufferConcat(_)
+            | Expr::BufferConcatWithLength { .. }
             | Expr::Uint8ArrayNew(_)
             | Expr::Uint8ArrayFrom(_)
             | Expr::TextEncoderEncode(_) => Some(Type::Named("Uint8Array".into())),
