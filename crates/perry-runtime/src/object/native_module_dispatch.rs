@@ -354,6 +354,35 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::os::js_process_chdir(arg_event_ptr(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("process", "loadEnvFile") => {
+            crate::process::js_process_load_env_file(optional_path_str_ptr(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "getgroups") => crate::process::js_process_getgroups(),
+        ("process", "setuid") => {
+            crate::process::js_process_setuid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "seteuid") => {
+            crate::process::js_process_seteuid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setgid") => {
+            crate::process::js_process_setgid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setegid") => {
+            crate::process::js_process_setegid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setgroups") => {
+            crate::process::js_process_setgroups(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "initgroups") => {
+            crate::process::js_process_initgroups(arg(0), arg(1));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "kill") => {
             crate::os::js_process_kill(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -866,7 +895,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             for i in 1..args_len {
                 arr = crate::array::js_array_push_f64(arr, arg(i));
             }
-            crate::builtins::js_util_format(arr)
+            crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
         ("util", "isDeepStrictEqual") => {

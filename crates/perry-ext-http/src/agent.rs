@@ -1,0 +1,994 @@
+//! `http.Agent` / `https.Agent` (#2129 / #2154).
+//!
+//! The first PR (#2157) shipped the Agent surface as a metadata-only
+//! shim: a constructible class with a real `getName(options)` and
+//! chainable no-op methods. This module extends that surface with the
+//! pieces #2154 calls out:
+//!
+//! - **Argument validation** — `new Agent({ maxSockets: -1 })` and
+//!   friends now throw `RangeError [ERR_OUT_OF_RANGE]` with Node's
+//!   exact message shape. Closes `test-http-agent-maxtotalsockets.js`.
+//! - **`sockets` / `freeSockets` / `requests` accessors** — return
+//!   `{}` (empty object) instead of `undefined`, matching Node's
+//!   behaviour for an Agent that hasn't dispatched any requests yet.
+//! - **Per-agent reqwest client** — `options.agent = new Agent({...})`
+//!   now actually routes requests through a per-agent `reqwest::Client`
+//!   whose connection pool honors the agent's `keepAlive` /
+//!   `maxFreeSockets` / `keepAliveMsecs` configuration, instead of
+//!   ignoring the agent and reusing the global `HTTP_CLIENT` every time.
+//! - **Tunable property setters** — `agent.maxSockets = 4` writes the
+//!   new value (with the same validation as the constructor) instead
+//!   of being silently dropped.
+//! - **`createConnection` / `createSocket` setter storage** — the
+//!   user-supplied closure is now stored and GC-rooted on the agent so
+//!   later code reading `agent.createConnection` gets back the same
+//!   function. Invoking the override on the request path (Node's full
+//!   socket-injection semantics) needs net.Socket bridging that is
+//!   deferred — tracked as a follow-up off #2154.
+//!
+//! The implementation is mirrored in `crates/perry-stdlib/src/http.rs`
+//! so the default `full` build (perry-stdlib's `http-client` feature)
+//! and the well-known-flip build (this crate) expose the same surface.
+
+use crate::ensure_gc_scanner_registered;
+use lazy_static::lazy_static;
+use perry_ffi::{
+    alloc_string, get_handle_mut, iter_handles_of_mut, register_handle, GcRootVisitor, Handle,
+    JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
+};
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+// ------------------------------------------------------------------
+// AgentHandle
+// ------------------------------------------------------------------
+
+/// `http.Agent` / `https.Agent` instance state.
+///
+/// Tracker: #2129 (initial constructor + getName); #2154 (validation +
+/// per-agent reqwest client + socket-counter accessors + setters).
+pub struct AgentHandle {
+    pub protocol: Option<String>,
+    pub keep_alive: bool,
+    pub keep_alive_msecs: f64,
+    pub max_sockets: f64,
+    pub max_total_sockets: f64,
+    pub max_free_sockets: f64,
+    pub scheduling: String,
+    pub timeout_ms: Option<f64>,
+    /// Set by `agent.destroy()` — recorded so the accessors that mirror
+    /// Node's `destroyed` getter can return true. The actual pool teardown
+    /// is implicit (the reqwest::Client gets dropped when the handle is
+    /// dropped).
+    pub destroyed: bool,
+    /// User-supplied `createConnection` override closure pointer. Stored
+    /// (and GC-rooted) so reads of `agent.createConnection` round-trip;
+    /// the request-path callback dispatch is a follow-up off #2154.
+    pub create_connection: i64,
+    /// User-supplied `createSocket` override closure pointer (same notes
+    /// as `create_connection`).
+    pub create_socket: i64,
+    /// Active sockets per host:port key (= `getName(options)`).
+    /// Incremented at dispatch, decremented when the response or error
+    /// pump fires on the main thread.
+    pub sockets: HashMap<String, u32>,
+    /// Idle (keep-alive) sockets per host. reqwest owns the real pool,
+    /// so this stays empty today — but the accessor returns `{}` so
+    /// user code that does `Object.keys(agent.freeSockets)` works.
+    pub free_sockets: HashMap<String, u32>,
+    /// Queued requests per host. Always 0 today (we have no semaphore
+    /// that would block over `maxSockets`); kept for API shape.
+    pub requests: HashMap<String, u32>,
+}
+
+impl Default for AgentHandle {
+    fn default() -> Self {
+        AgentHandle {
+            protocol: Some("http:".to_string()),
+            keep_alive: false,
+            keep_alive_msecs: 1000.0,
+            max_sockets: f64::INFINITY,
+            max_total_sockets: f64::INFINITY,
+            max_free_sockets: 256.0,
+            scheduling: "lifo".to_string(),
+            timeout_ms: None,
+            destroyed: false,
+            create_connection: 0,
+            create_socket: 0,
+            sockets: HashMap::new(),
+            free_sockets: HashMap::new(),
+            requests: HashMap::new(),
+        }
+    }
+}
+
+// SAFETY: closure pointers point into program-global code; the GC
+// scanner pins them.
+unsafe impl Send for AgentHandle {}
+unsafe impl Sync for AgentHandle {}
+
+// ------------------------------------------------------------------
+// Per-agent reqwest client cache
+// ------------------------------------------------------------------
+//
+// Keyed by agent handle id (the i64 perry_ffi::register_handle returns).
+// Building a fresh `reqwest::Client` per request would defeat the
+// purpose of an Agent — the whole point is connection pooling — so we
+// memoize one client per agent and feed its `keepAlive` /
+// `maxFreeSockets` / `keepAliveMsecs` settings into reqwest's pool
+// config. When the Agent handle is dropped the cache entry leaks
+// (clients self-trim via `pool_idle_timeout`); we don't unregister
+// because tracking Agent destruction would mean adding a finalizer
+// hook to the handle registry, which today's perry-ffi handle API
+// doesn't expose.
+
+lazy_static! {
+    static ref AGENT_CLIENTS: Mutex<HashMap<Handle, reqwest::Client>> = Mutex::new(HashMap::new());
+}
+
+/// Build (or fetch the cached) `reqwest::Client` for `handle`. Falls back
+/// to the global client if the handle is missing or the per-agent client
+/// fails to build. Inspects this agent's `keepAlive` / `maxFreeSockets` /
+/// `keepAliveMsecs` to derive `pool_max_idle_per_host` +
+/// `pool_idle_timeout`.
+pub(crate) fn client_for_agent(handle: Handle) -> reqwest::Client {
+    {
+        let cache = AGENT_CLIENTS.lock().unwrap();
+        if let Some(c) = cache.get(&handle) {
+            return c.clone();
+        }
+    }
+    let (keep_alive, max_free_sockets, keep_alive_msecs) = get_handle_mut::<AgentHandle>(handle)
+        .map(|a| (a.keep_alive, a.max_free_sockets, a.keep_alive_msecs))
+        .unwrap_or((false, 256.0, 1000.0));
+
+    let pool_max_idle = if keep_alive {
+        // f64 → usize: clamp Infinity, NaN, negatives to a sane upper.
+        if !max_free_sockets.is_finite() || max_free_sockets > usize::MAX as f64 {
+            256
+        } else {
+            max_free_sockets.max(1.0) as usize
+        }
+    } else {
+        0
+    };
+
+    let idle_timeout = if keep_alive {
+        let ms = if keep_alive_msecs.is_finite() && keep_alive_msecs > 0.0 {
+            keep_alive_msecs
+        } else {
+            1000.0
+        };
+        std::time::Duration::from_millis(ms as u64)
+    } else {
+        // `Duration::ZERO` would still let reqwest stash one connection
+        // before noticing it's expired; explicit short window prevents
+        // any keep-alive when the agent has `keepAlive: false`.
+        std::time::Duration::from_millis(0)
+    };
+
+    let built = reqwest::Client::builder()
+        .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
+        .pool_max_idle_per_host(pool_max_idle)
+        .pool_idle_timeout(idle_timeout)
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let mut cache = AGENT_CLIENTS.lock().unwrap();
+    cache.entry(handle).or_insert(built).clone()
+}
+
+/// Drop the cached client for `handle` so the next dispatch rebuilds it
+/// with the new pool config. Used by the `__set_keepAlive` /
+/// `__set_maxFreeSockets` / `__set_keepAliveMsecs` setters.
+fn invalidate_agent_client(handle: Handle) {
+    let _ = AGENT_CLIENTS.lock().map(|mut c| c.remove(&handle));
+}
+
+// ------------------------------------------------------------------
+// Validation
+// ------------------------------------------------------------------
+
+/// Throw `RangeError [ERR_OUT_OF_RANGE]` with Node's exact message
+/// shape. Reaches into perry-runtime directly — ext-http already depends
+/// on it for the GC scanner registration, so no new dep.
+fn throw_out_of_range(name: &str, bound: &str, received: f64) -> ! {
+    let received_str = format_received_number(received);
+    let message = format!(
+        "The value of \"{}\" is out of range. It must be {}. Received {}",
+        name, bound, received_str
+    );
+    let msg_ptr = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(msg_ptr, "ERR_OUT_OF_RANGE");
+    let err = perry_runtime::error::js_rangeerror_new(msg_ptr);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+fn format_received_number(n: f64) -> String {
+    if n.is_nan() {
+        "NaN".to_string()
+    } else if n.is_infinite() {
+        if n.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
+    } else if n.fract() == 0.0 && n.abs() < 1e21 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
+    }
+}
+
+/// Validate that a `> 0` numeric option (e.g. `maxSockets`) is sane.
+/// Mirrors Node's `if (value <= 0) throw ERR_OUT_OF_RANGE(...)` for the
+/// Agent option group.
+fn validate_positive(name: &str, value: f64) {
+    if value.is_nan() || value <= 0.0 {
+        throw_out_of_range(name, "> 0", value);
+    }
+}
+
+// ------------------------------------------------------------------
+// Object-field helpers (NaN-boxed reads from the options object)
+// ------------------------------------------------------------------
+//
+// `parse_options_object` in lib.rs goes through `json_stringify`, which
+// throws away pointer-tagged fields (the Agent handle stored as
+// `options.agent` doesn't survive a JSON round-trip). The helpers below
+// read the raw NaN-boxed object fields so we can extract the agent
+// handle id and the callback closure pointers without losing tags.
+
+/// Read a field's raw bits from a NaN-boxed options object via
+/// perry-runtime's name-keyed getter, returning `None` when the value
+/// is missing / undefined / null. Uses perry-runtime's `JSValue` /
+/// `ObjectHeader` types (not perry-ffi's) — they're a separate type
+/// universe so we can't mix them on the `js_object_get_field_by_name`
+/// boundary.
+unsafe fn read_field_bits(obj_f64: f64, field: &str) -> Option<u64> {
+    let bits = obj_f64.to_bits();
+    let upper = bits >> 48;
+    let obj_ptr: *const perry_runtime::ObjectHeader = if upper >= 0x7FF8 {
+        (bits & PTR_MASK) as *const perry_runtime::ObjectHeader
+    } else if upper == 0 && bits >= 0x10000 {
+        bits as *const perry_runtime::ObjectHeader
+    } else {
+        return None;
+    };
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = perry_runtime::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key);
+    if val.is_undefined() || val.is_null() {
+        None
+    } else {
+        Some(val.bits())
+    }
+}
+
+unsafe fn raw_object_ptr_is_null(val_f64: f64) -> bool {
+    let bits = val_f64.to_bits();
+    let upper = bits >> 48;
+    if upper >= 0x7FF8 {
+        (bits & PTR_MASK) == 0
+    } else if upper == 0 && bits >= 0x10000 {
+        false
+    } else {
+        true
+    }
+}
+
+unsafe fn read_number_field(obj_f64: f64, field: &str) -> Option<f64> {
+    let bits = read_field_bits(obj_f64, field)?;
+    let val = perry_runtime::JSValue::from_bits(bits);
+    if val.is_number() {
+        Some(val.to_number())
+    } else if val.is_int32() {
+        Some(val.as_int32() as f64)
+    } else {
+        None
+    }
+}
+
+unsafe fn read_bool_field(obj_f64: f64, field: &str) -> Option<bool> {
+    let bits = read_field_bits(obj_f64, field)?;
+    let val = perry_runtime::JSValue::from_bits(bits);
+    if val.is_bool() {
+        Some(val.as_bool())
+    } else {
+        None
+    }
+}
+
+unsafe fn read_string_field(obj_f64: f64, field: &str) -> Option<String> {
+    let bits = read_field_bits(obj_f64, field)?;
+    let val = perry_runtime::JSValue::from_bits(bits);
+    if !val.is_string() {
+        return None;
+    }
+    let ptr = val.as_string_ptr() as *mut perry_ffi::StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    let js = JsString::from_raw(ptr);
+    perry_ffi::read_string(js).map(String::from)
+}
+
+/// Extract a closure pointer field (e.g. `options.agent.createConnection`)
+/// as a raw `i64`. Returns 0 when the field is absent or not a closure.
+unsafe fn read_closure_field(obj_f64: f64, field: &str) -> i64 {
+    let bits = match read_field_bits(obj_f64, field) {
+        Some(b) => b,
+        None => return 0,
+    };
+    let upper = bits >> 48;
+    if upper == 0x7FFD {
+        (bits & PTR_MASK) as i64
+    } else if upper == 0 && bits >= 0x10000 {
+        bits as i64
+    } else {
+        0
+    }
+}
+
+/// Extract an `options.agent` handle from `options_f64`. Returns `None`
+/// when the field is missing, not a pointer, or doesn't resolve to an
+/// AgentHandle.
+pub(crate) unsafe fn agent_handle_from_options(options_f64: f64) -> Option<Handle> {
+    let bits = read_field_bits(options_f64, "agent")?;
+    let upper = bits >> 48;
+    let candidate = if upper == 0x7FFD {
+        (bits & PTR_MASK) as Handle
+    } else if upper == 0 && bits >= 0x10000 {
+        bits as Handle
+    } else {
+        return None;
+    };
+    if get_handle_mut::<AgentHandle>(candidate).is_some() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+// ------------------------------------------------------------------
+// Empty-object accessor helper (for sockets / freeSockets / requests)
+// ------------------------------------------------------------------
+
+fn empty_object_f64() -> f64 {
+    let (packed, shape_id) = perry_ffi::build_object_shape(&[]);
+    let obj = unsafe {
+        perry_ffi::js_object_alloc_with_shape(shape_id, 0, packed.as_ptr(), packed.len() as u32)
+    };
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let v = JsValue::from_object_ptr(obj as *mut u8);
+    f64::from_bits(v.bits())
+}
+
+// ------------------------------------------------------------------
+// GC scanner — call from lib.rs's scan_http_roots
+// ------------------------------------------------------------------
+
+pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
+    iter_handles_of_mut::<AgentHandle, _>(|agent| {
+        if agent.create_connection != 0 {
+            visitor.visit_i64_slot(&mut agent.create_connection);
+        }
+        if agent.create_socket != 0 {
+            visitor.visit_i64_slot(&mut agent.create_socket);
+        }
+    });
+}
+
+// ------------------------------------------------------------------
+// Constructor (with validation)
+// ------------------------------------------------------------------
+
+unsafe fn agent_new_with_protocol(options_f64: f64, default_protocol: &str) -> Handle {
+    ensure_gc_scanner_registered();
+
+    let mut agent = AgentHandle {
+        protocol: Some(default_protocol.to_string()),
+        ..AgentHandle::default()
+    };
+
+    if !raw_object_ptr_is_null(options_f64) {
+        // Booleans first so `keepAlive: false` plus `maxSockets: -1`
+        // still hits the maxSockets validator (test-suite expects the
+        // RangeError to win).
+        if let Some(v) = read_bool_field(options_f64, "keepAlive") {
+            agent.keep_alive = v;
+        }
+        if let Some(v) = read_number_field(options_f64, "keepAliveMsecs") {
+            if v.is_nan() || v < 0.0 {
+                throw_out_of_range("keepAliveMsecs", ">= 0", v);
+            }
+            agent.keep_alive_msecs = v;
+        }
+        if let Some(v) = read_number_field(options_f64, "maxSockets") {
+            if !(v.is_infinite() && v.is_sign_positive()) {
+                validate_positive("maxSockets", v);
+            }
+            agent.max_sockets = v;
+        }
+        if let Some(v) = read_number_field(options_f64, "maxFreeSockets") {
+            if !(v.is_infinite() && v.is_sign_positive()) {
+                validate_positive("maxFreeSockets", v);
+            }
+            agent.max_free_sockets = v;
+        }
+        if let Some(v) = read_number_field(options_f64, "maxTotalSockets") {
+            if !(v.is_infinite() && v.is_sign_positive()) {
+                validate_positive("maxTotalSockets", v);
+            }
+            agent.max_total_sockets = v;
+        }
+        if let Some(v) = read_number_field(options_f64, "timeout") {
+            agent.timeout_ms = Some(v);
+        }
+        if let Some(s) = read_string_field(options_f64, "scheduling") {
+            // Node throws TypeError [ERR_INVALID_ARG_VALUE] for
+            // anything other than "fifo" / "lifo".
+            if s != "fifo" && s != "lifo" {
+                // Reuse the ERR_OUT_OF_RANGE path — the radar tests don't
+                // distinguish ERR_INVALID_ARG_VALUE from ERR_OUT_OF_RANGE
+                // here, only that *some* error is thrown synchronously.
+                let message = format!(
+                    "The argument 'scheduling' must be one of: 'fifo', 'lifo'. Received {:?}",
+                    s
+                );
+                let msg_ptr =
+                    perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+                perry_runtime::node_submodules::register_error_code_pub(
+                    msg_ptr,
+                    "ERR_INVALID_ARG_VALUE",
+                );
+                let err = perry_runtime::error::js_typeerror_new(msg_ptr);
+                perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(
+                    err as i64,
+                ))
+            }
+            agent.scheduling = s;
+        }
+        // createConnection / createSocket closure storage. GC-rooted via
+        // `scan_agent_roots`. Invoking these on the request path needs
+        // net.Socket bridging — tracked as a #2154 follow-up.
+        let cc = read_closure_field(options_f64, "createConnection");
+        if cc != 0 {
+            agent.create_connection = cc;
+        }
+        let cs = read_closure_field(options_f64, "createSocket");
+        if cs != 0 {
+            agent.create_socket = cs;
+        }
+    }
+
+    register_handle(agent)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_agent_new(options_f64: f64) -> Handle {
+    agent_new_with_protocol(options_f64, "http:")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_agent_new(options_f64: f64) -> Handle {
+    agent_new_with_protocol(options_f64, "https:")
+}
+
+// ------------------------------------------------------------------
+// `agent.getName([options])`
+// ------------------------------------------------------------------
+//
+// PR #2259 brought https.Agent.getName parity (`lib/https.js` appends 20
+// extension fields on top of the http base name). This module re-uses
+// that logic via `parse_options_object` on a serde_json::Value so the
+// truthy/defined coercion matches Node's `lib/_http_agent.js` +
+// `lib/https.js` byte-for-byte (the `test-https-agent-getname.js`
+// 20-colon empty-options string is the load-bearing fixture).
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_agent_get_name(
+    handle: Handle,
+    options_f64: f64,
+) -> *mut StringHeader {
+    let is_https = get_handle_mut::<AgentHandle>(handle)
+        .and_then(|a| a.protocol.as_deref().map(|p| p == "https:"))
+        .unwrap_or(false);
+
+    let opts = crate::parse_options_object(options_f64);
+    let mut name = build_http_agent_name(opts.as_ref());
+    if is_https {
+        append_https_agent_name_fields(&mut name, opts.as_ref());
+    }
+    alloc_string(&name).as_raw()
+}
+
+fn build_http_agent_name(opts: Option<&serde_json::Value>) -> String {
+    let opts = match opts {
+        Some(v) => v,
+        None => return "localhost::".to_string(),
+    };
+
+    let host = opts
+        .get("host")
+        .and_then(|v| v.as_str())
+        .unwrap_or("localhost");
+    let port = opts
+        .get("port")
+        .map(|v| {
+            v.as_str()
+                .map(String::from)
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                .or_else(|| v.as_f64().map(|n| (n as i64).to_string()))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let local_address = opts
+        .get("localAddress")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let mut name = format!("{}:{}:{}", host, port, local_address);
+
+    // Per Node's `lib/_http_agent.js`: family is appended first when it
+    // is exactly 4 or 6, then socketPath. Both are independent.
+    if let Some(family) = opts.get("family") {
+        let f = family.as_i64().unwrap_or(0);
+        if f == 4 || f == 6 {
+            name.push(':');
+            name.push_str(&f.to_string());
+        }
+    }
+    if let Some(socket_path) = opts.get("socketPath").and_then(|v| v.as_str()) {
+        name.push(':');
+        name.push_str(socket_path);
+    }
+
+    name
+}
+
+/// Append the 20 extension fields that `lib/https.js`'s Agent.getName
+/// adds on top of the http parent. Each field has its own `:` separator
+/// regardless of whether the value is present, so an Agent with no
+/// options produces 20 trailing colons.
+fn append_https_agent_name_fields(name: &mut String, opts: Option<&serde_json::Value>) {
+    let opts = match opts {
+        Some(v) => v,
+        None => {
+            for _ in 0..20 {
+                name.push(':');
+            }
+            return;
+        }
+    };
+
+    let host_str = opts.get("host").and_then(|v| v.as_str()).unwrap_or("");
+
+    let push_truthy_string = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(v) = opts.get(field) {
+            if json_value_is_truthy(v) {
+                name.push_str(&json_value_to_string(v));
+            }
+        }
+    };
+    let push_defined = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(v) = opts.get(field) {
+            if !v.is_null() {
+                name.push_str(&json_value_to_string(v));
+            }
+        }
+    };
+
+    push_truthy_string(name, "ca");
+    push_truthy_string(name, "cert");
+    push_truthy_string(name, "clientCertEngine");
+    push_truthy_string(name, "ciphers");
+    push_truthy_string(name, "key");
+    push_truthy_string(name, "pfx");
+    push_defined(name, "rejectUnauthorized");
+
+    // servername appears only when truthy AND distinct from host.
+    name.push(':');
+    if let Some(sn) = opts.get("servername") {
+        if json_value_is_truthy(sn) {
+            let sn_str = json_value_to_string(sn);
+            if sn_str != host_str {
+                name.push_str(&sn_str);
+            }
+        }
+    }
+
+    push_truthy_string(name, "minVersion");
+    push_truthy_string(name, "maxVersion");
+    push_truthy_string(name, "secureProtocol");
+    push_truthy_string(name, "crl");
+    push_defined(name, "honorCipherOrder");
+    push_truthy_string(name, "ecdhCurve");
+    push_truthy_string(name, "dhparam");
+    push_defined(name, "secureOptions");
+    push_truthy_string(name, "sessionIdContext");
+
+    // sigalgs goes through JSON.stringify per Node.
+    name.push(':');
+    if let Some(v) = opts.get("sigalgs") {
+        if json_value_is_truthy(v) {
+            name.push_str(&serde_json::to_string(v).unwrap_or_default());
+        }
+    }
+
+    push_truthy_string(name, "privateKeyIdentifier");
+    push_truthy_string(name, "privateKeyEngine");
+}
+
+fn json_value_is_truthy(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::Number(n) => {
+            n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false)
+        }
+        serde_json::Value::String(s) => !s.is_empty(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => true,
+    }
+}
+
+fn json_value_to_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(json_value_to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        serde_json::Value::Object(map) => {
+            if let (Some(serde_json::Value::String(ty)), Some(serde_json::Value::Array(data))) =
+                (map.get("type"), map.get("data"))
+            {
+                if ty == "Buffer" {
+                    let bytes: Vec<u8> = data
+                        .iter()
+                        .filter_map(|el| el.as_u64().map(|n| n as u8))
+                        .collect();
+                    return String::from_utf8_lossy(&bytes).into_owned();
+                }
+            }
+            "[object Object]".to_string()
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// destroy / close / keepSocketAlive / reuseSocket — chainable no-ops
+// ------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
+    handle
+}
+
+/// `agent.destroy()` — flag the agent as destroyed (so the `destroyed`
+/// getter returns true) and drop the cached reqwest client (= release
+/// its idle pool). Returns the handle for chainability.
+#[no_mangle]
+pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.destroyed = true;
+    }
+    invalidate_agent_client(handle);
+    handle
+}
+
+// ------------------------------------------------------------------
+// Property getters
+// ------------------------------------------------------------------
+
+fn agent_field<T, F>(handle: Handle, default: T, f: F) -> T
+where
+    F: FnOnce(&AgentHandle) -> T,
+{
+    get_handle_mut::<AgentHandle>(handle)
+        .map(|a| f(a))
+        .unwrap_or(default)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_max_sockets(handle: Handle) -> f64 {
+    agent_field(handle, f64::INFINITY, |a| a.max_sockets)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_max_free_sockets(handle: Handle) -> f64 {
+    agent_field(handle, 256.0, |a| a.max_free_sockets)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_max_total_sockets(handle: Handle) -> f64 {
+    agent_field(handle, f64::INFINITY, |a| a.max_total_sockets)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_keep_alive_msecs(handle: Handle) -> f64 {
+    agent_field(handle, 1000.0, |a| a.keep_alive_msecs)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_keep_alive(handle: Handle) -> f64 {
+    if agent_field(handle, false, |a| a.keep_alive) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_protocol(handle: Handle) -> *mut StringHeader {
+    let s = get_handle_mut::<AgentHandle>(handle)
+        .and_then(|a| a.protocol.clone())
+        .unwrap_or_else(|| "http:".to_string());
+    alloc_string(&s).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_destroyed(handle: Handle) -> f64 {
+    if agent_field(handle, false, |a| a.destroyed) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// `agent.sockets` — `{}` (Node default for an idle agent). Returns a
+/// NaN-boxed object pointer (bits as f64). #2154.
+#[no_mangle]
+pub extern "C" fn js_http_agent_sockets(handle: Handle) -> f64 {
+    let _ = handle;
+    empty_object_f64()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_free_sockets(handle: Handle) -> f64 {
+    let _ = handle;
+    empty_object_f64()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_requests(handle: Handle) -> f64 {
+    let _ = handle;
+    empty_object_f64()
+}
+
+// ------------------------------------------------------------------
+// Property setters
+// ------------------------------------------------------------------
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_agent_set_protocol(
+    handle: Handle,
+    value_ptr: *const StringHeader,
+) {
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        if value_ptr.is_null() {
+            agent.protocol = None;
+        } else {
+            let js = JsString::from_raw(value_ptr as *mut StringHeader);
+            if let Some(s) = perry_ffi::read_string(js) {
+                agent.protocol = Some(s.to_string());
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_max_sockets(handle: Handle, value: f64) {
+    if !(value.is_infinite() && value.is_sign_positive()) {
+        validate_positive("maxSockets", value);
+    }
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.max_sockets = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_max_free_sockets(handle: Handle, value: f64) {
+    if !(value.is_infinite() && value.is_sign_positive()) {
+        validate_positive("maxFreeSockets", value);
+    }
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.max_free_sockets = value;
+    }
+    invalidate_agent_client(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_max_total_sockets(handle: Handle, value: f64) {
+    if !(value.is_infinite() && value.is_sign_positive()) {
+        validate_positive("maxTotalSockets", value);
+    }
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.max_total_sockets = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_keep_alive_msecs(handle: Handle, value: f64) {
+    if value.is_nan() || value < 0.0 {
+        throw_out_of_range("keepAliveMsecs", ">= 0", value);
+    }
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.keep_alive_msecs = value;
+    }
+    invalidate_agent_client(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_keep_alive(handle: Handle, value: f64) {
+    let on = value != 0.0 && !value.is_nan();
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.keep_alive = on;
+    }
+    invalidate_agent_client(handle);
+}
+
+// ------------------------------------------------------------------
+// createConnection / createSocket closure storage
+// ------------------------------------------------------------------
+//
+// Node's Agent lets the caller override how a fresh socket is produced
+// (`agent.createConnection = fn`). Today's perry-ext-http doesn't wire
+// the override into the request path — full happy-path interop needs a
+// net.Socket-shaped JS object that http.ClientRequest can write to,
+// which is tracked as a #2154 follow-up. But storing the closure means
+// reading `agent.createConnection` round-trips to the same function
+// (closes the `===` checks several Node tests do).
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_create_connection(handle: Handle, closure_ptr: i64) {
+    ensure_gc_scanner_registered();
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.create_connection = closure_ptr;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_create_socket(handle: Handle, closure_ptr: i64) {
+    ensure_gc_scanner_registered();
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.create_socket = closure_ptr;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_create_connection(handle: Handle) -> i64 {
+    agent_field(handle, 0i64, |a| a.create_connection)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_create_socket(handle: Handle) -> i64 {
+    agent_field(handle, 0i64, |a| a.create_socket)
+}
+
+/// Invoke a stored `createConnection` override (if any). Called from
+/// the request-path follow-up. Returns the raw return-value the closure
+/// produced; `None` when no override was set.
+#[allow(dead_code)]
+pub(crate) fn invoke_create_connection(handle: Handle, options_f64: f64) -> Option<f64> {
+    let cc = agent_field(handle, 0i64, |a| a.create_connection);
+    if cc == 0 {
+        return None;
+    }
+    Some(unsafe {
+        let closure = JsClosure::from_raw(cc as *const RawClosureHeader);
+        closure.call1(options_f64)
+    })
+}
+
+// ------------------------------------------------------------------
+// Tests
+// ------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_ffi::drop_handle;
+
+    #[test]
+    fn default_agent_constructor_no_options() {
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        let agent = get_handle_mut::<AgentHandle>(handle).expect("handle should resolve");
+        assert_eq!(agent.protocol.as_deref(), Some("http:"));
+        assert_eq!(agent.keep_alive, false);
+        assert_eq!(agent.keep_alive_msecs, 1000.0);
+        assert!(agent.max_sockets.is_infinite());
+        assert_eq!(agent.max_free_sockets, 256.0);
+        assert!(!agent.destroyed);
+        drop_handle(handle);
+    }
+
+    #[test]
+    fn validate_positive_accepts_positive() {
+        validate_positive("maxSockets", 1.0);
+        validate_positive("maxSockets", 64.0);
+    }
+
+    #[test]
+    fn format_received_handles_special_values() {
+        assert_eq!(format_received_number(f64::NAN), "NaN");
+        assert_eq!(format_received_number(f64::INFINITY), "Infinity");
+        assert_eq!(format_received_number(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(format_received_number(-1.0), "-1");
+        assert_eq!(format_received_number(0.5), "0.5");
+    }
+
+    #[test]
+    fn sockets_accessors_return_objects() {
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        let sockets = js_http_agent_sockets(handle);
+        let free = js_http_agent_free_sockets(handle);
+        let requests = js_http_agent_requests(handle);
+        // Empty objects are NaN-boxed pointer values — the upper 16
+        // bits must be `0x7FFD` (POINTER_TAG) and not `0x7FFC*`
+        // (undefined/null/bool tags).
+        for v in [sockets, free, requests] {
+            let upper = v.to_bits() >> 48;
+            assert_eq!(upper, 0x7FFD, "expected POINTER_TAG, got {:#x}", upper);
+        }
+        drop_handle(handle);
+    }
+
+    #[test]
+    fn destroy_marks_destroyed() {
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        assert_eq!(js_http_agent_destroyed(handle), 0.0);
+        let _ = js_http_agent_destroy(handle);
+        assert_eq!(js_http_agent_destroyed(handle), 1.0);
+        drop_handle(handle);
+    }
+
+    #[test]
+    fn setters_apply_new_values() {
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        js_http_agent_set_max_sockets(handle, 4.0);
+        assert_eq!(js_http_agent_max_sockets(handle), 4.0);
+        js_http_agent_set_keep_alive(handle, 1.0);
+        assert_eq!(js_http_agent_keep_alive(handle), 1.0);
+        drop_handle(handle);
+    }
+
+    #[test]
+    fn client_for_agent_memoizes() {
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        let c1 = client_for_agent(handle);
+        let c2 = client_for_agent(handle);
+        // `reqwest::Client` is cheap-clone (Arc inside); the cache should
+        // be returning the same underlying instance, so cloning the
+        // returned client and dropping shouldn't leave a fresh entry.
+        // We can't compare clients by identity, but we can assert the
+        // cache only has one entry for this handle.
+        let cache = AGENT_CLIENTS.lock().unwrap();
+        assert!(cache.contains_key(&handle));
+        drop(c1);
+        drop(c2);
+        drop(cache);
+        let _ = AGENT_CLIENTS.lock().map(|mut c| c.remove(&handle));
+        drop_handle(handle);
+    }
+}

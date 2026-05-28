@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1435 entries across 82 modules.
+Total: 1488 entries across 82 modules.
 
 ## Modules
 
@@ -755,29 +755,55 @@ Total: 1435 entries across 82 modules.
 ### Methods
 
 - `Agent` — module
+- `Server` — module
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
+- `__get_createConnection` — instance *(class: `Agent`)*
+- `__get_createSocket` — instance *(class: `Agent`)*
+- `__get_destroyed` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
+- `__get_freeSockets` — instance *(class: `Agent`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
+- `__get_headersTimeout` — instance *(class: `HttpServer`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
 - `__get_keepAlive` — instance *(class: `Agent`)*
 - `__get_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__get_keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `__get_maxFreeSockets` — instance *(class: `Agent`)*
+- `__get_maxHeadersCount` — instance *(class: `HttpServer`)*
+- `__get_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `__get_maxSockets` — instance *(class: `Agent`)*
 - `__get_maxTotalSockets` — instance *(class: `Agent`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
 - `__get_protocol` — instance *(class: `Agent`)*
+- `__get_requestTimeout` — instance *(class: `HttpServer`)*
+- `__get_requests` — instance *(class: `Agent`)*
+- `__get_sockets` — instance *(class: `Agent`)*
 - `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
 - `__get_statusMessage` — instance *(class: `IncomingMessage`)*
+- `__get_timeout` — instance *(class: `HttpServer`)*
 - `__get_trailers` — instance *(class: `IncomingMessage`)*
 - `__get_url` — instance *(class: `IncomingMessage`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
+- `__set_createConnection` — instance *(class: `Agent`)*
+- `__set_createSocket` — instance *(class: `Agent`)*
+- `__set_headersTimeout` — instance *(class: `HttpServer`)*
+- `__set_keepAlive` — instance *(class: `Agent`)*
+- `__set_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__set_keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `__set_maxFreeSockets` — instance *(class: `Agent`)*
+- `__set_maxHeadersCount` — instance *(class: `HttpServer`)*
+- `__set_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
+- `__set_maxSockets` — instance *(class: `Agent`)*
+- `__set_maxTotalSockets` — instance *(class: `Agent`)*
 - `__set_protocol` — instance *(class: `Agent`)*
+- `__set_requestTimeout` — instance *(class: `HttpServer`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
+- `__set_timeout` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
@@ -791,20 +817,26 @@ Total: 1435 entries across 82 modules.
 - `createServer` — module
 - `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
+- `destroyed` — instance *(class: `Agent`)*
 - `end` — instance *(class: `ServerResponse`)*
 - `flushHeaders` — instance *(class: `ServerResponse`)*
+- `freeSockets` — instance *(class: `Agent`)*
 - `get` — module
 - `getHeader` — instance *(class: `ServerResponse`)*
 - `getName` — instance *(class: `Agent`)*
 - `getStatus` — instance *(class: `ServerResponse`)*
 - `hasHeader` — instance *(class: `ServerResponse`)*
 - `headers` — instance *(class: `IncomingMessage`)*
+- `headersTimeout` — instance *(class: `HttpServer`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
 - `keepAlive` — instance *(class: `Agent`)*
 - `keepAliveMsecs` — instance *(class: `Agent`)*
+- `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
 - `maxFreeSockets` — instance *(class: `Agent`)*
+- `maxHeadersCount` — instance *(class: `HttpServer`)*
+- `maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `maxSockets` — instance *(class: `Agent`)*
 - `maxTotalSockets` — instance *(class: `Agent`)*
 - `method` — instance *(class: `IncomingMessage`)*
@@ -816,13 +848,18 @@ Total: 1435 entries across 82 modules.
 - `read` — instance *(class: `IncomingMessage`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
+- `requestTimeout` — instance *(class: `HttpServer`)*
+- `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
 - `reuseSocket` — instance *(class: `Agent`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
+- `setTimeout` — instance *(class: `HttpServer`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
+- `sockets` — instance *(class: `Agent`)*
 - `statusCode` — instance *(class: `IncomingMessage`)*
 - `statusMessage` — instance *(class: `IncomingMessage`)*
+- `timeout` — instance *(class: `HttpServer`)*
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `write` — instance *(class: `ServerResponse`)*
@@ -869,6 +906,7 @@ Total: 1435 entries across 82 modules.
 ### Methods
 
 - `Agent` — module
+- `Server` — module
 - `address` — instance *(class: `HttpsServer`)*
 - `close` — instance *(class: `HttpsServer`)*
 - `createServer` — module
@@ -1079,12 +1117,16 @@ Total: 1435 entries across 82 modules.
 - `listen` — instance *(class: `Server`)*
 - `listenerCount` — instance *(class: `Socket`)*
 - `listenerCount` — instance *(class: `Server`)*
+- `listeners` — instance *(class: `Socket`)*
+- `listeners` — instance *(class: `Server`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
 - `pause` — instance *(class: `Socket`)*
+- `rawListeners` — instance *(class: `Socket`)*
+- `rawListeners` — instance *(class: `Server`)*
 - `ref` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Server`)*
@@ -1636,11 +1678,14 @@ Total: 1435 entries across 82 modules.
 - `getegid` — module
 - `geteuid` — module
 - `getgid` — module
+- `getgroups` — module
 - `getuid` — module
 - `hrtime` — module
+- `initgroups` — module
 - `kill` — module
 - `listenerCount` — module
 - `listeners` — module
+- `loadEnvFile` — module
 - `memoryUsage` — module
 - `nextTick` — module
 - `off` — module
@@ -1653,6 +1698,11 @@ Total: 1435 entries across 82 modules.
 - `removeListener` — module
 - `resourceUsage` — module
 - `setMaxListeners` — module
+- `setegid` — module
+- `seteuid` — module
+- `setgid` — module
+- `setgroups` — module
+- `setuid` — module
 - `threadCpuUsage` — module
 - `umask` — module
 - `uptime` — module
@@ -1988,6 +2038,12 @@ Total: 1435 entries across 82 modules.
 - `postMessage` — instance
 - `setEnvironmentData` — module
 - `workerData` — module
+
+### Properties
+
+- `isMainThread`
+- `resourceLimits`
+- `threadId`
 
 ## `ws`
 

@@ -487,6 +487,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // bundles the call args into a heap array (same shape as
     // js_console_log_spread) and gets a NaN-boxed string back.
     module.declare_function("js_util_format", DOUBLE, &[I64]);
+    module.declare_function("js_util_format_with_options", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
@@ -570,6 +571,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_prepend_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_prepend_once_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_emit", DOUBLE, &[I64, I64]);
+    module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_remove_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_off", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_remove_all_listeners", DOUBLE, &[I64]);

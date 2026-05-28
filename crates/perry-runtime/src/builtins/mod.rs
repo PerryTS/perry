@@ -71,14 +71,14 @@ pub use console::{
 
 pub use formatting::{
     function_name_for_ptr, js_array_print, js_register_function_name, js_util_format,
-    js_util_inspect, js_util_is_deep_strict_equal, js_util_strip_vt_control_characters,
-    register_function_name_if_absent,
+    js_util_format_with_options, js_util_inspect, js_util_is_deep_strict_equal,
+    js_util_strip_vt_control_characters, register_function_name_if_absent,
 };
 
 pub(crate) use formatting::{
     format_finite_number_js, format_jsvalue, is_negative_zero, jsvalue_string_content,
-    InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard,
-    InspectSortedGuard,
+    InspectCompactGuard, InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard,
+    InspectShowHiddenGuard, InspectSortedGuard,
 };
 
 pub use globals::{

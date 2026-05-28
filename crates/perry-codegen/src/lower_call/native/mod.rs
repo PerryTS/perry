@@ -1609,18 +1609,21 @@ pub(crate) fn lower_native_method_call(
     // failed the parity gate on every PR.
     //
     // Bundle the substitution args into a heap array (same shape
-    // `js_console_log_spread` uses) and call `js_util_format`. For
-    // `formatWithOptions(opts, fmt, ...args)`, drop arg[0] (the
-    // `util.inspect` options bag) — the runtime stub ignores it; full
-    // options-passthrough (real `%o` / `%O` styling) is a follow-up.
+    // `js_console_log_spread` uses). For `formatWithOptions(opts, fmt,
+    // ...args)`, pass arg[0] separately so the runtime can apply the
+    // inspect options around `%O` / `%o`.
     if module == "util" && object.is_none() && (method == "format" || method == "formatWithOptions")
     {
-        let skip = if method == "formatWithOptions" { 1 } else { 0 };
-        // Lower any dropped args (just the options bag for now) for
-        // side effects so closures inside them still register.
-        for a in args.iter().take(skip) {
-            let _ = lower_expr(ctx, a)?;
-        }
+        let options_value = if method == "formatWithOptions" {
+            if let Some(options_arg) = args.first() {
+                Some(lower_expr(ctx, options_arg)?)
+            } else {
+                Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            }
+        } else {
+            None
+        };
+        let skip = usize::from(method == "formatWithOptions");
         let payload: Vec<&Expr> = args.iter().skip(skip).collect();
         let cap = (payload.len() as u32).to_string();
         let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
@@ -1634,7 +1637,15 @@ pub(crate) fn lower_native_method_call(
             );
         }
         let blk = ctx.block();
-        let result = blk.call(DOUBLE, "js_util_format", &[(I64, &current_arr)]);
+        let result = if let Some(options_value) = options_value {
+            blk.call(
+                DOUBLE,
+                "js_util_format_with_options",
+                &[(DOUBLE, &options_value), (I64, &current_arr)],
+            )
+        } else {
+            blk.call(DOUBLE, "js_util_format", &[(I64, &current_arr)])
+        };
         return Ok(result);
     }
 

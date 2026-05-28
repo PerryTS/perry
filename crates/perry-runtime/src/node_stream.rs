@@ -222,12 +222,12 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
             f64::from_bits(TAG_TRUE),
         );
         mark_writable_finished(stream);
+        if is_callable_value(callback) {
+            call_listener_args(stream, callback, &[]);
+        }
         let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
         mark_stream_closed(stream);
         let _ = emit_stream_event(stream, string_value(b"close"), &[]);
-    }
-    if is_callable_value(callback) {
-        call_listener_args(stream, callback, &[]);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -270,9 +270,9 @@ extern "C" fn ns_async_dispose(closure: *const ClosureHeader) -> f64 {
     resolved_promise(f64::from_bits(TAG_UNDEFINED))
 }
 
-extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
+extern "C" fn ns_read1(closure: *const ClosureHeader, n: f64) -> f64 {
     let stream = this_value(closure);
-    read_stream_default_size(stream)
+    read_stream_with_size_arg(stream, n)
 }
 
 extern "C" fn ns_set_encoding1(closure: *const ClosureHeader, encoding: f64) -> f64 {
@@ -921,10 +921,10 @@ pub extern "C" fn js_node_stream_method_allow_half_open(stream_handle: i64) -> f
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
+pub extern "C" fn js_node_stream_method_read(stream_handle: i64, n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     mark_disturbed(stream);
-    read_stream_default_size(stream)
+    read_stream_with_size_arg(stream, n)
 }
 
 #[no_mangle]
@@ -1315,6 +1315,9 @@ extern "C" fn ns_iter_to_array(closure: *const ClosureHeader, opts: f64) -> f64 
     if !arr.is_null() {
         out = extend_with_array(out, arr);
     }
+    mark_stream_ended(this);
+    clear_readable_buffer(this);
+    destroy_stream(this, f64::from_bits(TAG_UNDEFINED));
     settle_consuming(this, opts, box_pointer(out as *const u8))
 }
 
@@ -1467,9 +1470,11 @@ extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts:
             let el = crate::array::js_array_get_f64(arr, i);
             let mapped = call_settled(cb, el);
             // flatMap flattens one level: an array result is spread, a
-            // Readable result contributes its retained chunks, anything
-            // else is appended as a single chunk. (A bare async-generator
-            // mapper isn't flattened yet — tracked separately.)
+            // Readable result contributes its retained chunks, an
+            // async-iterable (e.g. an `async function*` mapper return —
+            // issue #1572) is driven through its `[Symbol.asyncIterator]()`
+            // and its yields flattened in order, anything else is
+            // appended as a single chunk.
             if is_array_like_value(mapped) {
                 out = extend_with_array(out, raw_ptr_from_value(mapped) as *const _);
             } else if let Some(inner) = readable_hidden_chunks(mapped) {
@@ -1478,6 +1483,8 @@ extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts:
                 } else {
                     out = crate::array::js_array_push_f64(out, mapped);
                 }
+            } else if let Some(flat) = flatten_async_iterable_value(mapped) {
+                out = extend_with_array(out, flat as *const _);
             } else {
                 out = crate::array::js_array_push_f64(out, mapped);
             }
@@ -1486,6 +1493,49 @@ extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts:
     let result = readable_from_chunks(out);
     propagate_stream_state(this, opts, result);
     result
+}
+
+/// Issue #1572 — drive an async-iterable value (an `async function*` mapper
+/// return, or any object exposing `[Symbol.asyncIterator]` /
+/// `[Symbol.iterator]` / a bare `.next()` method) through its iterator
+/// protocol and collect the yielded values into a flat array.
+///
+/// The order of probes matches what `Array.fromAsync` / `for await of`
+/// already does in `array/iterator.rs`:
+///   1. `[Symbol.asyncIterator]()` — the async-generator path. Each
+///      `.next()` returns a `Promise<{value, done}>`; the per-step
+///      promise is settled synchronously by pumping microtasks.
+///   2. The value is itself an iterator (bare `.next()` method) —
+///      sync-drive it. Covers caller-provided iterator objects.
+///   3. Sync iterables — `[Symbol.iterator]()`. Caught earlier by
+///      `is_array_like_value`/`readable_hidden_chunks` for the array
+///      and Readable cases; remaining sync iterables (Map/Set/Buffer
+///      iterators, custom `[Symbol.iterator]` objects) land here.
+///
+/// `None` signals "not iterable" so the caller can fall back to the
+/// "append as a single chunk" path that pre-#1572 was the only branch.
+fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    use crate::array::{
+        async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
+        has_iterator_next,
+    };
+    use crate::symbol::js_get_iterator;
+    if let Some(async_iter) = call_symbol_async_iterator_for_flat_map(value) {
+        return Some(async_iterator_to_array_for_flat_map(async_iter));
+    }
+    if has_iterator_next(value) {
+        // Async generator step values may be already-settled promises that
+        // `async_iterator_to_array_for_flat_map` unwraps; drive the same
+        // helper for a bare-iterator receiver too — `js_async_iterator_to_array`
+        // is a strict superset of `js_iterator_to_array` (it transparently
+        // returns non-promise step results unchanged).
+        return Some(async_iterator_to_array_for_flat_map(value));
+    }
+    let sync_iter = js_get_iterator(value);
+    if sync_iter.to_bits() != value.to_bits() {
+        return Some(async_iterator_to_array_for_flat_map(sync_iter));
+    }
+    None
 }
 
 extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {
@@ -2381,6 +2431,18 @@ fn emit_readable_end_once(stream: f64) {
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
         end_pipe_destinations(stream);
+        // For a Readable-only stream (no writable side), 'close' follows
+        // 'end' — Node's spec emits `close` after the stream's resources
+        // are released. A Duplex defers `close` until BOTH 'end' and
+        // 'finish' have fired; that path is handled separately in the
+        // writable-side `ns_end1` (which also emits `close` after
+        // `finish`). Without this, `Readable.from([...])` never fired
+        // `close`, so `readable.closed` reported `false` after the data
+        // was fully consumed. Refs node-suite/stream/readable/closed-flag.
+        if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
+            mark_stream_closed(stream);
+            let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+        }
     }
 }
 
@@ -2404,10 +2466,27 @@ fn clear_readable_buffer(stream: f64) {
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
+    set_hidden_value(stream, hidden_key(b"readableLength"), 0.0);
+}
+
+fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
+    let size_value = JSValue::from_bits(size.to_bits());
+    if size_value.is_undefined() || !size_value.is_number() {
+        return read_stream_default_size(stream);
+    }
+    let size = size_value.as_number();
+    if size.is_nan() {
+        return read_stream_default_size(stream);
+    }
+    read_stream_exact_size(stream, size.trunc())
 }
 
 fn read_stream_default_size(stream: f64) -> f64 {
     invoke_read_once(stream);
+    read_stream_available_default(stream)
+}
+
+fn read_stream_available_default(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
         if stream_hidden_ended(stream) {
             refresh_readable_aborted_flag(stream);
@@ -2434,6 +2513,69 @@ fn read_stream_default_size(stream: f64) -> f64 {
     }
     let result = crate::string::js_string_concat_chain(values.as_ptr(), values.len() as i32);
     box_pointer(crate::buffer::js_buffer_from_string(result, 0) as *const u8)
+}
+
+fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
+    invoke_read_once(stream);
+    if size <= 0.0 {
+        return f64::from_bits(TAG_NULL);
+    }
+    let requested = size as usize;
+    let available = get_hidden_value(stream, hidden_buffered_key())
+        .unwrap_or(0.0)
+        .max(0.0) as usize;
+    if available == 0 {
+        if stream_hidden_ended(stream) {
+            refresh_readable_aborted_flag(stream);
+        }
+        return f64::from_bits(TAG_NULL);
+    }
+    if requested > available && !stream_hidden_ended(stream) {
+        return f64::from_bits(TAG_NULL);
+    }
+    if requested >= available {
+        return read_stream_available_default(stream);
+    }
+
+    let mut bytes = Vec::new();
+    if let Some(chunks) = readable_hidden_chunks(stream) {
+        append_chunk_bytes(chunks, &mut bytes, 0);
+    }
+    if bytes.len() <= requested {
+        return read_stream_available_default(stream);
+    }
+    let result = buffer_value_from_bytes(&bytes[..requested]);
+    set_readable_buffer_bytes(stream, &bytes[requested..]);
+    mark_disturbed(stream);
+    result
+}
+
+fn set_readable_buffer_bytes(stream: f64, bytes: &[u8]) {
+    if bytes.is_empty() {
+        clear_readable_buffer(stream);
+        return;
+    }
+    let chunk = buffer_value_from_bytes(bytes);
+    let mut arr = crate::array::js_array_alloc(0);
+    arr = crate::array::js_array_push_f64(arr, chunk);
+    set_hidden_value(stream, hidden_chunks_key(), box_pointer(arr as *const u8));
+    let remaining = bytes.len() as f64;
+    set_hidden_value(stream, hidden_buffered_key(), remaining);
+    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
+}
+
+fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
+    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
+    if !bytes.is_empty() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                crate::buffer::buffer_data_mut(buf),
+                bytes.len(),
+            );
+        }
+    }
+    box_pointer(buf as *const u8)
 }
 
 fn string_chunk_to_buffer(value: f64) -> Option<f64> {
@@ -3884,6 +4026,10 @@ mod destroy_state;
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "node_stream_tests_extra.rs"]
+mod tests_extra;
 
 #[cfg(test)]
 #[path = "node_stream_state_tests.rs"]
