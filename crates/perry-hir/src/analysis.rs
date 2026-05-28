@@ -953,6 +953,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(input, assigned);
             collect_assigned_locals_expr(base, assigned);
         }
+        Expr::UrlParseWithBase { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            collect_assigned_locals_expr(base, assigned);
+        }
         // URLSearchParams operations
         Expr::UrlSearchParamsNew(init) => {
             if let Some(init_expr) = init {

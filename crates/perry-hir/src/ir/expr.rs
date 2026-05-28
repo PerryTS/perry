@@ -1554,6 +1554,11 @@ pub enum Expr {
     /// URL.parse(input) -> URL | null. Issue #650: non-throwing variant
     /// of `new URL()` added in Node 22. Returns null when parsing fails.
     UrlParse(Box<Expr>),
+    /// URL.parse(input, base) -> URL | null.
+    UrlParseWithBase {
+        input: Box<Expr>,
+        base: Box<Expr>,
+    },
     /// `urlInstance.toString()` -> string. Issue #650: WHATWG `URL.prototype.toString`
     /// is `URL.prototype.toJSON` is alias for `href`. Without this variant the
     /// call fell through to the generic Object.prototype.toString and returned

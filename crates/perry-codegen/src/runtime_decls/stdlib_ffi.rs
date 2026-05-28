@@ -515,6 +515,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_can_parse", I32, &[I64]);
     module.declare_function("js_url_can_parse_with_base", I32, &[I64, I64]);
     module.declare_function("js_url_parse", I64, &[I64]);
+    module.declare_function("js_url_parse_with_base", I64, &[I64, I64]);
     // Issue #650: URL setters — mutate field + re-derive href.
     module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
     module.declare_function("js_url_set_search", VOID, &[I64, I64]);

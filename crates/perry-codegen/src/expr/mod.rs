@@ -1874,6 +1874,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::UrlCanParse(..)
         | Expr::UrlCanParseWithBase { .. }
         | Expr::UrlParse(..)
+        | Expr::UrlParseWithBase { .. }
         | Expr::UrlSearchParamsNew(..)
         | Expr::UrlSearchParamsGet { .. }
         | Expr::UrlSearchParamsHas { .. }

@@ -313,6 +313,11 @@ where
             f(base);
         }
 
+        Expr::UrlParseWithBase { input, base } => {
+            f(input);
+            f(base);
+        }
+
         Expr::NativeArenaView {
             owner,
             byte_offset,

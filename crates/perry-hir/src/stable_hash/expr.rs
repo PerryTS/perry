@@ -445,6 +445,7 @@ impl SH for Expr {
             Expr::UrlCanParse(e) => { tag(h, 365); e.as_ref().hash(h); }
             Expr::UrlCanParseWithBase { input, base } => { tag(h, 700); input.as_ref().hash(h); base.as_ref().hash(h); }
             Expr::UrlParse(e) => { tag(h, 366); e.as_ref().hash(h); }
+            Expr::UrlParseWithBase { input, base } => { tag(h, 705); input.as_ref().hash(h); base.as_ref().hash(h); }
             Expr::UrlInstanceToString(e) => { tag(h, 367); e.as_ref().hash(h); }
             Expr::UrlInstanceToJSON(e) => { tag(h, 368); e.as_ref().hash(h); }
             Expr::UrlSetPathname { url, value } => { tag(h, 369); url.as_ref().hash(h); value.as_ref().hash(h); }

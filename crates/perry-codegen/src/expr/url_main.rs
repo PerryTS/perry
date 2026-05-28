@@ -203,6 +203,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.select(I1, &is_null, DOUBLE, &null_box, &success))
         }
 
+        Expr::UrlParseWithBase { input, base } => {
+            let input_v = lower_expr(ctx, input)?;
+            let input_ptr =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &input_v)]);
+            let base_v = lower_expr(ctx, base)?;
+            let base_ptr =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &base_v)]);
+            let obj = ctx.block().call(
+                I64,
+                "js_url_parse_with_base",
+                &[(I64, &input_ptr), (I64, &base_ptr)],
+            );
+            let blk = ctx.block();
+            let is_null = blk.icmp_eq(I64, &obj, "0");
+            let success = nanbox_pointer_inline(blk, &obj);
+            let null_box = blk.bitcast_i64_to_double(crate::nanbox::TAG_NULL_I64);
+            let blk = ctx.block();
+            Ok(blk.select(I1, &is_null, DOUBLE, &null_box, &success))
+        }
+
         Expr::UrlSearchParamsNew(init) => {
             // Pre-#575 this routed every init through `js_url_search_params_new`
             // which only accepts a string — object literals (`new

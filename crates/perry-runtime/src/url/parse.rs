@@ -480,12 +480,80 @@ pub(crate) fn is_valid_absolute_url(s: &str) -> bool {
         if !after_scheme.starts_with("//") {
             return false;
         }
-        // file:// is allowed to have an empty host, every other scheme needs one.
-        if scheme != "file" && after_scheme.len() <= 2 {
+        let authority = after_scheme[2..]
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default();
+        if !is_valid_url_authority(scheme, authority) {
             return false;
         }
     } else if after_scheme.is_empty() {
         return false;
     }
     true
+}
+
+fn is_valid_url_authority(scheme: &str, authority: &str) -> bool {
+    // file:// is allowed to have an empty host, every other special scheme
+    // needs one.
+    if scheme != "file" && authority.is_empty() {
+        return false;
+    }
+    if authority.bytes().any(|b| b <= 0x20 || b == 0x7f) {
+        return false;
+    }
+
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if scheme != "file" && host_port.is_empty() {
+        return false;
+    }
+
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        let Some(bracket_end) = rest.find(']') else {
+            return false;
+        };
+        let after_bracket = &rest[bracket_end + 1..];
+        if !after_bracket.is_empty()
+            && !after_bracket
+                .strip_prefix(':')
+                .is_some_and(|port| port.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return false;
+        }
+        &host_port[..=bracket_end + 1]
+    } else if let Some(port_idx) = host_port.rfind(':') {
+        let port = &host_port[port_idx + 1..];
+        if !port.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        &host_port[..port_idx]
+    } else {
+        host_port
+    };
+
+    if scheme != "file" && host.is_empty() {
+        return false;
+    }
+    !has_invalid_percent_escape(host)
+}
+
+fn has_invalid_percent_escape(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len()
+                || !bytes[i + 1].is_ascii_hexdigit()
+                || !bytes[i + 2].is_ascii_hexdigit()
+            {
+                return true;
+            }
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    false
 }
