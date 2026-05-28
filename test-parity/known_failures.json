@@ -272,12 +272,6 @@
     "category": "bug-open",
     "reason": "node:stream: write() return + drain event semantics not delivered. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/error/error-event": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(err) → error event chain doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/from-async-iterable": {
     "issue": "1532",
     "added": "2026-05-23",
