@@ -878,12 +878,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:'byob'}) on bytes-type stream fails or returns wrong shape. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/pipe/source-error-no-propagation": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe(src,dst) source-error handling — wrong error count on src or dst. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/error-event-arg-shape": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1274,12 +1268,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable({captureRejections}) — async listener throws not caught as 'error'. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/pipe-error-handler-on-source": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: src.on('error') during pipe — handler receives wrong error / not called. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/some-finds-match": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1291,12 +1279,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipeline(asyncIterable, dst, cb) — async-iterable source not handled. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/source-immediate-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() src immediate error — error not fired on src listener. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/destroyed-after-finish": {
     "issue": "1532",
