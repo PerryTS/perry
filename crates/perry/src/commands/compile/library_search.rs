@@ -580,6 +580,9 @@ fn read_registry_kits_root_10() -> Option<PathBuf> {
     None
 }
 
+// #854: cfg-symmetric stub — the Windows build calls this (line ~482); the
+// non-Windows build keeps the same signature so callers compile cross-platform.
+#[allow(dead_code)]
 #[cfg(not(target_os = "windows"))]
 fn read_registry_kits_root_10() -> Option<PathBuf> {
     None

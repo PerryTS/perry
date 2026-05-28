@@ -19,6 +19,9 @@ pub struct CompileResult {
     pub output_path: PathBuf,
     pub target: String,
     pub bundle_id: Option<String>,
+    // #854: set by every target builder to record library-output shape; not
+    // currently read back, but part of the CompileResult contract.
+    #[allow(dead_code)]
     pub is_dylib: bool,
     /// V2.2 codegen cache stats from this build, when the cache was enabled.
     /// `None` when disabled (`--no-cache`, `PERRY_NO_CACHE=1`, or bitcode-link mode).
@@ -342,6 +345,9 @@ pub struct JsModule {
     /// Source code of the JS module
     pub source: String,
     /// Module specifier used in imports (e.g., "lodash", "./utils.js")
+    // #854: descriptive field on the JsModule record; not read on the
+    // current V8-free path but kept for the module-graph contract.
+    #[allow(dead_code)]
     pub specifier: String,
 }
 
@@ -363,6 +369,9 @@ pub struct CompilationContext {
     /// JavaScript modules to interpret via V8
     pub js_modules: BTreeMap<String, JsModule>,
     /// Mapping from import specifiers to resolved paths
+    // #854: populated import-graph metadata on the compilation context;
+    // not read on the current path but part of the context contract.
+    #[allow(dead_code)]
     pub import_map: BTreeMap<String, PathBuf>,
     /// Whether the WebAssembly host runtime is needed (codegen detected
     /// `WebAssembly.*` usage OR the user passed `--enable-wasm-runtime`).
@@ -439,6 +448,9 @@ pub struct CompilationContext {
     /// Cache for resolve_import results: (import_source, importer_dir) -> Option<(resolved_path, kind)>
     pub resolve_cache: HashMap<(String, PathBuf), Option<(PathBuf, ModuleKind)>>,
     /// Cache for find_node_modules results: start_dir -> Option<node_modules_dir>
+    // #854: resolver cache field on the compilation context; not read on the
+    // current path but kept as part of the context contract.
+    #[allow(dead_code)]
     pub node_modules_cache: HashMap<PathBuf, Option<PathBuf>>,
     /// Whether geisterhand (in-process input fuzzer) is enabled
     pub needs_geisterhand: bool,
@@ -668,6 +680,9 @@ pub struct NativeLibraryManifest {
     /// Package module name (e.g., "@honeide/editor")
     pub module: String,
     /// Resolved package directory path
+    // #854: set when parsing a native-library manifest; not read back yet
+    // but part of the NativeLibraryManifest record.
+    #[allow(dead_code)]
     pub package_dir: PathBuf,
     /// `perry.nativeLibrary.abiVersion` — semver range the wrapper
     /// declares it was built against. Validated against the bundled

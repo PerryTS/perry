@@ -517,6 +517,8 @@ pub(crate) fn nanbox_string_f64(ptr: *const StringHeader) -> f64 {
 
 /// NaN-box an object/array pointer as f64 (POINTER_TAG)
 #[inline]
+// #854: NaN-boxing pointer helper retained for the JSON subsystem (see CLAUDE.md)
+#[allow(dead_code)]
 pub(crate) fn nanbox_pointer_f64(ptr: *const u8) -> f64 {
     f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK))
 }

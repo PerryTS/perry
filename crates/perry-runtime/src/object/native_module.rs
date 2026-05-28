@@ -1930,6 +1930,8 @@ unsafe fn http_methods_array() -> f64 {
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.
+// #854: fs.constants object builder retained for the native fs module
+#[allow(dead_code)]
 unsafe fn create_fs_constants_object() -> f64 {
     let cached = FS_CONSTANTS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {

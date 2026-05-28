@@ -118,7 +118,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
 ) -> *mut StringHeader {
     validate::validate_path_or_fd("path", path_value, "read");
     unsafe {
-        let path_str_for_log = decode_path_value(path_value).unwrap_or_default();
+        let _path_str_for_log = decode_path_value(path_value).unwrap_or_default();
 
         // Debug: log path on Android
         #[cfg(target_os = "android")]

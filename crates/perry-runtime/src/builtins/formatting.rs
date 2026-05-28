@@ -813,7 +813,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     if depth > inspect_depth_limit() {
                         return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                     }
-                    let keys_array = (*obj_ptr).keys_array;
+                    let _keys_array = (*obj_ptr).keys_array;
 
                     // Always route through `format_object_as_json` so the
                     // `[util.inspect.custom]` hook lookup runs even for

@@ -4289,7 +4289,10 @@ pub fn run_with_parse_cache(
     // layer (no `main` emission, `perry_module_init` entrypoint), but the
     // link step uses `ar` instead of `cc -shared`.
     let is_staticlib = args.output_type == "staticlib";
-    let is_library_output = is_dylib || is_staticlib;
+    // #854: kept as documentation of the library-output predicate; the
+    // exe_path closure below branches on is_dylib/is_staticlib directly,
+    // so this aggregate is currently unread.
+    let _is_library_output = is_dylib || is_staticlib;
     // Capture the args fields that helpers downstream of the
     // `args.output.unwrap_or_else(...)` partial-move still need.
     // Per the saved feedback note on this file: any helper extracted

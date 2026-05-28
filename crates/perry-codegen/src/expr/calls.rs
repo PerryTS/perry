@@ -398,7 +398,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         1
                     };
                     let update_argc = update_argc_usize.to_string();
-                    let blk = ctx.block();
                     let update_args_buf = ctx.func.alloca_entry_array(DOUBLE, update_argc_usize);
                     {
                         let blk = ctx.block();
