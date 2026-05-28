@@ -1059,6 +1059,32 @@ mod tests {
         assert!(get_object_property(boxed_ptr(ns as *const u8), b"finished").is_some());
     }
 
+    /// #2133: `fs.promises` (the parent `node:fs` module's `.promises`
+    /// property) must resolve to the populated `fs_promises` submodule
+    /// singleton — not an empty namespace stub — so destructured exports
+    /// like `const { open } = fs.promises` and the indirect form
+    /// (`const p = fs.promises; p.open(...)`) both reach real callable
+    /// closures and a returned FileHandle dispatches its methods.
+    #[test]
+    fn fs_parent_promises_property_exposes_namespace() {
+        let value = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"fs".as_ptr(),
+                "fs".len(),
+                b"promises".as_ptr(),
+                "promises".len(),
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("fs.promises should be an object");
+        let ns_value = boxed_ptr(ns as *const u8);
+        // Spot-check a few exports from the fs_promises submodule.
+        assert!(get_object_property(ns_value, b"open").is_some());
+        assert!(get_object_property(ns_value, b"readFile").is_some());
+        assert!(get_object_property(ns_value, b"writeFile").is_some());
+        assert!(get_object_property(ns_value, b"chmod").is_some());
+        assert!(get_object_property(ns_value, b"stat").is_some());
+    }
+
     #[test]
     fn stream_promises_default_export_exposes_namespace() {
         let value = unsafe {
