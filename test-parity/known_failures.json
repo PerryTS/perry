@@ -884,12 +884,6 @@
     "category": "bug-open",
     "reason": "node:stream: iter-helper closure capture — outer-var reference in arrow fn yields wrong values. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/options/default-encoding": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Writable defaultEncoding option — encoding arg seen by _write differs from 'hex'. Flips to PASS when #1539 lands."
-  },
   "node-suite/stream/readable/unshift-increases-length": {
     "issue": "1532",
     "added": "2026-05-24",
