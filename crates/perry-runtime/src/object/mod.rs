@@ -1405,6 +1405,19 @@ fn lookup_to_string_tag_hook(class_id: u32) -> Option<usize> {
     reg.as_ref().and_then(|m| m.get(&class_id).copied())
 }
 
+pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
+    if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 {
+        return None;
+    }
+    let kind_probe = stream_handle_kind_probe()?;
+    match unsafe { kind_probe(value as usize) } {
+        1 => Some("ReadableStream"),
+        2 => Some("WritableStream"),
+        5 => Some("TransformStream"),
+        _ => None,
+    }
+}
+
 /// `Object.prototype.toString.call(x)` — returns `[object <tag>]` where
 /// `<tag>` is read from the value's class-level `Symbol.toStringTag` getter
 /// if registered, otherwise `Object` (matching Node for plain objects).
@@ -1437,6 +1450,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     }
     if jsv.is_any_string() {
         let bytes = b"[object String]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if let Some(tag) = web_stream_to_string_tag(value) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }

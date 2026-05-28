@@ -1052,12 +1052,6 @@
     "category": "bug-open",
     "reason": "node:stream: pause()/resume()/destroy() don't all return `this` — chainability broken on one or more. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/tostring-tag-web-classes": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: ReadableStream/WritableStream/TransformStream lack Symbol.toStringTag — Object.prototype.toString.call() returns '[object Object]'. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/iter-helpers/to-array-erroring": {
     "issue": "1558",
     "added": "2026-05-24",

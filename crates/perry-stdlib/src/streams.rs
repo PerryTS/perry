@@ -1645,9 +1645,10 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
     js_stream_handle_kind(id) != 0
 }
 
-/// #1545: classify a numeric Web Streams handle for `instanceof` and dispatch.
+/// #1545: classify a numeric Web Streams handle for `instanceof`, dispatch,
+/// and `Object.prototype.toString` tags.
 /// 0 = not a stream, 1 = ReadableStream, 2 = WritableStream, 3 = reader,
-/// 4 = writer.
+/// 4 = writer, 5 = TransformStream.
 #[no_mangle]
 pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     if !(0x40000..0x100000).contains(&id) {
@@ -1672,6 +1673,13 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     }
     if WRITERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
         return 4;
+    }
+    if TRANSFORM_STREAMS
+        .lock()
+        .map(|m| m.contains_key(&id))
+        .unwrap_or(false)
+    {
+        return 5;
     }
     0
 }

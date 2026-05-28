@@ -1023,11 +1023,12 @@ pub type HandlePropertySetDispatchFn = unsafe extern "C" fn(
 /// fall through to the normal `(number).x is not a function` TypeError.
 pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
 
-/// #1545: classify a numeric Web Streams handle for `instanceof`.
+/// #1545: classify a numeric Web Streams handle for `instanceof` and tags.
 /// Returns 0 = not a stream, 1 = ReadableStream, 2 = WritableStream,
-/// 3 = reader, 4 = writer. Lets `x instanceof ReadableStream` /
-/// `instanceof WritableStream` resolve for numeric stream handles
-/// (`ts.readable`, `rs.pipeThrough(ts)`, …).
+/// 3 = reader, 4 = writer, 5 = TransformStream. Lets `x instanceof
+/// ReadableStream` / `instanceof WritableStream` resolve for numeric stream
+/// handles (`ts.readable`, `rs.pipeThrough(ts)`, …), and lets
+/// `Object.prototype.toString.call(handle)` recover Web stream tags.
 pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
 // Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)
