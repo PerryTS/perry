@@ -1868,12 +1868,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: WritableStream({type:'bytes'}) — handling differs from Node (accept-and-ignore or throw). Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/events/emit-after-destroy-still-works": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: custom emit() on destroyed stream — listener does not fire or fires multiple times. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/pause-sets-flowing-false": {
     "issue": "1532",
     "added": "2026-05-24",
