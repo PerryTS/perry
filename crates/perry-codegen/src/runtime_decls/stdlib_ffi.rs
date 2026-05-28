@@ -552,7 +552,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========

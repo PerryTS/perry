@@ -230,9 +230,44 @@ pub extern "C" fn js_url_format(value: f64, options: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_url_legacy_parse(input: f64, parse_query_string: f64) -> f64 {
+pub extern "C" fn js_url_legacy_parse(
+    input: f64,
+    parse_query_string: f64,
+    slashes_denote_host: f64,
+) -> f64 {
     let s = get_string_content(input);
-    let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(&s);
+    let (protocol, mut host, mut hostname, mut port, mut pathname, search, hash) = parse_url(&s);
+    let bool_true_bits = 0x7FFC_0000_0000_0004u64;
+    let slashes_host = slashes_denote_host.to_bits() == bool_true_bits;
+    let protocol_is_null = protocol.is_empty() && slashes_host && s.starts_with("//");
+
+    if protocol_is_null {
+        let rest = pathname.strip_prefix("//").unwrap_or(&pathname);
+        let path_idx = rest.find('/').unwrap_or(rest.len());
+        host = rest[..path_idx].to_string();
+        pathname = if path_idx < rest.len() {
+            rest[path_idx..].to_string()
+        } else {
+            "/".to_string()
+        };
+        hostname = host.clone();
+        if let Some(port_idx) = host.rfind(':') {
+            let potential_port = &host[port_idx + 1..];
+            if !potential_port.is_empty() && potential_port.chars().all(|c| c.is_ascii_digit()) {
+                hostname = host[..port_idx].to_string();
+                port = potential_port.to_string();
+            }
+        }
+    }
+
+    if let Some(percent_idx) = host.find('%') {
+        let invalid_tail = format!("{}{}", &host[percent_idx..], pathname);
+        host.truncate(percent_idx);
+        hostname = host.clone();
+        port.clear();
+        pathname = invalid_tail;
+    }
+
     let mut auth = String::new();
     if let Some(at_idx) = host.rfind('@') {
         auth = host[..at_idx].to_string();
@@ -249,7 +284,7 @@ pub extern "C" fn js_url_legacy_parse(input: f64, parse_query_string: f64) -> f6
             rest
         };
     }
-    let parse_qs = parse_query_string.to_bits() == 0x7FFC_0000_0000_0004u64;
+    let parse_qs = parse_query_string.to_bits() == bool_true_bits;
     let query = if parse_qs {
         let mut map = serde_json::Map::new();
         let raw = search.strip_prefix('?').unwrap_or(&search);
@@ -261,8 +296,13 @@ pub extern "C" fn js_url_legacy_parse(input: f64, parse_query_string: f64) -> f6
     } else {
         serde_json::Value::String(search.strip_prefix('?').unwrap_or(&search).to_string())
     };
+    let protocol_value = if protocol_is_null {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(protocol)
+    };
     json_to_value(serde_json::json!({
-        "protocol": protocol,
+        "protocol": protocol_value,
         "host": host,
         "hostname": hostname,
         "port": port,

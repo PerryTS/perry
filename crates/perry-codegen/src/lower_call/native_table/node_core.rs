@@ -312,7 +312,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "parse",
         class_filter: None,
         runtime: "js_url_legacy_parse",
-        args: &[NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

@@ -1071,7 +1071,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
         ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
-        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1)),
+        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),
         ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
 
         // ── console module namespace (`node:console` / `console`) ──
