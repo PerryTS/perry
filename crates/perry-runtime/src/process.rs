@@ -183,6 +183,38 @@ pub extern "C" fn js_process_getegid() -> f64 {
     }
 }
 
+/// `process.getgroups()` — supplementary group IDs the process is a member
+/// of, as a JS array of numbers. Wraps `libc::getgroups(2)`; on non-unix
+/// targets returns an empty array (Node throws there, but Perry's existing
+/// `getuid`/etc. family already returns `0` rather than throwing on
+/// Windows, so matching that shape keeps the surface consistent). #2135.
+#[no_mangle]
+pub extern "C" fn js_process_getgroups() -> f64 {
+    #[cfg(unix)]
+    let gids: Vec<u32> = unsafe {
+        let count = libc::getgroups(0, std::ptr::null_mut());
+        if count <= 0 {
+            Vec::new()
+        } else {
+            let mut buf: Vec<libc::gid_t> = vec![0; count as usize];
+            let got = libc::getgroups(count, buf.as_mut_ptr());
+            if got <= 0 {
+                Vec::new()
+            } else {
+                buf.truncate(got as usize);
+                buf.into_iter().map(|g| g as u32).collect()
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let gids: Vec<u32> = Vec::new();
+    let arr = crate::array::js_array_alloc(gids.len() as u32);
+    for g in gids {
+        crate::array::js_array_push_f64(arr, g as f64);
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
 /// process.resourceUsage() -> object with getrusage(RUSAGE_SELF)
 /// counters matching Node's shape (#1376). Linux's `ru_maxrss` is in
 /// kilobytes; macOS/BSD's is in bytes — Node normalizes Linux to bytes,

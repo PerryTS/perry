@@ -274,6 +274,20 @@ pub(super) fn try_native_module_methods(
                                 crate::ir::PosixCredentialKind::Egid,
                             )));
                         }
+                        "getgroups" => {
+                            // #2135: process.getgroups() — supplementary
+                            // group IDs as a number array. Dispatch through
+                            // the generic NativeMethodCall path; the
+                            // node_core table row routes to
+                            // `js_process_getgroups`.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "getgroups".to_string(),
+                                args,
+                            }));
+                        }
                         "emitWarning" => {
                             // process.emitWarning(warning[, type, code, ctor])
                             // — writes a formatted warning to stderr. Perry

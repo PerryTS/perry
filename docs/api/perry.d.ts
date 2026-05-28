@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1481 entries across 82 modules
+// Coverage: 1482 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1788,6 +1788,8 @@ declare module "process" {
   export function geteuid(...args: any[]): any;
   /** stdlib */
   export function getgid(...args: any[]): any;
+  /** stdlib */
+  export function getgroups(...args: any[]): any;
   /** stdlib */
   export function getuid(...args: any[]): any;
   /** stdlib */

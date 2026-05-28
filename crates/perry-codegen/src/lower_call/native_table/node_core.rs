@@ -178,6 +178,17 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_VOID,
     },
+    // #2135 (Node process parity): process.getgroups() — Array<number>
+    // of supplementary GIDs from libc::getgroups (empty on non-unix).
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "getgroups",
+        class_filter: None,
+        runtime: "js_process_getgroups",
+        args: &[],
+        ret: NR_F64,
+    },
     // ========== Node URL ==========
     // `new Number/String/Boolean(...)` now lowers to
     // `Expr::BoxedPrimitiveNew` (see crates/perry-hir/src/lower/expr_new.rs)

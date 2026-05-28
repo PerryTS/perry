@@ -356,6 +356,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "geteuid")
             | ("process", "getgid")
             | ("process", "getegid")
+            | ("process", "getgroups")
             | ("process", "emitWarning")
             | ("process", "on")
             | ("process", "addListener")
