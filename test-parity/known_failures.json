@@ -266,12 +266,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline() callback never fires (depends on stream event delivery). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-iterable-iteration": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: `for await (chunk of readable)` iterates to empty — async iterator does not yield chunks. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/object-mode": {
     "issue": "1532",
     "added": "2026-05-23",
