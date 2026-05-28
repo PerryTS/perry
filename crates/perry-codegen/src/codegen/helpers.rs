@@ -561,21 +561,56 @@ pub(super) fn init_static_fields_late(
         }
     }
     // Static blocks — emitted as synthetic static methods with the
-    // name prefix `__perry_static_init_`. Call them in registration
-    // order for each class, after that class's static fields are
-    // initialized, so they can reference those fields.
+    // name prefix `__perry_static_init_`. HIR lowering injects an inline
+    // `StaticMethodCall` for each one at the class-decl source position
+    // (right after that class's static-field-init stmts), so blocks
+    // normally run from `hir.init`. This loop is a fallback for any
+    // class whose static_methods include a block not yet hooked via
+    // init (e.g. class expressions that bypass the stmt-decl path);
+    // calling it here keeps the legacy behavior of "always run, just
+    // late" for those.
     for c in &hir.classes {
         for sm in &c.static_methods {
             if !sm.name.starts_with("__perry_static_init_") {
                 continue;
             }
             let key = (c.name.clone(), sm.name.clone());
+            // Skip if the init stream already invokes this block. The
+            // typical class-decl path emits a `StaticMethodCall` for
+            // each block; if we find one referencing this (class,
+            // method) pair, the user-init lowering above has already
+            // run it and a duplicate call here would double-fire any
+            // observable side effects.
+            if hir
+                .init
+                .iter()
+                .any(|s| init_calls_static_block(s, &c.name, &sm.name))
+            {
+                continue;
+            }
             if let Some(llvm_name) = ctx.methods.get(&key).cloned() {
                 ctx.block().call(DOUBLE, &llvm_name, &[]);
             }
         }
     }
     Ok(())
+}
+
+/// Returns true if `stmt` is a top-level `Expr(StaticMethodCall)`
+/// invoking the (`class_name`, `method_name`) pair — the shape HIR
+/// lowering emits at the class-decl position for each
+/// `__perry_static_init_*` synthetic method.
+fn init_calls_static_block(stmt: &perry_hir::Stmt, class_name: &str, method_name: &str) -> bool {
+    if let perry_hir::Stmt::Expr(perry_hir::Expr::StaticMethodCall {
+        class_name: c,
+        method_name: m,
+        ..
+    }) = stmt
+    {
+        c == class_name && m == method_name
+    } else {
+        false
+    }
 }
 
 /// Issue #100: emit the IR that populates this module's
