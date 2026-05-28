@@ -299,7 +299,11 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     if has_truthy_hidden(stream, hidden_ended_key()) {
         return f64::from_bits(TAG_FALSE);
     }
-    let added = chunk_byte_len(chunk) as f64;
+    let added = if readable_object_mode(stream) {
+        1.0
+    } else {
+        chunk_byte_len(chunk) as f64
+    };
     let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
@@ -2434,6 +2438,9 @@ fn read_stream_available_default(stream: f64) -> f64 {
         }
         return f64::from_bits(TAG_NULL);
     }
+    if readable_object_mode(stream) {
+        return read_stream_object_mode_chunk(stream);
+    }
     let mut values = Vec::new();
     if let Some(chunks) = readable_hidden_chunks(stream) {
         push_chunk_values(chunks, &mut values, 0);
@@ -2519,6 +2526,30 @@ fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
     box_pointer(buf as *const u8)
 }
 
+fn read_stream_object_mode_chunk(stream: f64) -> f64 {
+    let Some(chunks) = readable_hidden_chunks(stream) else {
+        return f64::from_bits(TAG_NULL);
+    };
+    if !is_array_like_value(chunks) {
+        clear_readable_buffer(stream);
+        return chunks;
+    }
+    let arr = raw_ptr_from_value(chunks) as *mut crate::array::ArrayHeader;
+    if crate::array::js_array_length(arr) == 0 {
+        clear_readable_buffer(stream);
+        return f64::from_bits(TAG_NULL);
+    }
+    let chunk = crate::array::js_array_shift_f64(arr);
+    let remaining = crate::array::js_array_length(arr) as f64;
+    set_hidden_value(stream, hidden_buffered_key(), remaining);
+    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
+    mark_disturbed(stream);
+    if stream_hidden_ended(stream) && remaining == 0.0 {
+        queue_readable_event(stream);
+    }
+    chunk
+}
+
 fn string_chunk_to_buffer(value: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(value.to_bits());
     if !jsval.is_any_string() {
@@ -2573,6 +2604,10 @@ fn is_array_like_value(value: f64) -> bool {
 
 fn readable_hidden_chunks(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_chunks_key())
+}
+
+fn readable_object_mode(value: f64) -> bool {
+    has_truthy_hidden(value, hidden_key(b"readableObjectMode"))
 }
 
 fn readable_chunks_nonempty(stream: f64) -> bool {

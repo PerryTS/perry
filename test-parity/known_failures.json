@@ -446,12 +446,6 @@
     "category": "bug-open",
     "reason": "node:stream: destroy(err) + error listener doesn't deliver the message to handler. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/object-mode/read-single-object": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read() on objectMode stream should return one object per call. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/with-async-fn": {
     "issue": "1539",
     "added": "2026-05-24",

@@ -1480,6 +1480,37 @@ fn readable_read_with_size_splits_buffer_and_keeps_remainder() {
 }
 
 #[test]
+fn readable_object_mode_read_returns_one_object_per_call() {
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"objectMode"), f64::from_bits(TAG_TRUE));
+    let stream = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    let first_obj = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(first_obj, hidden_key(b"a"), 1.0);
+    let first_value = box_pointer(first_obj as *const u8);
+    let second_obj = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(second_obj, hidden_key(b"b"), 2.0);
+    let second_value = box_pointer(second_obj as *const u8);
+
+    let _ = js_node_stream_method_push(handle, first_value);
+    let _ = js_node_stream_method_push(handle, second_value);
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+    assert_eq!(js_node_stream_method_readable_length(handle), 2.0);
+
+    let first_read = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(first_read.to_bits(), first_value.to_bits());
+    assert_eq!(js_node_stream_method_readable_length(handle), 1.0);
+    let second_read = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(second_read.to_bits(), second_value.to_bits());
+    assert_eq!(js_node_stream_method_readable_length(handle), 0.0);
+    assert_eq!(
+        js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED)).to_bits(),
+        TAG_NULL
+    );
+}
+
+#[test]
 fn destroyed_readable_drops_late_push_data() {
     READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
 
