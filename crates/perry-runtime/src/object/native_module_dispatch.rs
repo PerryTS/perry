@@ -375,6 +375,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_setegid(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("process", "setgroups") => {
+            crate::process::js_process_setgroups(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "initgroups") => {
+            crate::process::js_process_initgroups(arg(0), arg(1));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "kill") => {
             crate::os::js_process_kill(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
