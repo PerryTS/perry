@@ -203,6 +203,10 @@ pub extern "C" fn js_fs_exists_callback(path_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // Node throws `ERR_INVALID_ARG_TYPE` if the callback isn't a function
+    // (this is the *only* arg `fs.exists` validates — a bad path just
+    // makes the callback fire with `false`, see test-fs-exists.js).
+    crate::fs::validate::validate_function("cb", callback);
     let exists = js_fs_exists_sync(path_value) == 1;
     let cb = last_callback(&[callback]);
     if !cb.is_null() {
@@ -418,6 +422,10 @@ pub extern "C" fn js_fs_lchown_callback(
     callback: f64,
 ) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    crate::fs::validate::validate_path("path", path_value);
+    crate::fs::validate::validate_int32(uid_value, "uid", -1, u32::MAX as i64);
+    crate::fs::validate::validate_int32(gid_value, "gid", -1, u32::MAX as i64);
+    crate::fs::validate::validate_function("cb", callback);
     let cb = last_callback(&[callback]);
     unsafe {
         if let Some(err_val) = fs_callback_lstat_error(path_value, "lchown") {
@@ -434,6 +442,8 @@ pub extern "C" fn js_fs_lchown_callback(
 #[no_mangle]
 pub extern "C" fn js_fs_lchmod_callback(path_value: f64, mode_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    crate::fs::validate::validate_path("path", path_value);
+    crate::fs::validate::validate_function("cb", callback);
     let cb = last_callback(&[callback]);
     unsafe {
         if let Some(err_val) = fs_callback_lstat_error(path_value, "lchmod") {
@@ -978,6 +988,15 @@ pub extern "C" fn js_fs_copy_file_callback(
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
+    crate::fs::validate::validate_path("src", from_value);
+    crate::fs::validate::validate_path("dest", to_value);
+    // `copyFile(src, dest, cb)` puts the cb in arg2 (arg3 is undefined);
+    // `copyFile(src, dest, mode, cb)` puts it in arg3. Either way, *some*
+    // arg must be a function — `copyFile(src, dest, 0, 0)` is the case
+    // Node rejects with `ERR_INVALID_ARG_TYPE`.
+    if extract_closure_ptr(arg2).is_null() && extract_closure_ptr(arg3).is_null() {
+        crate::fs::validate::validate_function("cb", arg3);
+    }
     let cb = last_callback(&[arg2, arg3]);
     unsafe {
         if let Some(err_val) = fs_callback_read_error(from_value, "copyfile") {

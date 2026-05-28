@@ -155,3 +155,93 @@ pub(crate) fn validate_path_or_fd(arg_name: &str, value: f64, syscall: &'static 
     }
     throw_invalid_path_arg(arg_name, value);
 }
+
+/// Validate that `value` is a JS number suitable for a file descriptor —
+/// finite integer in `[0, 2^31-1]`. Matches Node's `validateInt32(fd, 'fd', 0)`.
+///
+/// Non-numbers raise `TypeError [ERR_INVALID_ARG_TYPE]`; `NaN`, `Infinity`,
+/// non-integers, and out-of-range integers raise `RangeError
+/// [ERR_OUT_OF_RANGE]`. The filehandle path (`filehandle_fd(closure) as f64`)
+/// always passes a real `i32`-ranged value, so the validators are no-ops there.
+pub(crate) fn validate_fd(value: f64) {
+    validate_int32(value, "fd", 0, i32::MAX as i64);
+}
+
+/// Validate that `value` is a finite integer in `[min, max]`. On type or
+/// range failure throws Node's `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE`
+/// with the same `Received` clause shape Node uses.
+pub(crate) fn validate_int32(value: f64, arg_name: &str, min: i64, max: i64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !is_numeric(jv) {
+        let message = format!(
+            "The \"{}\" argument must be of type number. Received {}",
+            arg_name,
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !n.is_finite() || n.fract() != 0.0 {
+        let received = if n.is_nan() {
+            "NaN".to_string()
+        } else if n.is_infinite() {
+            if n.is_sign_negative() {
+                "-Infinity".to_string()
+            } else {
+                "Infinity".to_string()
+            }
+        } else {
+            format_received_number(n)
+        };
+        let message = format!(
+            "The value of \"{}\" is out of range. It must be an integer. Received {}",
+            arg_name, received
+        );
+        throw_range_error_with_code(&message);
+    }
+    let i = n as i64;
+    if i < min || i > max {
+        let message = format!(
+            "The value of \"{}\" is out of range. It must be >= {} && <= {}. Received {}",
+            arg_name,
+            min,
+            max,
+            format_received_number(n)
+        );
+        throw_range_error_with_code(&message);
+    }
+}
+
+fn format_received_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e21 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
+    }
+}
+
+/// Validate that `value` is a function (closure). On failure throws
+/// `TypeError [ERR_INVALID_ARG_TYPE]`. Mirrors Node's `validateFunction`
+/// helper — used to catch `fs.exists(path)` / `fs.copyFile(src, dest, 0, 0)`
+/// where the trailing callback is missing or the wrong type.
+pub(crate) fn validate_function(arg_name: &str, value: f64) {
+    if super::stream::extract_closure_ptr(value).is_null() {
+        let message = format!(
+            "The \"{}\" argument must be of type function. Received {}",
+            arg_name,
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+}
+
+fn throw_range_error_with_code(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_OUT_OF_RANGE");
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}

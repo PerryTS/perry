@@ -225,7 +225,11 @@ pub extern "C" fn js_fs_write_string_sync_options(
     data_value: f64,
     position_value: f64,
 ) -> f64 {
-    let fd = fd_value as i32;
+    crate::fs::validate::validate_fd(fd_value);
+    write_string_sync_inner(fd_value as i32, data_value, position_value)
+}
+
+pub(crate) fn write_string_sync_inner(fd: i32, data_value: f64, position_value: f64) -> f64 {
     let bytes = bytes_from_value(data_value);
     let position = if position_value.is_finite() && position_value >= 0.0 {
         Some(position_value as u64)
@@ -261,7 +265,23 @@ pub extern "C" fn js_fs_write_buffer_sync(
     length_value: f64,
     position_value: f64,
 ) -> f64 {
-    let fd = fd_value as i32;
+    crate::fs::validate::validate_fd(fd_value);
+    write_buffer_sync_inner(
+        fd_value as i32,
+        buffer_value,
+        offset_value,
+        length_value,
+        position_value,
+    )
+}
+
+pub(crate) fn write_buffer_sync_inner(
+    fd: i32,
+    buffer_value: f64,
+    offset_value: f64,
+    length_value: f64,
+    position_value: f64,
+) -> f64 {
     let offset = offset_value.max(0.0) as usize;
     let length = length_value.max(0.0) as usize;
     let position = if position_value.is_finite() && position_value >= 0.0 {
@@ -400,7 +420,19 @@ pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_v
 /// `fs.writevSync(fd, buffers[, position])` — deterministic Buffer[] subset.
 #[no_mangle]
 pub extern "C" fn js_fs_writev_sync(fd_value: f64, buffers_value: f64, position_value: f64) -> f64 {
-    let fd = fd_value as i32;
+    // Match Node: skip fd validation when the buffers array is empty (Node's
+    // own writev returns 0 without touching the fd), validate only when
+    // there's something to write.
+    let buffers_for_check = array_ptr_from_value(buffers_value);
+    let buffers_nonempty = !buffers_for_check.is_null()
+        && unsafe { crate::array::js_array_length(buffers_for_check) } > 0;
+    if buffers_nonempty {
+        crate::fs::validate::validate_fd(fd_value);
+    }
+    writev_sync_inner(fd_value as i32, buffers_value, position_value)
+}
+
+pub(crate) fn writev_sync_inner(fd: i32, buffers_value: f64, position_value: f64) -> f64 {
     let position = if position_value.is_finite() && position_value >= 0.0 {
         Some(position_value as u64)
     } else {

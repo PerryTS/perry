@@ -39,12 +39,15 @@ pub(crate) extern "C" fn filehandle_close_impl(closure: *const ClosureHeader) ->
 }
 
 pub(crate) extern "C" fn filehandle_sync_impl(closure: *const ClosureHeader) -> f64 {
-    let _ = js_fs_fsync_sync(filehandle_fd(closure) as f64);
+    // Bypass `js_fs_fsync_sync`'s arg-validation: FileHandle may legitimately
+    // hold a `-1` fd sentinel from a failed open, and Node's API surfaces that
+    // earlier (at `open`), not here.
+    let _ = crate::fs::fsync_sync_inner(filehandle_fd(closure));
     promise_undefined_fs()
 }
 
 pub(crate) extern "C" fn filehandle_datasync_impl(closure: *const ClosureHeader) -> f64 {
-    let _ = js_fs_fdatasync_sync(filehandle_fd(closure) as f64);
+    let _ = crate::fs::fdatasync_sync_inner(filehandle_fd(closure));
     promise_undefined_fs()
 }
 
@@ -79,7 +82,7 @@ pub(crate) extern "C" fn filehandle_chown_impl(
     uid: f64,
     gid: f64,
 ) -> f64 {
-    let _ = js_fs_fchown_sync(filehandle_fd(closure) as f64, uid, gid);
+    let _ = crate::fs::fchown_sync_inner(filehandle_fd(closure), uid, gid);
     promise_undefined_fs()
 }
 
@@ -226,9 +229,9 @@ pub(crate) extern "C" fn filehandle_write_impl(
         } else {
             (buffer_len - actual_offset).max(0.0)
         };
-        js_fs_write_buffer_sync(fd as f64, data, actual_offset, actual_length, position)
+        crate::fs::write_buffer_sync_inner(fd, data, actual_offset, actual_length, position)
     } else {
-        js_fs_write_string_sync_options(fd as f64, data, offset)
+        crate::fs::write_string_sync_inner(fd, data, offset)
     };
     unsafe {
         promise_value_fs(build_file_io_result(
@@ -263,7 +266,7 @@ pub(crate) extern "C" fn filehandle_writev_impl(
     position: f64,
 ) -> f64 {
     let fd = filehandle_fd(closure);
-    let bytes_written = js_fs_writev_sync(fd as f64, buffers, position);
+    let bytes_written = crate::fs::writev_sync_inner(fd, buffers, position);
     unsafe {
         promise_value_fs(build_file_io_result(
             "bytesWritten",
