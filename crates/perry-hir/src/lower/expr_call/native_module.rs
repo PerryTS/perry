@@ -303,6 +303,21 @@ pub(super) fn try_native_module_methods(
                                 args,
                             }));
                         }
+                        // #2135: process.setgroups(groups[]) takes an
+                        // array of numeric GIDs; process.initgroups(user,
+                        // extra_gid) takes a username string + numeric
+                        // GID. The runtime decodes the JSValues itself, so
+                        // both pass through the generic NativeMethodCall.
+                        "setgroups" | "initgroups" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
                         "emitWarning" => {
                             // process.emitWarning(warning[, type, code, ctor])
                             // — writes a formatted warning to stderr. Perry
