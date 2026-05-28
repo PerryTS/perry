@@ -75,7 +75,23 @@ unsafe fn alloc_error(
     message: *mut StringHeader,
 ) -> *mut ErrorHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let message_ptr = if message.is_null() {
+    // #321 frontier issue #69 (sibling to #2230's `dyn_index_get` guard):
+    // codegen lowers `new Error(value)` by handing the value straight to
+    // `js_error_new_with_message` even when `value` is not a string pointer
+    // (e.g. effect's Cause.ts ends up calling `new Error(...)` with a tag
+    // value like `1` along some pretty-printer paths). `alloc_error` then
+    // dereferences the pointer at `(*message).byte_len` (offset 4) — for a
+    // `message` of 1 that reads address `0x5` and SIGSEGVs.
+    //
+    // Defensive runtime guard: if `message` does not look like a real
+    // heap-allocated string pointer (NaN-boxing tag values, small ints, and
+    // garbage from non-pointer dataflow all fail this gate), coerce it to
+    // an empty string before any reads. The same `is_valid_obj_ptr`
+    // predicate guards `dyn_index_get/set` (#2230), `js_object_keys`, the
+    // by-name field setters, and several typed-feedback probes — this
+    // brings the error-allocation path under the same umbrella.
+    let message_ptr = if message.is_null() || !crate::object::is_valid_obj_ptr(message as *const u8)
+    {
         js_string_from_bytes(b"".as_ptr(), 0)
     } else {
         message
