@@ -348,6 +348,58 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
+    // External http-server path (#2153): when `node:http` / `node:https` /
+    // `node:http2` routes through perry-ext-http-server, the HttpServer handle
+    // returned by `http.createServer(...)` reaches `js_native_call_method` via
+    // the small-handle range check above whenever the receiver's static type
+    // is `any` (e.g. `const s: any = http.createServer(...); s.listen(0)` or
+    // any `.js` source — both are common in the node-test radar). Without
+    // this arm `server.listen / .close / .on / .address / ...` resolved to
+    // undefined-or-NaN even though the `("http", "HttpServer", ...)` rows in
+    // `crates/perry-codegen/src/lower_call/native_table/http.rs` describe a
+    // valid dispatch — the typed-feedback emit site doesn't consult the
+    // native_table, and the runtime had no `HttpServer` arm.
+    //
+    // Method-gated so a handle id reused by another registry (HashHandle,
+    // FastifyApp, …) doesn't misroute. The list mirrors the
+    // `class_filter: Some("HttpServer")` rows in http.rs.
+    //
+    // IncomingMessage / ServerResponse follow the same recipe but live in
+    // separate registries; left as a follow-up so this PR stays scoped.
+    #[cfg(feature = "external-http-server-pump")]
+    if matches!(
+        method_name,
+        "listen"
+            | "close"
+            | "closeAllConnections"
+            | "closeIdleConnections"
+            | "address"
+            | "on"
+            | "addListener"
+    ) {
+        extern "C" {
+            fn js_ext_http_server_is_handle(handle: i64) -> i32;
+            fn js_ext_http_server_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+        }
+        if unsafe { js_ext_http_server_is_handle(handle) } != 0 {
+            return unsafe {
+                js_ext_http_server_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+    }
+
     // External net path (v0.5.581): perry-ext-net registers itself when
     // the well-known flip strips bundled-net. Same dispatch contract,
     // but routes through extern "C" symbols perry-ext-net provides.

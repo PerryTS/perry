@@ -52,6 +52,7 @@ use std::sync::Once;
 
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
+mod handle_dispatch;
 mod http2_server;
 mod https_server;
 mod request;
@@ -61,6 +62,7 @@ mod tls;
 mod types;
 mod upgrade;
 
+pub use handle_dispatch::*;
 pub use http2_server::*;
 pub use https_server::*;
 pub use request::*;
