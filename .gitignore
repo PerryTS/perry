@@ -132,6 +132,12 @@ __perry_js_bundle.js
 
 # Node.js
 node_modules/
+!benchmarks/compiler_output/fixtures/native_memory_fixture_project/node_modules/
+!benchmarks/compiler_output/fixtures/native_memory_fixture_project/node_modules/@perry-fixtures/
+!benchmarks/compiler_output/fixtures/native_memory_fixture_project/node_modules/@perry-fixtures/native-memory-fixture/
+!benchmarks/compiler_output/fixtures/native_memory_fixture_project/node_modules/@perry-fixtures/native-memory-fixture/**
+benchmarks/compiler_output/fixtures/native_memory_fixture_project/node_modules/@perry-fixtures/native-memory-fixture/native/Cargo.lock
+benchmarks/compiler_output/fixtures/native_memory_fixture_project/node_modules/@perry-fixtures/native-memory-fixture/native/target/
 
 # npm packaging: rendered package.json + staged binaries/libs
 # (rebuilt by scripts/stage-npm.sh; only templates and wrapper sources are tracked)

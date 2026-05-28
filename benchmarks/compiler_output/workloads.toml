@@ -1324,6 +1324,82 @@ native_rep_name = "buffer_view"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
 
+[workloads.native_memory_fixture]
+source = "benchmarks/compiler_output/fixtures/native_memory_fixture_project/main.ts"
+kind = "native_memory_fixture"
+allow_hot_loop_conversions = true
+
+[workloads.native_memory_fixture.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: end-to-end native memory fixture gates public arena, bulk memory, POD view, and native-library lowering"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_memory_fixture.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.native_memory_fixture.stdout_checks]]
+name = "native_memory_fixture_checksum"
+contains = "native_memory_fixture:1701"
+detail = "native arenas, bulk fill/copy, POD view lowering, and native pod+count call preserve checksum"
+
+[workloads.native_memory_fixture.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "return_abi", "runtime_api", "unknown_bounds"]
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_fill_u32_memset"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeMemoryFillU32"
+consumer = "NativeMemoryFillU32.memset_zero"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_copy_dst_memmove"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.dst.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_copy_src_memmove"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.src.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_pod_count_data_ptr"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeLibraryParam"
+consumer = "native_library.param.pod+count.data_ptr"
+native_rep_name = "pod_record_view"
+
+[[workloads.native_memory_fixture.native_rep_checks.require_records]]
+name = "native_memory_fixture_pod_count_record_count"
+source_function = "nativeMemoryFixture"
+expr_kind = "NativeLibraryParam"
+consumer = "native_library.param.pod+count.record_count"
+native_rep_name = "usize"
+
 [workloads.native_abi_packet_typed]
 source = "benchmarks/compiler_output/fixtures/native_abi_packet_typed.ts"
 kind = "native_abi_packet_typed"
