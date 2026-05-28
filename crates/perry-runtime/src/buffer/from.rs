@@ -1,5 +1,13 @@
 use super::*;
 
+fn throw_invalid_buffer_from_first_arg() -> ! {
+    let message = b"The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object.";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Create a Buffer from a string
 /// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii
 #[no_mangle]
@@ -150,6 +158,17 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
         let mut tmp = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let len = jsval.short_string_to_buf(&mut tmp);
         return buffer_from_str_bytes(&tmp[..len], encoding);
+    }
+
+    if jsval.is_undefined()
+        || jsval.is_null()
+        || jsval.is_bool()
+        || jsval.is_int32()
+        || jsval.is_number()
+        || jsval.is_bigint()
+        || unsafe { crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 }
+    {
+        throw_invalid_buffer_from_first_arg();
     }
 
     // Extract the raw pointer
