@@ -1034,12 +1034,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: writer.desiredSize does not restore to HWM after write resolves. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/highwater-mark-buffer": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: readableLength after multiple push() — does not equal sum of chunk lengths. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/flow/sync-pause-in-data-listener": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1105,12 +1099,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: TransformStream(t, writableStrategy, readableStrategy) — 3-arg constructor form not honored. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/length-byte-exact": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: readableLength after push('é') — does not count 2 UTF-8 bytes. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/compose-multi-async-fn": {
     "issue": "1531",
@@ -1501,12 +1489,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: objectMode 'readable' event — read() returns wrong object values. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/many-pushes-accumulate": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: many push() — readableLength does not match total bytes. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/iter-helpers/drop-zero-yields-all": {
     "issue": "1558",
