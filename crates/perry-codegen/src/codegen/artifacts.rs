@@ -1200,28 +1200,64 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     //       nested closures keep the anonymous label, matching Node
     //       (Node uses `inferred-name` only for direct assignments,
     //       which are exactly these top-level lets).
+    // (a) Top-level user functions — keyed against the singleton-wrapper
+    // address (`__perry_wrap_<sym>`). #2076: prefer the HIR display-name
+    // override (set by lower_fn_expr / lower_method_prop) so synthetic
+    // names like `__obj_method_method_42` register as `"method"`.
     let mut user_fn_display_names: Vec<(String, String)> = hir
         .functions
         .iter()
         .filter_map(|f| {
-            if f.name.is_empty() || f.name.starts_with('_') {
-                return None;
-            }
+            let display = hir.closure_display_names.get(&f.id).cloned().or_else(|| {
+                if f.name.is_empty() || f.name.starts_with('_') {
+                    None
+                } else {
+                    Some(f.name.clone())
+                }
+            })?;
             func_names
                 .get(&f.id)
-                .map(|sym| (format!("__perry_wrap_{}", sym), f.name.clone()))
+                .map(|sym| (format!("__perry_wrap_{}", sym), display))
         })
         .collect();
+    // (b) Closures bound to a top-level `let`/`const`. #2076: a named
+    // function expression's own name takes precedence over the binding
+    // name (`const bar = function namedBar(){}` ⇒ `"namedBar"`).
+    let mut named_inline_closure_ids: std::collections::HashSet<perry_types::FuncId> =
+        std::collections::HashSet::new();
     for stmt in &hir.init {
         if let perry_hir::Stmt::Let { name, init, .. } = stmt {
             if name.is_empty() || name.starts_with('_') {
                 continue;
             }
             if let Some(perry_hir::Expr::Closure { func_id, .. }) = init {
+                let display = hir
+                    .closure_display_names
+                    .get(func_id)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
                 let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
-                user_fn_display_names.push((sym, name.clone()));
+                user_fn_display_names.push((sym, display));
+                named_inline_closure_ids.insert(*func_id);
             }
         }
+    }
+    // (c) Inline closures with a HIR display name that weren't picked up
+    // by (a) or (b) — e.g. an object-literal shorthand method that
+    // captured locals or used `this` and lowered to an inline Closure
+    // instead of a FuncRef. Skip ids already covered above and any id
+    // that hir.functions already produced a wrapper entry for.
+    let registered_fn_ids: std::collections::HashSet<perry_types::FuncId> =
+        hir.functions.iter().map(|f| f.id).collect();
+    for (func_id, display) in &hir.closure_display_names {
+        if display.is_empty() || named_inline_closure_ids.contains(func_id) {
+            continue;
+        }
+        if registered_fn_ids.contains(func_id) {
+            continue;
+        }
+        let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
+        user_fn_display_names.push((sym, display.clone()));
     }
 
     emit_string_pool(

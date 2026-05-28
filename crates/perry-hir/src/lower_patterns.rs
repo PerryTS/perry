@@ -522,6 +522,69 @@ pub(crate) fn pre_scan_node_http_upgrade_params(
     Some(ws_id_name)
 }
 
+/// Issue #2211 — pre-scan for `request.on('socket', sock => …)` (and the
+/// `'connect'`/`'connection'` aliases). When the receiver is a
+/// `ClientRequest` native instance and the event name is `'socket'`,
+/// register the SINGLE arrow param as a `("net", "Socket")` native
+/// instance BEFORE the body is lowered, so introspection calls inside
+/// the handler — `sock.listeners('timeout')`, `sock.eventNames()`,
+/// `sock.removeListener(...)` — dispatch through the class-filtered
+/// Socket rows in NATIVE_MODULE_TABLE instead of failing the codegen-
+/// emitted `value is not a function` check.
+///
+/// Returns `Some(socket_local_name)` when the pattern matches.
+pub(crate) fn pre_scan_node_http_client_request_socket_params(
+    ctx: &crate::lower::LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<String> {
+    use ast::Callee;
+    let callee_expr = match &call.callee {
+        Callee::Expr(e) => e,
+        _ => return None,
+    };
+    let member = match callee_expr.as_ref() {
+        ast::Expr::Member(m) => m,
+        _ => return None,
+    };
+    let obj_ident = match member.obj.as_ref() {
+        ast::Expr::Ident(i) => i,
+        _ => return None,
+    };
+    let obj_name = obj_ident.sym.to_string();
+    let (module, class) = ctx.lookup_native_instance(&obj_name)?;
+    if module != "http" || class != "ClientRequest" {
+        return None;
+    }
+    let method_name = match &member.prop {
+        ast::MemberProp::Ident(i) => i.sym.to_string(),
+        _ => return None,
+    };
+    if method_name != "on" && method_name != "addListener" && method_name != "once" {
+        return None;
+    }
+    // First arg must be `'socket'` / `'connect'` / `'connection'`. Node
+    // fires the same socket reference on all three so the same param-tag
+    // applies; pinning the literal here keeps unrelated events (`'response'`,
+    // `'error'`) untouched.
+    let event_arg = call.args.first()?;
+    let event_name = match event_arg.expr.as_ref() {
+        ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().unwrap_or(""),
+        _ => return None,
+    };
+    if !matches!(event_name, "socket" | "connect" | "connection") {
+        return None;
+    }
+    let handler_arg = call.args.get(1)?;
+    if handler_arg.spread.is_some() {
+        return None;
+    }
+    let arrow = match handler_arg.expr.as_ref() {
+        ast::Expr::Arrow(a) => a,
+        _ => return None,
+    };
+    arrow.params.first().and_then(pat_ident_name)
+}
+
 /// Detect if an expression represents a native handle instance (Big, Decimal, etc.)
 /// Returns the module name if it does.
 ///

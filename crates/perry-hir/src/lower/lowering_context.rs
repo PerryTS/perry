@@ -158,6 +158,11 @@ pub struct LoweringContext {
     /// Functions created during expression lowering (e.g., object literal methods)
     /// These are flushed to the module after the enclosing statement is lowered.
     pub(crate) pending_functions: Vec<Function>,
+    /// Issue #2076: display-name overrides keyed by FuncId. Populated for
+    /// named function expressions (own ident) and object-literal methods
+    /// (static property key); flushed into `Module.closure_display_names`
+    /// alongside `pending_functions`.
+    pub(crate) closure_display_names: HashMap<FuncId, String>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))
