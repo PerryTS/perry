@@ -806,12 +806,6 @@
     "category": "gap-categorical",
     "reason": "#1278: console.trace / Error.stack frame format diverges from Node (Perry prints native frame addresses like `0: __mh_execute_header` instead of `at <fn> (file:///…:line:col)`). Requires source-position retention through HIR/transform + native-frame → TS-source mapping. The other two divergences in this fixture (#1276 spurious `Values` column on array-of-arrays, #1277 timer ms numbers) are not gating: #1276 was fixed in v0.5.1019+; #1277 is a misdiagnosis — Perry's `Instant::now()` is correct and the apparent 1000× gap is just AOT-vs-interpreted speedup on the trivial loop workload. Flips to PASS when #1278 lands."
   },
-  "test_issue_express_map_undefined": {
-    "issue": "912",
-    "added": "2026-05-17",
-    "category": "bug-open",
-    "reason": "Regression test from #911 (express map undefined / http.METHODS). The METHODS property is now in the manifest (PR adding it alongside this entry); the test may still diverge from Node in the exact METHODS list shape. Re-evaluate once express compiles cleanly."
-  },
   "node-suite/stream/readable/object-mode-read-returns-object": {
     "issue": "1532",
     "added": "2026-05-24",
