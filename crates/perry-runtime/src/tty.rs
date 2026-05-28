@@ -76,6 +76,10 @@ fn winsize_impl(_fd: i32) -> Option<(i32, i32)> {
     None
 }
 
+pub(crate) fn is_tty_fd(fd: i32) -> bool {
+    isatty_impl(fd)
+}
+
 // ---------------------------------------------------------------------------
 // SIGWINCH handler (Unix only)
 // ---------------------------------------------------------------------------
@@ -165,6 +169,14 @@ pub fn throw_invalid_fd(fd: f64) -> ! {
         );
     }
     crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
+pub fn throw_tty_init_failed() -> ! {
+    let message = "TTY initialization failed";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_TTY_INIT_FAILED");
+    let err = crate::error::js_error_new_with_name_message(b"SystemError", msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 /// `process.stdin.isTTY` / `process.stdout.isTTY` / `process.stderr.isTTY`.

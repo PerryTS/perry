@@ -771,6 +771,9 @@ pub unsafe extern "C" fn js_new_function_construct(
             if !fd.is_finite() || fd < 0.0 || fd.fract() != 0.0 {
                 crate::tty::throw_invalid_fd(fd);
             }
+            if !crate::tty::is_tty_fd(fd as i32) {
+                crate::tty::throw_tty_init_failed();
+            }
             return crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
         }
     }

@@ -46,6 +46,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     let true_val = f64::from_bits(TAG_TRUE);
     let false_val = f64::from_bits(TAG_FALSE);
 
+    if class_id == 0 {
+        return false_val;
+    }
+
     // User-defined `Symbol.hasInstance` takes precedence over the built-in
     // prototype-chain walk. The HIR lifts `static [Symbol.hasInstance](v)`
     // to a top-level function `__perry_wk_hasinstance_<class>` and the
