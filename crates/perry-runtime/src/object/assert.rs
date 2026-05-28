@@ -108,6 +108,15 @@ fn object_matcher_matches(actual: f64, expected: f64) -> bool {
         // names `code`/`errno`/`name`/`message`, the thrown error must carry
         // an equal value. A missing or mismatching value on the thrown error
         // is a mismatch (#2014) — there is no "optional code" carve-out.
+        // A RegExp validator value (e.g. `{ message: /bad/ }`) is tested
+        // against the thrown error's prop instead of being deep-equal-ed,
+        // matching Node's `deepStrictEqual`-with-RegExp-special-case shape.
+        if let Some(re_matches) = regex_test_value(expected_prop, actual_prop) {
+            if !re_matches {
+                return false;
+            }
+            continue;
+        }
         if !assert_same_value(actual_prop, expected_prop)
             && crate::value::js_jsvalue_loose_equals(actual_prop, expected_prop) == 0
         {
