@@ -2735,6 +2735,28 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "keepAliveMsecs", true, Some("Agent")),
     method("http", "keepAlive", true, Some("Agent")),
     method("http", "protocol", true, Some("Agent")),
+    // #2154 — sockets/freeSockets/requests accessors return `{}` for an
+    // idle agent; destroyed reflects whether `.destroy()` has been
+    // called; the `__set_*` rows enforce ERR_OUT_OF_RANGE on invalid
+    // writes (matches Node's `_http_agent.js` setter behavior);
+    // createConnection / createSocket closure pointers round-trip.
+    method("http", "__get_sockets", true, Some("Agent")),
+    method("http", "sockets", true, Some("Agent")),
+    method("http", "__get_freeSockets", true, Some("Agent")),
+    method("http", "freeSockets", true, Some("Agent")),
+    method("http", "__get_requests", true, Some("Agent")),
+    method("http", "requests", true, Some("Agent")),
+    method("http", "__get_destroyed", true, Some("Agent")),
+    method("http", "destroyed", true, Some("Agent")),
+    method("http", "__set_maxSockets", true, Some("Agent")),
+    method("http", "__set_maxFreeSockets", true, Some("Agent")),
+    method("http", "__set_maxTotalSockets", true, Some("Agent")),
+    method("http", "__set_keepAlive", true, Some("Agent")),
+    method("http", "__set_keepAliveMsecs", true, Some("Agent")),
+    method("http", "__set_createConnection", true, Some("Agent")),
+    method("http", "__set_createSocket", true, Some("Agent")),
+    method("http", "__get_createConnection", true, Some("Agent")),
+    method("http", "__get_createSocket", true, Some("Agent")),
     method("https", "createServer", false, None),
     // `https.Server(options, handler)` is Node's callable-constructor
     // alias for `createServer` (works with or without `new`). #2132.

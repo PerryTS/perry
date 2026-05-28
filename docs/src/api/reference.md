@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1444 entries across 82 modules.
+Total: 1461 entries across 82 modules.
 
 ## Modules
 
@@ -758,7 +758,11 @@ Total: 1444 entries across 82 modules.
 - `Server` — module
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
+- `__get_createConnection` — instance *(class: `Agent`)*
+- `__get_createSocket` — instance *(class: `Agent`)*
+- `__get_destroyed` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
+- `__get_freeSockets` — instance *(class: `Agent`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
@@ -769,6 +773,8 @@ Total: 1444 entries across 82 modules.
 - `__get_maxTotalSockets` — instance *(class: `Agent`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
 - `__get_protocol` — instance *(class: `Agent`)*
+- `__get_requests` — instance *(class: `Agent`)*
+- `__get_sockets` — instance *(class: `Agent`)*
 - `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
 - `__get_statusMessage` — instance *(class: `IncomingMessage`)*
@@ -776,6 +782,13 @@ Total: 1444 entries across 82 modules.
 - `__get_url` — instance *(class: `IncomingMessage`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
+- `__set_createConnection` — instance *(class: `Agent`)*
+- `__set_createSocket` — instance *(class: `Agent`)*
+- `__set_keepAlive` — instance *(class: `Agent`)*
+- `__set_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__set_maxFreeSockets` — instance *(class: `Agent`)*
+- `__set_maxSockets` — instance *(class: `Agent`)*
+- `__set_maxTotalSockets` — instance *(class: `Agent`)*
 - `__set_protocol` — instance *(class: `Agent`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
@@ -792,8 +805,10 @@ Total: 1444 entries across 82 modules.
 - `createServer` — module
 - `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
+- `destroyed` — instance *(class: `Agent`)*
 - `end` — instance *(class: `ServerResponse`)*
 - `flushHeaders` — instance *(class: `ServerResponse`)*
+- `freeSockets` — instance *(class: `Agent`)*
 - `get` — module
 - `getHeader` — instance *(class: `ServerResponse`)*
 - `getName` — instance *(class: `Agent`)*
@@ -817,11 +832,13 @@ Total: 1444 entries across 82 modules.
 - `read` — instance *(class: `IncomingMessage`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
+- `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
 - `reuseSocket` — instance *(class: `Agent`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
+- `sockets` — instance *(class: `Agent`)*
 - `statusCode` — instance *(class: `IncomingMessage`)*
 - `statusMessage` — instance *(class: `IncomingMessage`)*
 - `trailers` — instance *(class: `IncomingMessage`)*

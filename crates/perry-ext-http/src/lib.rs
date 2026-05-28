@@ -45,6 +45,9 @@
 #[allow(unused_imports)]
 extern crate perry_ext_http_server as _server_link;
 
+mod agent;
+pub use agent::*;
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -97,15 +100,16 @@ lazy_static! {
 
 static HTTP_GC_REGISTERED: Once = Once::new();
 
-fn ensure_gc_scanner_registered() {
+pub(crate) fn ensure_gc_scanner_registered() {
     HTTP_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
     });
 }
 
 /// GC root scanner: walks every ClientRequestHandle (response_callback
-/// + listeners) and IncomingMessageHandle (listeners). Closures stored
-/// as raw i64 pointers are handed to the runtime as mutable slots.
+/// + listeners), IncomingMessageHandle (listeners), and AgentHandle
+/// (createConnection / createSocket overrides). Closures stored as raw
+/// i64 pointers are handed to the runtime as mutable slots.
 fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
         visitor.visit_i64_slot(&mut req.response_callback);
@@ -123,6 +127,9 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
             }
         }
     });
+
+    // #2154: stored `agent.createConnection` / `.createSocket` closures.
+    agent::scan_agent_roots(visitor);
 }
 
 fn push_event(ev: PendingHttpEvent) {
@@ -345,6 +352,13 @@ pub struct ClientRequestHandle {
     listeners: HashMap<String, Vec<i64>>,
     timeout_ms: Option<u64>,
     ended: bool,
+    /// `options.agent` handle id when the caller supplied an Agent
+    /// (#2154). `0` = use the global `HTTP_CLIENT` (no pooling
+    /// distinction). When set, `dispatch_request` calls
+    /// `agent::client_for_agent` so requests share a per-Agent
+    /// connection pool whose `keepAlive` / `maxFreeSockets` /
+    /// `keepAliveMsecs` come from the Agent's stored options.
+    agent_handle: Handle,
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -399,7 +413,7 @@ fn is_string_value(val: f64) -> bool {
 
 /// Parse a NaN-boxed JS object via `json_stringify` → `serde_json::Value`.
 /// Returns `None` on null pointer or stringify failure.
-unsafe fn parse_options_object(val_f64: f64) -> Option<serde_json::Value> {
+pub(crate) unsafe fn parse_options_object(val_f64: f64) -> Option<serde_json::Value> {
     let v = JsValue::from_bits(val_f64.to_bits());
     if v.is_undefined() || v.is_null() {
         return None;
@@ -489,6 +503,7 @@ fn make_request_handle(
     headers: HashMap<String, String>,
     timeout_ms: Option<u64>,
     callback: i64,
+    agent_handle: Handle,
 ) -> Handle {
     register_handle(ClientRequestHandle {
         method,
@@ -499,6 +514,7 @@ fn make_request_handle(
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        agent_handle,
     })
 }
 
@@ -517,7 +533,18 @@ fn dispatch_request(
     headers: HashMap<String, String>,
     body: Vec<u8>,
     timeout_ms: Option<u64>,
+    agent_handle: Handle,
 ) {
+    // #2154: pick the per-Agent reqwest client when one was supplied, so
+    // the request honors the Agent's keepAlive/maxFreeSockets/keepAliveMsecs
+    // pool config rather than always using the global HTTP_CLIENT. The
+    // global is still the fallback for `http.request(opts)` without an
+    // `agent` field.
+    let client: reqwest::Client = if agent_handle != 0 {
+        agent::client_for_agent(agent_handle)
+    } else {
+        HTTP_CLIENT.clone()
+    };
     spawn_blocking(move || {
         // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
         // workaround perry-ext-net needs (see spawn_socket_runner).
@@ -552,13 +579,13 @@ fn dispatch_request(
             }
 
             let mut req = match method.as_str() {
-                "POST" => HTTP_CLIENT.post(&url),
-                "PUT" => HTTP_CLIENT.put(&url),
-                "DELETE" => HTTP_CLIENT.delete(&url),
-                "PATCH" => HTTP_CLIENT.patch(&url),
-                "HEAD" => HTTP_CLIENT.head(&url),
-                "OPTIONS" => HTTP_CLIENT.request(reqwest::Method::OPTIONS, &url),
-                _ => HTTP_CLIENT.get(&url),
+                "POST" => client.post(&url),
+                "PUT" => client.put(&url),
+                "DELETE" => client.delete(&url),
+                "PATCH" => client.patch(&url),
+                "HEAD" => client.head(&url),
+                "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
+                _ => client.get(&url),
             };
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
@@ -621,7 +648,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     // Issue #769 — accept either a URL string or an options object. Mirrors
     // the dispatch in `get_common` so `http.request("http://…", cb)` works
     // the same as `http.request({ host, port, path }, cb)`.
-    let (method, url, headers, timeout) = if is_string_value(arg_f64) {
+    let (method, url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
@@ -630,16 +657,20 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         } else {
             String::new()
         };
-        ("GET".to_string(), url, HashMap::new(), None)
+        ("GET".to_string(), url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
         let method = method_from_options(&opts);
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
         let timeout = timeout_from_options(&opts);
-        (method, url, headers, timeout)
+        // #2154: `options.agent` doesn't survive the JSON round-trip
+        // (pointer-tagged values get dropped) — read the field straight
+        // off the NaN-boxed object instead.
+        let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
+        (method, url, headers, timeout, agent_handle)
     };
-    make_request_handle(method, url, headers, timeout, callback)
+    make_request_handle(method, url, headers, timeout, callback, agent_handle)
 }
 
 #[no_mangle]
@@ -654,7 +685,7 @@ pub unsafe extern "C" fn js_https_request(opts_f64: f64, callback_i64: i64) -> H
 
 unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Handle {
     ensure_gc_scanner_registered();
-    let (url, headers, timeout) = if is_string_value(arg_f64) {
+    let (url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
@@ -663,16 +694,24 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         } else {
             String::new()
         };
-        (url, HashMap::new(), None)
+        (url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
         let timeout = timeout_from_options(&opts);
-        (url, headers, timeout)
+        let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
+        (url, headers, timeout, agent_handle)
     };
 
-    let handle = make_request_handle("GET".to_string(), url, headers, timeout, callback);
+    let handle = make_request_handle(
+        "GET".to_string(),
+        url,
+        headers,
+        timeout,
+        callback,
+        agent_handle,
+    );
     // GET auto-`end()`s, kicking off the request.
     js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
     handle
@@ -688,357 +727,7 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
     get_common(arg_f64, callback_i64, "https")
 }
 
-// ------------------------------------------------------------------
-// http.Agent / https.Agent (#2129)
-// ------------------------------------------------------------------
-//
-// Perry doesn't pool sockets today — every `http.request(...)` opens a
-// fresh reqwest connection — so the Agent state below is pure metadata
-// that mirrors Node's defaults. The only method whose output the Node
-// test suite asserts byte-for-byte is `getName(options)`; the rest are
-// chainable no-ops so user code that touches `.destroy()` / `.close()`
-// / `.keepSocketAlive()` keeps working.
-//
-// Mirrors `crates/perry-stdlib/src/http.rs`'s `AgentHandle` so both
-// link targets (well-known flip → ext crate; default `full` build →
-// perry-stdlib's http-client) expose the same surface.
-
-struct AgentHandle {
-    protocol: Option<String>,
-    keep_alive: bool,
-    keep_alive_msecs: f64,
-    max_sockets: f64,
-    max_total_sockets: f64,
-    max_free_sockets: f64,
-    scheduling: String,
-    timeout_ms: Option<f64>,
-}
-
-impl Default for AgentHandle {
-    fn default() -> Self {
-        AgentHandle {
-            protocol: Some("http:".to_string()),
-            keep_alive: false,
-            keep_alive_msecs: 1000.0,
-            max_sockets: f64::INFINITY,
-            max_total_sockets: f64::INFINITY,
-            max_free_sockets: 256.0,
-            scheduling: "lifo".to_string(),
-            timeout_ms: None,
-        }
-    }
-}
-
-unsafe fn agent_new_with_protocol(options_f64: f64, default_protocol: &str) -> Handle {
-    let mut agent = AgentHandle {
-        protocol: Some(default_protocol.to_string()),
-        ..AgentHandle::default()
-    };
-
-    if let Some(opts) = parse_options_object(options_f64) {
-        if let Some(v) = opts.get("keepAlive").and_then(|v| v.as_bool()) {
-            agent.keep_alive = v;
-        }
-        if let Some(v) = opts.get("keepAliveMsecs").and_then(|v| v.as_f64()) {
-            agent.keep_alive_msecs = v;
-        }
-        if let Some(v) = opts.get("maxSockets").and_then(|v| v.as_f64()) {
-            agent.max_sockets = v;
-        }
-        if let Some(v) = opts.get("maxFreeSockets").and_then(|v| v.as_f64()) {
-            agent.max_free_sockets = v;
-        }
-        if let Some(v) = opts.get("maxTotalSockets").and_then(|v| v.as_f64()) {
-            agent.max_total_sockets = v;
-        }
-        if let Some(v) = opts.get("timeout").and_then(|v| v.as_f64()) {
-            agent.timeout_ms = Some(v);
-        }
-        if let Some(v) = opts.get("scheduling").and_then(|v| v.as_str()) {
-            agent.scheduling = v.to_string();
-        }
-    }
-
-    register_handle(agent)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_http_agent_new(options_f64: f64) -> Handle {
-    agent_new_with_protocol(options_f64, "http:")
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_https_agent_new(options_f64: f64) -> Handle {
-    agent_new_with_protocol(options_f64, "https:")
-}
-
-/// `agent.getName([options])` — Node's canonical key under which sockets
-/// are pooled. The base shape is `${host}:${port}:${localAddress}` with
-/// optional `:${family}` and `:${socketPath}` appended. For https.Agent
-/// instances Node appends 20 extra fields (ca, cert, ciphers, key, …)
-/// per `lib/https.js`. Tests assert exact strings (see
-/// `test/parallel/test-http-agent-getname.js` and
-/// `test/parallel/test-https-agent-getname.js`).
-#[no_mangle]
-pub unsafe extern "C" fn js_http_agent_get_name(
-    handle: Handle,
-    options_f64: f64,
-) -> *mut StringHeader {
-    let is_https = get_handle_mut::<AgentHandle>(handle)
-        .and_then(|a| a.protocol.as_deref().map(|p| p == "https:"))
-        .unwrap_or(false);
-
-    let opts = parse_options_object(options_f64);
-    let mut name = build_http_agent_name(opts.as_ref());
-    if is_https {
-        append_https_agent_name_fields(&mut name, opts.as_ref());
-    }
-    alloc_string(&name).as_raw()
-}
-
-fn build_http_agent_name(opts: Option<&serde_json::Value>) -> String {
-    let opts = match opts {
-        Some(v) => v,
-        None => return "localhost::".to_string(),
-    };
-
-    let host = opts
-        .get("host")
-        .and_then(|v| v.as_str())
-        .unwrap_or("localhost");
-    let port = opts
-        .get("port")
-        .map(|v| {
-            v.as_str()
-                .map(String::from)
-                .or_else(|| v.as_i64().map(|n| n.to_string()))
-                .or_else(|| v.as_f64().map(|n| (n as i64).to_string()))
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
-    let local_address = opts
-        .get("localAddress")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let mut name = format!("{}:{}:{}", host, port, local_address);
-
-    // Per Node's `lib/_http_agent.js`: family is appended first when it
-    // is exactly 4 or 6, then socketPath. Both are independent.
-    if let Some(family) = opts.get("family") {
-        let f = family.as_i64().unwrap_or(0);
-        if f == 4 || f == 6 {
-            name.push(':');
-            name.push_str(&f.to_string());
-        }
-    }
-    if let Some(socket_path) = opts.get("socketPath").and_then(|v| v.as_str()) {
-        name.push(':');
-        name.push_str(socket_path);
-    }
-
-    name
-}
-
-/// Append the 20 extension fields that `lib/https.js`'s Agent.getName
-/// adds on top of the http parent. Each field has its own `:` separator
-/// regardless of whether the value is present, so an Agent with no
-/// options produces 20 trailing colons.
-fn append_https_agent_name_fields(name: &mut String, opts: Option<&serde_json::Value>) {
-    let opts = match opts {
-        Some(v) => v,
-        None => {
-            for _ in 0..20 {
-                name.push(':');
-            }
-            return;
-        }
-    };
-
-    let host_str = opts.get("host").and_then(|v| v.as_str()).unwrap_or("");
-
-    let push_truthy_string = |name: &mut String, field: &str| {
-        name.push(':');
-        if let Some(v) = opts.get(field) {
-            if json_value_is_truthy(v) {
-                name.push_str(&json_value_to_string(v));
-            }
-        }
-    };
-    let push_defined = |name: &mut String, field: &str| {
-        name.push(':');
-        if let Some(v) = opts.get(field) {
-            if !v.is_null() {
-                name.push_str(&json_value_to_string(v));
-            }
-        }
-    };
-
-    push_truthy_string(name, "ca");
-    push_truthy_string(name, "cert");
-    push_truthy_string(name, "clientCertEngine");
-    push_truthy_string(name, "ciphers");
-    push_truthy_string(name, "key");
-    push_truthy_string(name, "pfx");
-    push_defined(name, "rejectUnauthorized");
-
-    // servername appears only when truthy AND distinct from host.
-    name.push(':');
-    if let Some(sn) = opts.get("servername") {
-        if json_value_is_truthy(sn) {
-            let sn_str = json_value_to_string(sn);
-            if sn_str != host_str {
-                name.push_str(&sn_str);
-            }
-        }
-    }
-
-    push_truthy_string(name, "minVersion");
-    push_truthy_string(name, "maxVersion");
-    push_truthy_string(name, "secureProtocol");
-    push_truthy_string(name, "crl");
-    push_defined(name, "honorCipherOrder");
-    push_truthy_string(name, "ecdhCurve");
-    push_truthy_string(name, "dhparam");
-    push_defined(name, "secureOptions");
-    push_truthy_string(name, "sessionIdContext");
-
-    // sigalgs goes through JSON.stringify per Node.
-    name.push(':');
-    if let Some(v) = opts.get("sigalgs") {
-        if json_value_is_truthy(v) {
-            name.push_str(&serde_json::to_string(v).unwrap_or_default());
-        }
-    }
-
-    push_truthy_string(name, "privateKeyIdentifier");
-    push_truthy_string(name, "privateKeyEngine");
-}
-
-/// JS-style truthiness check on a `serde_json::Value`. Mirrors Node's
-/// `if (options.field)` guard.
-fn json_value_is_truthy(v: &serde_json::Value) -> bool {
-    match v {
-        serde_json::Value::Null => false,
-        serde_json::Value::Bool(b) => *b,
-        serde_json::Value::Number(n) => {
-            n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false)
-        }
-        serde_json::Value::String(s) => !s.is_empty(),
-        // Arrays/objects are always truthy in JS regardless of contents.
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => true,
-    }
-}
-
-/// JS-style ToString coercion on a `serde_json::Value`, mirroring how
-/// `name += options.field` flows through Array.prototype.toString and
-/// Buffer.prototype.toString:
-/// - arrays comma-join their element ToStrings
-/// - the `{"type":"Buffer","data":[…]}` shape that `JSON.stringify(buf)`
-///   emits becomes the UTF-8 string of the bytes, matching
-///   `Buffer.toString()`
-/// - other objects fall back to `"[object Object]"`
-fn json_value_to_string(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Bool(b) => {
-            if *b {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
-        }
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .map(json_value_to_string)
-            .collect::<Vec<_>>()
-            .join(","),
-        serde_json::Value::Object(map) => {
-            if let (Some(serde_json::Value::String(ty)), Some(serde_json::Value::Array(data))) =
-                (map.get("type"), map.get("data"))
-            {
-                if ty == "Buffer" {
-                    let bytes: Vec<u8> = data
-                        .iter()
-                        .filter_map(|el| el.as_u64().map(|n| n as u8))
-                        .collect();
-                    return String::from_utf8_lossy(&bytes).into_owned();
-                }
-            }
-            "[object Object]".to_string()
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
-    handle
-}
-
-fn agent_field<T, F>(handle: Handle, default: T, f: F) -> T
-where
-    F: FnOnce(&AgentHandle) -> T,
-{
-    get_handle_mut::<AgentHandle>(handle)
-        .map(|a| f(a))
-        .unwrap_or(default)
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_max_sockets(handle: Handle) -> f64 {
-    agent_field(handle, f64::INFINITY, |a| a.max_sockets)
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_max_free_sockets(handle: Handle) -> f64 {
-    agent_field(handle, 256.0, |a| a.max_free_sockets)
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_max_total_sockets(handle: Handle) -> f64 {
-    agent_field(handle, f64::INFINITY, |a| a.max_total_sockets)
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_keep_alive_msecs(handle: Handle) -> f64 {
-    agent_field(handle, 1000.0, |a| a.keep_alive_msecs)
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_keep_alive(handle: Handle) -> f64 {
-    if agent_field(handle, false, |a| a.keep_alive) {
-        1.0
-    } else {
-        0.0
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_protocol(handle: Handle) -> *mut StringHeader {
-    let s = get_handle_mut::<AgentHandle>(handle)
-        .and_then(|a| a.protocol.clone())
-        .unwrap_or_else(|| "http:".to_string());
-    alloc_string(&s).as_raw()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_http_agent_set_protocol(
-    handle: Handle,
-    value_ptr: *const StringHeader,
-) {
-    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
-        if value_ptr.is_null() {
-            agent.protocol = None;
-        } else {
-            let js = JsString::from_raw(value_ptr as *mut StringHeader);
-            if let Some(s) = perry_ffi::read_string(js) {
-                agent.protocol = Some(s.to_string());
-            }
-        }
-    }
-}
+// http.Agent / https.Agent (#2129 / #2154) lives in `agent.rs`.
 
 // ------------------------------------------------------------------
 // FFI: ClientRequest accessors
@@ -1077,6 +766,7 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
             req.headers.clone(),
             req.body.clone(),
             req.timeout_ms,
+            req.agent_handle,
         ))
     });
 
@@ -1085,8 +775,8 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
         None => return handle,
     };
 
-    let (method, url, headers, body, timeout_ms) = snapshot;
-    dispatch_request(handle, method, url, headers, body, timeout_ms);
+    let (method, url, headers, body, timeout_ms, agent_handle) = snapshot;
+    dispatch_request(handle, method, url, headers, body, timeout_ms, agent_handle);
     handle
 }
 
@@ -1433,6 +1123,7 @@ mod tests {
             listeners: request_listeners,
             timeout_ms: None,
             ended: false,
+            agent_handle: 0,
         });
 
         let mut incoming_listeners = HashMap::new();
