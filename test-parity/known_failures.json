@@ -458,12 +458,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/pipe/four-stage-chain": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: four-stage pipe chain does not propagate through. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/repipe-after-unpipe": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -974,12 +968,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(asyncGen()) — iteration wrong or fails. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/pipe/objectmode-pipe": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: objectMode pipe — raw object data not preserved through pipe. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/unshift-while-flowing": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1069,12 +1057,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(array with one Promise.reject) — error not emitted at the right point. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/r-t-w-end-to-end": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: simple R→T→W e2e pipe — received chunks wrong (transform/uppercase not applied). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/iter-helpers/every-async-rejection": {
     "issue": "1558",
@@ -1310,12 +1292,6 @@
     "category": "bug-open",
     "reason": "node:stream: encoding option in ctor — readableEncoding wrong or data not string. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/pipe-to-plain-writable": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() to plain Writable — collected wrong / empty. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/byob-reader-method-shape": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1441,18 +1417,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: generator with explicit return — values yielded after return statement aren't reached. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/four-stage-chain-v2": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: 4-stage pipe — wrong output. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/many-listeners-on-dst": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: multi 'data' listeners on dst — count or values wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-gen-return-value-ignored": {
     "issue": "1532",
