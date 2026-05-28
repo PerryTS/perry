@@ -6,6 +6,42 @@
 use super::*;
 use base64::Engine as _;
 
+fn throw_buffer_type_error_with_code(message: &'static str, code: &'static str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn is_buffer_dispatch_number(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    jsval.is_number() || jsval.is_int32()
+}
+
+fn is_buffer_dispatch_string(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    jsval.is_string() || jsval.is_short_string()
+}
+
+fn buffer_dispatch_i32(value: f64) -> i32 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_int32() {
+        jsval.as_int32()
+    } else {
+        value as i32
+    }
+}
+
+fn buffer_write_encoding_tag_or_throw(value: f64) -> i32 {
+    if !is_buffer_dispatch_string(value) {
+        throw_buffer_type_error_with_code("Invalid Buffer encoding", "ERR_INVALID_ARG_TYPE");
+    }
+    if crate::buffer::js_buffer_is_encoding(value) == 0 {
+        throw_buffer_type_error_with_code("Unknown encoding", "ERR_UNKNOWN_ENCODING");
+    }
+    crate::buffer::js_encoding_tag_from_value(value)
+}
+
 /// Dispatch a Buffer / Uint8Array instance method call. Receiver address
 /// is the raw heap pointer (already stripped of NaN-box tags). Routes
 /// the Node-style numeric read/write/search/swap method family through
@@ -22,6 +58,7 @@ pub fn is_buffer_method_name(name: &str) -> bool {
     matches!(
         name,
         "toString"
+            | "inspect"
             | "slice"
             | "subarray"
             | "set"
@@ -292,6 +329,9 @@ pub unsafe fn dispatch_buffer_method(
             };
             f64::from_bits(JSValue::string_ptr(str_ptr).bits())
         }
+        "inspect" => {
+            crate::builtins::js_util_inspect(buf_f64, f64::from_bits(crate::value::TAG_UNDEFINED))
+        }
         "slice" | "subarray" => {
             let len = (*buf_ptr).length as i32;
             let start = arg_i32(0);
@@ -344,27 +384,45 @@ pub unsafe fn dispatch_buffer_method(
                 str_bits
             };
             let str_ptr = str_addr as *const crate::string::StringHeader;
-            let offset = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            let mut offset = 0;
+            let mut arg_index = 1;
+            let mut enc = 0;
+            if args.len() >= 2 {
+                if args.len() == 2 && is_buffer_dispatch_string(args[1]) {
+                    enc = buffer_write_encoding_tag_or_throw(args[1]);
+                    arg_index = 2;
+                } else if is_buffer_dispatch_number(args[1]) {
+                    offset = buffer_dispatch_i32(args[1]);
+                    arg_index = 2;
+                } else {
+                    throw_buffer_type_error_with_code(
+                        "Invalid Buffer offset",
+                        "ERR_INVALID_ARG_TYPE",
+                    );
+                }
+            }
             // Detect trailing encoding arg (string) vs length arg (number).
             // Common forms: write(str), write(str, offset), write(str, offset, enc),
             // write(str, offset, length, enc).
-            let (max_len, enc) = if args.len() >= 4 {
-                (
-                    arg_i32(2),
-                    crate::buffer::js_encoding_tag_from_value(args[3]),
-                )
-            } else if args.len() >= 3 {
-                let third_bits = args[2].to_bits();
-                if (third_bits >> 48) == 0x7FFF {
-                    (
-                        (*buf_ptr).length as i32 - offset,
-                        crate::buffer::js_encoding_tag_from_value(args[2]),
-                    )
+            let max_len = if arg_index < args.len() {
+                if is_buffer_dispatch_string(args[arg_index]) {
+                    enc = buffer_write_encoding_tag_or_throw(args[arg_index]);
+                    (*buf_ptr).length as i32 - offset
+                } else if is_buffer_dispatch_number(args[arg_index]) {
+                    let len = buffer_dispatch_i32(args[arg_index]);
+                    arg_index += 1;
+                    if arg_index < args.len() {
+                        enc = buffer_write_encoding_tag_or_throw(args[arg_index]);
+                    }
+                    len
                 } else {
-                    (arg_i32(2), 0)
+                    throw_buffer_type_error_with_code(
+                        "Invalid Buffer length",
+                        "ERR_INVALID_ARG_TYPE",
+                    );
                 }
             } else {
-                ((*buf_ptr).length as i32 - offset, 0)
+                (*buf_ptr).length as i32 - offset
             };
             crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
         }
@@ -398,7 +456,16 @@ pub unsafe fn dispatch_buffer_method(
             let len = (*buf_ptr).length as i32;
             let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
             let end = if args.len() >= 3 { arg_i32(2) } else { len };
-            let result = crate::buffer::js_buffer_fill_range(buf_ptr, arg_i32(0), start, end);
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+            let enc = if args.len() >= 4 {
+                crate::buffer::js_encoding_tag_from_value(args[3])
+            } else {
+                0
+            };
+            let result = crate::buffer::js_buffer_fill_value_range(buf_ptr, value, start, end, enc);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "equals" => {
@@ -425,14 +492,32 @@ pub unsafe fn dispatch_buffer_method(
                 other_bits
             };
             let other = other_addr as *const crate::buffer::BufferHeader;
-            if args.len() >= 5 {
+            if args.len() >= 2 {
+                let target_len = if other.is_null() {
+                    0
+                } else {
+                    (*other).length as i32
+                };
+                let source_len = (*buf_ptr).length as i32;
+                let arg_i32_or = |i: usize, default: i32| -> i32 {
+                    if i < args.len() {
+                        let value = JSValue::from_bits(args[i].to_bits());
+                        if value.is_undefined() {
+                            default
+                        } else {
+                            args[i] as i32
+                        }
+                    } else {
+                        default
+                    }
+                };
                 i32_num(crate::buffer::js_buffer_compare_range(
                     buf_ptr,
                     other,
-                    arg_i32(1),
-                    arg_i32(2),
-                    arg_i32(3),
-                    arg_i32(4),
+                    arg_i32_or(1, 0),
+                    arg_i32_or(2, target_len),
+                    arg_i32_or(3, 0),
+                    arg_i32_or(4, source_len),
                 ))
             } else {
                 i32_num(crate::buffer::js_buffer_compare(buf_ptr, other))
