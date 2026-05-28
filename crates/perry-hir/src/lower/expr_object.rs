@@ -126,6 +126,16 @@ fn lower_method_prop(
     };
     let key: String = key_label.clone();
     let func_id = ctx.fresh_func();
+    // #2076: an object-literal shorthand method's `fn.name` is the
+    // property key per spec (`{m(){}}.m.name === "m"`). The synthetic
+    // function name we mint below (`__obj_method_<key>_<id>`) starts
+    // with `_`, so the artifacts.rs registration loop would skip it
+    // without this override.
+    if let MethodKeyKind::Static(s) = &method_key {
+        if !s.is_empty() {
+            ctx.closure_display_names.insert(func_id, s.clone());
+        }
+    }
     // Use a unique synthetic name to avoid collisions
     let func_name = format!("__obj_method_{}_{}", key, func_id);
 
