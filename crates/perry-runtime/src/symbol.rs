@@ -717,6 +717,22 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
+    // Buffer extends Uint8Array in Node, so Buffer values must expose
+    // @@iterator as values(). Perry's direct Buffer.from() paths often
+    // materialize through array-clone fast paths, but runtime-produced
+    // Buffers can reach generic iterator lookup first.
+    let raw_ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
+    if raw_ptr >= 0x10000 && crate::buffer::is_registered_buffer(raw_ptr) {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let mname = b"values";
+                return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
     // #36 / #321: the receiver is a closure whose OWN symbol props miss — walk
     // its static prototype chain (`Object.setPrototypeOf(closure, protoObj)`).
     // effect's `TagClass[TagTypeId]` / `isTag(TagClass)` read symbols off

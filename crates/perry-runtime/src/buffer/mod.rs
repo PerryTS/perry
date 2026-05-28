@@ -149,6 +149,80 @@ mod tests {
     }
 
     #[test]
+    fn test_buffer_symbol_iterator_uses_values_iterator() {
+        let buf = buffer_alloc(3);
+        unsafe {
+            (*buf).length = 3;
+            std::ptr::copy_nonoverlapping([7u8, 8, 9].as_ptr(), buffer_data_mut(buf), 3);
+        }
+        let buf_value = f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits());
+        let iter_sym = crate::symbol::well_known_symbol("iterator");
+        assert!(!iter_sym.is_null());
+        let iter_sym_value =
+            f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+
+        let method =
+            unsafe { crate::symbol::js_object_get_symbol_property(buf_value, iter_sym_value) };
+        assert_ne!(method.to_bits(), crate::value::TAG_UNDEFINED);
+
+        let iterator = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
+        let result = unsafe {
+            crate::object::js_native_call_method(
+                iterator,
+                b"next".as_ptr() as *const i8,
+                b"next".len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        let result_obj =
+            crate::value::js_nanbox_get_pointer(result) as *const crate::object::ObjectHeader;
+        assert!(!result_obj.is_null());
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        assert_eq!(
+            crate::object::js_object_get_field_by_name_f64(result_obj, value_key),
+            7.0
+        );
+    }
+
+    #[test]
+    fn test_buffer_symbol_iterator_respects_own_symbol_property() {
+        let buf = buffer_alloc(1);
+        unsafe {
+            (*buf).length = 1;
+            *buffer_data_mut(buf) = 7;
+        }
+        let buf_value = f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits());
+        let iter_sym = crate::symbol::well_known_symbol("iterator");
+        assert!(!iter_sym.is_null());
+        let iter_sym_value =
+            f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(buf_value, iter_sym_value, 123.0);
+        }
+
+        let method =
+            unsafe { crate::symbol::js_object_get_symbol_property(buf_value, iter_sym_value) };
+        assert_eq!(method, 123.0);
+    }
+
+    #[test]
+    fn test_array_from_small_buffer_materializes_bytes() {
+        let buf = buffer_alloc(4);
+        unsafe {
+            (*buf).length = 4;
+            std::ptr::copy_nonoverlapping([1u8, 2, 3, 4].as_ptr(), buffer_data_mut(buf), 4);
+        }
+
+        let arr = crate::array::js_array_clone(buf as *const crate::array::ArrayHeader);
+        assert_eq!(crate::array::js_array_length(arr), 4);
+        for (i, expected) in [1.0, 2.0, 3.0, 4.0].iter().copied().enumerate() {
+            assert_eq!(crate::array::js_array_get_f64(arr, i as u32), expected);
+        }
+    }
+
+    #[test]
     fn test_large_buffer_still_registered() {
         // Buffers at or above the threshold still go through the HashSet path.
         let buf = buffer_alloc(SMALL_BUF_THRESHOLD);
