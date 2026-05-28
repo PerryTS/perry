@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1441 entries across 82 modules
+// Coverage: 1444 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2111,6 +2111,12 @@ declare module "validator" {
 }
 
 declare module "worker_threads" {
+  /** stdlib */
+  export const isMainThread: any;
+  /** stdlib */
+  export const resourceLimits: any;
+  /** stdlib */
+  export const threadId: any;
   /** stdlib */
   export function getEnvironmentData(p0: any): any;
   /** stdlib */

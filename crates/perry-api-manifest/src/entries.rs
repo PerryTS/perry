@@ -1900,6 +1900,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method("worker_threads", "postMessage", true, None),
+    // node:worker_threads — value-shaped exports (#2135). Perry doesn't
+    // spawn JS workers, so the main thread is the only thread: isMainThread
+    // is always true, threadId is 0, resourceLimits is an empty object.
+    // The values themselves are returned by `js_native_module_property_by_name`
+    // (see `crates/perry-runtime/src/object/native_module.rs`).
+    property("worker_threads", "isMainThread"),
+    property("worker_threads", "threadId"),
+    property("worker_threads", "resourceLimits"),
     method_sig(
         "ethers",
         "getAddress",

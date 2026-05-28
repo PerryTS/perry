@@ -1734,6 +1734,23 @@ pub(crate) unsafe fn get_native_module_constant(
             }
             _ => None,
         },
+        // node:worker_threads value-shaped exports. Perry doesn't spawn JS
+        // workers, so the main thread is the only thread — `isMainThread`
+        // is always true, `threadId` is 0, `resourceLimits` is empty.
+        // Pre-fix `const { isMainThread } = require('worker_threads')` read
+        // `undefined`, which made the `if (!isMainThread) common.skip(...)`
+        // guard Node uses in main-thread-only tests fire under Perry, so
+        // ~8 process tests in the node-core radar (#2135) were "skipping"
+        // when they should have been running. (#2135)
+        "worker_threads" => match property {
+            "isMainThread" => Some(f64::from_bits(JSValue::bool(true).bits())),
+            "threadId" => Some(0.0),
+            "resourceLimits" => {
+                let obj = crate::object::js_object_alloc(0, 0);
+                Some(crate::value::js_nanbox_pointer(obj as i64))
+            }
+            _ => None,
+        },
         // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
         // Node also exposes directly on `require('node:zlib')`.
         "zlib" => match property {

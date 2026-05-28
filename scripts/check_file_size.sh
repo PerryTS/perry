@@ -98,6 +98,14 @@ crates/perry-runtime/src/node_stream_tests.rs
 # #1787 instance-field init replay (#2074) + web-stream class
 # wiring (#1641/#2110). Split tracked under #1435.
 crates/perry-runtime/src/object/class_registry.rs
+# Native-module namespace property/method dispatcher
+# (`get_native_module_constant` is one big match — one arm per
+# stdlib namespace, every property literal inline). Splitting per
+# namespace would scatter arms that share helpers (`fs_const`,
+# `os_signal_const`, …) and the constants tables they index.
+# Crossed the limit at 2014 LOC after the #2135 worker_threads
+# value-export arm. Split tracked under #1435.
+crates/perry-runtime/src/object/native_module.rs
 EOF
 )
 
