@@ -440,12 +440,6 @@
     "category": "bug-open",
     "reason": "node:stream: read + unshift + re-read sequence doesn't deliver chunks in the right order. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/error/error-no-listener": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(err) + error listener doesn't deliver the message to handler. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/object-mode/read-single-object": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -469,12 +463,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/error/error-then-end-order": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: after error, end event should NOT fire. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/options/auto-destroy-false": {
     "issue": "1531",
@@ -883,12 +871,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipe(src,dst) source-error handling — wrong error count on src or dst. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/error-event-arg-shape": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: 'error' event arg — identity / instanceof Error / message wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/pipethrough-preventclose-flag": {
     "issue": "1545",
