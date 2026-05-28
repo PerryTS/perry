@@ -11,6 +11,69 @@ use super::search_params::{
     create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER,
 };
 
+fn is_ascii_hex_digit(b: u8) -> bool {
+    b.is_ascii_hexdigit()
+}
+
+fn should_percent_encode_userinfo_byte(b: u8) -> bool {
+    b <= 0x1F
+        || b > 0x7E
+        || matches!(
+            b,
+            b' ' | b'"'
+                | b'#'
+                | b'/'
+                | b':'
+                | b';'
+                | b'<'
+                | b'='
+                | b'>'
+                | b'?'
+                | b'@'
+                | b'['
+                | b'\\'
+                | b']'
+                | b'^'
+                | b'`'
+                | b'{'
+                | b'|'
+                | b'}'
+        )
+}
+
+fn percent_encode_userinfo(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'%'
+            && i + 2 < bytes.len()
+            && is_ascii_hex_digit(bytes[i + 1])
+            && is_ascii_hex_digit(bytes[i + 2])
+        {
+            out.push('%');
+            out.push(bytes[i + 1] as char);
+            out.push(bytes[i + 2] as char);
+            i += 3;
+            continue;
+        }
+        if should_percent_encode_userinfo_byte(b) {
+            out.push_str(&format!("%{b:02X}"));
+        } else {
+            out.push(b as char);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn url_can_have_credentials(url: *mut ObjectHeader) -> bool {
+    let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
+    let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+    !host.is_empty() && protocol != "file:"
+}
+
 /// Create a new URL from a string
 /// js_url_new(url: *mut StringHeader) -> *mut ObjectHeader (URL object)
 #[no_mangle]
@@ -211,10 +274,10 @@ pub extern "C" fn js_url_set_port(url: *mut ObjectHeader, value: *mut crate::Str
 /// `url.username = value` — update userinfo and rebuild href.
 #[no_mangle]
 pub extern "C" fn js_url_set_username(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
-    if url.is_null() {
+    if url.is_null() || !url_can_have_credentials(url) {
         return;
     }
-    let raw = string_header_to_string(value);
+    let raw = percent_encode_userinfo(&string_header_to_string(value));
     unsafe {
         js_object_set_field_f64(url, URL_USERNAME, create_string_f64(&raw));
         rebuild_url_href(url);
@@ -224,10 +287,10 @@ pub extern "C" fn js_url_set_username(url: *mut ObjectHeader, value: *mut crate:
 /// `url.password = value` — update userinfo and rebuild href.
 #[no_mangle]
 pub extern "C" fn js_url_set_password(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
-    if url.is_null() {
+    if url.is_null() || !url_can_have_credentials(url) {
         return;
     }
-    let raw = string_header_to_string(value);
+    let raw = percent_encode_userinfo(&string_header_to_string(value));
     unsafe {
         js_object_set_field_f64(url, URL_PASSWORD, create_string_f64(&raw));
         rebuild_url_href(url);
