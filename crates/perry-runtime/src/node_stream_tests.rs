@@ -1427,6 +1427,45 @@ fn readable_read_default_size_drains_buffer_as_buffer_then_null() {
     });
 }
 
+fn stream_test_buffer_bytes(value: f64) -> Vec<u8> {
+    let len = crate::buffer::js_native_buffer_byte_len(value);
+    let data = crate::buffer::js_native_buffer_data_ptr(value);
+    if data.is_null() || len == 0 {
+        return Vec::new();
+    }
+    unsafe { std::slice::from_raw_parts(data, len).to_vec() }
+}
+
+#[test]
+fn readable_read_with_size_splits_buffer_and_keeps_remainder() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    let _ = js_node_stream_method_push(handle, string_value("abcdef"));
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+    assert_eq!(js_node_stream_method_readable_length(handle), 6.0);
+
+    let first = js_node_stream_method_read(handle, 3.0);
+    assert_eq!(stream_test_buffer_bytes(first), b"abc");
+    assert_eq!(js_node_stream_method_readable_length(handle), 3.0);
+
+    let second = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(second), b"def");
+    assert_eq!(js_node_stream_method_readable_length(handle), 0.0);
+    assert_eq!(
+        js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED)).to_bits(),
+        TAG_NULL
+    );
+
+    let ended = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let ended_handle = raw_ptr_from_value(ended) as i64;
+    let _ = js_node_stream_method_push(ended_handle, string_value("ab"));
+    let _ = js_node_stream_method_push(ended_handle, f64::from_bits(TAG_NULL));
+    let larger_than_remaining = js_node_stream_method_read(ended_handle, 100.0);
+    assert_eq!(stream_test_buffer_bytes(larger_than_remaining), b"ab");
+    assert_eq!(js_node_stream_method_readable_length(ended_handle), 0.0);
+}
+
 #[test]
 fn destroyed_readable_drops_late_push_data() {
     READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());

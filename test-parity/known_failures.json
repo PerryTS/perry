@@ -338,12 +338,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline with intermediate transform doesn't propagate data → end. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/read-with-size": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read(n) doesn't return buffered chunk (push/read pipeline not wired). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/finished/with-options-signal": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -427,12 +421,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: decodeStrings:false option not honored (writes still arrive as Buffer). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/read-larger-than-buffer": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read(n) larger than buffer doesn't return remaining bytes after end. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/wrap-old-stream": {
     "issue": "1532",
@@ -553,12 +541,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/read-zero": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read(0) special case not handled. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/error/error-then-end-order": {
     "issue": "1532",
@@ -829,18 +811,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: reduce(fn) without initial — first item not used as accumulator. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/readable/read-zero-probe": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read(0) probe — does not return null/trigger 'readable' without consuming. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/read-larger-than-buffered": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read(N>buffered) — does not return remaining buffered bytes at EOF. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipeline/async-fn-sink": {
     "issue": "1532",
