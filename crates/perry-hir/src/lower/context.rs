@@ -51,6 +51,7 @@ impl LoweringContext {
             builtin_module_aliases: Vec::new(),
             subns_path_aliases: HashMap::new(),
             type_param_scopes: Vec::new(),
+            type_param_constraints: Vec::new(),
             native_instances: Vec::new(),
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
@@ -126,11 +127,24 @@ impl LoweringContext {
     pub(crate) fn enter_type_param_scope(&mut self, type_params: &[TypeParam]) {
         let scope: HashSet<String> = type_params.iter().map(|p| p.name.clone()).collect();
         self.type_param_scopes.push(scope);
+        // Constraint table mirrors the same scope so `is_type_param(name)`
+        // and `resolve_type_param_constraint(name)` agree on visibility.
+        // Only params with a declared upper bound contribute an entry.
+        let constraints: HashMap<String, perry_types::Type> = type_params
+            .iter()
+            .filter_map(|p| {
+                p.constraint
+                    .as_ref()
+                    .map(|c| (p.name.clone(), (**c).clone()))
+            })
+            .collect();
+        self.type_param_constraints.push(constraints);
     }
 
     /// Exit the current type parameter scope
     pub(crate) fn exit_type_param_scope(&mut self) {
         self.type_param_scopes.pop();
+        self.type_param_constraints.pop();
     }
 
     /// Check if a name is a type parameter in the current scope
@@ -138,6 +152,45 @@ impl LoweringContext {
         self.type_param_scopes
             .iter()
             .any(|scope| scope.contains(name))
+    }
+
+    /// Resolve a type-parameter reference to its declared upper-bound
+    /// constraint, when that constraint is a runtime-meaningful type
+    /// (`String`, `Number`, `Boolean`, `BigInt`, `Array<T>`). Returns
+    /// `None` for parameters with no constraint or with constraints that
+    /// don't usefully narrow the runtime representation (`unknown`/`any`/
+    /// `object`/named-class/union — those keep `TypeVar(T)` so
+    /// monomorphization or downstream native-instance tagging still has
+    /// the chance to substitute a concrete type).
+    ///
+    /// Innermost scope wins (shadowing).
+    pub(crate) fn resolve_type_param_constraint(&self, name: &str) -> Option<perry_types::Type> {
+        for scope in self.type_param_constraints.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                // Only return constraints whose runtime shape is
+                // narrower than `Any`. `String`/`Number`/`Boolean`/
+                // `BigInt` are primitives; `Array<elem>` lets
+                // `<T extends string[]>` propagate to the array fast
+                // path. Anything else (e.g., `T extends SomeClass`,
+                // `T extends "literal"`, intersections) falls back to
+                // the `TypeVar`/`Named` path so existing native-
+                // instance tagging / class-id propagation still work.
+                let useful = matches!(
+                    ty,
+                    perry_types::Type::String
+                        | perry_types::Type::Number
+                        | perry_types::Type::Boolean
+                        | perry_types::Type::BigInt
+                        | perry_types::Type::Array(_)
+                );
+                if useful {
+                    return Some(ty.clone());
+                } else {
+                    return None;
+                }
+            }
+        }
+        None
     }
 
     /// Look up a type alias by name and return its resolved type (if found).

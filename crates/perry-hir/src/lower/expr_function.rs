@@ -33,6 +33,23 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     let func_id = ctx.fresh_func();
     let scope_mark = ctx.enter_scope();
 
+    // Enter a type-parameter scope for arrow generics — `<T extends string>
+    // (self: T) => ...`. Without this scope the `T` reference in `self: T`
+    // never matches `is_type_param` and stays as `Type::Named("T")`, so
+    // the constraint-substitution path in `extract_ts_type_with_ctx` can't
+    // resolve it. Arrows and function expressions aren't monomorphized
+    // (only `FuncRef`-targeted calls go through that pass), so the
+    // un-narrowed param type would be the one codegen lowers — and the
+    // IndexGet fast path keys off the param's static type. Mirrors the
+    // existing `lower_fn_decl` scope-entry. (#321: effect's
+    // `Str.capitalize` / `Capitalize<T>` arrow utilities.)
+    let arrow_type_params = arrow
+        .type_params
+        .as_ref()
+        .map(|tp| crate::lower_types::extract_type_params(tp))
+        .unwrap_or_default();
+    ctx.enter_type_param_scope(&arrow_type_params);
+
     // Track which locals exist before entering the closure scope
     let outer_locals: Vec<(String, LocalId)> = ctx
         .locals
@@ -245,6 +262,11 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     }
 
     ctx.exit_scope(scope_mark);
+
+    // Exit the type-parameter scope opened at the top of `lower_arrow`.
+    // Paired with `enter_type_param_scope` above so nested generic
+    // arrows don't leak outer T/U bindings into sibling code.
+    ctx.exit_type_param_scope();
 
     let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
 

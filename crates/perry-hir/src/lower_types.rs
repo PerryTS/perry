@@ -863,9 +863,34 @@ pub(crate) fn extract_ts_type_with_ctx(
                 }
             };
 
-            // First check if this is a type parameter reference (like T, K, V)
+            // First check if this is a type parameter reference (like T, K, V).
+            //
+            // When the parameter has a runtime-meaningful upper-bound
+            // constraint (`<T extends string>`, `<T extends number>`,
+            // `<T extends string[]>` …) substitute the constraint type
+            // here, so the rest of the lowering + codegen sees the
+            // narrowed runtime type directly. Without this, perry's
+            // codegen `is_string_expr`/`is_array_expr`/`is_numeric_expr`
+            // fast paths don't fire on `<T extends string>(self: T)
+            // => self[0]` and the IndexGet falls through to the
+            // polymorphic-object runtime helper, which reads a
+            // `StringHeader*` as `ArrayHeader*` and returns header
+            // bytes as a subnormal f64 (#321: effect `Str.capitalize`
+            // surfaced as `1.5E-323oo`). Arrow functions and
+            // function-typed-local indirections in particular bypass
+            // generic-call monomorphization entirely, so the
+            // un-substituted body would be the one codegen emits.
+            //
+            // Constraints that don't usefully narrow the runtime
+            // representation (named class, literal type, intersection,
+            // `unknown`/`any`) fall through to `TypeVar(name)` as
+            // before — preserving the existing native-instance tagging
+            // / class-id propagation paths.
             if let Some(context) = ctx {
                 if context.is_type_param(&name) {
+                    if let Some(resolved) = context.resolve_type_param_constraint(&name) {
+                        return resolved;
+                    }
                     return Type::TypeVar(name);
                 }
             }

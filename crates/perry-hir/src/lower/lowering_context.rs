@@ -114,6 +114,27 @@ pub struct LoweringContext {
     pub(crate) builtin_module_aliases: Vec<(String, String)>,
     /// Stack of type parameter scopes (for nested generics)
     pub(crate) type_param_scopes: Vec<HashSet<String>>,
+    /// Stack of type parameter CONSTRAINTS, paired with `type_param_scopes`.
+    /// `type_param_constraints[i]` maps type-parameter name → its declared
+    /// upper-bound constraint (`<T extends string>` → `String`). Used to
+    /// resolve a `Named(T)`/`TypeVar(T)` reference to the *runtime* type
+    /// the value must satisfy, so callers and the body see e.g.
+    /// `Type::String` instead of `Type::Named("T")`.
+    ///
+    /// Why this matters at lowering (not codegen): perry monomorphizes
+    /// `FuncRef`-targeted generic calls (issue #321 scaffolding) but does
+    /// NOT monomorphize closures/arrow functions and does NOT monomorphize
+    /// generic functions reached through a function-typed local. The
+    /// emitted body of such a function therefore lowers `self[0]` (for
+    /// `<T extends string>(self: T)`) with no string-typing on `self`,
+    /// and codegen falls through to `js_object_get_index_polymorphic`
+    /// which reads a `StringHeader*` as `ArrayHeader*` and returns the
+    /// header bytes as a subnormal f64 — surfacing as the `1.5E-323oo`
+    /// pattern in effect's `Str.capitalize`/`Capitalize<T>` utilities.
+    /// Resolving the constraint at the `TsTypeRef` site for `T` makes the
+    /// param type `String` everywhere downstream, so the IndexGet/Member
+    /// fast paths fire.
+    pub(crate) type_param_constraints: Vec<HashMap<String, Type>>,
     /// Native class instances: local_name -> (module_name, class_name)
     /// Tracks variables that hold instances of native module classes (e.g., EventEmitter)
     pub(crate) native_instances: Vec<(String, String, String)>,
