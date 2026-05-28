@@ -222,12 +222,12 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
             f64::from_bits(TAG_TRUE),
         );
         mark_writable_finished(stream);
+        if is_callable_value(callback) {
+            call_listener_args(stream, callback, &[]);
+        }
         let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
         mark_stream_closed(stream);
         let _ = emit_stream_event(stream, string_value(b"close"), &[]);
-    }
-    if is_callable_value(callback) {
-        call_listener_args(stream, callback, &[]);
     }
     f64::from_bits(TAG_UNDEFINED)
 }

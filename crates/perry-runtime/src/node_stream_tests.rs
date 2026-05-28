@@ -19,6 +19,7 @@ thread_local! {
     static STREAM_EVENT_ORDER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static WRITABLE_FINISH_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_CLOSE_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static WRITABLE_END_CALLBACK_SNAPSHOT: RefCell<Option<(usize, usize, bool, bool)>> = const { RefCell::new(None) };
     static WRITABLE_DRAIN_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static PENDING_WRITE_CALLBACK: RefCell<Option<f64>> = const { RefCell::new(None) };
     static TRANSFORM_THIS_HAS_STREAM_STATE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
@@ -205,6 +206,18 @@ extern "C" fn capture_finish_listener(_closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn capture_close_listener(_closure: *const ClosureHeader) -> f64 {
     WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_end_callback_state(closure: *const ClosureHeader) -> f64 {
+    let stream = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let handle = raw_ptr_from_value(stream) as i64;
+    let finish_count = WRITABLE_FINISH_COUNT.with(|count| *count.borrow());
+    let close_count = WRITABLE_CLOSE_COUNT.with(|count| *count.borrow());
+    let finished = js_node_stream_method_writable_finished(handle).to_bits() == TAG_TRUE;
+    let closed = js_node_stream_method_closed(handle).to_bits() == TAG_TRUE;
+    let snapshot = (finish_count, close_count, finished, closed);
+    WRITABLE_END_CALLBACK_SNAPSHOT.with(|value| *value.borrow_mut() = Some(snapshot));
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -1714,6 +1727,52 @@ fn writable_end_waits_for_pending_write_before_finish() {
         let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
     }
     let _ = crate::promise::js_promise_run_microtasks();
+    WRITABLE_FINISH_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    WRITABLE_CLOSE_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+}
+
+#[test]
+fn writable_end_callback_runs_before_finish_and_close_events() {
+    WRITABLE_FINISH_COUNT.with(|count| *count.borrow_mut() = 0);
+    WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() = 0);
+    WRITABLE_END_CALLBACK_SNAPSHOT.with(|snapshot| *snapshot.borrow_mut() = None);
+    PENDING_WRITE_CALLBACK.with(|pending| *pending.borrow_mut() = None);
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    let closure = js_closure_alloc(write_capture_pending as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture_pending as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let finish =
+        box_pointer(js_closure_alloc(capture_finish_listener as *const u8, 0) as *const u8);
+    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
+    let end_cb = js_closure_alloc(capture_end_callback_state as *const u8, 1);
+    js_closure_set_capture_f64(end_cb, 0, stream);
+    let end_cb_value = box_pointer(end_cb as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("finish"), finish);
+    let _ = js_node_stream_method_on(handle, string_value("close"), close);
+
+    let _ = js_node_stream_method_write(handle, string_value("pending"), undefined, undefined);
+    let _ = js_node_stream_method_end3(handle, undefined, undefined, end_cb_value);
+    let _ = crate::promise::js_promise_run_microtasks();
+    WRITABLE_END_CALLBACK_SNAPSHOT.with(|snapshot| assert!(snapshot.borrow().is_none()));
+
+    let cb = PENDING_WRITE_CALLBACK.with(|pending| pending.borrow_mut().take().unwrap());
+    unsafe {
+        let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+    }
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    WRITABLE_END_CALLBACK_SNAPSHOT.with(|snapshot| {
+        assert_eq!(*snapshot.borrow(), Some((0, 0, true, false)));
+    });
     WRITABLE_FINISH_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
     WRITABLE_CLOSE_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
 }

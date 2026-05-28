@@ -1,5 +1,5 @@
 import { Writable } from "node:stream";
-// end(cb) — cb fires after all pending writes flush + finish event.
+// end(cb) — cb fires after pending writes flush, before 'finish' listeners.
 const order: string[] = [];
 const w = new Writable({
   write(_c, _e, cb) {
