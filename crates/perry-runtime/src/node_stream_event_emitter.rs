@@ -219,7 +219,7 @@ fn add_stream_listener_for_event_with_options(
     }
     add_stream_listener(stream, event, cb, once, prepend);
     if super::string_value_eq(event, b"data") {
-        super::schedule_readable_from_drain(stream);
+        super::readable_data_listener_added(stream);
     } else if super::string_value_eq(event, b"readable") {
         super::schedule_readable_event(stream);
     }

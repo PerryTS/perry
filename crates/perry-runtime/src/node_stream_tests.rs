@@ -15,6 +15,8 @@ thread_local! {
     static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static ERROR_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static STREAM_EVENT_ARG_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+    static STREAM_EVENT_ORDER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static WRITABLE_FINISH_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_CLOSE_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_DRAIN_COUNT: RefCell<usize> = const { RefCell::new(0) };
@@ -171,6 +173,26 @@ extern "C" fn capture_end_listener(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn capture_error_listener(_closure: *const ClosureHeader, _err: f64) -> f64 {
     ERROR_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_expected_arg_listener(closure: *const ClosureHeader, arg: f64) -> f64 {
+    let expected = crate::closure::js_closure_get_capture_f64(closure, 0);
+    STREAM_EVENT_ARG_MATCHES.with(|matches| {
+        matches
+            .borrow_mut()
+            .push(arg.to_bits() == expected.to_bits())
+    });
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_pause_listener(_closure: *const ClosureHeader) -> f64 {
+    STREAM_EVENT_ORDER.with(|events| events.borrow_mut().push(b'P'));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_resume_listener(_closure: *const ClosureHeader) -> f64 {
+    STREAM_EVENT_ORDER.with(|events| events.borrow_mut().push(b'R'));
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -378,6 +400,16 @@ fn callable_stream_constructor_autoinstantiates_passthrough() {
     };
     assert_eq!(module, "stream");
     assert_eq!(method, "PassThrough");
+}
+
+#[test]
+fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
+    let dest = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+
+    assert_eq!(ns_pipe1(std::ptr::null(), dest).to_bits(), dest.to_bits());
+    assert!(pipe_destination_is_missing(f64::from_bits(TAG_UNDEFINED)));
+    assert!(pipe_destination_is_missing(f64::from_bits(TAG_NULL)));
+    assert!(!pipe_destination_is_missing(dest));
 }
 
 #[test]
@@ -801,6 +833,199 @@ fn stream_listener_count_and_listeners_reflect_data_end_storage() {
 }
 
 #[test]
+fn pipe_and_unpipe_emit_destination_events_with_source() {
+    STREAM_EVENT_ARG_MATCHES.with(|matches| matches.borrow_mut().clear());
+
+    let src = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let dest = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let dest_handle = raw_ptr_from_value(dest) as i64;
+    let dest_obj = raw_ptr_from_value(dest) as *const ObjectHeader;
+    let pipe = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(src) as *const ObjectHeader,
+        hidden_key(b"pipe"),
+    );
+    let unpipe = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(src) as *const ObjectHeader,
+        hidden_key(b"unpipe"),
+    );
+
+    let pipe_listener = js_closure_alloc(capture_expected_arg_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_expected_arg_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(pipe_listener, 0, src);
+    let listener = box_pointer(pipe_listener as *const u8);
+    let _ = js_node_stream_method_on(dest_handle, string_value("pipe"), listener);
+    let _ = js_node_stream_method_on(dest_handle, string_value("unpipe"), listener);
+
+    let ret = unsafe { crate::closure::js_native_call_value(pipe, [dest].as_ptr(), 1) };
+    assert_eq!(ret.to_bits(), dest.to_bits());
+    assert_eq!(
+        js_object_get_field_by_name_f64(dest_obj, readable_flowing_key()).to_bits(),
+        TAG_NULL
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(
+            raw_ptr_from_value(src) as *const ObjectHeader,
+            readable_flowing_key()
+        )
+        .to_bits(),
+        TAG_TRUE
+    );
+
+    let ret = unsafe { crate::closure::js_native_call_value(unpipe, [dest].as_ptr(), 1) };
+    assert_eq!(ret.to_bits(), src.to_bits());
+    STREAM_EVENT_ARG_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true, true]);
+    });
+}
+
+#[test]
+fn readable_from_pipe_ends_destination() {
+    READABLE_END_COUNT.with(|count| *count.borrow_mut() = 0);
+    READABLE_THIS_MATCHES.with(|matches| matches.borrow_mut().clear());
+
+    let mut arr = crate::array::js_array_alloc(2);
+    arr = crate::array::js_array_push_f64(arr, string_value("a"));
+    arr = crate::array::js_array_push_f64(arr, string_value("b"));
+    let src = js_node_stream_readable_from(box_pointer(arr as *const u8));
+    let dest = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let dest_handle = raw_ptr_from_value(dest) as i64;
+    let pipe = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(src) as *const ObjectHeader,
+        hidden_key(b"pipe"),
+    );
+
+    let data = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(end_closure, 0, dest);
+    let end = box_pointer(end_closure as *const u8);
+    let _ = js_node_stream_method_on(dest_handle, string_value("data"), data);
+    let _ = js_node_stream_method_on(dest_handle, string_value("end"), end);
+
+    let ret = unsafe { crate::closure::js_native_call_value(pipe, [dest].as_ptr(), 1) };
+    assert_eq!(ret.to_bits(), dest.to_bits());
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    READABLE_THIS_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true]);
+    });
+}
+
+#[test]
+fn readable_from_pipe_chain_ends_tail_destination() {
+    READABLE_END_COUNT.with(|count| *count.borrow_mut() = 0);
+    READABLE_THIS_MATCHES.with(|matches| matches.borrow_mut().clear());
+
+    let mut arr = crate::array::js_array_alloc(1);
+    arr = crate::array::js_array_push_f64(arr, string_value("x"));
+    let src = js_node_stream_readable_from(box_pointer(arr as *const u8));
+    let middle = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let sink = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let sink_handle = raw_ptr_from_value(sink) as i64;
+    let src_pipe = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(src) as *const ObjectHeader,
+        hidden_key(b"pipe"),
+    );
+    let middle_pipe = js_object_get_field_by_name_f64(
+        raw_ptr_from_value(middle) as *const ObjectHeader,
+        hidden_key(b"pipe"),
+    );
+
+    let sink_data = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let sink_end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(sink_end_closure, 0, sink);
+    let sink_end = box_pointer(sink_end_closure as *const u8);
+    let _ = js_node_stream_method_on(sink_handle, string_value("data"), sink_data);
+    let _ = js_node_stream_method_on(sink_handle, string_value("end"), sink_end);
+
+    assert_eq!(
+        unsafe { crate::closure::js_native_call_value(src_pipe, [middle].as_ptr(), 1) }.to_bits(),
+        middle.to_bits()
+    );
+    assert_eq!(
+        unsafe { crate::closure::js_native_call_value(middle_pipe, [sink].as_ptr(), 1) }.to_bits(),
+        sink.to_bits()
+    );
+    assert_eq!(
+        js_object_get_field_by_name_f64(
+            raw_ptr_from_value(middle) as *const ObjectHeader,
+            readable_flowing_key()
+        )
+        .to_bits(),
+        TAG_TRUE
+    );
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    READABLE_THIS_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true]);
+    });
+}
+
+#[test]
+fn pause_resume_track_readable_flowing_and_events() {
+    STREAM_EVENT_ORDER.with(|events| events.borrow_mut().clear());
+
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let pause = js_object_get_field_by_name_f64(obj, hidden_key(b"pause"));
+    let resume = js_object_get_field_by_name_f64(obj, hidden_key(b"resume"));
+    let is_paused = js_object_get_field_by_name_f64(obj, hidden_key(b"isPaused"));
+
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        TAG_NULL
+    );
+    assert_eq!(
+        unsafe { crate::closure::js_native_call_value(is_paused, std::ptr::null(), 0) }.to_bits(),
+        TAG_FALSE
+    );
+
+    let data = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let pause_listener =
+        box_pointer(js_closure_alloc(capture_pause_listener as *const u8, 0) as *const u8);
+    let resume_listener =
+        box_pointer(js_closure_alloc(capture_resume_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("pause"), pause_listener);
+    let _ = js_node_stream_method_on(handle, string_value("resume"), resume_listener);
+    let _ = js_node_stream_method_on(handle, string_value("data"), data);
+
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        TAG_TRUE
+    );
+    let ret = unsafe { crate::closure::js_native_call_value(pause, std::ptr::null(), 0) };
+    assert_eq!(ret.to_bits(), stream.to_bits());
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        unsafe { crate::closure::js_native_call_value(is_paused, std::ptr::null(), 0) }.to_bits(),
+        TAG_TRUE
+    );
+    STREAM_EVENT_ORDER.with(|events| assert_eq!(events.borrow().as_slice(), b"P"));
+
+    let ret = unsafe { crate::closure::js_native_call_value(resume, std::ptr::null(), 0) };
+    assert_eq!(ret.to_bits(), stream.to_bits());
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        unsafe { crate::closure::js_native_call_value(is_paused, std::ptr::null(), 0) }.to_bits(),
+        TAG_FALSE
+    );
+    STREAM_EVENT_ORDER.with(|events| assert_eq!(events.borrow().as_slice(), b"P"));
+
+    let _ = crate::promise::js_promise_run_microtasks();
+    STREAM_EVENT_ORDER.with(|events| assert_eq!(events.borrow().as_slice(), b"PR"));
+}
+
+#[test]
 fn readable_push_emits_data_with_stream_this_and_deferred_end() {
     READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
     READABLE_THIS_MATCHES.with(|matches| matches.borrow_mut().clear());
@@ -880,6 +1105,27 @@ fn readable_read_default_size_drains_buffer_as_buffer_then_null() {
 }
 
 #[test]
+fn destroyed_readable_drops_late_push_data() {
+    READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
+
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
+    let data_listener = box_pointer(data_closure as *const u8);
+
+    let _ = js_node_stream_method_on(handle, string_value("data"), data_listener);
+    let _ = js_node_stream_method_destroy(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(
+        js_node_stream_method_push(handle, string_value("late")).to_bits(),
+        TAG_FALSE
+    );
+
+    READABLE_DATA_CAPTURED.with(|captured| assert!(captured.borrow().is_empty()));
+}
+
+#[test]
 fn fresh_streams_expose_destroyed_false() {
     let streams = [
         js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)),
@@ -934,6 +1180,39 @@ fn readable_lifecycle_flags_reflect_ended_state() {
     assert_eq!(
         js_object_get_field_by_name_f64(obj, hidden_key(b"readableEnded")).to_bits(),
         TAG_TRUE
+    );
+}
+
+#[test]
+fn duplex_allow_half_open_defaults_true_and_honors_false_option() {
+    let stream = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"allowHalfOpen")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_allow_half_open(handle).to_bits(),
+        TAG_TRUE
+    );
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"allowHalfOpen"),
+        f64::from_bits(TAG_FALSE),
+    );
+    let stream = js_node_stream_duplex_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"allowHalfOpen")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_allow_half_open(handle).to_bits(),
+        TAG_FALSE
     );
 }
 
@@ -1170,6 +1449,35 @@ fn stream_destroy_with_error_marks_errored_state() {
     assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_FALSE);
     let _ = crate::promise::js_promise_run_microtasks();
     assert_eq!(js_node_stream_is_errored(stream).to_bits(), TAG_TRUE);
+}
+
+#[test]
+fn readable_pause_native_dispatch_returns_stream() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    assert_eq!(
+        js_node_stream_method_pause(handle).to_bits(),
+        stream.to_bits()
+    );
+}
+
+#[test]
+fn readable_exposes_async_dispose_symbol_method() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let async_dispose = crate::symbol::well_known_symbol("asyncDispose");
+    let method = unsafe {
+        crate::symbol::js_object_get_symbol_property(
+            stream,
+            box_pointer(async_dispose as *const u8),
+        )
+    };
+
+    assert!(is_callable_value(method));
+    let result = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
+    assert_ne!(result.to_bits(), TAG_UNDEFINED);
+    assert_eq!(js_node_stream_method_destroyed(handle).to_bits(), TAG_TRUE);
 }
 
 #[test]

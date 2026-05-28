@@ -2504,7 +2504,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Core stream instance stubs used by stream/promises and the
     // Readable/Writable/Duplex/Transform/PassThrough constructor surface.
     method("stream", "read", true, None),
+    method("stream", "pipe", true, None),
+    method("stream", "unpipe", true, None),
+    method("stream", "pause", true, None),
     method("stream", "resume", true, None),
+    method("stream", "isPaused", true, None),
     method("stream", "destroy", true, None),
     method("stream", "write", true, None),
     method("stream", "end", true, None),
@@ -2513,6 +2517,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1539: push() backpressure return + readable/writableHighWaterMark
     // property getters on typed stream instances.
     method("stream", "push", true, None),
+    method("stream", "readableFlowing", true, None),
     method("stream", "readableHighWaterMark", true, None),
     method("stream", "readableLength", true, None),
     method("stream", "readable", true, None),
@@ -2526,6 +2531,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream", "writable", true, None),
     method("stream", "writableEnded", true, None),
     method("stream", "writableFinished", true, None),
+    method("stream", "allowHalfOpen", true, None),
     method("stream", "destroyed", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---

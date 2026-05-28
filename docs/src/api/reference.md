@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1380 entries across 82 modules.
+Total: 1386 entries across 82 modules.
 
 ## Modules
 
@@ -1711,6 +1711,7 @@ Total: 1380 entries across 82 modules.
 
 - `addAbortSignal` — module
 - `addListener` — instance
+- `allowHalfOpen` — instance
 - `closed` — instance
 - `compose` — module
 - `cork` — instance
@@ -1728,6 +1729,7 @@ Total: 1380 entries across 82 modules.
 - `getMaxListeners` — instance
 - `isDisturbed` — module
 - `isErrored` — module
+- `isPaused` — instance
 - `isReadable` — module
 - `isWritable` — module
 - `listenerCount` — instance
@@ -1735,6 +1737,8 @@ Total: 1380 entries across 82 modules.
 - `off` — instance
 - `on` — instance
 - `once` — instance
+- `pause` — instance
+- `pipe` — instance
 - `pipeline` — module
 - `prependListener` — instance
 - `prependOnceListener` — instance
@@ -1744,6 +1748,7 @@ Total: 1380 entries across 82 modules.
 - `readable` — instance
 - `readableAborted` — instance
 - `readableEnded` — instance
+- `readableFlowing` — instance
 - `readableHighWaterMark` — instance
 - `readableLength` — instance
 - `removeAllListeners` — instance
@@ -1753,6 +1758,7 @@ Total: 1380 entries across 82 modules.
 - `setMaxListeners` — instance
 - `toWeb` — module
 - `uncork` — instance
+- `unpipe` — instance
 - `writable` — instance
 - `writableCorked` — instance
 - `writableEnded` — instance
