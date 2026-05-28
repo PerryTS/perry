@@ -35,24 +35,29 @@ Usage
     scripts/node_core_subset.py --root vendor/nodejs --max-per-api 25
     scripts/node_core_subset.py --root vendor/nodejs --api http net --auto-optimize
 
-Feature-gated APIs (#1778)
---------------------------
+Feature-gated APIs (#1778, #2156)
+---------------------------------
 By default the radar compiles with `PERRY_NO_AUTO_OPTIMIZE=1`, a speed hack
 that links the prebuilt full-feature `target/release/libperry_*.a` instead of
 rebuilding a per-program runtime. But Perry's http/net/https/ws *servers*,
 zlib, crypto and async_hooks live in `perry-ext-*` crates / Cargo features
 that are only built + added to the link line by the **auto-optimize** path.
-With that path skipped, those tests compile fine but fail to *link*
-(`Undefined symbols: _js_node_http_create_server`, `_js_net_create_server`,
-…) and get mis-bucketed as `compile-fail` — understating http/net/https/
-zlib/crypto/async_hooks parity (~570 tests in the full sweep).
+With that path skipped, those tests either fail to *link*
+(`Undefined symbols: _js_node_http_create_server`, …) and get mis-bucketed
+as `compile-fail` (#1778), OR — for the symbols compile.rs's stub-generator
+covers — compile *successfully* with a stub returning `undefined`, then
+fail at runtime with `undefined.listen` and land in `runtime-fail` (#2156).
+Both shapes hide real parity for http/https/net/zlib/events (~570 tests in
+the full sweep).
 
-`--auto-optimize` drops `PERRY_NO_AUTO_OPTIMIZE` so each program links the
-ext crates it actually imports, making those APIs measurable. The first
-compile per distinct import-set triggers a cargo rebuild (cached per
-feature-set in `target/perry-auto-<hash>/`), so the per-compile timeout is
-bumped automatically (see `--compile-timeout`). Restrict with `--api` to
-keep the sweep tractable.
+The radar runner therefore enables auto-optimize **per API** for the APIs
+whose well-known binding routes to a `perry-ext-*` crate
+(`_AUTO_OPTIMIZE_APIS` below — currently events / http / https / net / zlib).
+`--auto-optimize` extends that to every API. Either flavour pre-warms the
+ext-crate libs once (kitchen-sink import) so the first per-feature relink in
+the sweep is incremental, and bumps the per-compile timeout to absorb the
+cold cargo build (see `--compile-timeout`). Restrict with `--api` to keep
+the sweep tractable.
 
 See test-compat/node-core/README.md.
 """
@@ -75,6 +80,18 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 NODE_CORE_DIR = REPO_ROOT / "test-compat" / "node-core"
 SHIM_DIR = NODE_CORE_DIR / "shim"
+
+# APIs whose well-known binding (see `crates/perry/well_known_bindings.toml`)
+# routes to a `perry-ext-*` crate. Under PERRY_NO_AUTO_OPTIMIZE the
+# well-known flip is skipped, so symbols from these crates either link-fail
+# (#1778) or fall through to the compile.rs symbol-stub generator and run as
+# `undefined` (#2156). Either way the radar's bucket counts lie. For these
+# APIs the runner drops PERRY_NO_AUTO_OPTIMIZE and pays the per-feature
+# cargo rebuild (cached after the first compile, plus the global prewarm).
+_AUTO_OPTIMIZE_APIS: frozenset[str] = frozenset({
+    "events", "http", "https", "net", "zlib",
+})
+
 
 # Lines that are pure environmental noise from either runtime — stripped
 # before the stdout tiebreak so a warning never registers as a "diff".
@@ -215,12 +232,18 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
+    # Resolve early so the prewarm + timeout decisions cover both the
+    # explicit `--auto-optimize` flag and the per-API auto-route (#2156).
+    apis_pre = args.api or read_api_list(NODE_CORE_DIR / "supported-apis.txt")
+    auto_optimize_apis_in_run = [a for a in apis_pre if a in _AUTO_OPTIMIZE_APIS]
+    auto_optimize_needed = args.auto_optimize or bool(auto_optimize_apis_in_run)
+
     # The cold ext-crate rebuild on the first compile of each distinct
     # import-set can take minutes; without a longer compile budget it would
     # time out and land in compile-fail — the exact mis-bucketing #1778 is
     # about. Per-test execution still uses the tighter --timeout.
     compile_timeout = args.compile_timeout or (
-        max(args.timeout, 600) if args.auto_optimize else args.timeout)
+        max(args.timeout, 600) if auto_optimize_needed else args.timeout)
 
     root = args.root.resolve()
     if not (root / "test" / "parallel").is_dir():
@@ -236,13 +259,18 @@ def main() -> int:
               f"(cargo build --release -p perry)", file=sys.stderr)
         return 2
 
-    apis = args.api or read_api_list(NODE_CORE_DIR / "supported-apis.txt")
+    apis = apis_pre
     pinned = (NODE_CORE_DIR / "pinned-version.txt").read_text().strip()
 
-    if args.auto_optimize and not args.quiet:
-        print(f"  auto-optimize: ON (#1778) — linking per-program perry-ext-* "
-              f"crates; first compile per import-set rebuilds the runtime "
-              f"(compile-timeout={compile_timeout}s).")
+    if not args.quiet:
+        if args.auto_optimize:
+            print(f"  auto-optimize: ON (#1778) — linking per-program perry-ext-* "
+                  f"crates for every API; first compile per import-set rebuilds "
+                  f"the runtime (compile-timeout={compile_timeout}s).")
+        elif auto_optimize_apis_in_run:
+            print(f"  auto-optimize: ON per-API (#2156) for "
+                  f"{', '.join(auto_optimize_apis_in_run)}; "
+                  f"compile-timeout={compile_timeout}s for those APIs.")
 
     base_env = dict(os.environ)
     base_env.update(FORCE_COLOR="0", NO_COLOR="1", NODE_DISABLE_COLORS="1")
@@ -273,14 +301,15 @@ def main() -> int:
         bin_dir = stage / "bin"
         bin_dir.mkdir()
 
-        # #1842: under --auto-optimize, the first compile that needs a given
-        # ext-crate / feature triggers a COLD cargo build of heavy deps
-        # (hyper, tokio, openssl, flate2, ...), which can blow the per-test
-        # compile timeout and mis-bucket real-but-slow http/net/crypto/zlib
-        # tests as compile-fail. Pre-warm ONCE with a kitchen-sink that pulls
-        # in the server/client/crypto/zlib surface, so every subsequent
-        # per-feature relink in the sweep is incremental (fast) — not cold.
-        if args.auto_optimize:
+        # #1842: under auto-optimize (global or per-API #2156), the first
+        # compile that needs a given ext-crate / feature triggers a COLD
+        # cargo build of heavy deps (hyper, tokio, openssl, flate2, …), which
+        # can blow the per-test compile timeout and mis-bucket real-but-slow
+        # http/net/crypto/zlib tests as compile-fail. Pre-warm ONCE with a
+        # kitchen-sink that pulls in the server/client/crypto/zlib surface,
+        # so every subsequent per-feature relink in the sweep is incremental
+        # (fast) — not cold.
+        if auto_optimize_needed:
             warm = parallel_stage / "_prewarm.ts"
             warm.write_text(
                 "import * as http from 'node:http';\n"
@@ -339,22 +368,27 @@ def main() -> int:
                 #    is handled natively now (require/module.exports rewritten
                 #    to ESM); no .ts staging or external rewriter needed.
                 #    By default PERRY_NO_AUTO_OPTIMIZE skips the per-compile
-                #    runtime rebuild for speed, but that also skips linking the
-                #    perry-ext-* server/feature crates — see #1778 and the
-                #    --auto-optimize flag, which leaves it unset so the ext
-                #    crates this program imports actually get linked.
+                #    runtime rebuild for speed, but that also skips linking
+                #    the perry-ext-* server/feature crates — see #1778 and
+                #    the --auto-optimize flag — AND lets compile.rs emit
+                #    `undefined`-returning stubs for ext symbols (#2156). So
+                #    for APIs whose well-known binding routes to an ext crate
+                #    (`_AUTO_OPTIMIZE_APIS`), drop the flag even without
+                #    --auto-optimize so the ext crates this program imports
+                #    actually get linked.
                 #    cwd=bin_dir contains the `.o` litter perry emits.
                 out_bin = bin_dir / (test_name + ".out")
+                effective_ao = args.auto_optimize or (api in _AUTO_OPTIMIZE_APIS)
                 c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1")
-                if not args.auto_optimize:
+                if not effective_ao:
                     c_env["PERRY_NO_AUTO_OPTIMIZE"] = "1"
-                # Under --auto-optimize, compile from the perry workspace so
+                # Under auto-optimize, compile from the perry workspace so
                 # auto-optimize can build/link the perry-ext-* crates (it
                 # locates the workspace via cwd; a temp cwd silently skips the
                 # ext-crate rebuild → link-fail). `.o` litter in the repo root
                 # is gitignored. Without auto-optimize, keep cwd=bin_dir so the
                 # `.o` files stay in the disposable stage dir. #1842.
-                compile_cwd = str(REPO_ROOT) if args.auto_optimize else str(bin_dir)
+                compile_cwd = str(REPO_ROOT) if effective_ao else str(bin_dir)
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged),
                      "-o", str(out_bin)],
@@ -409,6 +443,7 @@ def main() -> int:
         "node_pinned": pinned,
         "node_runtime": run(["node", "--version"], base_env, 10)[1].strip(),
         "auto_optimize": args.auto_optimize,
+        "auto_optimize_per_api": sorted(auto_optimize_apis_in_run),
         "apis": apis,
         "totals": totals,
         "judged": judged,
