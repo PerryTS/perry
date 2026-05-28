@@ -2384,6 +2384,18 @@ fn emit_readable_end_once(stream: f64) {
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
         end_pipe_destinations(stream);
+        // For a Readable-only stream (no writable side), 'close' follows
+        // 'end' — Node's spec emits `close` after the stream's resources
+        // are released. A Duplex defers `close` until BOTH 'end' and
+        // 'finish' have fired; that path is handled separately in the
+        // writable-side `ns_end1` (which also emits `close` after
+        // `finish`). Without this, `Readable.from([...])` never fired
+        // `close`, so `readable.closed` reported `false` after the data
+        // was fully consumed. Refs node-suite/stream/readable/closed-flag.
+        if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
+            mark_stream_closed(stream);
+            let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+        }
     }
 }
 

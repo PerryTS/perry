@@ -112,24 +112,36 @@ pub(crate) fn visit_closure_dynamic_prop_value_slots_mut(
     });
 }
 
-/// Mutable GC scanner for closure dynamic-property side-table metadata.
+/// Mutable GC scanner for the closure dynamic-property side-table.
 ///
-/// The side table is keyed by closure address, but that key is metadata:
-/// it must follow forwarding pointers without itself keeping the closure
-/// alive. Property values are traced from `trace_closure`/copied-minor object
-/// scanning when their owner closure is live; this scanner handles only
-/// post-move key/value fixup and stale-reference verification.
+/// The side table is keyed by closure address. The key itself is metadata
+/// (visited only so a moved closure has its entry re-keyed; the metadata
+/// visitor is a no-op in mark phases), but the **values** are real JS
+/// references that must be marked alive in every phase, just like the
+/// parallel `scan_overflow_fields_roots_mut` (`object/mod.rs`) does for
+/// object overflow fields. #1802: pre-fix this scanner early-returned
+/// unless `is_metadata_rewrite_phase()`, so during `Mark` /
+/// `CopyingMark` the values were never traced, and a closure prop whose
+/// transitive contents were reachable only via the side table (e.g.
+/// ajv's `validate.errors = [{ msg }]`) had its element objects freed
+/// behind the still-live array.
 pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if !visitor.is_metadata_rewrite_phase() {
-        return;
-    }
     let mut moved = Vec::new();
     if let Ok(mut props) = get_closure_props().lock() {
         for (&owner, closure_props) in props.iter_mut() {
+            // Metadata key rewrite. Only fires in rewrite-phase modes;
+            // mark phases return `false` here without recording the key
+            // as a root (so the side-table entry doesn't itself keep
+            // the closure alive — same semantics as overflow-field
+            // metadata, see `visit_metadata_usize_slot`).
             let mut new_owner = owner;
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
                 moved.push((owner, new_owner));
             }
+            // #1802: trace every stored value in every phase. In `Mark`
+            // / `CopyingMark` this keeps `fn.errors = [...]` and its
+            // transitive contents reachable; in rewrite phases it
+            // updates the slot bits when a value was forwarded.
             for value in closure_props.values_mut() {
                 visitor.visit_nanbox_f64_slot(value);
             }
@@ -314,6 +326,51 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         // NaN-box the new closure pointer
         let new_ptr = new_closure as u64;
         f64::from_bits(0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF))
+    }
+}
+
+#[cfg(test)]
+mod tests_1802 {
+    use super::*;
+
+    /// #1802: the side-table values must be visited in mark phases, not
+    /// only during the metadata-rewrite tail. Pre-fix
+    /// `scan_closure_dynamic_props_roots_mut` early-returned unless
+    /// `is_metadata_rewrite_phase()`, so the `for_copy` adapter (which
+    /// wraps a non-rewrite callback) saw nothing — proving the values
+    /// were never traced in `Mark` / `CopyingMark`. With the early-return
+    /// removed, the adapter sees every stored value's bits.
+    #[test]
+    fn dyn_prop_values_are_visited_in_mark_phase() {
+        // A unique synthetic closure address (just an integer key — the
+        // scanner doesn't deref it during value visitation; the
+        // metadata-key visitor is a no-op for non-heap addresses).
+        let owner: usize = 0xC10C_AB1E_0000_1802;
+        let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCC;
+        closure_set_dynamic_prop(owner, "errors", f64::from_bits(value_bits));
+
+        // Copy-mode visitor calls our closure for every nanbox-bits
+        // slot the scanner visits. Pre-fix this produced an empty
+        // `seen` vec because the scanner early-returned.
+        let mut seen: Vec<u64> = Vec::new();
+        {
+            let mut mark = |v: f64| seen.push(v.to_bits());
+            let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
+            scan_closure_dynamic_props_roots_mut(&mut visitor);
+        }
+
+        assert!(
+            seen.contains(&value_bits),
+            "expected stored prop value bits {:x} in seen={:x?} — \
+             scanner did not trace the value during the mark phase",
+            value_bits,
+            seen,
+        );
+
+        // Cleanup so other tests don't see the synthetic entry.
+        if let Ok(mut props) = get_closure_props().lock() {
+            props.remove(&owner);
+        }
     }
 }
 

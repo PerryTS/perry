@@ -73,6 +73,18 @@ fn scan_http_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) 
             }
         }
     });
+
+    // #2154: stored `agent.createConnection` / `.createSocket` closure
+    // pointers. Skip the 0-slot to avoid emitting an invalid root for
+    // agents that haven't had an override assigned.
+    for_each_handle_mut_of::<AgentHandle, _>(|agent| {
+        if agent.create_connection != 0 {
+            visitor.visit_i64_slot(&mut agent.create_connection);
+        }
+        if agent.create_socket != 0 {
+            visitor.visit_i64_slot(&mut agent.create_socket);
+        }
+    });
 }
 
 /// Events that fire on the main thread via js_http_process_pending
@@ -110,14 +122,21 @@ pub struct ClientRequestHandle {
     timeout_ms: Option<u64>,
     /// Whether end() has been called (prevents double-send)
     ended: bool,
+    /// `options.agent` handle (#2154). When non-zero, dispatch reads the
+    /// Agent's `keepAlive` / `maxFreeSockets` / `keepAliveMsecs` and
+    /// folds them into the per-request reqwest::ClientBuilder config so
+    /// pool-related Agent options are honored instead of ignored.
+    agent_handle: Handle,
 }
 
-/// Agent handle — Node's `http.Agent` / `https.Agent`. Perry does not pool
-/// sockets today, so most fields are pure metadata that mirror Node's
-/// defaults; the only behavior tied to them is `getName(options)`, which
-/// real Node tests assert against exact strings.
+/// Agent handle — Node's `http.Agent` / `https.Agent`. Perry's
+/// `http.request` honors the Agent for its connection-pool config
+/// (#2154); the rest of the fields are still pure metadata mirrored
+/// from Node's defaults so `getName(options)` and the property
+/// accessors agree byte-for-byte with Node's `lib/_http_agent.js`.
 ///
-/// Tracker: #2129.
+/// Trackers: #2129 (initial constructor + getName), #2154 (validation
+/// + per-agent client + socket-counter accessors + setters).
 pub struct AgentHandle {
     /// `https.Agent` defaults to `"https:"`, `http.Agent` to `"http:"`.
     /// `null` is a legitimate value (some tests set it explicitly).
@@ -129,6 +148,14 @@ pub struct AgentHandle {
     pub max_free_sockets: f64,
     pub scheduling: String,
     pub timeout_ms: Option<f64>,
+    /// `agent.destroy()` flips this so the `destroyed` accessor mirrors
+    /// Node's getter (#2154).
+    pub destroyed: bool,
+    /// User-supplied `createConnection` override closure pointer (#2154).
+    /// Storage + GC-rooting only today — full happy-path invocation
+    /// needs net.Socket-shaped JS objects and is tracked separately.
+    pub create_connection: i64,
+    pub create_socket: i64,
 }
 
 impl Default for AgentHandle {
@@ -142,6 +169,9 @@ impl Default for AgentHandle {
             max_free_sockets: 256.0,
             scheduling: "lifo".to_string(),
             timeout_ms: None,
+            destroyed: false,
+            create_connection: 0,
+            create_socket: 0,
         }
     }
 }
@@ -412,6 +442,39 @@ unsafe fn extract_string_value(val: f64) -> Option<String> {
 }
 
 // ========================================================================
+// Agent extraction (used by http.request / https.request / http.get)
+// ========================================================================
+
+/// Extract `options.agent` from a NaN-boxed options object. Returns 0
+/// when the field is missing, not a pointer, or doesn't resolve to an
+/// AgentHandle. #2154.
+unsafe fn extract_agent_handle(options_f64: f64) -> Handle {
+    let obj_bits = options_f64.to_bits();
+    let upper = obj_bits >> 48;
+    let obj_ptr = if upper >= 0x7FF8 {
+        (obj_bits & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::ObjectHeader
+    } else if upper == 0 && obj_bits >= 0x10000 {
+        obj_bits as *const perry_runtime::ObjectHeader
+    } else {
+        return 0;
+    };
+    if obj_ptr.is_null() {
+        return 0;
+    }
+    let key = js_string_from_bytes("agent".as_ptr(), 5);
+    let val = js_object_get_field_by_name(obj_ptr, key);
+    if !val.is_pointer() {
+        return 0;
+    }
+    let candidate = (val.bits() & 0x0000_FFFF_FFFF_FFFF) as Handle;
+    if get_handle_mut::<AgentHandle>(candidate).is_some() {
+        candidate
+    } else {
+        0
+    }
+}
+
+// ========================================================================
 // FFI Functions
 // ========================================================================
 
@@ -453,6 +516,7 @@ pub unsafe extern "C" fn js_http_request(options_f64: f64, callback_i64: i64) ->
     }
 
     let timeout_ms = get_object_number_field(options_f64, "timeout").map(|n| n as u64);
+    let agent_handle = extract_agent_handle(options_f64);
 
     register_handle(ClientRequestHandle {
         method,
@@ -463,6 +527,7 @@ pub unsafe extern "C" fn js_http_request(options_f64: f64, callback_i64: i64) ->
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        agent_handle,
     })
 }
 
@@ -499,6 +564,7 @@ pub unsafe extern "C" fn js_https_request(options_f64: f64, callback_i64: i64) -
     }
 
     let timeout_ms = get_object_number_field(options_f64, "timeout").map(|n| n as u64);
+    let agent_handle = extract_agent_handle(options_f64);
 
     register_handle(ClientRequestHandle {
         method,
@@ -509,6 +575,7 @@ pub unsafe extern "C" fn js_https_request(options_f64: f64, callback_i64: i64) -
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        agent_handle,
     })
 }
 
@@ -519,9 +586,9 @@ pub unsafe extern "C" fn js_https_request(options_f64: f64, callback_i64: i64) -
 #[no_mangle]
 pub unsafe extern "C" fn js_http_get(url_or_options_f64: f64, callback_i64: i64) -> Handle {
     ensure_gc_scanner_registered();
-    let (url, headers, timeout_ms) = if is_string_value(url_or_options_f64) {
+    let (url, headers, timeout_ms, agent_handle) = if is_string_value(url_or_options_f64) {
         let url = extract_string_value(url_or_options_f64).unwrap_or_default();
-        (url, HashMap::new(), None)
+        (url, HashMap::new(), None, 0)
     } else {
         // Options object
         let url = build_url_from_options(url_or_options_f64, "http");
@@ -547,8 +614,9 @@ pub unsafe extern "C" fn js_http_get(url_or_options_f64: f64, callback_i64: i64)
         }
 
         let timeout_ms = get_object_number_field(url_or_options_f64, "timeout").map(|n| n as u64);
+        let agent_handle = extract_agent_handle(url_or_options_f64);
 
-        (url, headers, timeout_ms)
+        (url, headers, timeout_ms, agent_handle)
     };
 
     let handle = register_handle(ClientRequestHandle {
@@ -560,6 +628,7 @@ pub unsafe extern "C" fn js_http_get(url_or_options_f64: f64, callback_i64: i64)
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        agent_handle,
     });
 
     // GET auto-calls end()
@@ -573,7 +642,7 @@ pub unsafe extern "C" fn js_http_get(url_or_options_f64: f64, callback_i64: i64)
 #[no_mangle]
 pub unsafe extern "C" fn js_https_get(url_or_options_f64: f64, callback_i64: i64) -> Handle {
     ensure_gc_scanner_registered();
-    let (url, headers, timeout_ms) = if is_string_value(url_or_options_f64) {
+    let (url, headers, timeout_ms, agent_handle) = if is_string_value(url_or_options_f64) {
         let url = extract_string_value(url_or_options_f64).unwrap_or_default();
         // If URL doesn't start with https://, prepend it
         let url = if url.starts_with("http://") || url.starts_with("https://") {
@@ -581,7 +650,7 @@ pub unsafe extern "C" fn js_https_get(url_or_options_f64: f64, callback_i64: i64
         } else {
             format!("https://{}", url)
         };
-        (url, HashMap::new(), None)
+        (url, HashMap::new(), None, 0)
     } else {
         let url = build_url_from_options(url_or_options_f64, "https");
         let mut headers = HashMap::new();
@@ -606,8 +675,9 @@ pub unsafe extern "C" fn js_https_get(url_or_options_f64: f64, callback_i64: i64
         }
 
         let timeout_ms = get_object_number_field(url_or_options_f64, "timeout").map(|n| n as u64);
+        let agent_handle = extract_agent_handle(url_or_options_f64);
 
-        (url, headers, timeout_ms)
+        (url, headers, timeout_ms, agent_handle)
     };
 
     let handle = register_handle(ClientRequestHandle {
@@ -619,6 +689,7 @@ pub unsafe extern "C" fn js_https_get(url_or_options_f64: f64, callback_i64: i64
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        agent_handle,
     });
 
     // GET auto-calls end()
@@ -651,7 +722,7 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
     }
 
     // Extract request data for async task
-    let (method, url, headers, body, timeout_ms) = {
+    let (method, url, headers, body, timeout_ms, agent_pool) = {
         let req = match get_handle_mut::<ClientRequestHandle>(handle) {
             Some(r) => r,
             None => return handle,
@@ -660,25 +731,66 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
             return handle; // Already sent
         }
         req.ended = true;
+        // #2154: pull the Agent's pool config out NOW (still on the main
+        // thread; tokio worker can't safely touch the handle registry).
+        // `(keep_alive, max_free_sockets, keep_alive_msecs)` — None when
+        // the caller didn't pass `options.agent`, in which case we
+        // build a vanilla reqwest::Client below.
+        let agent_pool = if req.agent_handle != 0 {
+            get_handle_mut::<AgentHandle>(req.agent_handle)
+                .map(|a| (a.keep_alive, a.max_free_sockets, a.keep_alive_msecs))
+        } else {
+            None
+        };
         (
             req.method.clone(),
             req.url.clone(),
             req.headers.clone(),
             req.body.clone(),
             req.timeout_ms,
+            agent_pool,
         )
     };
 
     // Spawn async HTTP request
     let req_handle = handle;
     spawn(async move {
-        let client = reqwest::Client::builder();
-        let client = if let Some(timeout) = timeout_ms {
-            client.timeout(std::time::Duration::from_millis(timeout))
+        let mut builder = reqwest::Client::builder();
+        builder = if let Some(timeout) = timeout_ms {
+            builder.timeout(std::time::Duration::from_millis(timeout))
         } else {
-            client.timeout(std::time::Duration::from_secs(30))
+            builder.timeout(std::time::Duration::from_secs(30))
         };
-        let client = match client.build() {
+        // #2154: honor Agent pool config when one is supplied. Without
+        // an Agent we keep the prior vanilla builder (no idle pool
+        // override) — Perry's stdlib http path historically created a
+        // fresh Client per request and we don't want to silently
+        // change that for code that doesn't opt in via options.agent.
+        if let Some((keep_alive, max_free_sockets, keep_alive_msecs)) = agent_pool {
+            let pool_max_idle = if keep_alive {
+                if !max_free_sockets.is_finite() || max_free_sockets > usize::MAX as f64 {
+                    256
+                } else {
+                    max_free_sockets.max(1.0) as usize
+                }
+            } else {
+                0
+            };
+            let idle_timeout = if keep_alive {
+                let ms = if keep_alive_msecs.is_finite() && keep_alive_msecs > 0.0 {
+                    keep_alive_msecs
+                } else {
+                    1000.0
+                };
+                std::time::Duration::from_millis(ms as u64)
+            } else {
+                std::time::Duration::from_millis(0)
+            };
+            builder = builder
+                .pool_max_idle_per_host(pool_max_idle)
+                .pool_idle_timeout(idle_timeout);
+        }
+        let client = match builder.build() {
             Ok(c) => c,
             Err(e) => {
                 push_http_event(PendingHttpEvent::Error {
@@ -1039,6 +1151,48 @@ pub unsafe extern "C" fn js_https_agent_new(options_f64: f64) -> Handle {
     js_http_agent_new_with_protocol(options_f64, b"https:".as_ptr(), 6)
 }
 
+/// #2154: throw `RangeError [ERR_OUT_OF_RANGE]` with Node's exact
+/// message shape — `The value of "<name>" is out of range. It must be
+/// <bound>. Received <received>`. The `assert.throws(..., { code: ... })`
+/// path in test-http-agent-maxtotalsockets.js (and adjacent tests)
+/// reads the `code` property so we need both the RangeError class and
+/// the side-table code registration.
+fn throw_agent_out_of_range(name: &str, bound: &str, received: f64) -> ! {
+    let received_str = if received.is_nan() {
+        "NaN".to_string()
+    } else if received.is_infinite() {
+        if received.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
+    } else if received.fract() == 0.0 && received.abs() < 1e21 {
+        format!("{}", received as i64)
+    } else {
+        format!("{}", received)
+    };
+    let message = format!(
+        "The value of \"{}\" is out of range. It must be {}. Received {}",
+        name, bound, received_str
+    );
+    let msg_ptr = unsafe { js_string_from_bytes(message.as_ptr(), message.len() as u32) };
+    perry_runtime::node_submodules::register_error_code_pub(msg_ptr, "ERR_OUT_OF_RANGE");
+    let err = perry_runtime::error::js_rangeerror_new(msg_ptr);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+fn validate_agent_positive(name: &str, v: f64) {
+    // `+Infinity` is the Node default for maxSockets/maxTotalSockets, so
+    // accept it explicitly even though `v > 0.0` would also pass — keep
+    // the symmetry clear with the ext-http mirror.
+    if v.is_infinite() && v.is_sign_positive() {
+        return;
+    }
+    if v.is_nan() || v <= 0.0 {
+        throw_agent_out_of_range(name, "> 0", v);
+    }
+}
+
 unsafe fn js_http_agent_new_with_protocol(
     options_f64: f64,
     default_protocol_ptr: *const u8,
@@ -1062,19 +1216,21 @@ unsafe fn js_http_agent_new_with_protocol(
 
     if !opts_undef {
         if let Some(v) = get_object_number_field(options_f64, "keepAliveMsecs") {
+            if v.is_nan() || v < 0.0 {
+                throw_agent_out_of_range("keepAliveMsecs", ">= 0", v);
+            }
             agent.keep_alive_msecs = v;
         }
         if let Some(v) = get_object_number_field(options_f64, "maxSockets") {
-            if !v.is_finite() && v.is_sign_positive() {
-                agent.max_sockets = f64::INFINITY;
-            } else {
-                agent.max_sockets = v;
-            }
+            validate_agent_positive("maxSockets", v);
+            agent.max_sockets = v;
         }
         if let Some(v) = get_object_number_field(options_f64, "maxFreeSockets") {
+            validate_agent_positive("maxFreeSockets", v);
             agent.max_free_sockets = v;
         }
         if let Some(v) = get_object_number_field(options_f64, "maxTotalSockets") {
+            validate_agent_positive("maxTotalSockets", v);
             agent.max_total_sockets = v;
         }
         if let Some(v) = get_object_number_field(options_f64, "timeout") {
@@ -1098,6 +1254,18 @@ unsafe fn js_http_agent_new_with_protocol(
             let val = js_object_get_field_by_name(obj_ptr, key);
             if val.is_bool() {
                 agent.keep_alive = val.as_bool();
+            }
+            // #2154: storage for createConnection / createSocket
+            // overrides. GC-rooted via `scan_http_roots_mut` below.
+            for (slot_field, slot) in [
+                ("createConnection", &mut agent.create_connection),
+                ("createSocket", &mut agent.create_socket),
+            ] {
+                let key = js_string_from_bytes(slot_field.as_ptr(), slot_field.len() as u32);
+                let val = js_object_get_field_by_name(obj_ptr, key);
+                if val.is_pointer() {
+                    *slot = (val.bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                }
             }
         }
     }
@@ -1324,6 +1492,137 @@ pub unsafe extern "C" fn js_http_agent_set_protocol(
     }
 }
 
+// #2154: validating setters for the tunable Agent properties. Node lets
+// user code do `agent.maxSockets = 4` and rejects invalid writes with the
+// same RangeError the constructor throws.
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_max_sockets(handle: Handle, value: f64) {
+    validate_agent_positive("maxSockets", value);
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.max_sockets = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_max_free_sockets(handle: Handle, value: f64) {
+    validate_agent_positive("maxFreeSockets", value);
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.max_free_sockets = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_max_total_sockets(handle: Handle, value: f64) {
+    validate_agent_positive("maxTotalSockets", value);
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.max_total_sockets = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_keep_alive_msecs(handle: Handle, value: f64) {
+    if value.is_nan() || value < 0.0 {
+        throw_agent_out_of_range("keepAliveMsecs", ">= 0", value);
+    }
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.keep_alive_msecs = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_keep_alive(handle: Handle, value: f64) {
+    let on = value != 0.0 && !value.is_nan();
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.keep_alive = on;
+    }
+}
+
+/// `agent.destroyed`. Always 0/1 (matches the runtime's number ABI on
+/// the `__get_<prop>` path).
+#[no_mangle]
+pub extern "C" fn js_http_agent_destroyed(handle: Handle) -> f64 {
+    if get_handle_mut::<AgentHandle>(handle)
+        .map(|a| a.destroyed)
+        .unwrap_or(false)
+    {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// `agent.destroy()` — flag the agent as destroyed (so the `destroyed`
+/// getter returns true) and return the handle for chainability.
+#[no_mangle]
+pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.destroyed = true;
+    }
+    handle
+}
+
+/// Allocate a fresh empty JS object — Node returns `{}` from
+/// `agent.sockets` / `.freeSockets` / `.requests` until the agent has
+/// dispatched a request. Returns NaN-boxed pointer bits as `f64`
+/// (same ABI as `__get_protocol` etc. for the codegen-direct dispatch
+/// rows).
+fn empty_object_bits_f64() -> f64 {
+    // `js_object_alloc(num_keys, capacity)` returns an empty object
+    // pointer; the `0,0` shape is reused across allocations.
+    let obj = unsafe { perry_runtime::js_object_alloc(0, 0) };
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_sockets(handle: Handle) -> f64 {
+    let _ = handle;
+    empty_object_bits_f64()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_free_sockets(handle: Handle) -> f64 {
+    let _ = handle;
+    empty_object_bits_f64()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_requests(handle: Handle) -> f64 {
+    let _ = handle;
+    empty_object_bits_f64()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_create_connection(handle: Handle, closure_ptr: i64) {
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.create_connection = closure_ptr;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_create_socket(handle: Handle, closure_ptr: i64) {
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.create_socket = closure_ptr;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_create_connection(handle: Handle) -> i64 {
+    get_handle_mut::<AgentHandle>(handle)
+        .map(|a| a.create_connection)
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_create_socket(handle: Handle) -> i64 {
+    get_handle_mut::<AgentHandle>(handle)
+        .map(|a| a.create_socket)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1341,6 +1640,7 @@ mod tests {
             listeners: req_listeners,
             timeout_ms: None,
             ended: false,
+            agent_handle: 0,
         });
 
         let mut msg_listeners = HashMap::new();

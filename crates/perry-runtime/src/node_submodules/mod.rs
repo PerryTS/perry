@@ -1177,6 +1177,13 @@ mod tests {
     #[test]
     fn stream_promises_finished_resolves_for_clean_stub_stream() {
         let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let end = get_object_property(stream, b"end").expect("stream.end should exist");
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        }
+        crate::object::js_implicit_this_set(prev_this);
+
         let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
         let promise = promise_ptr(promise_value);
 
@@ -1195,6 +1202,26 @@ mod tests {
 
         let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
         let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+        assert_eq!(
+            crate::promise::js_promise_reason(promise).to_bits(),
+            err.to_bits()
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_later_destroy_error() {
+        let stream = crate::node_stream::js_node_stream_readable_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        let err = string_value("later-error");
+        let handle = object_ptr_from_value(stream).expect("stream object") as i64;
+        let _ = crate::node_stream::js_node_stream_method_destroy(handle, err);
+        let _ = crate::promise::js_promise_run_microtasks();
 
         assert_eq!(crate::promise::js_promise_state(promise), 2);
         assert_eq!(

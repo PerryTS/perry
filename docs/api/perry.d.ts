@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1441 entries across 82 modules
+// Coverage: 1490 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -183,6 +183,10 @@ declare module "buffer" {
   export function allocUnsafe(...args: any[]): any;
   /** stdlib */
   export function allocUnsafeSlow(...args: any[]): any;
+  /** stdlib */
+  export function atob(...args: any[]): any;
+  /** stdlib */
+  export function btoa(...args: any[]): any;
   /** stdlib */
   export function byteLength(...args: any[]): any;
   /** stdlib */
@@ -1789,15 +1793,21 @@ declare module "process" {
   /** stdlib */
   export function getgid(...args: any[]): any;
   /** stdlib */
+  export function getgroups(...args: any[]): any;
+  /** stdlib */
   export function getuid(...args: any[]): any;
   /** stdlib */
   export function hrtime(...args: any[]): any;
+  /** stdlib */
+  export function initgroups(...args: any[]): any;
   /** stdlib */
   export function kill(...args: any[]): any;
   /** stdlib */
   export function listenerCount(...args: any[]): any;
   /** stdlib */
   export function listeners(...args: any[]): any;
+  /** stdlib */
+  export function loadEnvFile(...args: any[]): any;
   /** stdlib */
   export function memoryUsage(...args: any[]): any;
   /** stdlib */
@@ -1822,6 +1832,16 @@ declare module "process" {
   export function resourceUsage(...args: any[]): any;
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
+  /** stdlib */
+  export function setegid(...args: any[]): any;
+  /** stdlib */
+  export function seteuid(...args: any[]): any;
+  /** stdlib */
+  export function setgid(...args: any[]): any;
+  /** stdlib */
+  export function setgroups(...args: any[]): any;
+  /** stdlib */
+  export function setuid(...args: any[]): any;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
@@ -2111,6 +2131,12 @@ declare module "validator" {
 }
 
 declare module "worker_threads" {
+  /** stdlib */
+  export const isMainThread: any;
+  /** stdlib */
+  export const resourceLimits: any;
+  /** stdlib */
+  export const threadId: any;
   /** stdlib */
   export function getEnvironmentData(p0: any): any;
   /** stdlib */
