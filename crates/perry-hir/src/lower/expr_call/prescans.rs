@@ -11,7 +11,8 @@ use swc_ecma_ast as ast;
 use crate::ir::Expr;
 use crate::lower_patterns::{
     pre_scan_fastify_handler_params, pre_scan_node_http_client_callback_params,
-    pre_scan_node_http_create_server_params, pre_scan_node_http_upgrade_params,
+    pre_scan_node_http_client_request_socket_params, pre_scan_node_http_create_server_params,
+    pre_scan_node_http_upgrade_params,
 };
 
 use super::super::{try_desugar_reactive_animate, try_desugar_reactive_text, LoweringContext};
@@ -88,6 +89,16 @@ pub(super) fn run_call_prescans(
     // entries in NATIVE_MODULE_TABLE.
     if let Some(ws_id_name) = pre_scan_node_http_upgrade_params(ctx, call) {
         ctx.register_native_instance(ws_id_name, "ws".to_string(), "Client".to_string());
+    }
+
+    // Issue #2211 — `request.on('socket', sock => …)` on a `ClientRequest`
+    // hands the consumer the underlying TCP socket; pre-tag the arrow param
+    // as a `("net", "Socket")` native instance so EventEmitter introspection
+    // (`sock.listeners('timeout')`, `sock.eventNames()`, etc.) inside the
+    // handler dispatches through the class-filtered Socket rows in
+    // NATIVE_MODULE_TABLE.
+    if let Some(sock_name) = pre_scan_node_http_client_request_socket_params(ctx, call) {
+        ctx.register_native_instance(sock_name, "net".to_string(), "Socket".to_string());
     }
 
     // perry/ui reactive Text: `Text(\`...${state.value}...\`)` where at least one

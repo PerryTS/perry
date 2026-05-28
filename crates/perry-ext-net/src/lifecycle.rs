@@ -20,7 +20,7 @@
 //! `NativeModSig` rows live in
 //! `perry-codegen/src/lower_call/native_table/net_events.rs`.
 
-use perry_ffi::{alloc_string, StringHeader};
+use perry_ffi::{alloc_string, ArrayHeader, JsValue, StringHeader};
 use std::collections::HashSet;
 
 use crate::statics;
@@ -223,6 +223,36 @@ fn event_names_json(handle: i64) -> String {
     format!("[{}]", parts.join(","))
 }
 
+/// Issue #2211 — build a JS array of the listener callbacks registered
+/// on `(handle, event)`. Each `cb` slot stores the raw closure pointer
+/// (`*const RawClosureHeader`) cast to `i64`; we NaN-box it back as
+/// POINTER_TAG so the returned array is full of callable JS values.
+/// Both `listeners()` and `rawListeners()` go through this helper — Node
+/// returns the wrapped onceWrapper for `rawListeners` and the unwrapped
+/// callback for `listeners`, but Perry's `once`-listener implementation
+/// drains the entry from the listener vector on first emit (the
+/// once-flag side table is just a removal set), so the wrap/unwrap
+/// distinction never observes a difference for callers that only ask
+/// before any event has fired. Matching Node's "the array is a real
+/// snapshot of current listeners" is what the
+/// `socket.listeners('timeout').length` check needs.
+fn listeners_array_for_event(handle: i64, event: &str) -> *mut ArrayHeader {
+    let snapshot: Vec<i64> = statics::listeners()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&handle).and_then(|p| p.get(event)).cloned())
+        .unwrap_or_default();
+    let mut arr = unsafe { perry_ffi::js_array_alloc(snapshot.len() as u32) };
+    for cb in snapshot {
+        if cb == 0 {
+            continue;
+        }
+        let value = JsValue::from_object_ptr(cb as *mut u8);
+        arr = unsafe { perry_ffi::js_array_push(arr, value) };
+    }
+    arr
+}
+
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -310,6 +340,36 @@ pub unsafe extern "C" fn js_net_socket_event_names(handle: i64) -> *mut StringHe
     alloc_string(&json).as_raw()
 }
 
+/// Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`.
+/// Both return a JS array of the registered callbacks. The codegen
+/// dispatches this through `NR_PTR`, so the raw ArrayHeader pointer is
+/// NaN-boxed with POINTER_TAG and reaches the caller as a real JS array
+/// (length, indexing, iteration). `rawListeners` shares the same impl
+/// because Perry collapses `once`-registered callbacks into the
+/// listener vector — see the helper's doc comment for the
+/// once-wrap/unwrap discussion.
+///
+/// # Safety
+///
+/// `event_ptr` must be null or a Perry-runtime `StringHeader` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64 {
+    let Some(event) = read_event(event_ptr) else {
+        return unsafe { perry_ffi::js_array_alloc(0) } as i64;
+    };
+    listeners_array_for_event(handle, &event) as i64
+}
+
+/// `socket.rawListeners(event)` — see `js_net_socket_listeners`.
+///
+/// # Safety
+///
+/// Same as `js_net_socket_listeners`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64) -> i64 {
+    js_net_socket_listeners(handle, event_ptr)
+}
+
 /// `socket.resetAndDestroy()` — Node treats this as "send RST then
 /// destroy" but exposes the same teardown surface as `destroy()` from
 /// the caller's point of view (the `'close'` event still fires). We
@@ -389,6 +449,31 @@ pub unsafe extern "C" fn js_net_server_event_names(handle: i64) -> *mut StringHe
     alloc_string(&json).as_raw()
 }
 
+/// `server.listeners(event)` — mirror of `js_net_socket_listeners` since
+/// net.Server and net.Socket share the `statics::listeners()` keyed by
+/// handle id. Same NR_PTR/POINTER_TAG return contract.
+///
+/// # Safety
+///
+/// `event_ptr` must be null or a Perry-runtime `StringHeader` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_listeners(handle: i64, event_ptr: i64) -> i64 {
+    let Some(event) = read_event(event_ptr) else {
+        return unsafe { perry_ffi::js_array_alloc(0) } as i64;
+    };
+    listeners_array_for_event(handle, &event) as i64
+}
+
+/// `server.rawListeners(event)` — see `js_net_server_listeners`.
+///
+/// # Safety
+///
+/// Same as `js_net_server_listeners`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_raw_listeners(handle: i64, event_ptr: i64) -> i64 {
+    js_net_server_listeners(handle, event_ptr)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +538,42 @@ mod tests {
         assert_eq!(listener_count_at_handle(handle, "end"), 0.0);
         let no_once_left = statics::once_flags().lock().unwrap().get(&handle).is_none();
         assert!(no_once_left);
+
+        reset_handle(handle);
+    }
+
+    /// Issue #2211 — `listeners_array_for_event` returns an
+    /// ArrayHeader holding one NaN-boxed POINTER_TAG value per
+    /// registered callback. The pointer round-trips bit-exact so the
+    /// runtime sees the closure handle the original `on()` call
+    /// stored.
+    #[test]
+    fn listeners_array_round_trips_callback_pointers() {
+        let handle = -91_237;
+        reset_handle(handle);
+
+        // Use raw pointer-shaped values (high bit clear) — the helper
+        // only re-NaN-boxes them, never dereferences.
+        register_listener_with_flag(handle, "timeout".to_string(), 0x1234, false);
+        register_listener_with_flag(handle, "timeout".to_string(), 0x5678, false);
+
+        let arr = listeners_array_for_event(handle, "timeout");
+        assert!(!arr.is_null());
+        let len = unsafe { (*arr).length };
+        assert_eq!(len, 2);
+
+        let v0 = unsafe { perry_ffi::js_array_get(arr, 0) };
+        let v1 = unsafe { perry_ffi::js_array_get(arr, 1) };
+        assert!(v0.is_pointer());
+        assert!(v1.is_pointer());
+        assert_eq!(v0.as_pointer::<u8>() as usize, 0x1234);
+        assert_eq!(v1.as_pointer::<u8>() as usize, 0x5678);
+
+        // Unknown event name → empty array (zero allocations beyond
+        // the header), not a panic.
+        let empty = listeners_array_for_event(handle, "never");
+        assert!(!empty.is_null());
+        assert_eq!(unsafe { (*empty).length }, 0);
 
         reset_handle(handle);
     }

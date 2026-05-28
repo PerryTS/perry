@@ -582,6 +582,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "removeAllListeners", true, Some("Socket")),
     method("net", "listenerCount", true, Some("Socket")),
     method("net", "eventNames", true, Some("Socket")),
+    // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`.
+    // Returns a real JS array of registered callbacks; the introspection
+    // methods `test-http-agent-*` exercises after `request.on('socket', ...)`.
+    method("net", "listeners", true, Some("Socket")),
+    method("net", "rawListeners", true, Some("Socket")),
     method("net", "resetAndDestroy", true, Some("Socket")),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
@@ -604,6 +609,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "removeAllListeners", true, Some("Server")),
     method("net", "listenerCount", true, Some("Server")),
     method("net", "eventNames", true, Some("Server")),
+    // Issue #2211 — `server.listeners(event)` / `server.rawListeners(event)`,
+    // twin of the Socket entries above (shared handle/listener namespace).
+    method("net", "listeners", true, Some("Server")),
+    method("net", "rawListeners", true, Some("Server")),
     // Issue #811 — IP classification helpers + Happy-Eyeballs default
     // accessors. Pure string/global-flag functions.
     method("net", "isIP", false, None),

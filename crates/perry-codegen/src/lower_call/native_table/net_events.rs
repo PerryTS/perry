@@ -487,6 +487,32 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_OBJ_FROM_JSON_STR,
     },
+    // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`.
+    // Returns a real JS array of registered callbacks; consumers do
+    // `socket.listeners('timeout').length` etc. Returned as NR_PTR so
+    // the runtime ArrayHeader is NaN-boxed POINTER_TAG. Perry collapses
+    // `once` into the listener vector + a removal side-table, so
+    // `listeners` and `rawListeners` share an impl — the onceWrapper
+    // distinction is unobservable to callers that read the array before
+    // any event has fired (which is the shape the radar tests use).
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "listeners",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "rawListeners",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_raw_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
     // Issue #2131 — `socket.resetAndDestroy()` is the "send RST then
     // destroy" variant; we alias to `destroy()` (FIN-then-close) for
     // now since the connected peer treats both as an abrupt close in
@@ -674,6 +700,27 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_net_server_event_names",
         args: &[],
         ret: NR_OBJ_FROM_JSON_STR,
+    },
+    // Issue #2211 — mirror of the Socket listeners/rawListeners surface
+    // for net.Server. Same impl since socket and server handles share
+    // the `statics::listeners()` map keyed by id.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "listeners",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "rawListeners",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_raw_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
     },
     // ========== node:stream — Readable.from(iterable) (#631) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired
