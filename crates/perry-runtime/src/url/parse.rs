@@ -411,6 +411,17 @@ pub(crate) unsafe fn rebuild_url_href(url: *mut ObjectHeader) {
     js_object_set_field_f64(url, URL_HREF, create_string_f64(&href));
 }
 
+pub(crate) unsafe fn rebuild_url_origin(url: *mut ObjectHeader) {
+    let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+    let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
+    let origin = if protocol == "file:" || host.is_empty() {
+        "null".to_string()
+    } else {
+        format!("{}//{}", protocol, host)
+    };
+    js_object_set_field_f64(url, URL_ORIGIN, create_string_f64(&origin));
+}
+
 /// Recompose `host` (`hostname[:port]`) from the URL's `hostname` and `port`
 /// fields, stripping default ports for known hierarchical schemes.
 pub(crate) unsafe fn rebuild_url_host(url: *mut ObjectHeader) {
@@ -433,6 +444,7 @@ pub(crate) unsafe fn rebuild_url_host(url: *mut ObjectHeader) {
         format!("{}:{}", hostname, port)
     };
     js_object_set_field_f64(url, URL_HOST, create_string_f64(&host));
+    rebuild_url_origin(url);
 }
 
 /// Validate that `s` looks like a parseable absolute URL — has a scheme

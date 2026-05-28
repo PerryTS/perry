@@ -11,6 +11,24 @@ use super::search_params::{
     create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER,
 };
 
+fn normalize_hostname_value(raw: &str) -> Option<String> {
+    if raw.is_empty()
+        || raw.chars().any(|c| {
+            c.is_ascii_control()
+                || matches!(
+                    c,
+                    ' ' | '#' | '/' | ':' | '<' | '>' | '?' | '@' | '[' | '\\' | ']' | '^' | '|'
+                )
+        })
+    {
+        return None;
+    }
+    match idna::domain_to_ascii(raw) {
+        Ok(ascii) if !ascii.is_empty() => Some(ascii),
+        _ => None,
+    }
+}
+
 /// Create a new URL from a string
 /// js_url_new(url: *mut StringHeader) -> *mut ObjectHeader (URL object)
 #[no_mangle]
@@ -183,7 +201,9 @@ pub extern "C" fn js_url_set_hostname(url: *mut ObjectHeader, value: *mut crate:
     if url.is_null() {
         return;
     }
-    let raw = string_header_to_string(value);
+    let Some(raw) = normalize_hostname_value(&string_header_to_string(value)) else {
+        return;
+    };
     unsafe {
         js_object_set_field_f64(url, URL_HOSTNAME, create_string_f64(&raw));
         rebuild_url_host(url);
