@@ -1405,6 +1405,19 @@ fn lookup_to_string_tag_hook(class_id: u32) -> Option<usize> {
     reg.as_ref().and_then(|m| m.get(&class_id).copied())
 }
 
+pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
+    if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 {
+        return None;
+    }
+    let kind_probe = stream_handle_kind_probe()?;
+    match unsafe { kind_probe(value as usize) } {
+        1 => Some("ReadableStream"),
+        2 => Some("WritableStream"),
+        5 => Some("TransformStream"),
+        _ => None,
+    }
+}
+
 /// `Object.prototype.toString.call(x)` — returns `[object <tag>]` where
 /// `<tag>` is read from the value's class-level `Symbol.toStringTag` getter
 /// if registered, otherwise `Object` (matching Node for plain objects).
@@ -1437,6 +1450,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     }
     if jsv.is_any_string() {
         let bytes = b"[object String]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if let Some(tag) = web_stream_to_string_tag(value) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
@@ -1770,6 +1789,42 @@ mod tests {
         assert_eq!(f0.as_number(), 123.0);
 
         js_object_free(obj);
+    }
+
+    #[test]
+    fn text_encoding_stream_globals_construct_readable_writable_shape() {
+        unsafe {
+            let global = js_get_global_this();
+            let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
+            assert!(!global_ptr.is_null());
+
+            for ctor_name in ["TextEncoderStream", "TextDecoderStream"] {
+                let ctor_key =
+                    crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
+                let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
+                assert!(
+                    ctor.is_pointer(),
+                    "{ctor_name} should be a closure-backed global"
+                );
+
+                let ctor_ptr = ctor.as_pointer::<crate::closure::ClosureHeader>();
+                assert_eq!((*ctor_ptr).type_tag, crate::closure::CLOSURE_MAGIC);
+
+                let instance =
+                    js_new_function_construct(f64::from_bits(ctor.bits()), std::ptr::null(), 0);
+                for field in ["readable", "writable"] {
+                    let key =
+                        crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+                    let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
+                    let present = js_object_has_property(instance, key_box);
+                    assert_ne!(
+                        crate::value::js_is_truthy(present),
+                        0,
+                        "{ctor_name} instance should expose {field}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

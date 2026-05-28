@@ -488,6 +488,27 @@ fn identify_global_builtin_constructor(func_value: f64) -> Option<&'static str> 
     None
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
+    let stream = js_object_alloc(0, 0);
+    if stream.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    for key_bytes in [b"readable".as_slice(), b"writable".as_slice()] {
+        let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let endpoint = js_object_alloc(0, 0);
+        let value = if endpoint.is_null() {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        } else {
+            crate::value::js_nanbox_pointer(endpoint as i64)
+        };
+        js_object_set_field_by_name(stream, key, value);
+    }
+
+    crate::value::js_nanbox_pointer(stream as i64)
+}
+
 /// Synthetic-anonymous-shape class IDs: classes the HIR generates for
 /// bare object literals (`{ x: 1 }` → `__AnonShape_<hash>`). Instances
 /// of these shapes should report `Object` from `.constructor`, not the
@@ -828,6 +849,9 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let obj = js_object_alloc(0, 0);
                 return crate::value::js_nanbox_pointer(obj as i64);
             }
+            "TextEncoderStream" | "TextDecoderStream" => {
+                return js_text_encoding_stream_new();
+            }
             _ => {}
         }
     }
@@ -1023,11 +1047,12 @@ pub type HandlePropertySetDispatchFn = unsafe extern "C" fn(
 /// fall through to the normal `(number).x is not a function` TypeError.
 pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
 
-/// #1545: classify a numeric Web Streams handle for `instanceof`.
+/// #1545: classify a numeric Web Streams handle for `instanceof` and tags.
 /// Returns 0 = not a stream, 1 = ReadableStream, 2 = WritableStream,
-/// 3 = reader, 4 = writer. Lets `x instanceof ReadableStream` /
-/// `instanceof WritableStream` resolve for numeric stream handles
-/// (`ts.readable`, `rs.pipeThrough(ts)`, …).
+/// 3 = reader, 4 = writer, 5 = TransformStream. Lets `x instanceof
+/// ReadableStream` / `instanceof WritableStream` resolve for numeric stream
+/// handles (`ts.readable`, `rs.pipeThrough(ts)`, …), and lets
+/// `Object.prototype.toString.call(handle)` recover Web stream tags.
 pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
 // Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)

@@ -134,6 +134,8 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "DataView",
     "TextEncoder",
     "TextDecoder",
+    "TextEncoderStream",
+    "TextDecoderStream",
     "URL",
     "URLSearchParams",
     "AbortController",
@@ -196,6 +198,12 @@ extern "C" fn object_prototype_to_string_thunk(
 ) -> f64 {
     use crate::value::JSValue;
     let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    if let Some(tag) = crate::object::web_stream_to_string_tag(f64::from_bits(this_bits)) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+    }
     let this_jsv = JSValue::from_bits(this_bits);
     let tag: &[u8] = if this_jsv.is_undefined() {
         b"[object Undefined]"

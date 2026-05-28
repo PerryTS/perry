@@ -66,6 +66,8 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "BigInt64Array"
             | "BigUint64Array"
             | "Uint8ClampedArray"
+            | "TextEncoderStream"
+            | "TextDecoderStream"
             | "process"
     )
 }

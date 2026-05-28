@@ -1096,6 +1096,13 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("console", "profile") | ("console", "profileEnd") | ("console", "timeStamp") => {
             f64::from_bits(JSValue::undefined().bits())
         }
+        // Classic stream constructors are legacy-callable in Node:
+        // `PassThrough()` behaves like `new PassThrough()`.
+        ("stream", "Readable") => crate::node_stream::js_node_stream_readable_new(arg(0)),
+        ("stream", "Writable") => crate::node_stream::js_node_stream_writable_new(arg(0)),
+        ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
+        ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
+        ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which

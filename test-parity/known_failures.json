@@ -446,12 +446,6 @@
     "category": "bug-open",
     "reason": "node:stream: setEncoding() should return `this` for chaining; Perry returns something else. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/constructor/without-new": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: calling PassThrough() without `new` should auto-instantiate; Perry behavior differs. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/duplex/allow-half-open": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -1052,12 +1046,6 @@
     "category": "bug-open",
     "reason": "node:stream: pause()/resume()/destroy() don't all return `this` — chainability broken on one or more. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/tostring-tag-web-classes": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: ReadableStream/WritableStream/TransformStream lack Symbol.toStringTag — Object.prototype.toString.call() returns '[object Object]'. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/iter-helpers/to-array-erroring": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1093,18 +1081,6 @@
     "added": "2026-05-17",
     "category": "bug-open",
     "reason": "Regression test from #911 (express map undefined / http.METHODS). The METHODS property is now in the manifest (PR adding it alongside this entry); the test may still diverge from Node in the exact METHODS list shape. Re-evaluate once express compiles cleanly."
-  },
-  "test_parity_stream_promises": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "node-suite/stream/imports/promises-ns": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.promises namespace is undefined (used for `await pipeline()` / `await finished()`). Flips to PASS when #1533 lands."
   },
   "node-suite/stream/pipe/returns-destination": {
     "issue": "1532",
@@ -1567,12 +1543,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: promises.finished() — does not reject when stream errors. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/web/text-encoder-stream-exists": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TextEncoderStream/TextDecoderStream globals — not exposed or wrong shape. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/readable/read-multibyte-boundary": {
     "issue": "1532",

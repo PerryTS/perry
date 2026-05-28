@@ -229,6 +229,25 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 }
 
 #[test]
+fn callable_stream_constructor_autoinstantiates_passthrough() {
+    let ctor = crate::object::bound_native_callable_export_value("stream", "PassThrough");
+    let stream = unsafe { crate::closure::js_native_call_value(ctor, std::ptr::null(), 0) };
+
+    assert!(raw_ptr_from_value(stream) >= 0x10000);
+    assert!(get_hidden_value(stream, hidden_readable_flag_key()).is_some());
+    assert!(get_hidden_value(stream, hidden_writable_flag_key()).is_some());
+
+    let constructor =
+        get_hidden_value(stream, hidden_key(b"constructor")).expect("constructor field");
+    let (module, method) = unsafe {
+        crate::object::bound_native_callable_module_and_method(constructor)
+            .expect("bound stream constructor")
+    };
+    assert_eq!(module, "stream");
+    assert_eq!(method, "PassThrough");
+}
+
+#[test]
 fn writable_cork_and_uncork_update_counter_and_return_undefined() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
