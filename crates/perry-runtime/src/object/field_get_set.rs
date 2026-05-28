@@ -907,6 +907,27 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // #2128: a plain JS number value (a finite double or canonical NaN —
+    // anything `JSValue::is_number` returns true for *minus* the raw-I64
+    // pointer convention where top16 == 0) reaches this generic property-get
+    // when codegen lacks static type info — e.g. drizzle's
+    // `buildQueryFromSourceParams` mapping a chunk that happens to be a
+    // bound-param number (`1` row-id, `31` age). Without this guard the
+    // receiver's f64 bits get bit-cast to a pointer and the first downstream
+    // helper that reads a GC header (`is_registered_set` here, `(*obj).field_*`
+    // elsewhere) derefs unmapped memory and SIGSEGVs. Spec: property access
+    // on a primitive number returns undefined for unknown keys (we don't
+    // auto-box to Number.prototype here; that's handled by the method-dispatch
+    // path, not this property-getter slow path). Heap pointers stored as raw
+    // I64 (module-level objects) have top16 == 0 and are preserved by this
+    // check.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        if top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16) {
+            return JSValue::undefined();
+        }
+    }
     // Issue #818 (Effect class-instance pattern): a V8 handle (JS_HANDLE_TAG
     // = 0x7FFB) reaches here when codegen routes a generic `PropertyGet`
     // through this slow path — e.g. `Effect.succeed(42).value` where the
