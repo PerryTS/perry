@@ -20,6 +20,7 @@ mod helpers;
 mod interface_decl;
 mod private_members;
 mod type_alias;
+mod typeof_narrow;
 
 // Explicit named re-exports — glob `pub use foo::*` doesn't transitively
 // expose names through an outer `pub(crate) use crate::lower_decl::*;`
