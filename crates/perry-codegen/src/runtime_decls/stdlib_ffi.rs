@@ -52,6 +52,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_status_code", DOUBLE, &[I64]);
     module.declare_function("js_http_status_message", I64, &[I64]);
 
+    // ========== http.Agent / https.Agent (#2129) ==========
+    module.declare_function("js_http_agent_new", I64, &[DOUBLE]);
+    module.declare_function("js_https_agent_new", I64, &[DOUBLE]);
+    module.declare_function("js_http_agent_get_name", I64, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_noop_self", I64, &[I64]);
+    module.declare_function("js_http_agent_max_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_max_free_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_max_total_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_keep_alive_msecs", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_keep_alive", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_protocol", I64, &[I64]);
+    module.declare_function("js_http_agent_set_protocol", VOID, &[I64, I64]);
+
     // ========== HTTPS ==========
     module.declare_function("js_https_get", I64, &[DOUBLE, I64]);
     module.declare_function("js_https_request", I64, &[DOUBLE, I64]);
@@ -63,7 +76,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // entries in well_known_bindings.toml route imports here.
     // Server / lifecycle:
     module.declare_function("js_node_http_create_server", I64, &[I64]);
-    module.declare_function("js_node_http_server_listen", VOID, &[I64, DOUBLE, I64]);
+    // Returns the server handle so chains like
+    // `createServer(...).listen(...).on(...)` resolve correctly (#2129).
+    module.declare_function("js_node_http_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_http_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http_server_close_all_connections", VOID, &[I64]);
     module.declare_function("js_node_http_server_close_idle_connections", VOID, &[I64]);
@@ -113,13 +128,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_res_on", DOUBLE, &[I64, I64, I64]);
     // node:https server (TLS via rustls):
     module.declare_function("js_node_https_create_server", I64, &[DOUBLE, I64]);
-    module.declare_function("js_node_https_server_listen", VOID, &[I64, DOUBLE, I64]);
+    module.declare_function("js_node_https_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_https_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
     // node:http2 secure server (HTTP/2 with ALPN):
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
-    module.declare_function("js_node_http2_server_listen", VOID, &[I64, DOUBLE, I64]);
+    module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http2_server_on", DOUBLE, &[I64, I64, I64]);

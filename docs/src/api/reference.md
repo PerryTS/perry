@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1395 entries across 82 modules.
+Total: 1404 entries across 82 modules.
 
 ## Modules
 
@@ -743,6 +743,7 @@ Total: 1395 entries across 82 modules.
 
 ### Classes
 
+- `Agent`
 - `ClientRequest`
 - `IncomingMessage`
 - `IncomingMessage`
@@ -753,6 +754,7 @@ Total: 1395 entries across 82 modules.
 
 ### Methods
 
+- `Agent` — module
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
@@ -773,20 +775,24 @@ Total: 1395 entries across 82 modules.
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
 - `addTrailers` — instance *(class: `ServerResponse`)*
+- `close` — instance *(class: `Agent`)*
 - `close` — instance *(class: `HttpServer`)*
 - `closeAllConnections` — instance *(class: `HttpServer`)*
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
 - `createServer` — module
 - `createServer` — module
+- `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `end` — instance *(class: `ServerResponse`)*
 - `flushHeaders` — instance *(class: `ServerResponse`)*
 - `get` — module
 - `getHeader` — instance *(class: `ServerResponse`)*
+- `getName` — instance *(class: `Agent`)*
 - `getStatus` — instance *(class: `ServerResponse`)*
 - `hasHeader` — instance *(class: `ServerResponse`)*
 - `headers` — instance *(class: `IncomingMessage`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
+- `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
 - `method` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `HttpServer`)*
@@ -797,6 +803,7 @@ Total: 1395 entries across 82 modules.
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
 - `resume` — instance *(class: `IncomingMessage`)*
+- `reuseSocket` — instance *(class: `Agent`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
@@ -837,6 +844,7 @@ Total: 1395 entries across 82 modules.
 
 ### Classes
 
+- `Agent`
 - `ClientRequest`
 - `IncomingMessage`
 - `Server`
@@ -845,6 +853,7 @@ Total: 1395 entries across 82 modules.
 
 ### Methods
 
+- `Agent` — module
 - `close` — instance *(class: `HttpsServer`)*
 - `createServer` — module
 - `createServer` — module

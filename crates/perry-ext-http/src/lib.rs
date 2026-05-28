@@ -689,6 +689,210 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
 }
 
 // ------------------------------------------------------------------
+// http.Agent / https.Agent (#2129)
+// ------------------------------------------------------------------
+//
+// Perry doesn't pool sockets today — every `http.request(...)` opens a
+// fresh reqwest connection — so the Agent state below is pure metadata
+// that mirrors Node's defaults. The only method whose output the Node
+// test suite asserts byte-for-byte is `getName(options)`; the rest are
+// chainable no-ops so user code that touches `.destroy()` / `.close()`
+// / `.keepSocketAlive()` keeps working.
+//
+// Mirrors `crates/perry-stdlib/src/http.rs`'s `AgentHandle` so both
+// link targets (well-known flip → ext crate; default `full` build →
+// perry-stdlib's http-client) expose the same surface.
+
+struct AgentHandle {
+    protocol: Option<String>,
+    keep_alive: bool,
+    keep_alive_msecs: f64,
+    max_sockets: f64,
+    max_total_sockets: f64,
+    max_free_sockets: f64,
+    scheduling: String,
+    timeout_ms: Option<f64>,
+}
+
+impl Default for AgentHandle {
+    fn default() -> Self {
+        AgentHandle {
+            protocol: Some("http:".to_string()),
+            keep_alive: false,
+            keep_alive_msecs: 1000.0,
+            max_sockets: f64::INFINITY,
+            max_total_sockets: f64::INFINITY,
+            max_free_sockets: 256.0,
+            scheduling: "lifo".to_string(),
+            timeout_ms: None,
+        }
+    }
+}
+
+unsafe fn agent_new_with_protocol(options_f64: f64, default_protocol: &str) -> Handle {
+    let mut agent = AgentHandle {
+        protocol: Some(default_protocol.to_string()),
+        ..AgentHandle::default()
+    };
+
+    if let Some(opts) = parse_options_object(options_f64) {
+        if let Some(v) = opts.get("keepAlive").and_then(|v| v.as_bool()) {
+            agent.keep_alive = v;
+        }
+        if let Some(v) = opts.get("keepAliveMsecs").and_then(|v| v.as_f64()) {
+            agent.keep_alive_msecs = v;
+        }
+        if let Some(v) = opts.get("maxSockets").and_then(|v| v.as_f64()) {
+            agent.max_sockets = v;
+        }
+        if let Some(v) = opts.get("maxFreeSockets").and_then(|v| v.as_f64()) {
+            agent.max_free_sockets = v;
+        }
+        if let Some(v) = opts.get("maxTotalSockets").and_then(|v| v.as_f64()) {
+            agent.max_total_sockets = v;
+        }
+        if let Some(v) = opts.get("timeout").and_then(|v| v.as_f64()) {
+            agent.timeout_ms = Some(v);
+        }
+        if let Some(v) = opts.get("scheduling").and_then(|v| v.as_str()) {
+            agent.scheduling = v.to_string();
+        }
+    }
+
+    register_handle(agent)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_agent_new(options_f64: f64) -> Handle {
+    agent_new_with_protocol(options_f64, "http:")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_agent_new(options_f64: f64) -> Handle {
+    agent_new_with_protocol(options_f64, "https:")
+}
+
+/// `agent.getName([options])` — Node's canonical key under which sockets
+/// are pooled. Format: `${host}:${port}:${localAddress}` with optional
+/// `:${socketPath}` or `:${family}` appended. Tests assert exact strings
+/// (see `test/parallel/test-http-agent-getname.js`).
+#[no_mangle]
+pub unsafe extern "C" fn js_http_agent_get_name(
+    handle: Handle,
+    options_f64: f64,
+) -> *mut StringHeader {
+    let _ = handle; // name is computed purely from `options`
+    let opts = match parse_options_object(options_f64) {
+        Some(v) => v,
+        None => return alloc_string("localhost::").as_raw(),
+    };
+
+    let host = opts
+        .get("host")
+        .and_then(|v| v.as_str())
+        .unwrap_or("localhost");
+    let port = opts
+        .get("port")
+        .map(|v| {
+            v.as_str()
+                .map(String::from)
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                .or_else(|| v.as_f64().map(|n| (n as i64).to_string()))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let local_address = opts
+        .get("localAddress")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let mut name = format!("{}:{}:{}", host, port, local_address);
+
+    if let Some(socket_path) = opts.get("socketPath").and_then(|v| v.as_str()) {
+        name.push(':');
+        name.push_str(socket_path);
+    } else if let Some(family) = opts.get("family") {
+        // Node only appends family when it is exactly 4 or 6; every
+        // other value (0, null, undefined, strings) is silently dropped.
+        let f = family.as_i64().unwrap_or(0);
+        if f == 4 || f == 6 {
+            name.push(':');
+            name.push_str(&f.to_string());
+        }
+    }
+
+    alloc_string(&name).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
+    handle
+}
+
+fn agent_field<T, F>(handle: Handle, default: T, f: F) -> T
+where
+    F: FnOnce(&AgentHandle) -> T,
+{
+    get_handle_mut::<AgentHandle>(handle)
+        .map(|a| f(a))
+        .unwrap_or(default)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_max_sockets(handle: Handle) -> f64 {
+    agent_field(handle, f64::INFINITY, |a| a.max_sockets)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_max_free_sockets(handle: Handle) -> f64 {
+    agent_field(handle, 256.0, |a| a.max_free_sockets)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_max_total_sockets(handle: Handle) -> f64 {
+    agent_field(handle, f64::INFINITY, |a| a.max_total_sockets)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_keep_alive_msecs(handle: Handle) -> f64 {
+    agent_field(handle, 1000.0, |a| a.keep_alive_msecs)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_keep_alive(handle: Handle) -> f64 {
+    if agent_field(handle, false, |a| a.keep_alive) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_protocol(handle: Handle) -> *mut StringHeader {
+    let s = get_handle_mut::<AgentHandle>(handle)
+        .and_then(|a| a.protocol.clone())
+        .unwrap_or_else(|| "http:".to_string());
+    alloc_string(&s).as_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_agent_set_protocol(
+    handle: Handle,
+    value_ptr: *const StringHeader,
+) {
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        if value_ptr.is_null() {
+            agent.protocol = None;
+        } else {
+            let js = JsString::from_raw(value_ptr as *mut StringHeader);
+            if let Some(s) = perry_ffi::read_string(js) {
+                agent.protocol = Some(s.to_string());
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------
 // FFI: ClientRequest accessors
 // ------------------------------------------------------------------
 

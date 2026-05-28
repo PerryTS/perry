@@ -143,6 +143,23 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_count_queuing_strategy_new",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_byte_length_queuing_strategy_new",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
 
+    // ── #2129: http.Agent / https.Agent ──────────────────────────────
+    // `perry-stdlib::http` (gated behind `http-client`) owns these.
+    // Without the registry entry, a program that does `new http.Agent()`
+    // but never `http.request(...)` could leave the auto-optimize build
+    // stripping `http-client`, breaking the link on agent symbols.
+    ("js_http_agent_new",                           OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_https_agent_new",                          OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_get_name",                      OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_noop_self",                     OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_max_sockets",                   OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_max_free_sockets",              OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_max_total_sockets",             OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_keep_alive_msecs",              OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_keep_alive",                    OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_protocol",                      OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_protocol",                  OwnerKind::Stdlib { feature: Some("http-client") }),
+
     // ── #846: node:http server ───────────────────────────────────────
     // `perry-ext-http-server` defines `js_node_http_*`. It's pulled in
     // transitively via `perry-ext-http` (rlib dep), and the well-known

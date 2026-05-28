@@ -110,7 +110,10 @@ pub extern "C" fn js_node_http_create_server(handler: i64) -> i64 {
 /// bare numeric/options/path first arg, an optional standalone host string,
 /// and the (single) function callback wherever it lands. Issue #2041.
 #[no_mangle]
-pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_array: i64) {
+pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_array: i64) -> i64 {
+    // Returns `server_handle` so `createServer(...).listen(...).on(...)` chains
+    // correctly. Pre-#2129 this was `-> ()` and chained sites broke at runtime
+    // with `undefined.on is not a function`.
     let parsed = crate::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 3000);
@@ -131,7 +134,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         s.request_rx = Some(request_rx);
         s.upgrade_rx = Some(upgrade_rx);
     } else {
-        return;
+        return server_handle;
     }
 
     // Hyper workers queue Rust request handles; JS callbacks run later in
@@ -225,6 +228,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
     // main TS thread inside `event_loop(...)` for the process lifetime,
     // so `await new Promise(r => server.listen(port, r))` never returned
     // → no code after `listen()` ever ran (e.g. axios.get + server.close).
+    server_handle
 }
 
 /// `server.close(cb?)` — drop the shutdown channel, fire `'close'`.

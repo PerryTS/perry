@@ -2663,6 +2663,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),
     class("http", "ServerResponse"),
+    // #2129 — `new http.Agent(options?)`. Construction is unconditional;
+    // method dispatch flows through ("http", "Agent") rows below.
+    class("http", "Agent"),
+    method("http", "Agent", false, None),
+    method("http", "getName", true, Some("Agent")),
+    method("http", "destroy", true, Some("Agent")),
+    method("http", "close", true, Some("Agent")),
+    method("http", "keepSocketAlive", true, Some("Agent")),
+    method("http", "reuseSocket", true, Some("Agent")),
     method("https", "createServer", false, None),
     method("https", "request", false, None),
     method("https", "get", false, None),
@@ -2670,6 +2679,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("https", "ClientRequest"),
     class("https", "IncomingMessage"),
     class("https", "ServerResponse"),
+    // #2129 — `new https.Agent(options?)`. The instance is tagged as
+    // ("http", "Agent") in destructuring/var_decl.rs so it shares the
+    // method surface; only the constructor's default protocol differs.
+    class("https", "Agent"),
+    method("https", "Agent", false, None),
     // --- axios (perry-ext-axios) — the npm `axios` HTTP client surface.
     //     The default export is callable (`axios(config)`); both flow
     //     through perry-ext-axios's `js_axios_*` symbols. ---
