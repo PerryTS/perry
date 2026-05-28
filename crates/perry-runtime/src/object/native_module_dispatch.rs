@@ -896,7 +896,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
-            bool_tag(crate::buffer::is_uint8array_buffer(addr) || typed_kind(arg(0)).is_some())
+            bool_tag(
+                crate::buffer::is_uint8array_buffer(addr)
+                    || crate::buffer::is_data_view(addr)
+                    || typed_kind(arg(0)).is_some(),
+            )
         }
         ("util", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util", "isUint8Array") => {
@@ -935,7 +939,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util.types", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
-            bool_tag(crate::buffer::is_uint8array_buffer(addr) || typed_kind(arg(0)).is_some())
+            bool_tag(
+                crate::buffer::is_uint8array_buffer(addr)
+                    || crate::buffer::is_data_view(addr)
+                    || typed_kind(arg(0)).is_some(),
+            )
         }
         ("util.types", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util.types", "isUint8Array") => {
@@ -951,7 +959,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
         }
         ("util.types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
+        ("util.types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
+        ("util.types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
         ("util.types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
+        ("util.types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
         ("util.types", "isDate") => {
             bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
         }
@@ -987,7 +998,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util/types", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
-            bool_tag(crate::buffer::is_uint8array_buffer(addr) || typed_kind(arg(0)).is_some())
+            bool_tag(
+                crate::buffer::is_uint8array_buffer(addr)
+                    || crate::buffer::is_data_view(addr)
+                    || typed_kind(arg(0)).is_some(),
+            )
         }
         ("util/types", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util/types", "isUint8Array") => {
@@ -1003,7 +1018,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
         }
         ("util/types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
+        ("util/types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
+        ("util/types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
         ("util/types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
+        ("util/types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
         ("util/types", "isDate") => {
             bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
         }

@@ -110,7 +110,11 @@ pub(super) fn lower_builtin_new(
             for a in args.iter().skip(1) {
                 let _ = lower_expr(ctx, a)?;
             }
-            Ok(Some(view_box))
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_data_view_new",
+                &[(DOUBLE, &view_box)],
+            )))
         }
         "RegExp" => {
             let pattern_box = if !args.is_empty() {

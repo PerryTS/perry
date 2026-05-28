@@ -110,7 +110,9 @@ pub extern "C" fn js_util_types_is_any_array_buffer(value: f64) -> f64 {
 pub extern "C" fn js_util_types_is_array_buffer_view(value: f64) -> f64 {
     let addr = jsvalue_addr(value);
     nanbox_bool(
-        crate::buffer::is_uint8array_buffer(addr) || jsvalue_typed_array_kind(value).is_some(),
+        crate::buffer::is_uint8array_buffer(addr)
+            || crate::buffer::is_data_view(addr)
+            || jsvalue_typed_array_kind(value).is_some(),
     )
 }
 
@@ -158,4 +160,19 @@ pub extern "C" fn js_util_types_is_date(value: f64) -> f64 {
 pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
     nanbox_bool(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_proxy(value: f64) -> f64 {
+    nanbox_bool(crate::proxy::js_proxy_is_proxy(value) != 0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_map_iterator(value: f64) -> f64 {
+    nanbox_bool(crate::map::is_registered_map_iterator(jsvalue_addr(value)))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_set_iterator(value: f64) -> f64 {
+    nanbox_bool(crate::set::is_registered_set_iterator(jsvalue_addr(value)))
 }

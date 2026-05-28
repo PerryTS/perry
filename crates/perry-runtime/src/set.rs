@@ -11,6 +11,22 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
+thread_local! {
+    static SET_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+}
+
+fn mark_set_iterator_array(arr: *mut crate::array::ArrayHeader) {
+    if !arr.is_null() {
+        SET_ITERATOR_ARRAYS.with(|r| {
+            r.borrow_mut().insert(arr as usize);
+        });
+    }
+}
+
+pub fn is_registered_set_iterator(addr: usize) -> bool {
+    SET_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -728,7 +744,9 @@ pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::A
             (*result).length = size as u32;
             crate::array::rebuild_array_layout_exact(result);
         }
-        result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
+        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_set_iterator_array(result);
+        result
     }
 }
 

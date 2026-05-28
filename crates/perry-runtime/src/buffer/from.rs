@@ -420,6 +420,20 @@ pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
     buf
 }
 
+/// `new DataView(buffer)` — Perry currently aliases the underlying buffer
+/// storage, so mark that value as a DataView-backed ArrayBufferView.
+#[no_mangle]
+pub extern "C" fn js_data_view_new(value: f64) -> f64 {
+    let v = crate::value::JSValue::from_bits(value.to_bits());
+    if v.is_pointer() {
+        let addr = v.as_pointer::<u8>() as usize;
+        if addr != 0 {
+            mark_as_data_view(addr);
+        }
+    }
+    value
+}
+
 /// Allocate a zero-filled buffer
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc(size: i32, fill: i32) -> *mut BufferHeader {

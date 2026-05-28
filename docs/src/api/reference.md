@@ -1906,10 +1906,13 @@ Total: 1392 entries across 82 modules.
 - `isFloat64Array` — module
 - `isInt32Array` — module
 - `isMap` — module
+- `isMapIterator` — module
 - `isNumberObject` — module
 - `isPromise` — module
+- `isProxy` — module
 - `isRegExp` — module
 - `isSet` — module
+- `isSetIterator` — module
 - `isSharedArrayBuffer` — module
 - `isStringObject` — module
 - `isTypedArray` — module
@@ -2030,4 +2033,3 @@ Total: 1392 entries across 82 modules.
 ### Properties
 
 - `constants`
-

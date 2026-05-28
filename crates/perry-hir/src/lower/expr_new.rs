@@ -677,26 +677,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 return Ok(Expr::TextDecoderNew);
             }
 
-            // Minimal DataView support: Perry currently models ArrayBuffer
-            // storage as the same BufferHeader used by Uint8Array/Buffer.
-            // Treat `new DataView(buffer)` as an alias to that backing value
-            // so BufferSource consumers can read its bytes.
-            if class_name == "DataView" {
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                if let Some(first) = args.into_iter().next() {
-                    return Ok(first);
-                }
-            }
-
             // Handle Uint8Array constructor
             if class_name == "Uint8Array" {
                 // new Uint8Array() or new Uint8Array(length) or new Uint8Array(array)

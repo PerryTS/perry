@@ -14,6 +14,22 @@ use std::ptr;
 /// Must match value.rs TAG_UNDEFINED
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
+thread_local! {
+    static MAP_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+}
+
+fn mark_map_iterator_array(arr: *mut crate::array::ArrayHeader) {
+    if !arr.is_null() {
+        MAP_ITERATOR_ARRAYS.with(|r| {
+            r.borrow_mut().insert(arr as usize);
+        });
+    }
+}
+
+pub fn is_registered_map_iterator(addr: usize) -> bool {
+    MAP_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -1065,6 +1081,7 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
         let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
         crate::array::rebuild_array_layout_exact(result);
 
+        mark_map_iterator_array(result);
         result
     }
 }
@@ -1095,7 +1112,9 @@ pub extern "C" fn js_map_keys(map: *const MapHeader) -> *mut crate::array::Array
             (*result).length = (i + 1) as u32;
         }
 
-        result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
+        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_map_iterator_array(result);
+        result
     }
 }
 
@@ -1125,7 +1144,9 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
             (*result).length = (i + 1) as u32;
         }
 
-        result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
+        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_map_iterator_array(result);
+        result
     }
 }
 

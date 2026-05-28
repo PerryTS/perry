@@ -2357,7 +2357,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isInt32Array", false, None),
     method("util/types", "isFloat64Array", false, None),
     method("util/types", "isMap", false, None),
+    method("util/types", "isMapIterator", false, None),
+    method("util/types", "isProxy", false, None),
     method("util/types", "isSet", false, None),
+    method("util/types", "isSetIterator", false, None),
     method("util/types", "isDate", false, None),
     method("util/types", "isRegExp", false, None),
     // Boxed primitive introspection (PR #1257). The `util/types` import form

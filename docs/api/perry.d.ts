@@ -2049,13 +2049,19 @@ declare module "util/types" {
   /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
+  export function isMapIterator(...args: any[]): any;
+  /** stdlib */
   export function isNumberObject(...args: any[]): any;
   /** stdlib */
   export function isPromise(...args: any[]): any;
   /** stdlib */
+  export function isProxy(...args: any[]): any;
+  /** stdlib */
   export function isRegExp(...args: any[]): any;
   /** stdlib */
   export function isSet(...args: any[]): any;
+  /** stdlib */
+  export function isSetIterator(...args: any[]): any;
   /** stdlib */
   export function isSharedArrayBuffer(...args: any[]): any;
   /** stdlib */
@@ -2226,4 +2232,3 @@ declare module "zlib" {
   /** stdlib */
   export function unzipSync(p0: string): any;
 }
-
