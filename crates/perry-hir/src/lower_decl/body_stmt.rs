@@ -754,7 +754,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         }
         ast::Stmt::Try(try_stmt) => {
             // try body is its own lexical scope
-            let body = lower_block_stmt_scoped(ctx, &try_stmt.block)?;
+            let previous_optional_require_try_depth = ctx.optional_require_try_depth;
+            ctx.optional_require_try_depth = previous_optional_require_try_depth.saturating_add(1);
+            let body_result = lower_block_stmt_scoped(ctx, &try_stmt.block);
+            ctx.optional_require_try_depth = previous_optional_require_try_depth;
+            let body = body_result?;
 
             // Lower catch clause (if present)
             let catch = if let Some(ref catch_clause) = try_stmt.handler {

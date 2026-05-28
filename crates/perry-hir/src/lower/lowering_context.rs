@@ -410,4 +410,11 @@ pub struct LoweringContext {
     /// `@perryts/redis` deliberately use `require(literal)` to defer
     /// cycle-breaking imports inside method bodies that may never execute.
     pub(crate) is_external_module: bool,
+    /// Depth of nested `try { ... }` bodies currently being lowered.
+    /// Optional platform modules in Electron-style code commonly use
+    /// `try { var x = require("native-addon") } catch {}`. Let those sites
+    /// lower to the existing runtime failure path so the catch block can
+    /// observe the failure instead of rejecting the whole user source at
+    /// compile time. Outside try blocks, `require(literal)` still hard-errors.
+    pub(crate) optional_require_try_depth: u32,
 }

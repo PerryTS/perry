@@ -36,6 +36,7 @@ pub(super) fn try_require_literal_bail(ctx: &LoweringContext, call: &ast::CallEx
             // unknown-callee path) until we wire up real `require(literal)`
             // lowering.
             if !ctx.is_external_module
+                && ctx.optional_require_try_depth == 0
                 && ident.sym.as_ref() == "require"
                 && ctx.lookup_local("require").is_none()
                 && ctx.lookup_func("require").is_none()

@@ -109,6 +109,7 @@ impl LoweringContext {
             object_static_method_aliases: HashMap::new(),
             is_entry_module: false,
             is_external_module: false,
+            optional_require_try_depth: 0,
         }
     }
 
