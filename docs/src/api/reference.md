@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1461 entries across 82 modules.
+Total: 1480 entries across 82 modules.
 
 ## Modules
 
@@ -765,33 +765,45 @@ Total: 1461 entries across 82 modules.
 - `__get_freeSockets` — instance *(class: `Agent`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
+- `__get_headersTimeout` — instance *(class: `HttpServer`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
 - `__get_keepAlive` — instance *(class: `Agent`)*
 - `__get_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__get_keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `__get_maxFreeSockets` — instance *(class: `Agent`)*
+- `__get_maxHeadersCount` — instance *(class: `HttpServer`)*
+- `__get_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `__get_maxSockets` — instance *(class: `Agent`)*
 - `__get_maxTotalSockets` — instance *(class: `Agent`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
 - `__get_protocol` — instance *(class: `Agent`)*
+- `__get_requestTimeout` — instance *(class: `HttpServer`)*
 - `__get_requests` — instance *(class: `Agent`)*
 - `__get_sockets` — instance *(class: `Agent`)*
 - `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
 - `__get_statusMessage` — instance *(class: `IncomingMessage`)*
+- `__get_timeout` — instance *(class: `HttpServer`)*
 - `__get_trailers` — instance *(class: `IncomingMessage`)*
 - `__get_url` — instance *(class: `IncomingMessage`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
 - `__set_createConnection` — instance *(class: `Agent`)*
 - `__set_createSocket` — instance *(class: `Agent`)*
+- `__set_headersTimeout` — instance *(class: `HttpServer`)*
 - `__set_keepAlive` — instance *(class: `Agent`)*
 - `__set_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__set_keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `__set_maxFreeSockets` — instance *(class: `Agent`)*
+- `__set_maxHeadersCount` — instance *(class: `HttpServer`)*
+- `__set_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `__set_maxSockets` — instance *(class: `Agent`)*
 - `__set_maxTotalSockets` — instance *(class: `Agent`)*
 - `__set_protocol` — instance *(class: `Agent`)*
+- `__set_requestTimeout` — instance *(class: `HttpServer`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
+- `__set_timeout` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
@@ -815,12 +827,16 @@ Total: 1461 entries across 82 modules.
 - `getStatus` — instance *(class: `ServerResponse`)*
 - `hasHeader` — instance *(class: `ServerResponse`)*
 - `headers` — instance *(class: `IncomingMessage`)*
+- `headersTimeout` — instance *(class: `HttpServer`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
 - `keepAlive` — instance *(class: `Agent`)*
 - `keepAliveMsecs` — instance *(class: `Agent`)*
+- `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
 - `maxFreeSockets` — instance *(class: `Agent`)*
+- `maxHeadersCount` — instance *(class: `HttpServer`)*
+- `maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `maxSockets` — instance *(class: `Agent`)*
 - `maxTotalSockets` — instance *(class: `Agent`)*
 - `method` — instance *(class: `IncomingMessage`)*
@@ -832,15 +848,18 @@ Total: 1461 entries across 82 modules.
 - `read` — instance *(class: `IncomingMessage`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
+- `requestTimeout` — instance *(class: `HttpServer`)*
 - `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
 - `reuseSocket` — instance *(class: `Agent`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
+- `setTimeout` — instance *(class: `HttpServer`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
 - `sockets` — instance *(class: `Agent`)*
 - `statusCode` — instance *(class: `IncomingMessage`)*
 - `statusMessage` — instance *(class: `IncomingMessage`)*
+- `timeout` — instance *(class: `HttpServer`)*
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `write` — instance *(class: `ServerResponse`)*

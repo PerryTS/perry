@@ -3137,6 +3137,39 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (`js_node_http_server_address_json`) but missing from both
     // `NATIVE_MODULE_TABLE` and the manifest.
     method("http", "address", true, Some("HttpServer")),
+    // Issue #2210 — `server.<name>` timeout/socket-option accessors,
+    // plus the canonical `server.setTimeout(ms, cb)` method. Each
+    // accessor has two manifest entries (`__get_<name>` HIR-rewrite +
+    // bare-name fallback for receivers that escape the rewrite).
+    method("http", "__get_headersTimeout", true, Some("HttpServer")),
+    method("http", "__set_headersTimeout", true, Some("HttpServer")),
+    method("http", "headersTimeout", true, Some("HttpServer")),
+    method("http", "__get_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__set_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__get_requestTimeout", true, Some("HttpServer")),
+    method("http", "__set_requestTimeout", true, Some("HttpServer")),
+    method("http", "requestTimeout", true, Some("HttpServer")),
+    method("http", "__get_timeout", true, Some("HttpServer")),
+    method("http", "__set_timeout", true, Some("HttpServer")),
+    method("http", "timeout", true, Some("HttpServer")),
+    method("http", "__get_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "__set_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "maxHeadersCount", true, Some("HttpServer")),
+    method(
+        "http",
+        "__get_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method(
+        "http",
+        "__set_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method("http", "maxRequestsPerSocket", true, Some("HttpServer")),
+    method("http", "setTimeout", true, Some("HttpServer")),
     method("http", "on", true, Some("IncomingMessage")),
     method("http", "addListener", true, Some("IncomingMessage")),
     method("http", "pause", true, Some("IncomingMessage")),

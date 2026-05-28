@@ -456,24 +456,30 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     },
     // ========== node:http server (issue #577) ==========
     // Module-level: `import { createServer } from "node:http"; createServer(handler)`
+    // Issue #2210 — accepts an optional 2nd `options` arg (Node 18.4+):
+    //   `createServer(handler, { headersTimeout, keepAliveTimeout, ... })`
+    // The runtime distinguishes the no-args / handler-only / handler+opts
+    // cases by the JsValue tag on the second arg (UNDEFINED vs pointer);
+    // a 0-arg call leaves both NA_PTR / NA_JSV slots as `undefined`.
     NativeModSig {
         module: "http",
         has_receiver: false,
         method: "createServer",
         class_filter: None,
-        runtime: "js_node_http_create_server",
-        args: &[NA_PTR],
+        runtime: "js_node_http_create_server_with_options",
+        args: &[NA_PTR, NA_JSV],
         ret: NR_PTR,
     },
     // `http.Server(handler)` is Node's callable-constructor alias for
     // `http.createServer` (works with or without `new`). #2132.
+    // Same `(handler, options?)` shape as `createServer` above (#2210).
     NativeModSig {
         module: "http",
         has_receiver: false,
         method: "Server",
         class_filter: None,
-        runtime: "js_node_http_create_server",
-        args: &[NA_PTR],
+        runtime: "js_node_http_create_server_with_options",
+        args: &[NA_PTR, NA_JSV],
         ret: NR_PTR,
     },
     // HttpServer instance methods (class_filter: HttpServer)
@@ -556,6 +562,189 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         runtime: "js_node_http_server_address_json",
         args: &[],
         ret: NR_OBJ_FROM_JSON_STR,
+    },
+    // Issue #2210 — `server.<name>` timeout / socket-option accessors.
+    // The HIR rewrites `server.headersTimeout` reads / writes to
+    // `__get_headersTimeout` / `__set_headersTimeout` synthetic methods
+    // when the receiver is tagged as `("http", "HttpServer")`; bare-name
+    // fallback rows also wired so receivers that escape the HIR-rewrite
+    // (e.g. assigned through a local before the property access) still
+    // hit the FFI.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_headersTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_headers_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_headersTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_headers_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_keepAliveTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_keep_alive_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_keepAliveTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_keep_alive_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_requestTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_request_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_requestTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_request_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_timeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_idle_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_timeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_idle_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_maxHeadersCount",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_headers_count",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_maxHeadersCount",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_max_headers_count",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_maxRequestsPerSocket",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_requests_per_socket",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_maxRequestsPerSocket",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_max_requests_per_socket",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // Bare-name dispatch — same FFI, covers receivers that escape the
+    // `__get_<name>` HIR rewrite (e.g. assigned through a local).
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "headersTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_headers_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "keepAliveTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_keep_alive_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "requestTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_request_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "timeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_idle_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "maxHeadersCount",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_headers_count",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "maxRequestsPerSocket",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_requests_per_socket",
+        args: &[],
+        ret: NR_F64,
+    },
+    // `server.setTimeout(msecs, [callback])` — the canonical
+    // EventEmitter-style setter mirrors `socket.setTimeout`. The
+    // callback (if supplied) is registered as a `'timeout'` listener.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "setTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_timeout_method",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
     },
     // IncomingMessage instance methods
     NativeModSig {

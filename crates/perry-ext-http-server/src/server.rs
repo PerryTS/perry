@@ -56,6 +56,59 @@ pub struct HttpServer {
     /// the WebSocket handshake completes. Drained alongside
     /// `request_rx` in `event_loop`.
     pub upgrade_rx: Option<mpsc::Receiver<HttpPendingUpgrade>>,
+    /// Issue #2210 — Node 18.4+ timeout knobs surfaced as both
+    /// `createServer(handler, options)` and `server.<name>` property
+    /// setters. Phase 1: store the values and read them back; the
+    /// hyper accept-loop wiring (Phase 2) is the follow-up tracked in
+    /// the same ticket.
+    ///
+    /// Defaults mirror Node's `lib/_http_server.js`:
+    ///   - `headersTimeout`: 60_000 ms
+    ///   - `keepAliveTimeout`: 5_000 ms
+    ///   - `requestTimeout`: 300_000 ms
+    ///   - `timeout` (idle): 0 (disabled)
+    ///   - `maxHeadersCount`: 2000
+    ///   - `maxRequestsPerSocket`: 0 (no limit)
+    ///   - `noDelay`: true (Node toggled the default in 21.0)
+    ///   - `keepAlive`: false
+    ///   - `keepAliveInitialDelay`: 0 ms
+    pub headers_timeout: f64,
+    pub keep_alive_timeout: f64,
+    pub request_timeout: f64,
+    pub idle_timeout: f64,
+    pub max_headers_count: f64,
+    pub max_requests_per_socket: f64,
+    pub no_delay: bool,
+    pub keep_alive: bool,
+    pub keep_alive_initial_delay: f64,
+}
+
+impl HttpServer {
+    /// Build a new `HttpServer` with all Node 18.4+ timeout defaults.
+    /// Keeps the field list off the `register_handle` call sites so a
+    /// future field addition doesn't require updating every constructor
+    /// (https / http2 / test fixtures).
+    pub fn with_handler(handler: i64) -> Self {
+        Self {
+            handler,
+            listeners: HashMap::new(),
+            bound_port: 0,
+            bound_host: String::new(),
+            listening: false,
+            shutdown_tx: None,
+            request_rx: None,
+            upgrade_rx: None,
+            headers_timeout: 60_000.0,
+            keep_alive_timeout: 5_000.0,
+            request_timeout: 300_000.0,
+            idle_timeout: 0.0,
+            max_headers_count: 2000.0,
+            max_requests_per_socket: 0.0,
+            no_delay: true,
+            keep_alive: false,
+            keep_alive_initial_delay: 0.0,
+        }
+    }
 }
 
 /// Pending request from the hyper service fn to the main thread.
@@ -87,16 +140,164 @@ pub struct HttpPendingUpgrade {
 #[no_mangle]
 pub extern "C" fn js_node_http_create_server(handler: i64) -> i64 {
     ensure_gc_scanner_registered();
-    register_handle(HttpServer {
-        handler,
-        listeners: HashMap::new(),
-        bound_port: 0,
-        bound_host: String::new(),
-        listening: false,
-        shutdown_tx: None,
-        request_rx: None,
-        upgrade_rx: None,
-    })
+    register_handle(HttpServer::with_handler(handler))
+}
+
+/// Issue #2210 — `http.createServer(handler, options)` (Node 18.4+).
+/// `options_f64` is the NaN-boxed options object (`undefined` /
+/// `TAG_UNDEFINED` for the no-arg overload). Reads the timeout knobs
+/// off the object and stores them on the new `HttpServer`. The
+/// argument-order overload `createServer(options, handler)` is
+/// resolved at the dispatch shim — see `lower_http_create_server` in
+/// perry-codegen which normalizes both shapes to `(handler, options)`
+/// before the FFI call.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_create_server_with_options(
+    handler: i64,
+    options_f64: f64,
+) -> i64 {
+    ensure_gc_scanner_registered();
+    let mut server = HttpServer::with_handler(handler);
+    apply_server_options(&mut server, options_f64);
+    register_handle(server)
+}
+
+/// Read each Node-documented timeout/socket knob off the options
+/// object and overwrite the server's default. Missing keys leave the
+/// default in place; non-numeric values silently no-op (matches
+/// Node, which coerces or ignores most invalid types).
+///
+/// Uses the same JSON-round-trip pattern as `extract_port`/`extract_host`
+/// in `types.rs` so we don't introduce a second runtime-object-read API
+/// surface — keeps the crate independent of perry-runtime's internal
+/// ObjectHeader layout.
+fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
+    use perry_ffi::JsValue;
+    let v = JsValue::from_bits(options_f64.to_bits());
+    if !v.is_pointer() {
+        return;
+    }
+    let Some(json) = perry_ffi::json_stringify(v) else {
+        return;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return;
+    };
+    let as_num = |key: &str| -> Option<f64> {
+        parsed
+            .get(key)
+            .and_then(|v| v.as_f64())
+            .filter(|n| !n.is_nan())
+    };
+    let as_bool = |key: &str| -> Option<bool> { parsed.get(key).and_then(|v| v.as_bool()) };
+
+    if let Some(v) = as_num("headersTimeout") {
+        server.headers_timeout = v;
+    }
+    if let Some(v) = as_num("keepAliveTimeout") {
+        server.keep_alive_timeout = v;
+    }
+    if let Some(v) = as_num("requestTimeout") {
+        server.request_timeout = v;
+    }
+    if let Some(v) = as_num("timeout") {
+        server.idle_timeout = v;
+    }
+    if let Some(v) = as_num("maxHeadersCount") {
+        server.max_headers_count = v;
+    }
+    if let Some(v) = as_num("maxRequestsPerSocket") {
+        server.max_requests_per_socket = v;
+    }
+    if let Some(v) = as_num("keepAliveInitialDelay") {
+        server.keep_alive_initial_delay = v;
+    }
+    if let Some(v) = as_bool("noDelay") {
+        server.no_delay = v;
+    }
+    if let Some(v) = as_bool("keepAlive") {
+        server.keep_alive = v;
+    }
+}
+
+// ============================================================================
+// Issue #2210 — server.<timeout> property accessors
+// ============================================================================
+//
+// Six numeric knobs (`headersTimeout`, `keepAliveTimeout`,
+// `requestTimeout`, `timeout`, `maxHeadersCount`, `maxRequestsPerSocket`)
+// plus the `setTimeout(ms, cb?)` instance method. Phase 1 stores +
+// reads back; Phase 2 (hyper connection-builder + per-request deadline)
+// is the follow-up tracked in #2210. The getter/setter naming follows
+// the existing `__get_<prop>` / `__set_<prop>` convention from the
+// Agent and ServerResponse rows in `native_table/http.rs`.
+
+macro_rules! server_getter {
+    ($name:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $name(handle: i64) -> f64 {
+            get_handle::<HttpServer>(handle)
+                .map(|s| s.$field)
+                .unwrap_or(0.0)
+        }
+    };
+}
+
+macro_rules! server_setter {
+    ($name:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $name(handle: i64, value: f64) -> f64 {
+            if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+                s.$field = value;
+            }
+            value
+        }
+    };
+}
+
+server_getter!(js_node_http_server_headers_timeout, headers_timeout);
+server_setter!(js_node_http_server_set_headers_timeout, headers_timeout);
+server_getter!(js_node_http_server_keep_alive_timeout, keep_alive_timeout);
+server_setter!(
+    js_node_http_server_set_keep_alive_timeout,
+    keep_alive_timeout
+);
+server_getter!(js_node_http_server_request_timeout, request_timeout);
+server_setter!(js_node_http_server_set_request_timeout, request_timeout);
+server_getter!(js_node_http_server_idle_timeout, idle_timeout);
+server_setter!(js_node_http_server_set_idle_timeout, idle_timeout);
+server_getter!(js_node_http_server_max_headers_count, max_headers_count);
+server_setter!(js_node_http_server_set_max_headers_count, max_headers_count);
+server_getter!(
+    js_node_http_server_max_requests_per_socket,
+    max_requests_per_socket
+);
+server_setter!(
+    js_node_http_server_set_max_requests_per_socket,
+    max_requests_per_socket
+);
+
+/// `server.setTimeout(msecs, [callback])` — the canonical EventEmitter-
+/// style setter. The callback (if provided) is registered as a
+/// `'timeout'` listener; we store the raw closure handle and let the
+/// existing listener-firing path emit it once Phase 2 wires up the
+/// idle-detector. Returns the server handle for chaining.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_set_timeout_method(
+    handle: i64,
+    msecs: f64,
+    callback: i64,
+) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        s.idle_timeout = msecs;
+        if callback != 0 {
+            s.listeners
+                .entry("timeout".to_string())
+                .or_default()
+                .push(callback);
+        }
+    }
+    handle
 }
 
 /// `server.listen(port?, host?, backlog?, cb?)` — bind + start accepting.

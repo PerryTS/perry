@@ -957,7 +957,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("ServerResponse", "statusCode")
                             | ("ServerResponse", "headersSent")
                             | ("ServerResponse", "writableEnded")
-                            | ("ServerResponse", "writableFinished") => {
+                            | ("ServerResponse", "writableFinished")
+                            // Issue #2210 — `server.headersTimeout` etc.
+                            // get rewritten to `__get_<name>` so the read
+                            // dispatches through the per-prop FFI in
+                            // perry-ext-http-server (Phase 1 returns the
+                            // stored numeric default; Phase 2 will reflect
+                            // the live hyper accept-loop state).
+                            | ("HttpServer", "headersTimeout")
+                            | ("HttpServer", "keepAliveTimeout")
+                            | ("HttpServer", "requestTimeout")
+                            | ("HttpServer", "timeout")
+                            | ("HttpServer", "maxHeadersCount")
+                            | ("HttpServer", "maxRequestsPerSocket") => {
                                 format!("__get_{}", property_name)
                             }
                             _ => property_name,
