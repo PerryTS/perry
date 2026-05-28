@@ -1262,6 +1262,68 @@ name = "native_pod_layout_constants_checksum"
 contains = "native_pod_layout_constants:55"
 detail = "POD layout constants preserve native-arena packet checksum"
 
+[workloads.native_memory_bulk_fill]
+source = "benchmarks/compiler_output/fixtures/native_memory_bulk_fill.ts"
+kind = "native_memory_bulk_fill"
+allow_hot_loop_conversions = true
+
+[workloads.native_memory_bulk_fill.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: bulk NativeMemory fixture gates memset/memmove codegen, not vectorization"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.native_memory_bulk_fill.runtime_budgets]
+allocations_traced = 0
+gc_collections_traced = 0
+write_barriers_static = 0
+write_barriers_traced = 0
+boxed_number_allocations_static = 0
+buffer_slow_path_accesses_static = 0
+
+[[workloads.native_memory_bulk_fill.stdout_checks]]
+name = "native_memory_bulk_fill_checksum"
+contains = "native_memory_bulk_fill:471"
+detail = "NativeMemory.fillU32 and copy preserve packet checksum"
+
+[workloads.native_memory_bulk_fill.native_rep_checks]
+allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_bounds"]
+
+[[workloads.native_memory_bulk_fill.native_rep_checks.require_records]]
+name = "native_memory_fill_u32_memset"
+source_function = "nativeMemoryBulkFill"
+expr_kind = "NativeMemoryFillU32"
+consumer = "NativeMemoryFillU32.memset_zero"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_bulk_fill.native_rep_checks.require_records]]
+name = "native_memory_copy_dst_memmove"
+source_function = "nativeMemoryBulkFill"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.dst.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
+[[workloads.native_memory_bulk_fill.native_rep_checks.require_records]]
+name = "native_memory_copy_src_memmove"
+source_function = "nativeMemoryBulkFill"
+expr_kind = "NativeMemoryCopy"
+consumer = "NativeMemoryCopy.src.memmove"
+native_rep_name = "buffer_view"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+
 [workloads.native_abi_packet_typed]
 source = "benchmarks/compiler_output/fixtures/native_abi_packet_typed.ts"
 kind = "native_abi_packet_typed"

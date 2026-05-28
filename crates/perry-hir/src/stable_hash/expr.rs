@@ -300,6 +300,8 @@ impl SH for Expr {
             Expr::NativeArenaView { owner, kind, byte_offset, length } => { tag(h, 11238); owner.as_ref().hash(h); kind.hash(h); byte_offset.as_ref().hash(h); length.as_ref().hash(h); }
             Expr::NativePodView { owner, byte_offset, count } => { tag(h, 11241); owner.as_ref().hash(h); byte_offset.as_ref().hash(h); count.as_ref().hash(h); }
             Expr::NativeArenaDispose(e) => { tag(h, 11242); e.as_ref().hash(h); }
+            Expr::NativeMemoryFillU32 { view, value } => { tag(h, 11243); view.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::NativeMemoryCopy { dst, src } => { tag(h, 11244); dst.as_ref().hash(h); src.as_ref().hash(h); }
             Expr::ChildProcessExecSync { command, options } => { tag(h, 236); command.as_ref().hash(h); options.hash(h); }
             Expr::ChildProcessSpawnSync { command, args, options, } => { tag(h, 237); command.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessSpawn { command, args, options, } => { tag(h, 238); command.as_ref().hash(h); args.hash(h); options.hash(h); }

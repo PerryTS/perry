@@ -221,6 +221,101 @@ pub unsafe fn typed_array_bytes_mut<'a>(ta: *mut TypedArrayHeader) -> Option<&'a
     Some(std::slice::from_raw_parts_mut(data, len))
 }
 
+#[cold]
+fn throw_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+unsafe fn strict_typed_array_from_raw(
+    raw: u64,
+    expected_kind: Option<u8>,
+    message: &[u8],
+) -> *mut TypedArrayHeader {
+    let addr = strip_nanbox(raw);
+    if addr < 0x1000 {
+        throw_type_error(message);
+    }
+    let Some(kind) = lookup_typed_array_kind(addr) else {
+        throw_type_error(message);
+    };
+    if expected_kind.is_some_and(|expected| kind != expected) {
+        throw_type_error(message);
+    }
+    let ta = addr as *mut TypedArrayHeader;
+    if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
+        crate::native_arena::validate_view_alive(
+            crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
+        );
+    }
+    ta
+}
+
+unsafe fn typed_array_raw_bytes(ta: *const TypedArrayHeader) -> (*const u8, usize) {
+    let data = data_ptr(ta);
+    let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
+    if len == 0 {
+        return (ptr::NonNull::<u8>::dangling().as_ptr(), 0);
+    }
+    if data.is_null() {
+        throw_type_error(b"Expected typed array");
+    }
+    (data, len)
+}
+
+unsafe fn typed_array_raw_bytes_mut(ta: *mut TypedArrayHeader) -> (*mut u8, usize) {
+    let data = data_ptr_mut(ta);
+    let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
+    if len == 0 {
+        return (ptr::NonNull::<u8>::dangling().as_ptr(), 0);
+    }
+    if data.is_null() {
+        throw_type_error(b"Expected typed array");
+    }
+    (data, len)
+}
+
+unsafe fn native_memory_copy_src_bytes(raw: u64) -> (*const u8, usize) {
+    let addr = strip_nanbox(raw);
+    if lookup_typed_array_kind(addr).is_some() {
+        let ta =
+            strict_typed_array_from_raw(raw, None, b"NativeMemory.copy expects typed array views");
+        return typed_array_raw_bytes(ta);
+    }
+    if addr >= 0x1000
+        && crate::buffer::is_registered_buffer(addr)
+        && crate::buffer::is_uint8array_buffer(addr)
+    {
+        let buffer = addr as *const crate::buffer::BufferHeader;
+        return (
+            crate::buffer::buffer_data(buffer),
+            (*buffer).length as usize,
+        );
+    }
+    throw_type_error(b"NativeMemory.copy expects typed array views");
+}
+
+unsafe fn native_memory_copy_dst_bytes(raw: u64) -> (*mut u8, usize) {
+    let addr = strip_nanbox(raw);
+    if lookup_typed_array_kind(addr).is_some() {
+        let ta =
+            strict_typed_array_from_raw(raw, None, b"NativeMemory.copy expects typed array views");
+        return typed_array_raw_bytes_mut(ta);
+    }
+    if addr >= 0x1000
+        && crate::buffer::is_registered_buffer(addr)
+        && crate::buffer::is_uint8array_buffer(addr)
+    {
+        let buffer = addr as *mut crate::buffer::BufferHeader;
+        return (
+            crate::buffer::buffer_data_mut(buffer),
+            (*buffer).length as usize,
+        );
+    }
+    throw_type_error(b"NativeMemory.copy expects typed array views");
+}
+
 fn ta_layout(capacity: u32, elem_size: usize) -> Layout {
     let total = std::mem::size_of::<TypedArrayHeader>() + (capacity as usize) * elem_size;
     let total = total.max(std::mem::size_of::<TypedArrayHeader>() + elem_size);
@@ -428,6 +523,32 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
 }
 
 // ---------- FFI ----------
+
+#[no_mangle]
+pub extern "C" fn js_native_memory_fill_u32(view_raw: u64, value: f64) {
+    unsafe {
+        let view = strict_typed_array_from_raw(
+            view_raw,
+            Some(KIND_UINT32),
+            b"NativeMemory.fillU32 expects a Uint32Array view",
+        );
+        let (data, len) = typed_array_raw_bytes_mut(view);
+        let word_count = len / std::mem::size_of::<u32>();
+        let value = jsvalue_to_f64(value) as i64 as u32;
+        for i in 0..word_count {
+            *(data as *mut u32).add(i) = value;
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_native_memory_copy(dst_raw: u64, src_raw: u64) {
+    unsafe {
+        let (dst_data, dst_len) = native_memory_copy_dst_bytes(dst_raw);
+        let (src_data, src_len) = native_memory_copy_src_bytes(src_raw);
+        ptr::copy(src_data, dst_data, dst_len.min(src_len));
+    }
+}
 
 /// Allocate a typed array of `length` elements, all zero.
 #[no_mangle]

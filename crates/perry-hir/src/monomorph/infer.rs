@@ -118,6 +118,8 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         // Void always returns undefined
         Expr::Void(_) => Some(Type::Void),
 
+        Expr::NativeMemoryFillU32 { .. } | Expr::NativeMemoryCopy { .. } => Some(Type::Void),
+
         // InstanceOf always returns boolean
         Expr::InstanceOf { .. } => Some(Type::Boolean),
 

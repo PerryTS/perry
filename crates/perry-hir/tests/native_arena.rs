@@ -43,6 +43,8 @@ fn expr_any(expr: &Expr, pred: &impl Fn(&Expr) -> bool) -> bool {
             byte_offset,
             count,
         } => expr_any(owner, pred) || expr_any(byte_offset, pred) || expr_any(count, pred),
+        Expr::NativeMemoryFillU32 { view, value } => expr_any(view, pred) || expr_any(value, pred),
+        Expr::NativeMemoryCopy { dst, src } => expr_any(dst, pred) || expr_any(src, pred),
         Expr::Call { callee, args, .. } => {
             expr_any(callee, pred) || args.iter().any(|arg| expr_any(arg, pred))
         }
@@ -269,6 +271,75 @@ fn native_arena_public_api_respects_shadowing() {
             | Expr::NativePodView { .. }
             | Expr::NativeArenaDispose(_)
     )));
+}
+
+#[test]
+fn native_memory_public_api_lowers_direct_global_calls() {
+    let module = lower_src(
+        r#"
+        const arena = NativeArena.alloc(64);
+        const words = arena.view(Uint32Array, 0, 16);
+        const dst = new Uint32Array(16);
+        NativeMemory.fillU32(words, 0);
+        NativeMemory.copy(dst, words);
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    assert!(module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeMemoryFillU32 { .. }
+    )));
+    assert!(module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeMemoryCopy { .. }
+    )));
+}
+
+#[test]
+fn native_memory_public_api_respects_shadowing() {
+    let module = lower_src(
+        r#"
+        const NativeMemory: any = { fillU32: () => 1, copy: () => 2 };
+        const words = new Uint32Array(4);
+        NativeMemory.fillU32(words, 0);
+        NativeMemory.copy(words, words);
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    assert!(!module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeMemoryFillU32 { .. } | Expr::NativeMemoryCopy { .. }
+    )));
+}
+
+#[test]
+fn native_memory_public_api_rejects_spread_and_wrong_arity() {
+    let spread_err = lower_src(
+        r#"
+        const words = new Uint32Array(4);
+        const args: any = [words, 0];
+        NativeMemory.fillU32(...args);
+        "#,
+    )
+    .expect_err("spread should fail lowering");
+    assert!(
+        spread_err.contains("NativeMemory.fillU32(view, value) does not accept spread arguments"),
+        "unexpected error: {spread_err}"
+    );
+
+    let arity_err = lower_src(
+        r#"
+        const words = new Uint32Array(4);
+        NativeMemory.copy(words);
+        "#,
+    )
+    .expect_err("wrong arity should fail lowering");
+    assert!(
+        arity_err.contains("NativeMemory.copy(dst, src) expects exactly two arguments"),
+        "unexpected error: {arity_err}"
+    );
 }
 
 #[test]

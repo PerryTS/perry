@@ -11,7 +11,7 @@
 //! gets garbage back (see anvil README §48 bug hunt).
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
 
 mod arrays;
 mod objects;

@@ -596,6 +596,62 @@ mod tests {
     }
 
     #[test]
+    fn native_memory_fill_u32_handles_heap_and_native_views() {
+        let heap = typedarray::typed_array_alloc(typedarray::KIND_UINT32, 4);
+        crate::typedarray::js_native_memory_fill_u32(heap as u64, 0xAABB_CCDDu32 as f64);
+        for i in 0..4 {
+            assert_eq!(
+                crate::typedarray::js_typed_array_get(heap, i),
+                0xAABB_CCDDu32 as f64
+            );
+        }
+
+        let owner = js_native_arena_alloc(16);
+        let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT32 as i32, 4, 2);
+        crate::typedarray::js_native_memory_fill_u32(view as u64, 7.0);
+        unsafe {
+            assert_eq!(*((*owner).data.add(4) as *const u32), 7);
+            assert_eq!(*((*owner).data.add(8) as *const u32), 7);
+        }
+        js_native_arena_dispose(owner as u64);
+    }
+
+    #[test]
+    fn native_memory_copy_uses_raw_overlap_safe_bytes() {
+        let owner = js_native_arena_alloc(8);
+        let src = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 0, 6);
+        let dst = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 2, 6);
+        unsafe {
+            for i in 0..8 {
+                *(*owner).data.add(i) = (i + 1) as u8;
+            }
+        }
+
+        crate::typedarray::js_native_memory_copy(dst as u64, src as u64);
+
+        unsafe {
+            let bytes = std::slice::from_raw_parts((*owner).data, 8);
+            assert_eq!(bytes, &[1, 2, 1, 2, 3, 4, 5, 6]);
+        }
+        js_native_arena_dispose(owner as u64);
+    }
+
+    #[test]
+    fn native_memory_helpers_validate_kind_and_dispose() {
+        let bytes = typedarray::typed_array_alloc(typedarray::KIND_UINT8, 4);
+        assert!(catch_runtime_throw(|| {
+            crate::typedarray::js_native_memory_fill_u32(bytes as u64, 0.0);
+        }));
+
+        let owner = js_native_arena_alloc(8);
+        let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 0, 8);
+        js_native_arena_dispose(owner as u64);
+        assert!(catch_runtime_throw(|| {
+            crate::typedarray::js_native_memory_copy(view as u64, view as u64);
+        }));
+    }
+
+    #[test]
     fn random_fill_sync_native_uint8_view_preserves_metadata() {
         let owner = js_native_arena_alloc(96);
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 8, 64);

@@ -681,6 +681,7 @@ entry:
         self.assertIn("raw_numeric_object_fields", spec["workloads"])
         self.assertIn("scalar_replacement_literals", spec["workloads"])
         self.assertIn("native_pod_layout_constants", spec["workloads"])
+        self.assertIn("native_memory_bulk_fill", spec["workloads"])
         self.assertIn("native_abi_packet_typed", spec["workloads"])
         self.assertIn("native_abi_packet_control", spec["workloads"])
         self.assertTrue(spec["workloads"]["fma_contract"]["fma_gate"]["enabled"])

@@ -12,6 +12,7 @@ type PerryF64 = number & { readonly __perryF64?: never };
 type PerryBufferLen = number & { readonly __perryBufferLen?: never };
 type PerryHandleId = number & { readonly __perryHandleId?: never };
 type PerryPod<T> = T & { readonly __perryPod?: never };
+type NativeMemoryTypedView = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array;
 declare function sizeof<T extends PerryPod<any>>(): number;
 declare function alignof<T extends PerryPod<any>>(): number;
 declare function offsetof<T extends PerryPod<any>>(field: string): number;
@@ -46,6 +47,11 @@ interface NativeArenaConstructor {
   alloc(byteLength: number): NativeArena;
 }
 declare const NativeArena: NativeArenaConstructor;
+interface NativeMemoryConstructor {
+  fillU32(view: Uint32Array, value: number): void;
+  copy(dst: NativeMemoryTypedView, src: NativeMemoryTypedView): void;
+}
+declare const NativeMemory: NativeMemoryConstructor;
 
 declare module "@perryts/pdf" {
   /** stdlib */

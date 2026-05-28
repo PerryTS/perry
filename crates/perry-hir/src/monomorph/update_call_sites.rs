@@ -593,6 +593,7 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
         Expr::Bool(_) => Some(Type::Boolean),
         Expr::Null => Some(Type::Null),
         Expr::Undefined => Some(Type::Void),
+        Expr::NativeMemoryFillU32 { .. } | Expr::NativeMemoryCopy { .. } => Some(Type::Void),
         Expr::BigInt(_) => Some(Type::BigInt),
 
         Expr::Array(elems) => {

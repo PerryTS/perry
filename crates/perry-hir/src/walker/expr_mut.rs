@@ -347,6 +347,16 @@ where
             f(count);
         }
 
+        Expr::NativeMemoryFillU32 { view, value } => {
+            f(view);
+            f(value);
+        }
+
+        Expr::NativeMemoryCopy { dst, src } => {
+            f(dst);
+            f(src);
+        }
+
         Expr::UrlSearchParamsForEach {
             params,
             callback,

@@ -49,6 +49,7 @@ mod helpers;
 mod i32_fast_path;
 mod index;
 mod nanbox_inline;
+mod native_memory;
 mod native_record;
 mod object_literal;
 mod pod_layout_constants;
@@ -1555,6 +1556,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArrayKeys(..)
         | Expr::ArrayValues(..)
         | Expr::ClassRef(..) => arrays_finds::lower(ctx, expr),
+        Expr::NativeMemoryFillU32 { .. } | Expr::NativeMemoryCopy { .. } => {
+            native_memory::lower(ctx, expr)
+        }
         Expr::CallSpread { .. } => call_spread::lower(ctx, expr),
         Expr::MathFround(..)
         | Expr::MapNewFromArray(..)

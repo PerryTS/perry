@@ -92,6 +92,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.bswap.i16", I16, &[I16]);
     module.declare_function("llvm.bswap.i32", I32, &[I32]);
     module.declare_function("llvm.bswap.i64", I64, &[I64]);
+    module.declare_function("llvm.memset.p0.i64", VOID, &[PTR, I8, I64, I1]);
+    module.declare_function("llvm.memmove.p0.p0.i64", VOID, &[PTR, PTR, I64, I1]);
     // Keep js_math_pow for now — Math.pow has overflow / NaN
     // semantics that the libm pow doesn't quite match.
 
@@ -1086,6 +1088,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, I64],
     );
     module.declare_function("js_native_arena_dispose", VOID, &[I64]);
+    module.declare_function("js_native_memory_fill_u32", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_native_memory_copy", VOID, &[I64, I64]);
     module.declare_function("js_typed_array_to_reversed", I64, &[I64]);
     module.declare_function("js_typed_array_to_sorted_default", I64, &[I64]);
     module.declare_function("js_typed_array_to_sorted_with_comparator", I64, &[I64, I64]);

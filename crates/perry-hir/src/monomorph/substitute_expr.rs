@@ -76,6 +76,14 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             ty: substitute_type(ty, substitutions),
             field_path: field_path.clone(),
         },
+        Expr::NativeMemoryFillU32 { view, value } => Expr::NativeMemoryFillU32 {
+            view: Box::new(substitute_expr(view, substitutions)),
+            value: Box::new(substitute_expr(value, substitutions)),
+        },
+        Expr::NativeMemoryCopy { dst, src } => Expr::NativeMemoryCopy {
+            dst: Box::new(substitute_expr(dst, substitutions)),
+            src: Box::new(substitute_expr(src, substitutions)),
+        },
 
         // References
         Expr::FuncRef(id) => Expr::FuncRef(*id),

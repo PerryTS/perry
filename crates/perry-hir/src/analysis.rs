@@ -1222,6 +1222,14 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(byte_offset, assigned);
             collect_assigned_locals_expr(count, assigned);
         }
+        Expr::NativeMemoryFillU32 { view, value } => {
+            collect_assigned_locals_expr(view, assigned);
+            collect_assigned_locals_expr(value, assigned);
+        }
+        Expr::NativeMemoryCopy { dst, src } => {
+            collect_assigned_locals_expr(dst, assigned);
+            collect_assigned_locals_expr(src, assigned);
+        }
         // Dynamic env access
         Expr::EnvGetDynamic(key) => {
             collect_assigned_locals_expr(key, assigned);

@@ -820,6 +820,104 @@ fn pod_layout_constants_reject_missing_field_path() {
 }
 
 #[test]
+fn native_memory_fill_u32_zero_uses_memset_fast_path() {
+    let body = vec![
+        native_arena_owner_let(1, "arena", int(64), false),
+        native_arena_view_let(
+            2,
+            "words",
+            1,
+            "Uint32Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT32,
+            int(0),
+            int(16),
+        ),
+        Stmt::Expr(Expr::NativeMemoryFillU32 {
+            view: Box::new(local(2)),
+            value: Box::new(int(0)),
+        }),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("native_memory_fill_u32_zero.ts", body.clone());
+    assert!(
+        ir.contains("call void @llvm.memset.p0.i64"),
+        "NativeMemory.fillU32(words, 0) should lower to llvm.memset:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_native_memory_fill_u32"),
+        "proven local Uint32Array view should not use runtime fallback:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json("artifact_native_memory_fill_u32_zero.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NativeMemoryFillU32"
+                && record["consumer"] == "NativeMemoryFillU32.memset_zero"
+                && record["native_rep_name"] == "buffer_view"
+                && record["access_mode"] == "checked_native"
+        }),
+        "expected NativeMemoryFillU32 buffer_view record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn native_memory_copy_uses_memmove_fast_path() {
+    let body = vec![
+        native_arena_owner_let(1, "arena", int(128), false),
+        native_arena_view_let(
+            2,
+            "src",
+            1,
+            "Uint32Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT32,
+            int(0),
+            int(16),
+        ),
+        native_arena_view_let(
+            3,
+            "dst",
+            1,
+            "Uint32Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT32,
+            int(64),
+            int(16),
+        ),
+        Stmt::Expr(Expr::NativeMemoryCopy {
+            dst: Box::new(local(3)),
+            src: Box::new(local(2)),
+        }),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("native_memory_copy.ts", body.clone());
+    assert!(
+        ir.contains("call void @llvm.memmove.p0.p0.i64"),
+        "NativeMemory.copy(dst, src) should lower to llvm.memmove:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_native_memory_copy"),
+        "proven local typed views should not use runtime fallback:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json("artifact_native_memory_copy.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NativeMemoryCopy"
+                && record["consumer"] == "NativeMemoryCopy.dst.memmove"
+                && record["native_rep_name"] == "buffer_view"
+        }) && records.iter().any(|record| {
+            record["expr_kind"] == "NativeMemoryCopy"
+                && record["consumer"] == "NativeMemoryCopy.src.memmove"
+                && record["native_rep_name"] == "buffer_view"
+        }),
+        "expected NativeMemoryCopy dst/src buffer_view records:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     let packet_ty = pod_type(&[
         ("tag", Type::Named("PerryU32".to_string())),

@@ -311,6 +311,10 @@ fn emit_native_memory_globals(out: &mut String) {
     );
     let _ = writeln!(
         out,
+        "type NativeMemoryTypedView = Int8Array | Uint8Array | Uint8ClampedArray | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array;"
+    );
+    let _ = writeln!(
+        out,
         "declare function sizeof<T extends PerryPod<any>>(): number;"
     );
     let _ = writeln!(
@@ -351,6 +355,14 @@ fn emit_native_memory_globals(out: &mut String) {
     let _ = writeln!(out, "  alloc(byteLength: number): NativeArena;");
     let _ = writeln!(out, "}}");
     let _ = writeln!(out, "declare const NativeArena: NativeArenaConstructor;");
+    let _ = writeln!(out, "interface NativeMemoryConstructor {{");
+    let _ = writeln!(out, "  fillU32(view: Uint32Array, value: number): void;");
+    let _ = writeln!(
+        out,
+        "  copy(dst: NativeMemoryTypedView, src: NativeMemoryTypedView): void;"
+    );
+    let _ = writeln!(out, "}}");
+    let _ = writeln!(out, "declare const NativeMemory: NativeMemoryConstructor;");
 }
 
 fn native_arena_view_overloads() -> &'static [(&'static str, &'static str)] {

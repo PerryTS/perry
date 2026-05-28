@@ -449,6 +449,74 @@ fn native_arena_global_is_shadowed(ctx: &LoweringContext) -> bool {
         || ctx.lookup_class("NativeArena").is_some()
 }
 
+fn native_memory_global_is_shadowed(ctx: &LoweringContext) -> bool {
+    ctx.lookup_local("NativeMemory").is_some()
+        || ctx.lookup_func("NativeMemory").is_some()
+        || ctx.lookup_imported_func("NativeMemory").is_some()
+        || ctx.lookup_class("NativeMemory").is_some()
+}
+
+pub(super) fn try_native_memory_public_api(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    has_spread: bool,
+) -> Result<Option<Expr>> {
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    let ast::Expr::Member(member) = callee_expr.as_ref() else {
+        return Ok(None);
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return Ok(None);
+    };
+    if !matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeMemory")
+        || native_memory_global_is_shadowed(ctx)
+    {
+        return Ok(None);
+    }
+
+    match prop.sym.as_ref() {
+        "fillU32" => {
+            if has_spread {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeMemory.fillU32(view, value) does not accept spread arguments"
+                );
+            }
+            if call.args.len() != 2 {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeMemory.fillU32(view, value) expects exactly two arguments"
+                );
+            }
+            Ok(Some(Expr::NativeMemoryFillU32 {
+                view: Box::new(lower_expr(ctx, &call.args[0].expr)?),
+                value: Box::new(lower_expr(ctx, &call.args[1].expr)?),
+            }))
+        }
+        "copy" => {
+            if has_spread {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeMemory.copy(dst, src) does not accept spread arguments"
+                );
+            }
+            if call.args.len() != 2 {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeMemory.copy(dst, src) expects exactly two arguments"
+                );
+            }
+            Ok(Some(Expr::NativeMemoryCopy {
+                dst: Box::new(lower_expr(ctx, &call.args[0].expr)?),
+                src: Box::new(lower_expr(ctx, &call.args[1].expr)?),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn is_native_arena_alloc_call(ctx: &LoweringContext, call: &ast::CallExpr) -> bool {
     let ast::Callee::Expr(callee_expr) = &call.callee else {
         return false;

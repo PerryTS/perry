@@ -248,6 +248,14 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
                 fill_defaults_in_expr(arg, ctor_defaults);
             }
         }
+        Expr::NativeMemoryFillU32 { view, value } => {
+            fill_defaults_in_expr(view, ctor_defaults);
+            fill_defaults_in_expr(value, ctor_defaults);
+        }
+        Expr::NativeMemoryCopy { dst, src } => {
+            fill_defaults_in_expr(dst, ctor_defaults);
+            fill_defaults_in_expr(src, ctor_defaults);
+        }
         Expr::StaticMethodCall { args, .. } => {
             for arg in args {
                 fill_defaults_in_expr(arg, ctor_defaults);

@@ -1098,6 +1098,18 @@ pub enum Expr {
     },
     /// Hidden Perry intrinsic: `__perry_native_arena_dispose(owner)`.
     NativeArenaDispose(Box<Expr>),
+    /// Public compile-time NativeMemory API:
+    /// `NativeMemory.fillU32(view, value)`.
+    NativeMemoryFillU32 {
+        view: Box<Expr>,
+        value: Box<Expr>,
+    },
+    /// Public compile-time NativeMemory API:
+    /// `NativeMemory.copy(dst, src)`.
+    NativeMemoryCopy {
+        dst: Box<Expr>,
+        src: Box<Expr>,
+    },
 
     // Child Process operations
     ChildProcessExecSync {
