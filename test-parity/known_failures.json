@@ -266,12 +266,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline() callback never fires (depends on stream event delivery). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-iterable-iteration": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: `for await (chunk of readable)` iterates to empty — async iterator does not yield chunks. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/object-mode": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -410,12 +404,6 @@
     "category": "bug-open",
     "reason": "node:stream: setEncoding(hex) + data delivery doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/async-iter/break-cleanup": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: `for await` break + destroyOnReturn (default) doesn't destroy the stream. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/events/readable-event": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -457,12 +445,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: pipeline for already-ended source doesn't invoke callback. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/double-iterate-empty": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: re-iterating a consumed Readable doesn't behave correctly (event chain). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/read-no-arg": {
     "issue": "1532",
@@ -506,12 +488,6 @@
     "category": "bug-open",
     "reason": "node:stream: read + unshift + re-read sequence doesn't deliver chunks in the right order. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/async-iter/try-finally-cleanup": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: try/finally with for-await early bail-out + destroyed flag not honored. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/error/error-no-listener": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -523,12 +499,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: read() on objectMode stream should return one object per call. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/async-iter/two-iterators-error": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: two concurrent Symbol.asyncIterator on same Readable should error. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/with-async-fn": {
     "issue": "1539",
@@ -788,12 +758,6 @@
     "category": "bug-open",
     "reason": "node:stream: read() after end — does not consistently return null. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/iterate-after-toarray": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: iteration after toArray() yields wrong count (state not drained). Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/web/transform-cancel-propagates": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -932,12 +896,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw — composite does not emit 'error'. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flow/pause-during-async-iter": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pause() inside for-await — affects iteration count incorrectly. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/dest-error-propagates": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1063,12 +1021,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:'byob'}) on bytes-type stream fails or returns wrong shape. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/async-iter/single-iteration-only": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: second for-await on already-iterated Readable yields wrong count (state not drained). Flips to PASS when #1531 lands."
   },
   "node-suite/stream/pipe/source-error-no-propagation": {
     "issue": "1532",
@@ -1298,12 +1250,6 @@
     "category": "bug-open",
     "reason": "node:stream: simple R→T→W e2e pipe — received chunks wrong (transform/uppercase not applied). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/iterator-prevent-cancel": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: readable.iterator({destroyOnReturn:false}) — early return still destroys. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/iter-helpers/every-async-rejection": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1448,12 +1394,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(customIterable) — value or done wrong. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/iterator-empty-after-consumed": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: second [Symbol.asyncIterator]() call — does not return immediately-done iterator. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1465,12 +1405,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(transform).toArray() — chain produces wrong result. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/readable/iter-and-data-listener": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: for-await + 'data' listener — data event listener counts wrong, or iter empty. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipeline/three-async-fns": {
     "issue": "1532",

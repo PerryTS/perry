@@ -1315,6 +1315,9 @@ extern "C" fn ns_iter_to_array(closure: *const ClosureHeader, opts: f64) -> f64 
     if !arr.is_null() {
         out = extend_with_array(out, arr);
     }
+    mark_stream_ended(this);
+    clear_readable_buffer(this);
+    destroy_stream(this, f64::from_bits(TAG_UNDEFINED));
     settle_consuming(this, opts, box_pointer(out as *const u8))
 }
 

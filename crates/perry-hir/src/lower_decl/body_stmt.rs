@@ -127,7 +127,7 @@ fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     }
 }
 
-fn insert_iterator_return_before_breaks(
+fn insert_iterator_return_before_abrupts(
     stmts: &mut Vec<Stmt>,
     iter_id: LocalId,
     needs_await: bool,
@@ -139,14 +139,26 @@ fn insert_iterator_return_before_breaks(
                 rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
                 rewritten.push(Stmt::Break);
             }
+            Stmt::LabeledBreak(label) => {
+                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
+                rewritten.push(Stmt::LabeledBreak(label));
+            }
+            Stmt::Return(value) => {
+                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
+                rewritten.push(Stmt::Return(value));
+            }
+            Stmt::Throw(expr) => {
+                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
+                rewritten.push(Stmt::Throw(expr));
+            }
             Stmt::If {
                 condition,
                 mut then_branch,
                 mut else_branch,
             } => {
-                insert_iterator_return_before_breaks(&mut then_branch, iter_id, needs_await);
+                insert_iterator_return_before_abrupts(&mut then_branch, iter_id, needs_await);
                 if let Some(else_stmts) = else_branch.as_mut() {
-                    insert_iterator_return_before_breaks(else_stmts, iter_id, needs_await);
+                    insert_iterator_return_before_abrupts(else_stmts, iter_id, needs_await);
                 }
                 rewritten.push(Stmt::If {
                     condition,
@@ -1164,7 +1176,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 });
                 let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
                 if is_node_readable_for_await {
-                    insert_iterator_return_before_breaks(&mut user_body, iter_id, needs_await);
+                    insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
                 }
                 body_stmts.extend(user_body);
                 body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));

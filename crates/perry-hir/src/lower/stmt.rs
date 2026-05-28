@@ -1019,6 +1019,22 @@ pub(crate) fn lower_stmt(
                 });
             }
         }
+        ast::Stmt::Break(break_stmt) => {
+            if let Some(ref label) = break_stmt.label {
+                module.init.push(Stmt::LabeledBreak(label.sym.to_string()));
+            } else {
+                module.init.push(Stmt::Break);
+            }
+        }
+        ast::Stmt::Continue(continue_stmt) => {
+            if let Some(ref label) = continue_stmt.label {
+                module
+                    .init
+                    .push(Stmt::LabeledContinue(label.sym.to_string()));
+            } else {
+                module.init.push(Stmt::Continue);
+            }
+        }
         ast::Stmt::For(for_stmt) => {
             // Push a lexical scope covering init/test/update/body, so
             // `for (let i = 0; ...)` bindings don't leak to the outer scope.
