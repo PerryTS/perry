@@ -105,16 +105,7 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
     register_handle(Http2SecureServer {
         handler,
         tls_config,
-        base: HttpServer {
-            handler,
-            listeners: HashMap::new(),
-            bound_port: 0,
-            bound_host: String::new(),
-            listening: false,
-            shutdown_tx: None,
-            request_rx: None,
-            upgrade_rx: None,
-        },
+        base: HttpServer::with_handler(handler),
     })
 }
 
