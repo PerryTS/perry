@@ -297,6 +297,13 @@ unsafe fn make_error_with_message(msg: &str) -> u64 {
     JSValue::pointer(err as *const u8).bits()
 }
 
+unsafe fn throw_invalid_arg_type(message: &str) -> ! {
+    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = perry_runtime::error::js_typeerror_new(s);
+    perry_runtime::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
 fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usize {
     let id = next_id(&NEXT_STREAM_ID);
     READABLE_STREAMS.lock().unwrap().insert(
@@ -1153,6 +1160,11 @@ pub unsafe extern "C" fn js_writable_stream_new(
         js_closure_call1(start_cb as *const ClosureHeader, id as f64);
     }
     id as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_writable_stream_throw_invalid_sink() -> f64 {
+    throw_invalid_arg_type("The \"sink\" argument must be of type object")
 }
 
 #[no_mangle]

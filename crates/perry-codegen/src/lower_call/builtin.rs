@@ -767,6 +767,15 @@ pub(super) fn lower_builtin_new(
         }
 
         "WritableStream" => {
+            if matches!(args.first(), Some(Expr::Null)) {
+                for arg in args {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                let h = ctx
+                    .block()
+                    .call(DOUBLE, "js_writable_stream_throw_invalid_sink", &[]);
+                return Ok(Some(h));
+            }
             let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut write = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut close = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

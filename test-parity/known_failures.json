@@ -1298,12 +1298,6 @@
     "category": "bug-open",
     "reason": "node:stream: Transform default objectMode — readableObjectMode/writableObjectMode wrong default. Flips to PASS when #1539 lands."
   },
-  "node-suite/stream/web/writable-stream-null-sink": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: new WritableStream(null) — null sink construction differs from Node. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/readable/read-with-undefined-size": {
     "issue": "1532",
     "added": "2026-05-24",

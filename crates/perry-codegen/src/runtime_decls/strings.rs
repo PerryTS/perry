@@ -1747,6 +1747,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_writable_stream_throw_invalid_sink", DOUBLE, &[]);
     module.declare_function("js_writable_stream_get_writer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_writable_stream_locked", DOUBLE, &[DOUBLE]);
     module.declare_function("js_writable_stream_close", I64, &[DOUBLE]);
