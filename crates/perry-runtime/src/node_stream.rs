@@ -38,8 +38,8 @@ mod async_iterator;
 mod event_emitter;
 use event_emitter::{
     call_listener_args, emit_stream_event, emit_stream_event_from_array, is_callable_value,
-    ns_event_names, ns_get_max_listeners, ns_listener_count, ns_listeners, ns_off2, ns_on2,
-    ns_once2, ns_prepend_listener2, ns_prepend_once_listener2, ns_raw_listeners,
+    ns_capture_rejection, ns_event_names, ns_get_max_listeners, ns_listener_count, ns_listeners,
+    ns_off2, ns_on2, ns_once2, ns_prepend_listener2, ns_prepend_once_listener2, ns_raw_listeners,
     ns_remove_all_listeners1, ns_remove_listener2, ns_set_max_listeners,
     stream_listener_count_for_event,
 };
@@ -81,6 +81,7 @@ const STREAM_END_SCHEDULED_KEY: &[u8] = b"__perryStreamEndScheduled";
 const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
 const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
+const STREAM_CAPTURE_REJECTIONS_KEY: &[u8] = b"__perryStreamCaptureRejections";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
 const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
@@ -1609,6 +1610,7 @@ fn register_stub_arities() {
     register(ns_readable_event_microtask as *const u8, 0);
     register(ns_readable_end_microtask as *const u8, 0);
     register(ns_writable_finish_microtask as *const u8, 0);
+    register(ns_capture_rejection as *const u8, 1);
     register(ns_emit2 as *const u8, 2);
     crate::closure::js_register_closure_rest(ns_emit_rest as *const u8, 1);
     register(ns_resume0 as *const u8, 0);
@@ -1741,6 +1743,11 @@ fn hidden_ended_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_max_listeners_key() -> *mut crate::string::StringHeader {
     hidden_key(STREAM_MAX_LISTENERS_KEY)
+}
+
+#[inline]
+fn hidden_capture_rejections_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_CAPTURE_REJECTIONS_KEY)
 }
 
 #[inline]
@@ -3424,8 +3431,17 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
 }
 
 /// Initialize visible lifecycle flags shared by all stream sides.
-fn init_lifecycle_state(stream: f64) {
+fn init_lifecycle_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    set_hidden_value(
+        stream,
+        hidden_capture_rejections_key(),
+        f64::from_bits(if opt_bool(opts, b"captureRejections") {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
     set_visible_closed(stream, false);
 }
 
@@ -3641,7 +3657,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     if let Some(read) = read_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
     }
-    init_lifecycle_state(readable);
+    init_lifecycle_state(readable, opts);
     init_constructor(readable, "Readable");
     init_readable_state(readable, opts);
     init_abort_signal_state(readable, opts);
@@ -3669,7 +3685,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
             rebind_callback_this(writev, writable),
         );
     }
-    init_lifecycle_state(writable);
+    init_lifecycle_state(writable, opts);
     init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
     init_abort_signal_state(writable, opts);
@@ -3692,7 +3708,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
             rebind_callback_this(writev, duplex),
         );
     }
-    init_lifecycle_state(duplex);
+    init_lifecycle_state(duplex, opts);
     init_constructor(duplex, "Duplex");
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);

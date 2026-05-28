@@ -920,12 +920,6 @@
     "category": "bug-open",
     "reason": "node:stream: r.compose(t1).compose(t2) chained — output stream produces wrong chunks. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/events/emit-error-with-capture": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: captureRejections — async listener throws not caught into 'error' event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/abort-during-pipeto": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1267,12 +1261,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: for-await break — custom iterator.return() not invoked. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/events/captureRejections-constructor": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable({captureRejections}) — async listener throws not caught as 'error'. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipe/pipe-error-handler-on-source": {
     "issue": "1532",
