@@ -25,7 +25,9 @@
 //! GC mutable-root scanner.
 
 use std::collections::HashMap;
-use std::io::{BufRead, Read, Write};
+#[cfg(unix)]
+use std::io::BufRead;
+use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -34,6 +36,11 @@ use std::sync::{Mutex, PoisonError};
 // (since this is a descendant module) `mod.rs`'s `use` bindings such as
 // `ClosureHeader` / `JSValue`.
 use super::*;
+
+#[cfg(unix)]
+type IpcStream = std::os::unix::net::UnixStream;
+#[cfg(not(unix))]
+type IpcStream = ();
 
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
@@ -89,7 +96,7 @@ struct LiveChild {
     /// #1933: the parent end of the IPC socket for a `fork()`ed child (a clone
     /// for `child.send()` / `child.disconnect()`; the reader thread owns
     /// another clone). `None` for plain `spawn`.
-    ipc_send: Option<std::os::unix::net::UnixStream>,
+    ipc_send: Option<IpcStream>,
 }
 
 static CP_LIVE: Mutex<Option<HashMap<u64, LiveChild>>> = Mutex::new(None);
@@ -165,7 +172,8 @@ fn cp_spawn_waiter(handle: u64, mut child: Child) {
 
 /// IPC reader (#1933): read newline-delimited JSON from the parent socket and
 /// push each line for main-thread parse + `'message'` delivery.
-fn cp_spawn_ipc_reader(handle: u64, sock: std::os::unix::net::UnixStream) {
+#[cfg(unix)]
+fn cp_spawn_ipc_reader(handle: u64, sock: IpcStream) {
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(sock);
         for line in reader.lines() {
@@ -191,7 +199,7 @@ pub(super) fn cp_register_live_child(
     stderr_obj: f64,
     stdin_obj: f64,
     mut child: Child,
-    ipc: Option<std::os::unix::net::UnixStream>,
+    ipc: Option<IpcStream>,
 ) -> u64 {
     let pid = child.id();
     cp_set_field(cp, b"pid", pid as f64);
@@ -211,7 +219,13 @@ pub(super) fn cp_register_live_child(
 
     // For fork, keep a clone of the IPC socket for send/disconnect; the reader
     // thread owns the original.
+    #[cfg(unix)]
     let ipc_send = ipc.as_ref().and_then(|s| s.try_clone().ok());
+    #[cfg(not(unix))]
+    let ipc_send = {
+        let _ = &ipc;
+        None
+    };
 
     {
         let mut guard = cp_live_lock();
@@ -240,8 +254,11 @@ pub(super) fn cp_register_live_child(
         cp_spawn_reader(handle, e, true);
     }
     cp_spawn_waiter(handle, child);
-    if let Some(sock) = ipc {
-        cp_spawn_ipc_reader(handle, sock);
+    #[cfg(unix)]
+    {
+        if let Some(sock) = ipc {
+            cp_spawn_ipc_reader(handle, sock);
+        }
     }
     // Wake the loop so 'spawn' fires on the next tick.
     crate::event_pump::js_notify_main_thread();
@@ -252,40 +269,58 @@ pub(super) fn cp_register_live_child(
 /// it newline-delimited to the IPC socket. Returns whether the write
 /// succeeded. #1933.
 pub(super) fn cp_ipc_send(handle: u64, message: f64) -> bool {
-    let sh = unsafe { crate::json::js_json_stringify(message, 0) };
-    if sh.is_null() {
+    #[cfg(not(unix))]
+    {
+        let _ = (handle, message);
         return false;
     }
-    let mut line = unsafe {
-        let len = (*sh).byte_len as usize;
-        let data = (sh as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::slice::from_raw_parts(data, len).to_vec()
-    };
-    line.push(b'\n');
-    let mut guard = cp_live_lock();
-    if let Some(map) = guard.as_mut() {
-        if let Some(lc) = map.get_mut(&handle) {
-            if let Some(sock) = lc.ipc_send.as_mut() {
-                return sock.write_all(&line).is_ok();
+
+    #[cfg(unix)]
+    {
+        let sh = unsafe { crate::json::js_json_stringify(message, 0) };
+        if sh.is_null() {
+            return false;
+        }
+        let mut line = unsafe {
+            let len = (*sh).byte_len as usize;
+            let data = (sh as *const u8).add(std::mem::size_of::<StringHeader>());
+            std::slice::from_raw_parts(data, len).to_vec()
+        };
+        line.push(b'\n');
+        let mut guard = cp_live_lock();
+        if let Some(map) = guard.as_mut() {
+            if let Some(lc) = map.get_mut(&handle) {
+                if let Some(sock) = lc.ipc_send.as_mut() {
+                    return sock.write_all(&line).is_ok();
+                }
             }
         }
+        false
     }
-    false
 }
 
 /// `child.disconnect()` — shut the IPC socket down (the reader thread then sees
 /// EOF and exits). Returns whether a channel was present. #1933.
 pub(super) fn cp_ipc_disconnect(handle: u64) -> bool {
-    let mut guard = cp_live_lock();
-    if let Some(map) = guard.as_mut() {
-        if let Some(lc) = map.get_mut(&handle) {
-            if let Some(sock) = lc.ipc_send.take() {
-                let _ = sock.shutdown(std::net::Shutdown::Both);
-                return true;
+    #[cfg(not(unix))]
+    {
+        let _ = handle;
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        let mut guard = cp_live_lock();
+        if let Some(map) = guard.as_mut() {
+            if let Some(lc) = map.get_mut(&handle) {
+                if let Some(sock) = lc.ipc_send.take() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                    return true;
+                }
             }
         }
+        false
     }
-    false
 }
 
 /// `child_process.spawn(command[, args][, options])` — returns a live streaming
