@@ -17,6 +17,16 @@ pub(crate) const URL_SEARCH_PARAMS_ENTRIES: u32 = 0; // Array of [key, value] pa
 pub(crate) const URL_SEARCH_PARAMS_OWNER: u32 = 1;
 pub(crate) const URL_SEARCH_PARAMS_FIELD_COUNT: u32 = 2;
 
+fn throw_invalid_query_pair_tuple() -> ! {
+    let msg = b"Each query pair must be an iterable [name, value] tuple";
+    let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_TUPLE");
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(f64::from_bits(
+        crate::value::JSValue::pointer(err as *const u8).bits(),
+    ))
+}
+
 // URL field constant alias — we only need URL_SEARCH from `super::parse` for
 // the params→owner-URL sync path.
 use super::parse::URL_SEARCH;
@@ -287,10 +297,9 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
 /// a 2-element array `[key, value]`. Strings (key + value) are
 /// extracted via `get_string_content`, which handles SSO + heap
 /// strings + INT32 / number coercion so `new URLSearchParams([["n", 1]])`
-/// silently stringifies the value to `"1"` to match Node. Non-array
-/// entries are skipped (Node would throw, but Perry's loose-iter
-/// stance is to accept what we can read and drop garbage rather than
-/// abort the whole construction).
+/// silently stringifies the value to `"1"` to match Node. Array entries must
+/// be exactly two items; Node throws `ERR_INVALID_TUPLE` for shorter or longer
+/// query pairs before appending them.
 pub(crate) fn read_iterable_pair_entries(arr: *const ArrayHeader) -> Vec<(String, String)> {
     if arr.is_null() {
         return Vec::new();
@@ -320,8 +329,8 @@ pub(crate) fn read_iterable_pair_entries(arr: *const ArrayHeader) -> Vec<(String
         }
         let pair = pair_ptr_i64 as *const ArrayHeader;
         let pair_len = unsafe { (*pair).length };
-        if pair_len < 2 {
-            continue;
+        if pair_len != 2 {
+            throw_invalid_query_pair_tuple();
         }
         let k = get_string_content(crate::array::js_array_get_f64(pair, 0));
         let v = get_string_content(crate::array::js_array_get_f64(pair, 1));
