@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1486 entries across 82 modules
+// Coverage: 1488 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1795,6 +1795,8 @@ declare module "process" {
   /** stdlib */
   export function hrtime(...args: any[]): any;
   /** stdlib */
+  export function initgroups(...args: any[]): any;
+  /** stdlib */
   export function kill(...args: any[]): any;
   /** stdlib */
   export function listenerCount(...args: any[]): any;
@@ -1832,6 +1834,8 @@ declare module "process" {
   export function seteuid(...args: any[]): any;
   /** stdlib */
   export function setgid(...args: any[]): any;
+  /** stdlib */
+  export function setgroups(...args: any[]): any;
   /** stdlib */
   export function setuid(...args: any[]): any;
   /** stdlib */
