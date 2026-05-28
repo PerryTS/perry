@@ -566,12 +566,6 @@
     "category": "bug-open",
     "reason": "node:stream: after error, end event should NOT fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/object-mode/preserve-buffer": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: objectMode does not preserve Buffer identity through data event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/options/auto-destroy-false": {
     "issue": "1531",
     "added": "2026-05-23",
