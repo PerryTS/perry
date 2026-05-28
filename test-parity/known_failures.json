@@ -404,12 +404,6 @@
     "category": "bug-open",
     "reason": "node:stream: construct() callback receiving Error does not propagate via error event. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/iter-helpers/flat-map-async": {
-    "issue": "1572",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.flatMap with an async-generator mapper isn't driven through the async-iterator protocol yet (the other iterator helpers + AbortSignal landed in #1558). Flips to PASS when #1572 lands."
-  },
   "node-suite/stream/compose/single-transform": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -853,12 +847,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from([P1, P2, P3]) \u2014 does not await each Promise. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/iter-helpers/flat-map-async-gen": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: flatMap(asyncGenFn) \u2014 multi-yield per input not flattened. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/readable/from-rejected-promise-in-array": {
     "issue": "1532",
