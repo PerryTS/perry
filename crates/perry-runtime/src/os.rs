@@ -866,6 +866,17 @@ pub extern "C" fn js_process_prepend_once_listener(
     register_process_listener(event_ptr, handler, true, true)
 }
 
+/// Emit the synthetic `beforeExit` event with the would-be exit code as a
+/// numeric argument. Called from the codegen-emitted event-loop epilogue
+/// once the loop has drained all real work (#2135). Node's semantics fire
+/// this hook *only* when the event loop is exiting on its own; an explicit
+/// `process.exit()` skips it. Perry's `js_process_exit` calls `libc::_exit`
+/// directly without going through this hook, so that contract is preserved.
+#[no_mangle]
+pub extern "C" fn js_process_emit_before_exit(code: f64) {
+    let _ = emit_process_event("beforeExit", &[code]);
+}
+
 #[no_mangle]
 pub extern "C" fn js_process_emit(event_ptr: *const StringHeader, args: *const ArrayHeader) -> f64 {
     let Some(event) = read_event_name(event_ptr) else {
