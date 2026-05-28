@@ -3969,5 +3969,9 @@ mod destroy_state;
 mod tests;
 
 #[cfg(test)]
+#[path = "node_stream_tests_extra.rs"]
+mod tests_extra;
+
+#[cfg(test)]
 #[path = "node_stream_state_tests.rs"]
 mod state_tests;
