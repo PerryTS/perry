@@ -458,12 +458,6 @@
     "category": "bug-open",
     "reason": "node:stream: Duplex.allowHalfOpen option not surfaced on instance. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/iterator/destroy-on-return-false": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readable.iterator({destroyOnReturn:false}) option not honored. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/pipe-chain": {
     "issue": "1532",
     "added": "2026-05-23",
