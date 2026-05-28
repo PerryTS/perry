@@ -30,6 +30,7 @@ use std::collections::HashMap;
 
 const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
 const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
+const TAG_NULL_F64_BITS: u64 = 0x7FFC_0000_0000_0002;
 const ERROR_MONITOR_EVENT_NAME: &str = "Symbol(events.errorMonitor)";
 const MIN_HEAP_POINTER: u64 = 0x10000;
 const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -295,6 +296,21 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
         None
     } else {
         Some(ptr)
+    }
+}
+
+fn stream_value_from_handle(handle: Handle) -> Option<f64> {
+    let addr = handle as u64;
+    if !(MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) || addr & 0x7 != 0 {
+        return None;
+    }
+    let value = js_nanbox_pointer(handle);
+    let readable = perry_runtime::node_stream::js_node_stream_is_readable(value);
+    let writable = perry_runtime::node_stream::js_node_stream_is_writable(value);
+    if readable.to_bits() == TAG_NULL_F64_BITS && writable.to_bits() == TAG_NULL_F64_BITS {
+        None
+    } else {
+        Some(value)
     }
 }
 
@@ -969,6 +985,71 @@ extern "C" fn events_once_abort_listener(closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
+extern "C" fn events_once_stream_resolve_listener(closure: *const ClosureHeader, rest: f64) -> f64 {
+    use perry_runtime::closure::js_closure_get_capture_ptr;
+
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
+    let error_listener = js_closure_get_capture_ptr(closure, 2);
+    let error_event_ptr = js_closure_get_capture_ptr(closure, 3);
+    if promise.is_null() {
+        return undefined_value();
+    }
+    if handle != 0 && error_listener != 0 && error_event_ptr != 0 {
+        let error_event = js_nanbox_string(error_event_ptr);
+        let error_listener_value = js_nanbox_pointer(error_listener);
+        let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
+            handle,
+            error_event,
+            error_listener_value,
+        );
+    }
+    js_promise_resolve(promise, rest_array_or_empty(rest));
+    undefined_value()
+}
+
+extern "C" fn events_once_stream_reject_listener(closure: *const ClosureHeader, rest: f64) -> f64 {
+    use perry_runtime::closure::js_closure_get_capture_ptr;
+
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
+    let event_name_ptr = js_closure_get_capture_ptr(closure, 2);
+    let resolve_listener = js_closure_get_capture_ptr(closure, 3);
+    if handle != 0 && event_name_ptr != 0 && resolve_listener != 0 {
+        let event = js_nanbox_string(event_name_ptr);
+        let resolve_listener_value = js_nanbox_pointer(resolve_listener);
+        let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
+            handle,
+            event,
+            resolve_listener_value,
+        );
+    }
+    if !promise.is_null() {
+        js_promise_reject(promise, first_rest_arg_or_undefined(rest));
+    }
+    undefined_value()
+}
+
+fn rest_array_or_empty(rest: f64) -> f64 {
+    if JSValue::from_bits(rest.to_bits()).is_pointer() {
+        rest
+    } else {
+        js_nanbox_pointer(js_array_alloc(0) as i64)
+    }
+}
+
+fn first_rest_arg_or_undefined(rest: f64) -> f64 {
+    if !JSValue::from_bits(rest.to_bits()).is_pointer() {
+        return undefined_value();
+    }
+    let arr = js_nanbox_get_pointer(rest) as *const ArrayHeader;
+    if arr.is_null() || js_array_length(arr) == 0 {
+        undefined_value()
+    } else {
+        perry_runtime::array::js_array_get_f64(arr, 0)
+    }
+}
+
 /// `events.once(emitter, eventName[, options])` — returns a Promise that resolves
 /// to an array of the args fired by the next `emit(eventName, ...)`.
 ///
@@ -1020,6 +1101,49 @@ pub unsafe extern "C" fn js_events_once(
             .entry(event_name)
             .or_default()
             .push(pending);
+        return promise;
+    }
+    if stream_value_from_handle(handle).is_some() {
+        perry_runtime::closure::js_register_closure_rest(
+            events_once_stream_resolve_listener as *const u8,
+            0,
+        );
+        perry_runtime::closure::js_register_closure_rest(
+            events_once_stream_reject_listener as *const u8,
+            0,
+        );
+        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        js_closure_set_capture_ptr(listener, 0, promise as i64);
+        js_closure_set_capture_ptr(listener, 1, handle);
+        js_closure_set_capture_ptr(listener, 2, 0);
+        js_closure_set_capture_ptr(listener, 3, 0);
+        let event_value = js_nanbox_string(event_name_ptr as i64);
+        let listener_value = js_nanbox_pointer(listener as i64);
+        if event_name != "error" {
+            let error_event_name = b"error";
+            let error_event_ptr =
+                js_string_from_bytes(error_event_name.as_ptr(), error_event_name.len() as u32);
+            let reject_listener =
+                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            js_closure_set_capture_ptr(reject_listener, 0, promise as i64);
+            js_closure_set_capture_ptr(reject_listener, 1, handle);
+            js_closure_set_capture_ptr(reject_listener, 2, event_name_ptr as i64);
+            js_closure_set_capture_ptr(reject_listener, 3, listener as i64);
+            js_closure_set_capture_ptr(listener, 2, reject_listener as i64);
+            js_closure_set_capture_ptr(listener, 3, error_event_ptr as i64);
+            let error_event = js_nanbox_string(error_event_ptr as i64);
+            let reject_listener_value = js_nanbox_pointer(reject_listener as i64);
+            let _ = perry_runtime::node_stream::js_node_stream_method_once(
+                handle,
+                error_event,
+                reject_listener_value,
+            );
+        }
+        let _ = perry_runtime::node_stream::js_node_stream_method_once(
+            handle,
+            event_value,
+            listener_value,
+        );
     }
     promise
 }

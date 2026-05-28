@@ -644,12 +644,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: writer.desiredSize w/ CountQueuingStrategy — fails to compile (CountQueuingStrategy constructor not on globalThis). Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/events/once-returns-promise": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: events.once(stream, 'end') — Promise-returning form does not resolve correctly. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/error-mid-chain": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -1003,12 +997,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipe(dst,{end:false}) then manual dst.write — output order/count wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/once-static-promise": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: events.once(stream, 'end') Promise — args shape wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipeline/async-fn-rejection-propagates": {
     "issue": "1532",
