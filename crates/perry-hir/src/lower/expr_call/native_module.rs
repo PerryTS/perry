@@ -179,15 +179,29 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "loadEnvFile" => {
-                            // #1399: process.loadEnvFile(path?) (Node 20.12+)
-                            // reads a `.env` file from disk and adds its
-                            // KEY=value entries to process.env. Perry today
-                            // doesn't persist `process.env.X = v` writes
-                            // (#1344) so eagerly loading would be moot;
-                            // returning undefined is the closest no-op for
-                            // call sites that probe-and-call. Real `.env`
-                            // loading is tracked separately.
-                            return Ok(Ok(Expr::Undefined));
+                            // #1399 / #2135: process.loadEnvFile(path?)
+                            // (Node 20.12+) reads a `.env` file from disk and
+                            // merges its KEY=value entries into `process.env`.
+                            // Previously a no-op because `process.env.X = v`
+                            // didn't persist; #1344 has since wired writes
+                            // through `std::env::set_var`, so we lower to a
+                            // runtime call that actually reads the file.
+                            // Default the optional path to `.env` (Node's
+                            // default) so the dispatch-table row's single
+                            // NA_STR arg stays satisfied for the no-arg call
+                            // form.
+                            let call_args = if args.is_empty() {
+                                vec![Expr::String(".env".to_string())]
+                            } else {
+                                args
+                            };
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "loadEnvFile".to_string(),
+                                args: call_args,
+                            }));
                         }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
@@ -259,6 +273,50 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ProcessPosixCredential(
                                 crate::ir::PosixCredentialKind::Egid,
                             )));
+                        }
+                        "getgroups" => {
+                            // #2135: process.getgroups() — supplementary
+                            // group IDs as a number array. Dispatch through
+                            // the generic NativeMethodCall path; the
+                            // node_core table row routes to
+                            // `js_process_getgroups`.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "getgroups".to_string(),
+                                args,
+                            }));
+                        }
+                        // #2135: POSIX credential setters — single numeric
+                        // ID arg, return undefined. Implemented as libc
+                        // wrappers in the runtime (string-username form is
+                        // a no-op today; see js_process_setuid for the
+                        // out-of-scope note).
+                        "setuid" | "seteuid" | "setgid" | "setegid" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
+                        // #2135: process.setgroups(groups[]) takes an
+                        // array of numeric GIDs; process.initgroups(user,
+                        // extra_gid) takes a username string + numeric
+                        // GID. The runtime decodes the JSValues itself, so
+                        // both pass through the generic NativeMethodCall.
+                        "setgroups" | "initgroups" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
                         }
                         "emitWarning" => {
                             // process.emitWarning(warning[, type, code, ctor])
