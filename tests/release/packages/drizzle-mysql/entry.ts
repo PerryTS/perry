@@ -35,10 +35,9 @@ async function exec(sql: string, params: any[], method: string): Promise<{ rows:
 
 const db = drizzle(exec);
 
-// Note: idiomatic drizzle would `await db.select().from(users)` (the builder
-// is thenable via QueryPromise.then). Under Perry that inherited .then
-// currently resolves to undefined (#2159), so we use explicit .execute()
-// throughout. Once #2159 lands, the .execute() calls can be dropped.
+// Idiomatic drizzle: `await db.select().from(users)` resolves via the
+// QueryPromise.then thenable that `applyMixins(MySqlSelectBase,
+// [QueryPromise])` copies onto MySqlSelectBase.prototype. Closed by #2159.
 
 
 const users = mysqlTable("users", {
@@ -61,23 +60,23 @@ await exec("CREATE TABLE posts (id INT PRIMARY KEY AUTO_INCREMENT, user_id INT N
 await db.insert(users).values([
     { id: 1, name: "alice", age: 30 },
     { id: 2, name: "bob",   age: 25 },
-]).execute();
+]);
 await db.insert(posts).values([
     { id: 1, userId: 1, title: "hello" },
     { id: 2, userId: 1, title: "world" },
-]).execute();
+]);
 
-const all = await db.select().from(users).execute();
+const all = await db.select().from(users);
 console.log(`count=${all.length}`);
 
-await db.update(users).set({ age: 31 }).where(eq(users.id, 1)).execute();
-const a = await db.select().from(users).where(eq(users.id, 1)).execute();
+await db.update(users).set({ age: 31 }).where(eq(users.id, 1));
+const a = await db.select().from(users).where(eq(users.id, 1));
 console.log(`alice.age=${a[0].age}`);
 
-await db.delete(users).where(eq(users.id, 2)).execute();
-console.log(`after_delete=${(await db.select().from(users).execute()).length}`);
+await db.delete(users).where(eq(users.id, 2));
+console.log(`after_delete=${(await db.select().from(users)).length}`);
 
-const joined = await db.select().from(users).leftJoin(posts, eq(users.id, posts.userId)).execute();
+const joined = await db.select().from(users).leftJoin(posts, eq(users.id, posts.userId));
 console.log(`join_rows=${joined.length}`);
 
 await conn.close();

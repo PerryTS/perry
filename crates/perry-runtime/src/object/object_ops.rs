@@ -311,6 +311,93 @@ unsafe fn gc_header_for(obj: *const ObjectHeader) -> *mut crate::gc::GcHeader {
     (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
 }
 
+/// #2159 helper: install a `target_cid.method` entry from an
+/// `Object.defineProperty(C.prototype, name, descriptor)` call.
+///
+/// The descriptor's `value` came in two main shapes in practice:
+///
+/// 1. A `BOUND_METHOD_FUNC_PTR` closure returned by `getOwnPropertyDescriptor`
+///    on a sibling class (drizzle's `applyMixins(Base, [Mixin])`: the
+///    `getOwnPropertyDescriptor(Mixin.prototype, name)` value reads as
+///    `js_class_method_bind(Mixin_class_ref, name)`). Dispatching that bound
+///    closure would re-enter `js_native_call_method` against the class-ref —
+///    a class object reaches the *static* dispatch arm, not the instance
+///    method, so calling it would return the wrong thing. Instead we look up
+///    the raw vtable entry on the source class and copy it onto the target
+///    class's vtable directly, so future `inst.method(args)` dispatches via
+///    the regular chain walk with `this = inst`.
+///
+/// 2. A user-supplied closure (e.g. `Object.defineProperty(C.prototype, "m",
+///    { value: function () { … } })`). Route through the same per-class
+///    prototype-method side table that `js_register_prototype_method` (#838)
+///    uses, so the `inst.m` / `inst.m()` lookup paths in
+///    `field_get_set.rs` / `native_call_method.rs` find it after the regular
+///    vtable miss.
+unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits: u64) {
+    use crate::closure::{ClosureHeader, BOUND_METHOD_FUNC_PTR, CLOSURE_MAGIC};
+    use crate::object::class_registry::{ClassVTable, VTableMethodEntry, CLASS_VTABLE_REGISTRY};
+
+    // Reject undefined / null / numeric values up front — those aren't
+    // methods and shouldn't make it onto the prototype side tables.
+    let value = f64::from_bits(value_bits);
+    let jsv = crate::JSValue::from_bits(value_bits);
+    if !jsv.is_pointer() {
+        return;
+    }
+    let ptr = jsv.as_pointer::<u8>() as usize;
+    if ptr < 0x1000 {
+        return;
+    }
+
+    // Shape (1): BOUND_METHOD closure. Extract source class-ref + method
+    // name from the captures (see `js_class_method_bind`), then copy the
+    // source class's vtable entry (or any inherited entry up the parent
+    // chain) onto `target_cid`.
+    if crate::closure::is_closure_ptr(ptr) {
+        let closure = ptr as *const ClosureHeader;
+        if (*closure).type_tag == CLOSURE_MAGIC && (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
+            let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
+            if let Some(source_cid) = super::class_ref_id(recv) {
+                if let Some((func_ptr, param_count)) =
+                    super::lookup_class_method_in_chain(source_cid, name)
+                {
+                    let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();
+                    if guard.is_none() {
+                        *guard = Some(std::collections::HashMap::new());
+                    }
+                    let reg = guard.as_mut().unwrap();
+                    let vtable = reg.entry(target_cid).or_insert_with(|| ClassVTable {
+                        methods: std::collections::HashMap::new(),
+                        getters: std::collections::HashMap::new(),
+                        setters: std::collections::HashMap::new(),
+                    });
+                    vtable.methods.insert(
+                        name.to_string(),
+                        VTableMethodEntry {
+                            func_ptr,
+                            param_count,
+                        },
+                    );
+                    drop(guard);
+                    super::class_registry::js_register_class_id(target_cid);
+                    crate::typed_feedback::invalidate_method_change(target_cid);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Shape (2): any other callable value (user closure, regular function).
+    // Mirror the `Class.prototype.method = fn` direct-assignment path so the
+    // existing `lookup_prototype_method` walks find it.
+    super::class_registry::js_register_prototype_method(
+        target_cid,
+        name.as_ptr(),
+        name.len(),
+        value,
+    );
+}
+
 /// Object.defineProperty(obj, key, descriptor) — set the value AND record the
 /// `writable` / `enumerable` / `configurable` attribute flags in the side table.
 /// Returns the object (NaN-boxed pointer).
@@ -325,6 +412,33 @@ pub extern "C" fn js_object_define_property(
     descriptor_value: f64,
 ) -> f64 {
     unsafe {
+        // #2159: when the receiver is a class-ref (`Class.prototype` evaluates
+        // back to the class itself in Perry — see `class_ref_id` /
+        // `js_object_get_own_property_descriptor`'s class-ref arm), route the
+        // descriptor through the class-vtable / prototype-method side tables
+        // so instance lookups (`new C().method`) see the new entry. Drizzle's
+        // `applyMixins(Base, [Mixin])` copies methods between class
+        // prototypes via `Object.defineProperty(Base.prototype, name,
+        // Object.getOwnPropertyDescriptor(Mixin.prototype, name))` — pre-fix
+        // the call hit `extract_obj_ptr → null` (a class-ref isn't a pointer)
+        // and silently dropped the descriptor, so `await
+        // db.select().from(x)` saw `instance.then === undefined` and `await`
+        // unwrapped the builder unchanged.
+        if let Some(target_cid) = super::class_ref_id(obj_value) {
+            if let Some(name) = super::metadata_key_to_string(key_value) {
+                let desc_ptr = extract_obj_ptr(descriptor_value);
+                if !desc_ptr.is_null() {
+                    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+                    let value_field =
+                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
+                    if !value_field.is_undefined() {
+                        define_class_prototype_method(target_cid, &name, value_field.bits());
+                    }
+                }
+            }
+            return obj_value;
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
             return obj_value;
