@@ -524,6 +524,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_set_port", VOID, &[I64, I64]);
     module.declare_function("js_url_set_username", VOID, &[I64, I64]);
     module.declare_function("js_url_set_password", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_href", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);

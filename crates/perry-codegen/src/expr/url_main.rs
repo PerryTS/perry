@@ -112,7 +112,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::UrlSetHostname { url, value }
         | Expr::UrlSetPort { url, value }
         | Expr::UrlSetUsername { url, value }
-        | Expr::UrlSetPassword { url, value } => {
+        | Expr::UrlSetPassword { url, value }
+        | Expr::UrlSetHref { url, value } => {
             let runtime_fn = match expr {
                 Expr::UrlSetPathname { .. } => "js_url_set_pathname",
                 Expr::UrlSetSearch { .. } => "js_url_set_search",
@@ -122,6 +123,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Expr::UrlSetPort { .. } => "js_url_set_port",
                 Expr::UrlSetUsername { .. } => "js_url_set_username",
                 Expr::UrlSetPassword { .. } => "js_url_set_password",
+                Expr::UrlSetHref { .. } => "js_url_set_href",
                 _ => unreachable!(),
             };
             let url_v = lower_expr(ctx, url)?;

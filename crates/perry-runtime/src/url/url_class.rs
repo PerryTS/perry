@@ -4,8 +4,9 @@ use super::*;
 
 use super::parse::{
     create_url_object, is_valid_absolute_url, rebuild_url_host, rebuild_url_href, resolve_url,
-    throw_invalid_url, URL_HASH, URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN, URL_PASSWORD,
-    URL_PATHNAME, URL_PORT, URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS, URL_USERNAME,
+    throw_invalid_url, URL_FIELD_COUNT, URL_HASH, URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN,
+    URL_PASSWORD, URL_PATHNAME, URL_PORT, URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS,
+    URL_USERNAME,
 };
 use super::search_params::{
     create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER,
@@ -231,6 +232,64 @@ pub extern "C" fn js_url_set_password(url: *mut ObjectHeader, value: *mut crate:
     unsafe {
         js_object_set_field_f64(url, URL_PASSWORD, create_string_f64(&raw));
         rebuild_url_href(url);
+    }
+}
+
+/// `url.href = value` — parse a full replacement URL or throw.
+#[no_mangle]
+pub extern "C" fn js_url_set_href(url: *mut ObjectHeader, value: *mut crate::StringHeader) {
+    if url.is_null() {
+        return;
+    }
+    let raw = string_header_to_string(value);
+    if !is_valid_absolute_url(&raw) {
+        throw_invalid_url(&raw);
+    }
+    let parsed = create_url_object(&raw);
+    for field in 0..URL_FIELD_COUNT {
+        let v = crate::object::js_object_get_field_f64(parsed, field);
+        js_object_set_field_f64(url, field, v);
+    }
+    let params_f64 = crate::object::js_object_get_field_f64(url, URL_SEARCH_PARAMS);
+    if let Some(params) = object_from_f64(params_f64) {
+        js_object_set_field_f64(
+            params,
+            URL_SEARCH_PARAMS_OWNER,
+            crate::value::js_nanbox_pointer(url as i64),
+        );
+    }
+}
+
+unsafe fn is_gc_object_header(obj: *mut ObjectHeader) -> bool {
+    if obj.is_null() || !crate::object::is_valid_obj_ptr(obj as *const u8) {
+        return false;
+    }
+    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+}
+
+pub(crate) fn is_url_object_shape(url: *mut ObjectHeader) -> bool {
+    if url.is_null() {
+        return false;
+    }
+    unsafe {
+        if !is_gc_object_header(url) || (*url).class_id != 0 || (*url).field_count < URL_FIELD_COUNT
+        {
+            return false;
+        }
+        let href = get_string_content(crate::object::js_object_get_field_f64(url, URL_HREF));
+        if !is_valid_absolute_url(&href) {
+            return false;
+        }
+        let params_f64 = crate::object::js_object_get_field_f64(url, URL_SEARCH_PARAMS);
+        let Some(params) = object_from_f64(params_f64) else {
+            return false;
+        };
+        if !is_gc_object_header(params) {
+            return false;
+        }
+        let owner_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_OWNER);
+        object_from_f64(owner_f64).is_some_and(|owner| owner == url)
     }
 }
 
