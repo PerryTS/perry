@@ -33,6 +33,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return js_instanceof(value, class_id);
         }
     }
+    if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
+        if module == "events"
+            && method == "EventEmitter"
+            && (crate::node_stream::is_classic_stream_instance_value(value)
+                || is_stream_event_emitter_prototype_value(value))
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+    }
     f64::from_bits(TAG_FALSE)
 }
 

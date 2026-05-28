@@ -455,6 +455,9 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         match gc_obj_type(ptr) {
             crate::gc::GC_TYPE_ARRAY => stringify_array(ptr, buf),
             crate::gc::GC_TYPE_OBJECT => {
+                if crate::node_stream::try_stringify_node_stream_json(ptr, buf) {
+                    return;
+                }
                 if is_object_pointer(ptr) {
                     // `stringify_object_inner` (via `stringify_object`) probes
                     // the prototype `toJSON` itself, so no extra check needed.

@@ -1244,12 +1244,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipe error semantics — destination error or source close state differs from Node. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/meta/stream-prototype-ee": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Stream class default export prototype chain doesn't reach EventEmitter. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/options/auto-destroy-true-default": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1310,11 +1304,11 @@
     "category": "bug-open",
     "reason": "node:stream/web: new WritableStream(null) — null sink construction differs from Node. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/meta/json-stringify-output": {
+  "node-suite/stream/readable/read-with-undefined-size": {
     "issue": "1532",
     "added": "2026-05-24",
     "category": "bug-open",
-    "reason": "node:stream: JSON.stringify(stream) — output shape differs from Node ({} vs something else). Flips to PASS when #1532 lands."
+    "reason": "node:stream: read(undefined) — not equivalent to read() no-arg form. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/iter-yields-buffer-no-encoding": {
     "issue": "1532",

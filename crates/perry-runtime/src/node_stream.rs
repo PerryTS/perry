@@ -26,8 +26,8 @@ use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{
-    js_object_alloc_with_shape, js_object_get_field_by_name_f64, js_object_set_field,
-    js_object_set_field_by_name, ObjectHeader,
+    js_object_alloc_with_shape, js_object_get_field, js_object_get_field_by_name_f64,
+    js_object_set_field, js_object_set_field_by_name, ObjectHeader,
 };
 use crate::value::JSValue;
 
@@ -1321,6 +1321,86 @@ fn mark_disturbed(stream: f64) {
     set_hidden_value(stream, hidden_disturbed_key(), f64::from_bits(TAG_TRUE));
 }
 
+fn push_json_number(buf: &mut String, value: f64) {
+    if value.is_nan() || value.is_infinite() {
+        buf.push_str("null");
+    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+        let mut itoa_buf = itoa::Buffer::new();
+        buf.push_str(itoa_buf.format(value as i64));
+    } else {
+        let mut ryu_buf = ryu::Buffer::new();
+        buf.push_str(ryu_buf.format(value));
+    }
+}
+
+pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut String) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let obj = ptr as *const ObjectHeader;
+    let readable = own_field_by_key_bytes(obj, READABLE_FLAG_KEY).is_some();
+    let writable = own_field_by_key_bytes(obj, WRITABLE_FLAG_KEY).is_some();
+    if readable == writable {
+        return false;
+    }
+
+    buf.push_str(r#"{"_events":{},"#);
+    if readable {
+        let hwm =
+            own_field_by_key_bytes(obj, READABLE_HWM_KEY).unwrap_or_else(|| default_hwm(false));
+        let length = own_field_by_key_bytes(obj, READABLE_BUFFERED_KEY).unwrap_or(0.0);
+        buf.push_str(r#""_readableState":{"highWaterMark":"#);
+        push_json_number(buf, hwm);
+        buf.push_str(r#","buffer":[],"bufferIndex":0,"length":"#);
+        push_json_number(buf, length);
+        buf.push_str(r#","pipes":[],"awaitDrainWriters":null}}"#);
+    } else {
+        let hwm = own_field_by_key_bytes(obj, b"writableHighWaterMark")
+            .unwrap_or_else(|| default_hwm(false));
+        let length = 0.0;
+        let corked = own_field_by_key_bytes(obj, WRITABLE_CORKED_KEY).unwrap_or(0.0);
+        buf.push_str(r#""_writableState":{"highWaterMark":"#);
+        push_json_number(buf, hwm);
+        buf.push_str(r#","length":"#);
+        push_json_number(buf, length);
+        buf.push_str(r#","corked":"#);
+        push_json_number(buf, corked);
+        buf.push_str(r#","writelen":0,"bufferedIndex":0,"pendingcb":0}}"#);
+    }
+    true
+}
+
+unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
+    if obj.is_null() {
+        return None;
+    }
+    let keys = (*obj).keys_array;
+    let keys_ptr = keys as usize;
+    if keys.is_null() || keys_ptr < 0x10000 {
+        return None;
+    }
+    if gc_type_for_ptr(keys_ptr) != Some(crate::gc::GC_TYPE_ARRAY) {
+        return None;
+    }
+
+    let key_count = crate::array::js_array_length(keys) as usize;
+    if key_count > 65_536 {
+        return None;
+    }
+    for i in 0..key_count {
+        let key_val = crate::array::js_array_get(keys, i as u32);
+        if string_value_eq(f64::from_bits(key_val.bits()), key) {
+            let value = js_object_get_field(obj, i as u32);
+            return if value.bits() == TAG_UNDEFINED {
+                None
+            } else {
+                Some(f64::from_bits(value.bits()))
+            };
+        }
+    }
+    None
+}
+
 fn hidden_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
@@ -1364,6 +1444,16 @@ fn get_hidden_value(value: f64, key: *mut crate::string::StringHeader) -> Option
         None
     } else {
         Some(value)
+    }
+}
+
+pub(crate) fn is_classic_stream_instance_value(value: f64) -> bool {
+    let Some(obj) = object_ptr_from_value(value) else {
+        return false;
+    };
+    unsafe {
+        own_field_by_key_bytes(obj, READABLE_FLAG_KEY).is_some()
+            || own_field_by_key_bytes(obj, WRITABLE_FLAG_KEY).is_some()
     }
 }
 

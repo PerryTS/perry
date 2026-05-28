@@ -22,6 +22,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             visitor.visit_nanbox_u64_slot(value_bits);
         }
     });
+    scan_stream_event_emitter_prototype_roots_mut(visitor);
 }
 
 /// Special class ID for native module namespace objects
@@ -176,6 +177,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
+    }
+    if module_name == "stream" && property_name == "Stream" {
+        attach_stream_legacy_prototype(value);
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the

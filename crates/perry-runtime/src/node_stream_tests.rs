@@ -194,6 +194,35 @@ fn readable_options_read_callback_this_is_rebound_to_stream() {
 }
 
 #[test]
+fn stream_json_stringify_uses_node_state_shape() {
+    let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let mut readable_json = String::new();
+    unsafe {
+        assert!(try_stringify_node_stream_json(
+            raw_ptr_from_value(readable) as *const u8,
+            &mut readable_json,
+        ));
+    }
+    assert_eq!(
+        readable_json,
+        r#"{"_events":{},"_readableState":{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":0,"pipes":[],"awaitDrainWriters":null}}"#
+    );
+
+    let writable = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let mut writable_json = String::new();
+    unsafe {
+        assert!(try_stringify_node_stream_json(
+            raw_ptr_from_value(writable) as *const u8,
+            &mut writable_json,
+        ));
+    }
+    assert_eq!(
+        writable_json,
+        r#"{"_events":{},"_writableState":{"highWaterMark":65536,"length":0,"corked":0,"writelen":0,"bufferedIndex":0,"pendingcb":0}}"#
+    );
+}
+
+#[test]
 fn stream_methods_use_implicit_this_without_closure_capture() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let prev_this = crate::object::js_implicit_this_set(stream);
