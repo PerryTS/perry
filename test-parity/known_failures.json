@@ -248,12 +248,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline() callback never fires (depends on stream event delivery). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/object-mode": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable objectMode push/data events don't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/set-encoding": {
     "issue": "1532",
     "added": "2026-05-23",
