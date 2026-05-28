@@ -1274,12 +1274,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline 3-stage mid-error — src/sink destroy flags or err wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/destroyed-during-data-flow": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() inside 'data' listener — emits wrong data count. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/from-array-of-promises": {
     "issue": "1532",
     "added": "2026-05-24",

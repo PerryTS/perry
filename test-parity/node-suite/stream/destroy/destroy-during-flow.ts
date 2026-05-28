@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
-// destroy() in the middle of flowing — outstanding data is dropped,
-// 'data' stops, 'close' fires.
+// destroy() in the middle of flowing rejects future pushes but still lets
+// chunks already queued before the close event drain.
 const r = new Readable({ read() {} });
 let dataCount = 0;
 let closed = false;
@@ -14,5 +14,5 @@ r.on("close", () => {
   console.log("closed:", closed);
 });
 r.push("a");
-r.push("b"); // shouldn't be emitted as data
+r.push("b"); // queued before close, so it still emits as data
 r.push(null);
