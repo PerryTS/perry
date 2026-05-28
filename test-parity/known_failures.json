@@ -1412,12 +1412,6 @@
     "category": "bug-open",
     "reason": "node:stream: post-pipe-end destroyed flags wrong on source or destination. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/writable-length-tracker": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: writableLength does not track buffered bytes in the writable queue. Flips to PASS when #1539 lands."
-  },
   "node-suite/stream/readable/options-autoDestroy-explicit": {
     "issue": "1532",
     "added": "2026-05-24",
