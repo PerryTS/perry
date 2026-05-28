@@ -13,6 +13,7 @@ use std::cell::RefCell;
 thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+    static STREAM_EVENT_EMITTER_PROTOTYPES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -177,6 +178,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
+    if module_name == "stream" && property_name == "Stream" {
+        attach_stream_legacy_prototype(value);
+    }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
     // constructor. `PerformanceObserver` is a function value (a bound-method
@@ -259,6 +263,38 @@ fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
         "prototype",
         proto_value,
     );
+}
+
+fn attach_stream_legacy_prototype(constructor_value: f64) {
+    let proto = js_object_alloc_with_shape(
+        0x7FFF_FF33,
+        1,
+        b"constructor\0".as_ptr(),
+        b"constructor\0".len() as u32,
+    );
+    js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
+        let mut protos = protos.borrow_mut();
+        let raw = proto as usize;
+        if !protos.contains(&raw) {
+            protos.push(raw);
+        }
+    });
+    crate::closure::closure_set_dynamic_prop(
+        (constructor_value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+        "prototype",
+        crate::value::js_nanbox_pointer(proto as i64),
+    );
+}
+
+pub(crate) fn is_stream_event_emitter_prototype_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| protos.borrow().contains(&raw))
 }
 
 pub(crate) unsafe fn bound_native_callable_module_and_method(
@@ -1944,4 +1980,23 @@ unsafe fn create_fs_constants_object() -> f64 {
     // GC_STORE_AUDIT(ROOT): FS_CONSTANTS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
     FS_CONSTANTS_CACHE.store(result.to_bits(), Ordering::Relaxed);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_stream_prototype_is_event_emitter_instanceof_candidate() {
+        let stream_ctor = bound_native_callable_export_value("stream", "Stream");
+        let stream_ptr = (stream_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
+        let stream_proto = crate::closure::closure_get_dynamic_prop(stream_ptr, "prototype");
+        assert!(is_stream_event_emitter_prototype_value(stream_proto));
+
+        let event_emitter = bound_native_callable_export_value("events", "EventEmitter");
+        assert_eq!(
+            js_instanceof_dynamic(stream_proto, event_emitter).to_bits(),
+            crate::value::TAG_TRUE,
+        );
+    }
 }

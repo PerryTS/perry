@@ -1349,6 +1349,11 @@ fn get_hidden_value(value: f64, key: *mut crate::string::StringHeader) -> Option
     }
 }
 
+pub(crate) fn is_classic_stream_instance_value(value: f64) -> bool {
+    get_hidden_value(value, hidden_readable_flag_key()).is_some()
+        || get_hidden_value(value, hidden_writable_flag_key()).is_some()
+}
+
 fn set_hidden_value(value: f64, key: *mut crate::string::StringHeader, field_value: f64) {
     if let Some(obj) = object_ptr_from_value(value) {
         js_object_set_field_by_name(obj, key, field_value);
