@@ -60,6 +60,7 @@ pub mod pointer_event;
 pub mod process;
 pub mod promise;
 pub mod regex;
+pub mod safe_area;
 pub mod set;
 pub mod string;
 pub mod symbol;

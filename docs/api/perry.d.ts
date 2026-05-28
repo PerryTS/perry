@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1488 entries across 82 modules
+// Coverage: 1489 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1301,6 +1301,8 @@ declare module "perry/system" {
   export function getLocale(...args: any[]): any;
   /** stdlib */
   export function getOSVersion(...args: any[]): any;
+  /** stdlib */
+  export function getSafeAreaInsets(...args: any[]): any;
   /** stdlib */
   export function imagePickerPick(...args: any[]): any;
   /** stdlib */

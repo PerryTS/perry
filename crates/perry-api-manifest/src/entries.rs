@@ -2933,6 +2933,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- perry/system — auto-derivable from PERRY_SYSTEM_TABLE. ---
     method("perry/system", "isDarkMode", false, None),
     method("perry/system", "getDeviceIdiom", false, None),
+    method("perry/system", "getSafeAreaInsets", false, None),
     method("perry/system", "getDeviceModel", false, None),
     // Bug-report-flow utility: stable OS-version string per
     // platform (e.g. `"15.2"`, `"macOS 14.5"`, `"Android 14"`).
