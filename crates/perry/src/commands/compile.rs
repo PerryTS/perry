@@ -36,6 +36,7 @@ mod optimized_libs;
 mod parse_cache;
 mod post_link;
 mod precompile_capture;
+mod reachability;
 mod resolve;
 mod resources;
 mod sandbox_buildrs;
@@ -290,6 +291,18 @@ pub fn run_with_parse_cache(
     )?;
 
     run_post_collect_preflight(&args, &mut ctx, format)?;
+
+    // #2309: tree-shake the final module graph — prune unreachable
+    // node_modules modules and re-raise any deferred refusal that survives.
+    // No-op unless tree-shaking is enabled (byte-identical to pre-#2309).
+    {
+        let entry_canonical = ctx.entry_canonical.clone().unwrap_or_else(|| {
+            args.input
+                .canonicalize()
+                .unwrap_or_else(|_| args.input.clone())
+        });
+        reachability::tree_shake(&mut ctx, &entry_canonical)?;
+    }
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
     if matches!(args.target.as_deref(), Some("web") | Some("wasm")) {

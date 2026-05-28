@@ -597,6 +597,56 @@ pub struct CompilationContext {
     /// makes the dangerous "compile this random npm package into the
     /// binary" surface a two-key opt-in.
     pub allow_compile_packages: Vec<String>,
+    /// #2309: tree-shaking / dead-code elimination enabled for this build.
+    /// Off (default) ⇒ behaviour is byte-identical to pre-#2309: no refusal
+    /// deferral, no reachability prune, no `process.env` define-folding.
+    /// Sources (any enables): `PERRY_TREE_SHAKE=1` env, or
+    /// `perry.experiments.treeShake: true` in the host `package.json`.
+    pub tree_shake: bool,
+    /// #2309: refusals (`new Function` RuntimeUnknown, #463 unimplemented APIs)
+    /// recorded while lowering `node_modules` modules under tree-shaking,
+    /// instead of hard-erroring. After reachability is computed, any whose
+    /// module survived the prune is re-raised; the rest are dropped silently
+    /// (the offending code never ships). Tagged with the canonical module path
+    /// by the collect driver after each lower.
+    pub deferred_refusals: Vec<perry_hir::DeferredRefusal>,
+    /// #2309: cache of each package's `sideEffects` field, keyed by the
+    /// package directory (the dir containing the owning `package.json`).
+    /// Drives whether a bare side-effect import edge of a reachable module may
+    /// be dropped during the prune.
+    pub side_effects_cache: HashMap<PathBuf, SideEffects>,
+    /// #2309 (Stage 2): build-time `process.env.X` substitutions, esbuild
+    /// `define`-style. Read from `perry.define` in the host `package.json`
+    /// only (same trust boundary as `compilePackages`), plus an implicit
+    /// `NODE_ENV → "production"` default applied to `node_modules` code unless
+    /// overridden. Keyed by the full `process.env.<NAME>` string.
+    pub define: HashMap<String, DefineValue>,
+}
+
+/// #2309: a package's declared `sideEffects` (package.json). `Unknown` (the
+/// default for an absent/unparseable field) is treated as side-effectful —
+/// the conservative choice that never drops code.
+#[derive(Debug, Clone)]
+pub enum SideEffects {
+    /// `"sideEffects": false` — no module in the package has observable
+    /// top-level side effects; bare side-effect import edges are droppable.
+    None,
+    /// `"sideEffects": true`, absent, or unparseable — treat every module as
+    /// side-effectful (conservative).
+    Unknown,
+    /// `"sideEffects": ["glob", ...]` — only files matching a glob have side
+    /// effects; others are droppable. Globs are relative to the package dir.
+    Globs(Vec<String>),
+}
+
+/// #2309 (Stage 2): a build-time `define` value. Parsed from `perry.define`
+/// (JSON value) into a folded HIR literal.
+#[derive(Debug, Clone)]
+pub enum DefineValue {
+    Str(String),
+    Bool(bool),
+    Number(f64),
+    Null,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -658,6 +708,10 @@ impl CompilationContext {
             allow_dynamic_hosts: false,
             allow_native_library: Vec::new(),
             allow_compile_packages: Vec::new(),
+            tree_shake: false,
+            deferred_refusals: Vec::new(),
+            side_effects_cache: HashMap::new(),
+            define: HashMap::new(),
         }
     }
 }

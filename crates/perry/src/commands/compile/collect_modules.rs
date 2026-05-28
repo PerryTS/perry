@@ -475,6 +475,15 @@ pub(super) fn collect_modules(
     // any violation site without re-reading the file. Cleared right
     // after the lower call so it can't leak to unrelated work on this
     // thread.
+    // #2309: arm the tree-shake deferral sink so `new Function` / #463
+    // refusals in this module are recorded (and fall through) instead of
+    // hard-erroring — but only for node_modules modules under tree-shaking.
+    // User/host source refusals stay fatal. The sink is thread-local
+    // (rayon-safe) and drained right after the lower below.
+    let tree_shake_defer_armed = ctx.tree_shake && is_in_node_modules;
+    if tree_shake_defer_armed {
+        perry_hir::arm_deferral_sink();
+    }
     perry_hir::set_current_module_source(source.clone());
     // #1681: re-install build-time precompile state on the (possibly rayon
     // worker) lowering thread — capture mode emits `precompile(EXPR)` source;
@@ -496,6 +505,17 @@ pub(super) fn collect_modules(
     perry_hir::clear_compile_packages_override();
     perry_hir::clear_current_module_source();
     perry_hir::clear_precompile_state();
+    // #2309: drain refusals deferred during this lower and tag them with the
+    // canonical module path so the post-collection prune can decide whether
+    // they survive. Done before the `?` below so a non-deferrable error can't
+    // leak the armed sink onto the next module on this thread.
+    if tree_shake_defer_armed {
+        let module_str = canonical.to_string_lossy().to_string();
+        for mut d in perry_hir::disarm_deferral_sink() {
+            d.module = module_str.clone();
+            ctx.deferred_refusals.push(d);
+        }
+    }
     let (mut hir_module, new_next_class_id) = lower_result?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 

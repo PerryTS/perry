@@ -90,14 +90,16 @@ pub(super) fn try_module_class_static(
                             )
                             .map(|h| format!(" {h}"))
                             .unwrap_or_default();
-                            crate::lower_bail!(
-                                outer_member.span,
+                            let msg = format!(
                                 "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
                                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
-                                module_name,
-                                class_name,
-                                hint,
+                                module_name, class_name, hint,
                             );
+                            // #2309: defer under tree-shaking; re-raised only
+                            // if the module survives pruning.
+                            if !crate::try_defer_refusal(msg.clone(), outer_member.span.lo.0) {
+                                crate::lower_bail!(outer_member.span, "{}", msg);
+                            }
                         }
                         if !is_sub_namespace {
                             if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
