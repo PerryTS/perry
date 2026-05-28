@@ -533,6 +533,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // would read garbage one word before the BufferHeader).
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 format_buffer_value(buf_ptr)
+            } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
+                let target = crate::proxy::js_proxy_target(value);
+                format_jsvalue(target, depth)
             } else if (ptr as usize) < 0x100000 {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
                 // POINTER_TAG values whose unboxed payload is a small
@@ -1177,7 +1180,10 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 // A small registry-id handle (`< 0x100000`, e.g. a Web Fetch
                 // Request) carries no GC header, so reading `ptr - 8` would
                 // deref unmapped memory — print a placeholder instead.
-                if (ptr as usize) < 0x100000 {
+                if crate::proxy::js_proxy_is_proxy(value) != 0 {
+                    let target = crate::proxy::js_proxy_target(value);
+                    format_jsvalue_for_json(target, depth)
+                } else if (ptr as usize) < 0x100000 {
                     "[object Object]".to_string()
                 } else {
                     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
