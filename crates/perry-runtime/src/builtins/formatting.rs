@@ -463,6 +463,109 @@ impl Drop for InspectSortedGuard {
     }
 }
 
+unsafe fn string_header_to_string(ptr: *mut StringHeader, fallback: &str) -> String {
+    if ptr.is_null() {
+        return fallback.to_string();
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).unwrap_or(fallback).to_string()
+}
+
+unsafe fn format_error_headline(error_ptr: *const crate::error::ErrorHeader) -> String {
+    let name_str = string_header_to_string((*error_ptr).name, "Error");
+    let message_str = string_header_to_string((*error_ptr).message, "");
+    if message_str.is_empty() {
+        name_str
+    } else {
+        format!("{}: {}", name_str, message_str)
+    }
+}
+
+unsafe fn format_error_stack_frame(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
+    let stack = string_header_to_string((*error_ptr).stack, "");
+    stack
+        .lines()
+        .skip(1)
+        .find(|line| !line.trim().is_empty())
+        .map(str::to_string)
+}
+
+unsafe fn format_error_array(arr_ptr: *const crate::array::ArrayHeader, depth: usize) -> String {
+    if arr_ptr.is_null() {
+        return "[]".to_string();
+    }
+    let length = (*arr_ptr).length as usize;
+    if length == 0 {
+        return "[]".to_string();
+    }
+    let data_ptr =
+        (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+    let mut out = String::from("[");
+    for i in 0..length {
+        out.push('\n');
+        out.push_str("    ");
+        out.push_str(&format_jsvalue_for_json(*data_ptr.add(i), depth + 1));
+    }
+    out.push('\n');
+    out.push_str("  ]");
+    out
+}
+
+unsafe fn format_error_value(error_ptr: *const crate::error::ErrorHeader, depth: usize) -> String {
+    let headline = format_error_headline(error_ptr);
+    let mut entries: Vec<(String, String)> =
+        crate::node_submodules::error_user_props(error_ptr as usize)
+            .into_iter()
+            .filter(|(key, _)| key != "cause" && key != "errors")
+            .map(|(key, value)| (key, format_jsvalue_for_json(value, depth + 1)))
+            .collect();
+
+    let cause = (*error_ptr).cause;
+    if !crate::value::JSValue::from_bits(cause.to_bits()).is_undefined() {
+        entries.push((
+            "[cause]".to_string(),
+            format_jsvalue_for_json(cause, depth + 1),
+        ));
+    }
+
+    if !(*error_ptr).errors.is_null() {
+        entries.push((
+            "[errors]".to_string(),
+            format_error_array((*error_ptr).errors, depth + 1),
+        ));
+    }
+
+    if entries.is_empty() {
+        return headline;
+    }
+
+    let mut out = headline;
+    if let Some(frame) = format_error_stack_frame(error_ptr) {
+        out.push('\n');
+        out.push_str(&frame);
+        out.push_str(" {");
+    } else {
+        out.push_str("\n{");
+    }
+
+    let last = entries.len().saturating_sub(1);
+    for (idx, (label, value)) in entries.into_iter().enumerate() {
+        out.push('\n');
+        out.push_str("  ");
+        out.push_str(&label);
+        out.push_str(": ");
+        out.push_str(&value);
+        if idx != last {
+            out.push(',');
+        }
+    }
+    out.push('\n');
+    out.push('}');
+    out
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -572,35 +675,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     };
 
                 if gc_type == crate::gc::GC_TYPE_ERROR {
-                    // Error object
                     let error_ptr = ptr as *const crate::error::ErrorHeader;
-                    let name_ptr = (*error_ptr).name;
-                    let message_ptr = (*error_ptr).message;
-
-                    let name_str = if name_ptr.is_null() {
-                        "Error".to_string()
-                    } else {
-                        let len = (*name_ptr).byte_len as usize;
-                        let data = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                        let bytes = std::slice::from_raw_parts(data, len);
-                        std::str::from_utf8(bytes).unwrap_or("Error").to_string()
-                    };
-
-                    let message_str = if message_ptr.is_null() {
-                        "".to_string()
-                    } else {
-                        let len = (*message_ptr).byte_len as usize;
-                        let data =
-                            (message_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                        let bytes = std::slice::from_raw_parts(data, len);
-                        std::str::from_utf8(bytes).unwrap_or("").to_string()
-                    };
-
-                    if message_str.is_empty() {
-                        name_str
-                    } else {
-                        format!("{}: {}", name_str, message_str)
-                    }
+                    format_error_value(error_ptr, depth)
                 } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Array — format as [ elem1, elem2, ... ] matching Node.js util.inspect.
                     // Cycle check FIRST so back-edges win over depth truncation
@@ -1204,36 +1280,8 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         };
 
                     if gc_type == crate::gc::GC_TYPE_ERROR {
-                        // Error object — format as "Error: <message>".
                         let error_ptr = ptr as *const crate::error::ErrorHeader;
-                        let name_ptr = (*error_ptr).name;
-                        let message_ptr = (*error_ptr).message;
-
-                        let name_str = if name_ptr.is_null() {
-                            "Error".to_string()
-                        } else {
-                            let len = (*name_ptr).byte_len as usize;
-                            let data =
-                                (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                            let bytes = std::slice::from_raw_parts(data, len);
-                            std::str::from_utf8(bytes).unwrap_or("Error").to_string()
-                        };
-
-                        let message_str = if message_ptr.is_null() {
-                            "".to_string()
-                        } else {
-                            let len = (*message_ptr).byte_len as usize;
-                            let data =
-                                (message_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                            let bytes = std::slice::from_raw_parts(data, len);
-                            std::str::from_utf8(bytes).unwrap_or("").to_string()
-                        };
-
-                        if message_str.is_empty() {
-                            name_str
-                        } else {
-                            format!("{}: {}", name_str, message_str)
-                        }
+                        format_error_value(error_ptr, depth)
                     } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                         // Cycle check FIRST so back-edges always print as
                         // `[Circular *N]` regardless of depth (#1204). The

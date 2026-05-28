@@ -472,6 +472,40 @@ pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
     })
 }
 
+/// Return user-assigned own properties on an Error object as materialized JS
+/// values so util.inspect/console formatting can show them.
+pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
+    if error_ptr == 0 {
+        return Vec::new();
+    }
+    let props: Vec<(String, ErrUserProp)> = ERROR_USER_PROPS.with(|m| {
+        m.borrow()
+            .get(&error_ptr)
+            .map(|props| {
+                props
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    let mut props: Vec<(String, f64)> = props
+        .into_iter()
+        .map(|(key, value)| {
+            let materialized = match value {
+                ErrUserProp::Str(s) => {
+                    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                    f64::from_bits(crate::js_nanbox_string(ptr as i64).to_bits())
+                }
+                ErrUserProp::Bits(bits) => f64::from_bits(bits),
+            };
+            (key, materialized)
+        })
+        .collect();
+    props.sort_by(|a, b| a.0.cmp(&b.0));
+    props
+}
+
 pub(crate) fn throw_invalid_arg() -> ! {
     let msg = b"The argument is invalid";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
