@@ -1071,6 +1071,21 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                     write.as_mut().unwrap().insert(cid, proto_ptr as usize);
                 }
                 unsafe { js_register_class_id(cid) };
+                // #1805: link the synthetic class_id into the original class's
+                // inheritance chain. `Object.getPrototypeOf(instance)` returns
+                // the instance pointer itself in Perry's model (see
+                // `js_object_get_prototype_of`), so `proto_ptr` here is a real
+                // class instance whose `class_id` field IS the user class's
+                // id. Registering it as the synthetic cid's parent lets
+                // `js_instanceof`'s `get_parent_class_id` walk reach the
+                // original class and match — without this, the chain stopped
+                // at the unregistered synthetic id and `Object.create(proto)
+                // instanceof C` was always false even though property /
+                // getter dispatch through the chain worked correctly.
+                let parent_class_id = unsafe { (*proto_ptr).class_id };
+                if parent_class_id != 0 && parent_class_id != cid {
+                    register_class(cid, parent_class_id);
+                }
                 class_id = cid;
             }
         }
