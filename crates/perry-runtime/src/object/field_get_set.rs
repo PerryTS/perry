@@ -924,7 +924,35 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16) {
+        // Two shapes of primitive-number receiver reach this generic slow
+        // path: (a) a finite double whose top16 is neither a NaN-box tag
+        // nor zero — most numbers (1.0 has top16 0x3FF0, -3.14 has
+        // 0xC008...), and (b) the f64 +0.0 whose full bit pattern is
+        // `0` — distinguishable from a raw heap pointer because real
+        // ObjectHeader allocations live above 0x10000 and from null /
+        // undefined because both are NaN-boxed with top16 == 0x7FFC.
+        let is_primitive_number =
+            (top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16)) || (top16 == 0 && bits == 0);
+        if is_primitive_number {
+            // #2138: auto-box the primitive number for the inherited
+            // `.constructor` read so `n.constructor === Number` (and the
+            // duck-type `value.constructor.name === "Number"` lodash/date-fns
+            // use to discriminate primitives). Route through the same
+            // `js_get_global_this_builtin_value` helper that backs bare-`Number`
+            // identifier resolution so identity comparison holds. Other unknown
+            // keys still return undefined per #2128 (was SIGSEGV pre-#2128).
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if key_bytes == b"constructor" {
+                        let v = js_get_global_this_builtin_value(b"Number".as_ptr(), 6);
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
             return JSValue::undefined();
         }
     }
