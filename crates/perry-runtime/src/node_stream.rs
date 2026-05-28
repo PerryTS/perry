@@ -622,6 +622,7 @@ fn writable_chunk_len(stream: f64, chunk: f64) -> f64 {
 
 fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
     subtract_writable_length(stream, len);
+    let has_error = err.to_bits() != TAG_UNDEFINED && err.to_bits() != TAG_NULL;
     if is_callable_value(callback) {
         let arg = if err.to_bits() == TAG_UNDEFINED {
             f64::from_bits(TAG_NULL)
@@ -632,6 +633,10 @@ fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
         unsafe {
             let _ = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
         }
+    }
+    if has_error {
+        destroy_stream(stream, err);
+        return;
     }
     if writable_length(stream) == 0.0 {
         let should_emit_drain = writable_need_drain_raw(stream)

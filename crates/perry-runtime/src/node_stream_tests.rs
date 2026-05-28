@@ -100,6 +100,19 @@ extern "C" fn write_capture_encoding(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn write_callback_error(
+    closure: *const ClosureHeader,
+    _chunk: f64,
+    _enc: f64,
+    cb: f64,
+) -> f64 {
+    let err = crate::closure::js_closure_get_capture_f64(closure, 0);
+    unsafe {
+        let _ = crate::closure::js_native_call_value(cb, [err].as_ptr(), 1);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn writev_capture(_closure: *const ClosureHeader, chunks: f64, cb: f64) -> f64 {
     let chunks = raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader;
     let len = crate::array::js_array_length(chunks);
@@ -941,6 +954,59 @@ fn writable_write_after_end_emits_error_without_calling_write() {
     assert_eq!(result.to_bits(), TAG_FALSE);
     ERROR_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
     WRITE_CAPTURED.with(|captured| assert_eq!(captured.borrow().as_slice(), &[b"a".to_vec()]));
+}
+
+#[test]
+fn writable_write_callback_error_emits_error_and_destroys() {
+    STREAM_EVENT_ARG_MATCHES.with(|matches| matches.borrow_mut().clear());
+
+    let msg = crate::string::js_string_from_bytes(b"sink-rejection".as_ptr(), 14);
+    let err = crate::error::js_error_new_with_message(msg);
+    let err_value = crate::value::js_nanbox_pointer(err as i64);
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    let write = js_closure_alloc(write_callback_error as *const u8, 1);
+    crate::closure::js_register_closure_arity(write_callback_error as *const u8, 3);
+    crate::closure::js_closure_set_capture_f64(write, 0, err_value);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    crate::closure::js_register_closure_arity(capture_expected_arg_listener as *const u8, 1);
+
+    let error = js_closure_alloc(capture_expected_arg_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(error, 0, err_value);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("error"),
+        f64::from_bits(JSValue::pointer(error as *const u8).bits()),
+    );
+
+    let write_cb = js_closure_alloc(capture_expected_arg_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(write_cb, 0, err_value);
+    let write_cb_value = f64::from_bits(JSValue::pointer(write_cb as *const u8).bits());
+    let result = js_node_stream_method_write3(
+        handle,
+        string_value("x"),
+        write_cb_value,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    assert_eq!(result.to_bits(), TAG_TRUE);
+
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    STREAM_EVENT_ARG_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true, true]);
+    });
+    assert_eq!(js_node_stream_method_destroyed(handle).to_bits(), TAG_TRUE);
+    assert_eq!(
+        js_node_stream_method_errored(handle).to_bits(),
+        err_value.to_bits()
+    );
 }
 
 #[test]
