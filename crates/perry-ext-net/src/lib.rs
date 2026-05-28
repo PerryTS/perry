@@ -35,7 +35,7 @@ use perry_ffi::{
     js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, BufferHeader,
     GcRootVisitor, JsClosure, JsPromise, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -140,8 +140,10 @@ pub(crate) mod statics {
     /// this set, giving Node's "fire once and auto-remove" semantics.
     /// Kept as a side table so the flat `Vec<i64>` listener storage
     /// (and the GC scanner that walks it) stays unchanged.
-    pub fn once_flags() -> &'static Mutex<HashMap<i64, HashMap<String, HashSet<i64>>>> {
-        static O: OnceLock<Mutex<HashMap<i64, HashMap<String, HashSet<i64>>>>> = OnceLock::new();
+    pub fn once_flags(
+    ) -> &'static Mutex<HashMap<i64, HashMap<String, std::collections::HashSet<i64>>>> {
+        static O: OnceLock<Mutex<HashMap<i64, HashMap<String, std::collections::HashSet<i64>>>>> =
+            OnceLock::new();
         O.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
@@ -1547,7 +1549,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
-                drain_once_listeners(id, "connect");
+                lifecycle::drain_once_listeners(id, "connect");
             }
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
@@ -1566,7 +1568,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(buf_f64);
                     }
                 }
-                drain_once_listeners(id, "data");
+                lifecycle::drain_once_listeners(id, "data");
             }
             PendingNetEvent::Error(id, msg) => {
                 let cbs = listeners_for(id, "error");
@@ -1582,7 +1584,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
                     }
                 }
-                drain_once_listeners(id, "error");
+                lifecycle::drain_once_listeners(id, "error");
             }
             PendingNetEvent::End(id) => {
                 // Issue #1852 — readable side ended (peer FIN). Fire the
@@ -1595,7 +1597,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
-                drain_once_listeners(id, "end");
+                lifecycle::drain_once_listeners(id, "end");
             }
             PendingNetEvent::Close(id) => {
                 for cb in listeners_for(id, "close") {
@@ -1617,7 +1619,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                     // Drain any `server.once('connection', cb)` flagged
                     // here too — listeners_for returned empty but the
                     // once-set may still be holding stale entries.
-                    drain_once_listeners(server_id, "connection");
+                    lifecycle::drain_once_listeners(server_id, "connection");
                     continue;
                 }
                 // Sockets returned by the codegen's `net.connect`
@@ -1639,7 +1641,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(sock_f64);
                     }
                 }
-                drain_once_listeners(server_id, "connection");
+                lifecycle::drain_once_listeners(server_id, "connection");
             }
             PendingNetEvent::ServerListening(server_id) => {
                 // Take + drain the 'listening' listeners so the
@@ -1701,7 +1703,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
                     }
                 }
-                drain_once_listeners(server_id, "error");
+                lifecycle::drain_once_listeners(server_id, "error");
             }
         }
     }
@@ -1728,39 +1730,8 @@ fn listeners_for(id: i64, event: &str) -> Vec<i64> {
         .unwrap_or_default()
 }
 
-/// Issue #2131 — drop any callback pointer flagged as a `once` listener
-/// for `(handle, event)` from both the listener vector and the
-/// once-flag side table. Called right after the pump finishes
-/// dispatching an event so the next emit doesn't re-fire it. The early
-/// return on an empty/missing set keeps the steady-state path (no
-/// `once` users) lock-light: one map probe + drop.
-fn drain_once_listeners(handle: i64, event: &str) {
-    let to_drop: HashSet<i64> = {
-        let mut once = statics::once_flags().lock().unwrap();
-        let Some(per) = once.get_mut(&handle) else {
-            return;
-        };
-        let Some(set) = per.remove(event) else {
-            return;
-        };
-        if per.is_empty() {
-            once.remove(&handle);
-        }
-        set
-    };
-    if to_drop.is_empty() {
-        return;
-    }
-    let mut listeners = statics::listeners().lock().unwrap();
-    if let Some(per) = listeners.get_mut(&handle) {
-        if let Some(vec) = per.get_mut(event) {
-            vec.retain(|cb| !to_drop.contains(cb));
-            if vec.is_empty() {
-                per.remove(event);
-            }
-        }
-    }
-}
+// `drain_once_listeners` lives in `lifecycle::drain_once_listeners` so
+// the file-size gate keeps a single owner for the EventEmitter surface.
 
 /// Returns 1 if there are pending events or live sockets keeping the
 /// runtime's main loop alive.

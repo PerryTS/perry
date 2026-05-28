@@ -98,6 +98,40 @@ fn register_listener_with_flag(handle: i64, event: String, cb: i64, once: bool) 
     }
 }
 
+/// Issue #2131 — drop any callback pointer flagged as a `once` listener
+/// for `(handle, event)` from both the listener vector and the
+/// once-flag side table. Called from `lib.rs`'s pump right after each
+/// event dispatch so the next emit doesn't re-fire it. The early
+/// return on an empty/missing set keeps the steady-state path (no
+/// `once` users) lock-light: one map probe + drop.
+pub(crate) fn drain_once_listeners(handle: i64, event: &str) {
+    let to_drop: HashSet<i64> = {
+        let mut once = statics::once_flags().lock().unwrap();
+        let Some(per) = once.get_mut(&handle) else {
+            return;
+        };
+        let Some(set) = per.remove(event) else {
+            return;
+        };
+        if per.is_empty() {
+            once.remove(&handle);
+        }
+        set
+    };
+    if to_drop.is_empty() {
+        return;
+    }
+    let mut listeners = statics::listeners().lock().unwrap();
+    if let Some(per) = listeners.get_mut(&handle) {
+        if let Some(vec) = per.get_mut(event) {
+            vec.retain(|cb| !to_drop.contains(cb));
+            if vec.is_empty() {
+                per.remove(event);
+            }
+        }
+    }
+}
+
 fn remove_listener_at_handle(handle: i64, event: &str, cb: i64) {
     let mut removed = false;
     {
