@@ -889,14 +889,28 @@ unsafe fn format_object_as_json(
         }
     }
 
+    let class_name = {
+        let class_id = (*obj_ptr).class_id;
+        if class_id == 0 {
+            None
+        } else {
+            crate::object::class_name_for_id(class_id).filter(|name| !name.is_empty())
+        }
+    };
+    let class_name_ref = class_name.as_deref();
+    let empty_object = || match class_name_ref {
+        Some(name) => format!("{name} {{}}"),
+        None => "{}".to_string(),
+    };
+
     let keys_array = (*obj_ptr).keys_array;
     if keys_array.is_null() {
-        return "{}".to_string();
+        return empty_object();
     }
 
     let key_count = crate::array::js_array_length(keys_array) as usize;
     if key_count == 0 {
-        return "{}".to_string();
+        return empty_object();
     }
 
     // Honor `Object.defineProperty(..., { enumerable: false })`. By default
@@ -928,6 +942,12 @@ unsafe fn format_object_as_json(
         } else {
             continue;
         };
+
+        // Perry stores private class fields in the regular key table, but
+        // Node's util.inspect never exposes them, even with showHidden.
+        if class_name_ref.is_some() && key_str.starts_with('#') {
+            continue;
+        }
 
         let is_enumerable = if descriptors_in_use {
             crate::object::get_property_attrs(obj_addr, &key_str)
@@ -979,9 +999,12 @@ unsafe fn format_object_as_json(
     }
 
     if parts.is_empty() {
-        return "{}".to_string();
+        return empty_object();
     }
-    let single_line = format!("{{ {} }}", parts.join(", "));
+    let single_line = match class_name_ref {
+        Some(name) => format!("{} {{ {} }}", name, parts.join(", ")),
+        None => format!("{{ {} }}", parts.join(", ")),
+    };
     // Node's `util.inspect` switches to multi-line layout when the single-line
     // rendering would exceed `breakLength` (default 80). The threshold is
     // measured against the body alone — we approximate with 72 here because
@@ -1004,7 +1027,10 @@ unsafe fn format_object_as_json(
         .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
-    format!("{{\n{}\n}}", body)
+    match class_name_ref {
+        Some(name) => format!("{} {{\n{}\n}}", name, body),
+        None => format!("{{\n{}\n}}", body),
+    }
 }
 
 /// Format a JSValue for JSON output (strings get quotes)
