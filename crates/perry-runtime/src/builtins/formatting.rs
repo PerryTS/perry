@@ -781,13 +781,16 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     // self-referencing case wins over the depth-2 collapse to
                     // `[Object]` (#1204). The depth cap is overridable via
                     // INSPECT_DEPTH_LIMIT for `%o` / `console.dir(v, { depth })`.
+                    let obj_ptr = ptr as *const crate::object::ObjectHeader;
+                    if let Some(label) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
+                        return format!("{label} {{}}");
+                    }
                     if let Err(id) = inspect_enter_circular(ptr as usize) {
                         return format!("[Circular *{}]", id);
                     }
                     if depth > inspect_depth_limit() {
                         return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                     }
-                    let obj_ptr = ptr as *const crate::object::ObjectHeader;
                     let keys_array = (*obj_ptr).keys_array;
 
                     // Always route through `format_object_as_json` so the
@@ -1326,13 +1329,16 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // depth-limit collapse to `[Object]` (#1204). The
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT
                         // for `%o` / `console.dir(v, { depth })`.
+                        let obj_ptr = ptr as *const crate::object::ObjectHeader;
+                        if let Some(label) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
+                            return format!("{label} {{}}");
+                        }
                         if let Err(id) = inspect_enter_circular(ptr as usize) {
                             return format!("[Circular *{}]", id);
                         }
                         if depth > inspect_depth_limit() {
                             return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                         }
-                        let obj_ptr = ptr as *const crate::object::ObjectHeader;
                         let keys_array = (*obj_ptr).keys_array;
                         let body_str = if !keys_array.is_null()
                             && (keys_array as usize) > 0x10000

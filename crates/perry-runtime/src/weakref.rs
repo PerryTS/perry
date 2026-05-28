@@ -25,6 +25,19 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
 const WEAKREF_SHAPE_ID: u32 = 0x7FFF_FE10;
 const FINREG_SHAPE_ID: u32 = 0x7FFF_FE11;
+pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0029;
+pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
+
+pub(crate) fn weak_wrapper_inspect_label(obj: *const ObjectHeader) -> Option<&'static str> {
+    if obj.is_null() {
+        return None;
+    }
+    match unsafe { (*obj).class_id } {
+        CLASS_ID_WEAKREF => Some("WeakRef"),
+        CLASS_ID_FINALIZATION_REGISTRY => Some("FinalizationRegistry"),
+        _ => None,
+    }
+}
 
 /// Allocate a `WeakRef` wrapper object that strongly holds the target value
 /// in a single field named `target`.
@@ -33,6 +46,9 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
     let packed = b"target\0";
     let obj = js_object_alloc_with_shape(WEAKREF_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     js_object_set_field(obj, 0, JSValue::from_bits(target.to_bits()));
+    unsafe {
+        (*obj).class_id = CLASS_ID_WEAKREF;
+    }
     obj
 }
 
@@ -65,6 +81,9 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     js_object_set_field(obj, 0, JSValue::from_bits(callback.to_bits()));
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 1, JSValue::array_ptr(entries_arr));
+    unsafe {
+        (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
+    }
     obj
 }
 
