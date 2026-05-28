@@ -869,6 +869,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_transform_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_readable_from_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // #1534: static introspection helpers reflecting tracked stream state.
     module.declare_function("js_node_stream_is_disturbed", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);

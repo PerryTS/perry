@@ -686,8 +686,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "from",
         class_filter: None,
-        runtime: "js_node_stream_readable_from",
-        args: &[NA_F64],
+        runtime: "js_node_stream_readable_from_options",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     // #1534: static introspection helpers `isDisturbed` and

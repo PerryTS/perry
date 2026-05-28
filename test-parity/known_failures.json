@@ -596,12 +596,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipe() called twice with same destination duplicates writes (should be no-op for second call). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-with-options": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(iter, options) — 2nd-arg stream options (objectMode/highWaterMark) ignored. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/end-false-option": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1351,12 +1345,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(string) — does not throw TypeError. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/readable/static-from-with-options": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(iter, opts) — objectMode/hwm 2nd-arg not applied. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/two-stage-error-stops": {
     "issue": "1531",

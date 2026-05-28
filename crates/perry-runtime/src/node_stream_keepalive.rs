@@ -142,6 +142,9 @@ static KEEP_NS_PASSTHROUGH_NEW: extern "C" fn(f64) -> f64 = super::js_node_strea
 #[used]
 static KEEP_NS_READABLE_FROM: extern "C" fn(f64) -> f64 = super::js_node_stream_readable_from;
 #[used]
+static KEEP_NS_READABLE_FROM_OPTIONS: extern "C" fn(f64, f64) -> f64 =
+    super::js_node_stream_readable_from_options;
+#[used]
 static KEEP_NS_IS_DISTURBED: extern "C" fn(f64) -> f64 = super::js_node_stream_is_disturbed;
 #[used]
 static KEEP_NS_IS_ERRORED: extern "C" fn(f64) -> f64 = super::js_node_stream_is_errored;

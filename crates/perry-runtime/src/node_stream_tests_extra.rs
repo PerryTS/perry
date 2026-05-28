@@ -624,6 +624,35 @@ fn stream_object_mode_fields_reflect_defaults_and_options() {
 }
 
 #[test]
+fn readable_from_uses_node_object_mode_and_high_water_mark_defaults() {
+    let mut default_chunks = crate::array::js_array_alloc(1);
+    default_chunks = crate::array::js_array_push_f64(default_chunks, string_value("a"));
+    let default_readable = js_node_stream_readable_from(box_pointer(default_chunks as *const u8));
+    let default_handle = raw_ptr_from_value(default_readable) as i64;
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(default_handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(js_node_stream_method_readable_hwm(default_handle), 1.0);
+
+    let mut byte_chunks = crate::array::js_array_alloc(1);
+    byte_chunks = crate::array::js_array_push_f64(byte_chunks, string_value("b"));
+    let opts = crate::object::js_object_alloc(0, 2);
+    js_object_set_field_by_name(opts, hidden_key(b"objectMode"), f64::from_bits(TAG_FALSE));
+    js_object_set_field_by_name(opts, hidden_key(b"highWaterMark"), 1.0);
+    let byte_readable = js_node_stream_readable_from_options(
+        box_pointer(byte_chunks as *const u8),
+        box_pointer(opts as *const u8),
+    );
+    let byte_handle = raw_ptr_from_value(byte_readable) as i64;
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(byte_handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(js_node_stream_method_readable_hwm(byte_handle), 1.0);
+}
+
+#[test]
 fn writable_corked_counter_tracks_cork_balance() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

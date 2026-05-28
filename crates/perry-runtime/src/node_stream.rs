@@ -2994,6 +2994,24 @@ fn normalize_readable_from_input(iterable: f64) -> f64 {
     box_pointer(arr as *const u8)
 }
 
+fn readable_from_options(opts: f64) -> f64 {
+    let merged = crate::object::js_object_alloc(0, 2);
+    let object_mode = !get_hidden_value(opts, hidden_key(b"objectMode"))
+        .is_some_and(|v| v.to_bits() == TAG_FALSE);
+    set_hidden_value(
+        box_pointer(merged as *const u8),
+        hidden_key(b"objectMode"),
+        f64::from_bits(if object_mode { TAG_TRUE } else { TAG_FALSE }),
+    );
+    let hwm = opt_number(opts, b"highWaterMark").unwrap_or(1.0);
+    set_hidden_value(
+        box_pointer(merged as *const u8),
+        hidden_key(b"highWaterMark"),
+        hwm,
+    );
+    box_pointer(merged as *const u8)
+}
+
 fn append_string_bytes(value: f64, out: &mut Vec<u8>) {
     let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
     append_string_ptr_bytes(ptr, out);
@@ -3741,12 +3759,17 @@ pub extern "C" fn js_node_stream_passthrough_new(opts: f64) -> f64 {
 /// `node:stream/consumers` can drain the current stub stream surface.
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_from(iterable: f64) -> f64 {
+    js_node_stream_readable_from_options(iterable, f64::from_bits(TAG_UNDEFINED))
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64) -> f64 {
     if matches!(iterable.to_bits(), TAG_NULL | TAG_UNDEFINED)
         || is_non_iterable_primitive_for_readable_from(iterable)
     {
         throw_readable_from_invalid_iterable();
     }
-    let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let readable = js_node_stream_readable_new(readable_from_options(opts));
     let raw = raw_ptr_from_value(readable);
     if raw >= 0x10000 {
         let chunks = normalize_readable_from_input(iterable);
