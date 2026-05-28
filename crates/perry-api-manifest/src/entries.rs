@@ -2672,6 +2672,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "close", true, Some("Agent")),
     method("http", "keepSocketAlive", true, Some("Agent")),
     method("http", "reuseSocket", true, Some("Agent")),
+    // Synthetic `__get_<name>` / `__set_<name>` accessor methods (HIR
+    // rewrites bare `agent.maxSockets` reads to `__get_maxSockets()`
+    // when the receiver is class-tagged) + their bare-name twins for
+    // sites where the rewrite doesn't fire. Keep parity with the rows
+    // in `crates/perry-codegen/src/lower_call/native_table/http.rs`
+    // (drift caught by perry-codegen/tests/manifest_consistency.rs).
+    method("http", "__get_maxSockets", true, Some("Agent")),
+    method("http", "__get_maxFreeSockets", true, Some("Agent")),
+    method("http", "__get_maxTotalSockets", true, Some("Agent")),
+    method("http", "__get_keepAliveMsecs", true, Some("Agent")),
+    method("http", "__get_keepAlive", true, Some("Agent")),
+    method("http", "__get_protocol", true, Some("Agent")),
+    method("http", "__set_protocol", true, Some("Agent")),
+    method("http", "maxSockets", true, Some("Agent")),
+    method("http", "maxFreeSockets", true, Some("Agent")),
+    method("http", "maxTotalSockets", true, Some("Agent")),
+    method("http", "keepAliveMsecs", true, Some("Agent")),
+    method("http", "keepAlive", true, Some("Agent")),
+    method("http", "protocol", true, Some("Agent")),
     method("https", "createServer", false, None),
     method("https", "request", false, None),
     method("https", "get", false, None),

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1404 entries across 82 modules.
+Total: 1417 entries across 82 modules.
 
 ## Modules
 
@@ -761,7 +761,13 @@ Total: 1404 entries across 82 modules.
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
+- `__get_keepAlive` — instance *(class: `Agent`)*
+- `__get_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__get_maxFreeSockets` — instance *(class: `Agent`)*
+- `__get_maxSockets` — instance *(class: `Agent`)*
+- `__get_maxTotalSockets` — instance *(class: `Agent`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
+- `__get_protocol` — instance *(class: `Agent`)*
 - `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
 - `__get_statusMessage` — instance *(class: `IncomingMessage`)*
@@ -769,6 +775,7 @@ Total: 1404 entries across 82 modules.
 - `__get_url` — instance *(class: `IncomingMessage`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
+- `__set_protocol` — instance *(class: `Agent`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
 - `addListener` — instance *(class: `HttpServer`)*
@@ -792,13 +799,19 @@ Total: 1404 entries across 82 modules.
 - `hasHeader` — instance *(class: `ServerResponse`)*
 - `headers` — instance *(class: `IncomingMessage`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
+- `keepAlive` — instance *(class: `Agent`)*
+- `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
+- `maxFreeSockets` — instance *(class: `Agent`)*
+- `maxSockets` — instance *(class: `Agent`)*
+- `maxTotalSockets` — instance *(class: `Agent`)*
 - `method` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `HttpServer`)*
 - `on` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `ServerResponse`)*
 - `pause` — instance *(class: `IncomingMessage`)*
+- `protocol` — instance *(class: `Agent`)*
 - `read` — instance *(class: `IncomingMessage`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
