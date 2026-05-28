@@ -1087,35 +1087,77 @@ pub extern "C" fn js_path_win32_format(obj_f64: f64) -> *mut StringHeader {
     string_to_js(&result)
 }
 
+fn current_dir_as_win32() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| normalize_win32_str(&cwd.to_string_lossy()))
+}
+
+fn resolve_win32_for_namespace(path_str: &str) -> String {
+    let normalized = normalize_win32_str(path_str);
+    let split = split_win32(&normalized);
+    if split.is_absolute {
+        return normalized;
+    }
+
+    if !split.prefix.is_empty() {
+        let cwd = current_dir_as_win32().unwrap_or_else(|| "\\".to_string());
+        let cwd_tail = cwd.trim_start_matches('\\');
+        if split.rest.is_empty() || split.rest == "." {
+            return normalize_win32_str(&format!("{}\\{}", split.prefix, cwd_tail));
+        }
+        return normalize_win32_str(&format!("{}\\{}\\{}", split.prefix, cwd_tail, split.rest));
+    }
+
+    let cwd = current_dir_as_win32().unwrap_or_default();
+    if cwd.is_empty() {
+        normalized
+    } else if cwd.ends_with('\\') {
+        normalize_win32_str(&format!("{}{}", cwd, normalized))
+    } else {
+        normalize_win32_str(&format!("{}\\{}", cwd, normalized))
+    }
+}
+
+fn win32_to_namespaced_path(path_str: &str) -> String {
+    if path_str.is_empty() {
+        return String::new();
+    }
+    let normalized = normalize_win32_str(path_str);
+    if normalized.starts_with("\\\\?\\") || normalized.starts_with("\\\\.\\") {
+        return normalized;
+    }
+
+    let resolved = resolve_win32_for_namespace(path_str);
+    if resolved.len() <= 2 {
+        return path_str.to_string();
+    }
+    if let Some(stripped) = resolved.strip_prefix("\\\\") {
+        let third = stripped.as_bytes().first().copied();
+        if third != Some(b'?') && third != Some(b'.') {
+            return format!("\\\\?\\UNC\\{}", stripped);
+        }
+    }
+
+    let split = split_win32(&resolved);
+    if split.is_absolute
+        && split.prefix.len() == 2
+        && split.prefix.as_bytes()[1] == b':'
+        && split.prefix.as_bytes()[0].is_ascii_alphabetic()
+    {
+        return format!("\\\\?\\{}", resolved);
+    }
+
+    resolved
+}
+
 #[no_mangle]
 pub extern "C" fn js_path_win32_to_namespaced_path(
     path_ptr: *const StringHeader,
 ) -> *mut StringHeader {
     unsafe {
         let s = string_from_header(path_ptr).unwrap_or_default();
-        // Node's win32 implementation prepends `\\?\` for drive-absolute
-        // and UNC paths (`\\?\C:\foo`, `\\?\UNC\server\share`). Bare
-        // relative paths and already-prefixed paths are returned as-is.
-        if s.is_empty() {
-            return string_to_js(&s);
-        }
-        let normalized = normalize_win32_str(&s);
-        if normalized.starts_with("\\\\?\\") || normalized.starts_with("\\\\.\\") {
-            return string_to_js(&normalized);
-        }
-        let split = split_win32(&normalized);
-        if split.is_absolute {
-            if let Some(stripped) = normalized.strip_prefix("\\\\") {
-                // UNC: "\\\\server\\share\\..." → "\\\\?\\UNC\\server\\share\\..."
-                let prefixed = format!("\\\\?\\UNC\\{}", stripped);
-                return string_to_js(&prefixed);
-            }
-            // Drive-absolute: "C:\\..." → "\\\\?\\C:\\..."
-            let prefixed = format!("\\\\?\\{}", normalized);
-            return string_to_js(&prefixed);
-        }
-        // Drive-relative or plain relative paths pass through unchanged.
-        string_to_js(&normalized)
+        string_to_js(&win32_to_namespaced_path(&s))
     }
 }
 
@@ -1252,7 +1294,9 @@ pub extern "C" fn js_path_win32_relative(
 
 #[cfg(test)]
 mod win32_normalize_tests {
-    use super::{normalize_win32_str, win32_basename_inner};
+    use super::{
+        current_dir_as_win32, normalize_win32_str, win32_basename_inner, win32_to_namespaced_path,
+    };
 
     #[test]
     fn drive_relative_bare_appends_dot() {
@@ -1316,5 +1360,22 @@ mod win32_normalize_tests {
         assert_eq!(normalize_win32_str("a//b//../b"), "a\\b");
         assert_eq!(normalize_win32_str("/foo/../../../bar"), "\\bar");
         assert_eq!(normalize_win32_str(""), ".");
+    }
+
+    #[test]
+    fn to_namespaced_path_resolves_but_only_namespaces_drive_and_unc() {
+        let cwd = current_dir_as_win32().unwrap();
+        let expected_relative = normalize_win32_str(&format!("{}\\foo", cwd));
+        assert_eq!(win32_to_namespaced_path("foo"), expected_relative);
+        assert_eq!(win32_to_namespaced_path("/tmp/x"), "\\tmp\\x");
+        assert_eq!(win32_to_namespaced_path("C:\\foo"), "\\\\?\\C:\\foo");
+        assert_eq!(
+            win32_to_namespaced_path("\\\\server\\share\\file"),
+            "\\\\?\\UNC\\server\\share\\file"
+        );
+        assert_eq!(
+            win32_to_namespaced_path("\\\\?\\C:\\already"),
+            "\\\\?\\C:\\already"
+        );
     }
 }
