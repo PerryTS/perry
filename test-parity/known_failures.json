@@ -1568,12 +1568,6 @@
     "category": "bug-open",
     "reason": "node:stream: promises.finished() — does not reject when stream errors. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/text-encoder-stream-exists": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TextEncoderStream/TextDecoderStream globals — not exposed or wrong shape. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/readable/read-multibyte-boundary": {
     "issue": "1532",
     "added": "2026-05-24",

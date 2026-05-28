@@ -869,6 +869,14 @@ pub(super) fn lower_builtin_new(
             Ok(Some(h))
         }
 
+        "TextEncoderStream" | "TextDecoderStream" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let h = ctx.block().call(DOUBLE, "js_text_encoding_stream_new", &[]);
+            Ok(Some(h))
+        }
+
         // node:stream/web QueuingStrategy classes (#1545). Both take a single
         // `{ highWaterMark }` options object; the runtime reads
         // `opts.highWaterMark` and builds a `{ highWaterMark, size }` object.

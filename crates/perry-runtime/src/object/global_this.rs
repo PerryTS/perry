@@ -134,6 +134,8 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "DataView",
     "TextEncoder",
     "TextDecoder",
+    "TextEncoderStream",
+    "TextDecoderStream",
     "URL",
     "URLSearchParams",
     "AbortController",

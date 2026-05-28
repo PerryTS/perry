@@ -1773,6 +1773,42 @@ mod tests {
     }
 
     #[test]
+    fn text_encoding_stream_globals_construct_readable_writable_shape() {
+        unsafe {
+            let global = js_get_global_this();
+            let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
+            assert!(!global_ptr.is_null());
+
+            for ctor_name in ["TextEncoderStream", "TextDecoderStream"] {
+                let ctor_key =
+                    crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
+                let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
+                assert!(
+                    ctor.is_pointer(),
+                    "{ctor_name} should be a closure-backed global"
+                );
+
+                let ctor_ptr = ctor.as_pointer::<crate::closure::ClosureHeader>();
+                assert_eq!((*ctor_ptr).type_tag, crate::closure::CLOSURE_MAGIC);
+
+                let instance =
+                    js_new_function_construct(f64::from_bits(ctor.bits()), std::ptr::null(), 0);
+                for field in ["readable", "writable"] {
+                    let key =
+                        crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+                    let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
+                    let present = js_object_has_property(instance, key_box);
+                    assert_ne!(
+                        crate::value::js_is_truthy(present),
+                        0,
+                        "{ctor_name} instance should expose {field}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn transition_cache_lookup_rejects_mutated_edge_target() {
         let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
         let keys = crate::array::js_array_alloc(4);

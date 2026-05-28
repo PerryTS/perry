@@ -92,6 +92,12 @@ pub(crate) fn lower_let(
         // X to a class alias so `new X(args)` dispatches to the
         // real class instead of the empty-object placeholder.
         Some(perry_hir::Expr::PropertyGet { object, property }) => {
+            if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
+                && matches!(property.as_str(), "TextEncoderStream" | "TextDecoderStream")
+            {
+                ctx.local_class_aliases
+                    .insert(name.to_string(), property.clone());
+            }
             if let perry_hir::Expr::LocalGet(other_id) = object.as_ref() {
                 if let Some(fields) = ctx.local_class_field_aliases.get(other_id) {
                     if let Some(class_name) = fields.get(property) {
