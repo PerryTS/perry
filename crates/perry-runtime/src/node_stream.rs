@@ -75,6 +75,7 @@ const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
 const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
 const STREAM_DRAIN_SCHEDULED_KEY: &[u8] = b"__perryStreamDrainScheduled";
+const STREAM_READABLE_SCHEDULED_KEY: &[u8] = b"__perryStreamReadableScheduled";
 const STREAM_END_SCHEDULED_KEY: &[u8] = b"__perryStreamEndScheduled";
 const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
@@ -141,6 +142,20 @@ extern "C" fn ns_readable_from_drain(closure: *const ClosureHeader) -> f64 {
         f64::from_bits(TAG_FALSE),
     );
     drain_readable_from_events(stream);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_readable_event_microtask(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    set_hidden_value(
+        stream,
+        hidden_readable_scheduled_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    let _ = emit_stream_event(stream, string_value(b"readable"), &[]);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -211,10 +226,7 @@ extern "C" fn ns_resume0(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
     let stream = this_value(closure);
-    mark_stream_ended(stream);
-    refresh_readable_aborted_flag(stream);
-    mark_disturbed(stream);
-    f64::from_bits(TAG_NULL)
+    read_stream_default_size(stream)
 }
 
 /// Shared `push(chunk)` accounting (#1539): track the buffered byte count and
@@ -237,7 +249,9 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
     if added > 0.0 {
+        push_readable_buffered_chunk(stream, chunk);
         mark_disturbed(stream);
+        schedule_readable_event(stream);
         let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
     }
     let hwm = get_hidden_value(stream, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
@@ -523,10 +537,7 @@ pub extern "C" fn js_node_stream_method_writable_finished(stream_handle: i64) ->
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    mark_stream_ended(stream);
-    refresh_readable_aborted_flag(stream);
-    mark_disturbed(stream);
-    f64::from_bits(TAG_NULL)
+    read_stream_default_size(stream)
 }
 
 #[no_mangle]
@@ -1141,6 +1152,7 @@ fn register_stub_arities() {
     register(ns_off2 as *const u8, 2);
     register(ns_remove_all_listeners1 as *const u8, 1);
     register(ns_readable_from_drain as *const u8, 0);
+    register(ns_readable_event_microtask as *const u8, 0);
     register(ns_readable_end_microtask as *const u8, 0);
     register(ns_writable_finish_microtask as *const u8, 0);
     register(ns_emit2 as *const u8, 2);
@@ -1225,6 +1237,11 @@ fn hidden_read_invoked_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_drain_scheduled_key() -> *mut crate::string::StringHeader {
     hidden_key(STREAM_DRAIN_SCHEDULED_KEY)
+}
+
+#[inline]
+fn hidden_readable_scheduled_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_READABLE_SCHEDULED_KEY)
 }
 
 #[inline]
@@ -1375,6 +1392,31 @@ fn schedule_readable_from_drain(stream: f64) {
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
+fn schedule_readable_event(stream: f64) {
+    if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0
+        || !readable_chunks_nonempty(stream)
+    {
+        return;
+    }
+    queue_readable_event(stream);
+}
+
+fn queue_readable_event(stream: f64) {
+    if has_truthy_hidden(stream, hidden_readable_scheduled_key())
+        || stream_listener_count_for_event(stream, string_value(b"readable")) == 0
+    {
+        return;
+    }
+    set_hidden_value(
+        stream,
+        hidden_readable_scheduled_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    let closure = js_closure_alloc(ns_readable_event_microtask as *const u8, 1);
+    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    crate::builtins::js_queue_microtask(closure as i64);
+}
+
 fn schedule_readable_end(stream: f64) {
     if has_truthy_hidden(stream, hidden_end_emitted_key())
         || has_truthy_hidden(stream, hidden_end_scheduled_key())
@@ -1419,6 +1461,72 @@ fn emit_readable_end_once(stream: f64) {
     }
 }
 
+fn push_readable_buffered_chunk(stream: f64, chunk: f64) {
+    let existing = readable_hidden_chunks(stream).unwrap_or_else(|| {
+        let arr = crate::array::js_array_alloc(0);
+        box_pointer(arr as *const u8)
+    });
+    if !is_array_like_value(existing) {
+        return;
+    }
+    let arr = raw_ptr_from_value(existing) as *mut crate::array::ArrayHeader;
+    let arr = crate::array::js_array_push_f64(arr, chunk);
+    set_hidden_value(stream, hidden_chunks_key(), box_pointer(arr as *const u8));
+}
+
+fn clear_readable_buffer(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_chunks_key(),
+        box_pointer(crate::array::js_array_alloc(0) as *const u8),
+    );
+    set_hidden_value(stream, hidden_buffered_key(), 0.0);
+}
+
+fn read_stream_default_size(stream: f64) -> f64 {
+    invoke_read_once(stream);
+    if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
+        if stream_hidden_ended(stream) {
+            refresh_readable_aborted_flag(stream);
+        }
+        return f64::from_bits(TAG_NULL);
+    }
+    let mut values = Vec::new();
+    if let Some(chunks) = readable_hidden_chunks(stream) {
+        push_chunk_values(chunks, &mut values, 0);
+    }
+    if values.is_empty() {
+        if stream_hidden_ended(stream) {
+            refresh_readable_aborted_flag(stream);
+        }
+        return f64::from_bits(TAG_NULL);
+    }
+    clear_readable_buffer(stream);
+    mark_disturbed(stream);
+    if stream_hidden_ended(stream) {
+        queue_readable_event(stream);
+    }
+    if values.len() == 1 {
+        return string_chunk_to_buffer(values[0]).unwrap_or(values[0]);
+    }
+    let result = crate::string::js_string_concat_chain(values.as_ptr(), values.len() as i32);
+    box_pointer(crate::buffer::js_buffer_from_string(result, 0) as *const u8)
+}
+
+fn string_chunk_to_buffer(value: f64) -> Option<f64> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        return None;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return None;
+    }
+    Some(box_pointer(
+        crate::buffer::js_buffer_from_string(ptr, 0) as *const u8
+    ))
+}
+
 fn drain_readable_from_events(stream: f64) {
     let data_event = string_value(b"data");
     if stream_listener_count_for_event(stream, data_event) == 0 {
@@ -1449,6 +1557,18 @@ fn is_array_like_value(value: f64) -> bool {
 
 fn readable_hidden_chunks(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_chunks_key())
+}
+
+fn readable_chunks_nonempty(stream: f64) -> bool {
+    let Some(chunks) = readable_hidden_chunks(stream) else {
+        return false;
+    };
+    if is_array_like_value(chunks) {
+        let raw = raw_ptr_from_value(chunks);
+        return raw >= 0x10000
+            && crate::array::js_array_length(raw as *const crate::array::ArrayHeader) > 0;
+    }
+    is_single_chunk_value(chunks)
 }
 
 fn readable_hidden_error(value: f64) -> Option<f64> {

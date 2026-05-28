@@ -7,6 +7,7 @@ use std::cell::RefCell;
 thread_local! {
     static WRITE_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static READABLE_READ_CAPTURED: RefCell<Vec<Option<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
     static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static WRITABLE_FINISH_COUNT: RefCell<usize> = const { RefCell::new(0) };
@@ -58,6 +59,20 @@ extern "C" fn capture_data_listener(closure: *const ClosureHeader, chunk: f64) -
         captured
             .borrow_mut()
             .push(js_node_stream_collect_bytes(readable))
+    });
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn capture_readable_listener(closure: *const ClosureHeader) -> f64 {
+    let stream = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let got = js_node_stream_method_read(raw_ptr_from_value(stream) as i64, f64::NAN);
+    READABLE_READ_CAPTURED.with(|captured| {
+        let value = if JSValue::from_bits(got.to_bits()).is_null() {
+            None
+        } else {
+            Some(js_node_stream_collect_bytes(got))
+        };
+        captured.borrow_mut().push(value);
     });
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -511,6 +526,30 @@ fn readable_push_emits_data_with_stream_this_and_deferred_end() {
     let _ = js_node_stream_method_push(handle, string_value("late"));
     READABLE_DATA_CAPTURED.with(|captured| {
         assert_eq!(captured.borrow().as_slice(), &[b"x".to_vec()]);
+    });
+}
+
+#[test]
+fn readable_read_default_size_drains_buffer_as_buffer_then_null() {
+    READABLE_READ_CAPTURED.with(|captured| captured.borrow_mut().clear());
+
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let readable_closure = js_closure_alloc(capture_readable_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_readable_listener as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(readable_closure, 0, stream);
+
+    let _ = js_node_stream_method_push(handle, string_value("abc"));
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("readable"),
+        box_pointer(readable_closure as *const u8),
+    );
+
+    let _ = crate::promise::js_promise_run_microtasks();
+    READABLE_READ_CAPTURED.with(|captured| {
+        assert_eq!(captured.borrow().as_slice(), &[Some(b"abc".to_vec()), None]);
     });
 }
 

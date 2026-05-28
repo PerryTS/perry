@@ -1364,12 +1364,6 @@
     "category": "bug-open",
     "reason": "node:stream: Transform default objectMode — readableObjectMode/writableObjectMode wrong default. Flips to PASS when #1539 lands."
   },
-  "node-suite/stream/readable/read-with-nan-size": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read(NaN) — NaN coercion to default behavior wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/writable-stream-null-sink": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1381,12 +1375,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: JSON.stringify(stream) — output shape differs from Node ({} vs something else). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/read-with-undefined-size": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read(undefined) — not equivalent to read() no-arg form. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/iter-yields-buffer-no-encoding": {
     "issue": "1532",
