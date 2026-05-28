@@ -36,6 +36,7 @@ mod intrinsics;
 mod local_array_methods;
 mod module_class_static;
 mod module_static;
+mod name_fold;
 mod native_module;
 mod nested_namespace;
 mod object_static;

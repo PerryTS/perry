@@ -9,7 +9,9 @@ use crate::ir::*;
 use crate::walker::{walk_expr_children, walk_expr_children_mut};
 
 mod builtins;
-pub(crate) use builtins::{is_builtin_function, is_builtin_global_value_name};
+pub(crate) use builtins::{
+    is_builtin_function, is_builtin_global_value_name, is_builtin_static_function_member,
+};
 
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///

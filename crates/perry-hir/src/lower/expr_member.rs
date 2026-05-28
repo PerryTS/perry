@@ -1111,6 +1111,63 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             }
         }
     }
+
+    // #2144: spec `.name` own-property on built-in functions / constructors.
+    //
+    // Built-in constructors (`TypeError`, `Promise`, `Array`, …) and the
+    // static functions on built-in namespaces / constructors (`Math.min`,
+    // `Promise.race`, `Array.isArray`, …) are not represented as named
+    // closure values in Perry. Reading their `.name` therefore falls through
+    // to a globalThis lookup that returns 0/undefined instead of the spec
+    // name string. `assert.throws` reports `expectedErrorConstructor.name`
+    // and Test262 regularly inspects built-in `.name`, so fold these reads
+    // here at lowering time when the receiver shape is unambiguous.
+    //
+    // Detection is gated on the *lowered* receiver expression — bare
+    // `GlobalGet(0)` (after the reroute-undo above for `TypeError.name`) or
+    // `PropertyGet { GlobalGet(0), <method> }` (for `Math.min.name` /
+    // `Promise.race.name`). Local shadowing (`const Math = …`) lowers the
+    // receiver to a `LocalGet` instead, so the fold is correctly skipped.
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if prop_ident.sym.as_ref() == "name" {
+            match &object_expr {
+                Expr::GlobalGet(0) => {
+                    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                        let name = obj_ident.sym.as_ref();
+                        if crate::analysis::is_builtin_global_value_name(name) {
+                            return Ok(Expr::String(name.to_string()));
+                        }
+                    }
+                }
+                Expr::PropertyGet {
+                    object: inner,
+                    property,
+                } => {
+                    if matches!(inner.as_ref(), Expr::GlobalGet(0)) {
+                        if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
+                            if let (
+                                ast::Expr::Ident(ns_ident),
+                                ast::MemberProp::Ident(method_ident),
+                            ) = (inner_member.obj.as_ref(), &inner_member.prop)
+                            {
+                                let ns = ns_ident.sym.as_ref();
+                                let method = method_ident.sym.as_ref();
+                                if method == property.as_str()
+                                    && crate::analysis::is_builtin_static_function_member(
+                                        ns, method,
+                                    )
+                                {
+                                    return Ok(Expr::String(method.to_string()));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     let object = Box::new(object_expr);
 
     // Unimplemented-API gate (#463). When the receiver is a

@@ -71,3 +71,122 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "process"
     )
 }
+
+/// Spec-defined static *function* members of built-in namespaces /
+/// constructors. Used by the `<Builtin>.<member>.name` HIR fold (#2144)
+/// to recognize cases where `.name` should resolve to the member ident
+/// string — `Math.min.name === "min"`, `Promise.race.name === "race"`,
+/// `Array.isArray.name === "isArray"`, and so on.
+///
+/// Only function-typed members are listed. Numeric constants (`Math.PI`,
+/// `Number.EPSILON`) and namespace-level objects are excluded so that
+/// reads like `Math.PI.name` continue to lower the normal way (which
+/// yields `undefined` on a number, matching Node).
+///
+/// The list is conservative — adding a new pair is a one-line change and
+/// the safe fallback (no fold → existing behavior) is the same shape as
+/// pre-fix. Mirrors well-known spec surfaces; the hot ones are the ones
+/// surfaced by `built-ins/Function` Test262 (38× `Cannot read … (reading
+/// 'name')` on the #799 radar).
+pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -> bool {
+    match namespace {
+        "Math" => matches!(
+            member,
+            "abs"
+                | "acos"
+                | "acosh"
+                | "asin"
+                | "asinh"
+                | "atan"
+                | "atan2"
+                | "atanh"
+                | "cbrt"
+                | "ceil"
+                | "clz32"
+                | "cos"
+                | "cosh"
+                | "exp"
+                | "expm1"
+                | "floor"
+                | "fround"
+                | "hypot"
+                | "imul"
+                | "log"
+                | "log10"
+                | "log1p"
+                | "log2"
+                | "max"
+                | "min"
+                | "pow"
+                | "random"
+                | "round"
+                | "sign"
+                | "sin"
+                | "sinh"
+                | "sqrt"
+                | "tan"
+                | "tanh"
+                | "trunc"
+        ),
+        "Promise" => matches!(
+            member,
+            "resolve" | "reject" | "all" | "race" | "allSettled" | "any" | "withResolvers" | "try"
+        ),
+        "Array" => matches!(member, "isArray" | "from" | "of" | "fromAsync"),
+        "Object" => matches!(
+            member,
+            "assign"
+                | "create"
+                | "defineProperties"
+                | "defineProperty"
+                | "entries"
+                | "freeze"
+                | "fromEntries"
+                | "getOwnPropertyDescriptor"
+                | "getOwnPropertyDescriptors"
+                | "getOwnPropertyNames"
+                | "getOwnPropertySymbols"
+                | "getPrototypeOf"
+                | "groupBy"
+                | "hasOwn"
+                | "is"
+                | "isExtensible"
+                | "isFrozen"
+                | "isSealed"
+                | "keys"
+                | "preventExtensions"
+                | "seal"
+                | "setPrototypeOf"
+                | "values"
+        ),
+        "Number" => matches!(
+            member,
+            "isFinite" | "isInteger" | "isNaN" | "isSafeInteger" | "parseFloat" | "parseInt"
+        ),
+        "String" => matches!(member, "fromCharCode" | "fromCodePoint" | "raw"),
+        "Symbol" => matches!(member, "for" | "keyFor"),
+        "JSON" => matches!(member, "parse" | "stringify"),
+        "Date" => matches!(member, "now" | "UTC" | "parse"),
+        "ArrayBuffer" => matches!(member, "isView"),
+        "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+        | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
+        | "BigUint64Array" => matches!(member, "from" | "of"),
+        "Reflect" => matches!(
+            member,
+            "apply"
+                | "construct"
+                | "defineProperty"
+                | "deleteProperty"
+                | "get"
+                | "getOwnPropertyDescriptor"
+                | "getPrototypeOf"
+                | "has"
+                | "isExtensible"
+                | "ownKeys"
+                | "preventExtensions"
+                | "set"
+                | "setPrototypeOf"
+        ),
+        _ => false,
+    }
+}

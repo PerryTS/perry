@@ -725,6 +725,46 @@ pub(super) fn try_native_module_methods(
                             )));
                         }
                         "getOwnPropertyDescriptor" => {
+                            // #2144: built-in function `.name` descriptor.
+                            //
+                            // `Object.getOwnPropertyDescriptor(<BuiltinCtor>,
+                            // "name")` and `…(<BuiltinNs>.<staticFn>, "name")`
+                            // — the runtime path returns `undefined` because
+                            // the bare ctor/static-fn lowers to a
+                            // `PropertyGet { GlobalGet(0), … }` whose value
+                            // is the 0 sentinel (no closure to read the
+                            // built-in `name` slot off of). Per spec the
+                            // descriptor is a non-writable, non-enumerable,
+                            // configurable data property whose value is the
+                            // function's name. Fold to an inline object
+                            // literal when we can statically recognize the
+                            // shape — same gating logic as the `.name` fold
+                            // in `expr_member.rs`.
+                            if call.args.len() >= 2 && args.len() >= 2 {
+                                let key_is_name = matches!(
+                                    call.args[1].expr.as_ref(),
+                                    ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("name")
+                                );
+                                if key_is_name {
+                                    let lowered_obj_is_global_intrinsic = match &args[0] {
+                                        Expr::GlobalGet(0) => true,
+                                        Expr::PropertyGet { object: inner, .. } => {
+                                            matches!(inner.as_ref(), Expr::GlobalGet(0))
+                                        }
+                                        _ => false,
+                                    };
+                                    if lowered_obj_is_global_intrinsic {
+                                        let folded = super::name_fold::builtin_fn_name_for_arg(
+                                            call.args[0].expr.as_ref(),
+                                        );
+                                        if let Some(fname) = folded {
+                                            return Ok(Ok(super::name_fold::name_data_descriptor(
+                                                fname,
+                                            )));
+                                        }
+                                    }
+                                }
+                            }
                             let mut iter = args.into_iter();
                             let obj = iter.next().unwrap_or(Expr::Undefined);
                             let key = iter.next().unwrap_or(Expr::Undefined);
