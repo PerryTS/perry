@@ -133,6 +133,52 @@ fn buffer_byte_from_js_value(value: f64) -> u8 {
     }
 }
 
+unsafe fn buffer_from_object_value_of(
+    ptr: usize,
+    original_value: f64,
+    encoding: i32,
+) -> Option<*mut BufferHeader> {
+    if ptr < 0x1000 {
+        return None;
+    }
+    let gc_type = *((ptr - crate::gc::GC_HEADER_SIZE) as *const u8);
+    if gc_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+
+    let value_of_key = js_string_from_bytes(b"valueOf".as_ptr(), 7);
+    let value_of = crate::object::js_object_get_field_by_name(
+        ptr as *const crate::object::ObjectHeader,
+        value_of_key,
+    );
+    if !value_of.is_pointer() {
+        return None;
+    }
+    let closure_ptr = value_of.as_pointer::<u8>() as usize;
+    if !crate::closure::is_closure_ptr(closure_ptr) {
+        return None;
+    }
+
+    let converted = crate::object::js_native_call_method(
+        original_value,
+        b"valueOf".as_ptr() as *const i8,
+        7,
+        ptr::null(),
+        0,
+    );
+    if converted.to_bits() == original_value.to_bits() {
+        return None;
+    }
+    let converted_value = crate::JSValue::from_bits(converted.to_bits());
+    if converted_value.is_null() || converted_value.is_undefined() {
+        return None;
+    }
+    if converted_value.is_any_string() || converted_value.is_pointer() {
+        return Some(js_buffer_from_value(converted.to_bits() as i64, encoding));
+    }
+    None
+}
+
 unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader> {
     if ptr < 0x1000 {
         return None;
@@ -176,12 +222,25 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
     Some(buf)
 }
 
+unsafe fn buffer_from_object_to_primitive(value: f64, encoding: i32) -> Option<*mut BufferHeader> {
+    let primitive = crate::symbol::js_to_primitive(value, 2);
+    if primitive.to_bits() == value.to_bits() {
+        return None;
+    }
+    let primitive_value = crate::JSValue::from_bits(primitive.to_bits());
+    if primitive_value.is_any_string() {
+        return Some(js_buffer_from_value(primitive.to_bits() as i64, encoding));
+    }
+    None
+}
+
 /// Create a Buffer from a value (auto-detects string vs array vs buffer)
 /// This is used by Buffer.from() which accepts multiple input types.
 #[no_mangle]
 pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut BufferHeader {
     let bits = value as u64;
     let jsval = crate::JSValue::from_bits(bits);
+    let value_f64 = f64::from_bits(bits);
 
     // Check if it's a NaN-boxed heap string
     if jsval.is_string() {
@@ -248,7 +307,11 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
             }
             buf
         }
+    } else if let Some(buf) = unsafe { buffer_from_object_value_of(ptr, value_f64, encoding) } {
+        buf
     } else if let Some(buf) = unsafe { buffer_from_array_like_object(ptr) } {
+        buf
+    } else if let Some(buf) = unsafe { buffer_from_object_to_primitive(value_f64, encoding) } {
         buf
     } else {
         // Assume it's an array of numbers
