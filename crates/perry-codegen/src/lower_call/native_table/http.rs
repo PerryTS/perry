@@ -370,6 +370,20 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },
+    // `server.address()` — returns `{ port, address, family }` (or `null`
+    // before listen completes). Runtime serializes to JSON; codegen
+    // parses via `NR_OBJ_FROM_JSON_STR`. Without this row, `server.address()`
+    // fell through to typed-feedback dispatch and returned NaN.
+    // (#2153 followup to #2129.)
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_address_json",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
     // IncomingMessage instance methods
     NativeModSig {
         module: "http",
@@ -826,6 +840,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_address_json",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
     // ========== node:http2 server (issue #577 Phase 3) ==========
     NativeModSig {
         module: "http2",
@@ -864,6 +887,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         runtime: "js_node_http2_server_on",
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http2",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("Http2SecureServer"),
+        runtime: "js_node_http2_server_address_json",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
     },
     // `@perryts/google-auth` is no longer bundled in perry-stdlib —
     // since v0.5.1015 the package is published as a standalone npm

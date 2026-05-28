@@ -410,6 +410,26 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             ("http" | "https", "request" | "get") => {
                                                 Some("ClientRequest")
                                             }
+                                            // #2153 — `const server = http.createServer(...)`
+                                            // inside a function body (the CJS wrapper closure
+                                            // counts: a raw `.js` user file is wrapped in
+                                            // `(function(){ ... })()` before lowering). The
+                                            // module-level + named-import paths
+                                            // (`createServer(...)` after
+                                            // `import { createServer } from 'node:http'`) were
+                                            // already registering correctly; the member-call
+                                            // form `http.createServer(...)` slipped through
+                                            // this arm's match because the row didn't exist.
+                                            // Without the tag, `server.listen(...)` /
+                                            // `server.on(...)` / `server.close()` falls
+                                            // through to `js_typed_feedback_native_call_method`
+                                            // → generic `js_native_call_method`, which has no
+                                            // HttpServer arm → returns NaN.
+                                            ("http", "createServer") => Some("HttpServer"),
+                                            ("https", "createServer") => Some("HttpsServer"),
+                                            ("http2", "createSecureServer") => {
+                                                Some("Http2SecureServer")
+                                            }
                                             // node-cron's `cron.schedule(expr, cb)` returns a job
                                             // handle whose `start()`/`stop()`/`isRunning()` methods
                                             // dispatch via the ("node-cron", true, METHOD) entries

@@ -3088,6 +3088,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "closeIdleConnections", true, Some("HttpServer")),
     method("http", "on", true, Some("HttpServer")),
     method("http", "addListener", true, Some("HttpServer")),
+    // #2153 — `.address()` was stubbed in the runtime
+    // (`js_node_http_server_address_json`) but missing from both
+    // `NATIVE_MODULE_TABLE` and the manifest.
+    method("http", "address", true, Some("HttpServer")),
     method("http", "on", true, Some("IncomingMessage")),
     method("http", "addListener", true, Some("IncomingMessage")),
     method("http", "pause", true, Some("IncomingMessage")),
@@ -3150,12 +3154,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("https", "listen", true, Some("HttpsServer")),
     method("https", "close", true, Some("HttpsServer")),
     method("https", "on", true, Some("HttpsServer")),
+    method("https", "address", true, Some("HttpsServer")),
     class("https", "Server"),
     // --- node:http2 server (issue #577 Phase 3) ---
     method("http2", "createSecureServer", false, None),
     method("http2", "listen", true, Some("Http2SecureServer")),
     method("http2", "close", true, Some("Http2SecureServer")),
     method("http2", "on", true, Some("Http2SecureServer")),
+    method("http2", "address", true, Some("Http2SecureServer")),
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),
