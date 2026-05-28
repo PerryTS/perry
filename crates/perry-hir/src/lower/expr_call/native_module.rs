@@ -288,6 +288,21 @@ pub(super) fn try_native_module_methods(
                                 args,
                             }));
                         }
+                        // #2135: POSIX credential setters — single numeric
+                        // ID arg, return undefined. Implemented as libc
+                        // wrappers in the runtime (string-username form is
+                        // a no-op today; see js_process_setuid for the
+                        // out-of-scope note).
+                        "setuid" | "seteuid" | "setgid" | "setegid" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
                         "emitWarning" => {
                             // process.emitWarning(warning[, type, code, ctor])
                             // — writes a formatted warning to stderr. Perry

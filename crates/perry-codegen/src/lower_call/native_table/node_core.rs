@@ -189,6 +189,44 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // #2135 (Node process parity): POSIX credential setters — single
+    // numeric ID arg, void return.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setuid",
+        class_filter: None,
+        runtime: "js_process_setuid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "seteuid",
+        class_filter: None,
+        runtime: "js_process_seteuid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setgid",
+        class_filter: None,
+        runtime: "js_process_setgid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setegid",
+        class_filter: None,
+        runtime: "js_process_setegid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
     // ========== Node URL ==========
     // `new Number/String/Boolean(...)` now lowers to
     // `Expr::BoxedPrimitiveNew` (see crates/perry-hir/src/lower/expr_new.rs)

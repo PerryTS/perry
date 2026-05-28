@@ -183,6 +183,89 @@ pub extern "C" fn js_process_getegid() -> f64 {
     }
 }
 
+/// POSIX credential setters (#2135). Each wraps the matching `libc::set*id`
+/// call; non-numeric arguments and errors are silently dropped (the call
+/// returns undefined), matching the "no-op stub" shape Perry uses for the
+/// other unimplemented privileged process methods. On non-unix targets the
+/// setters are unconditional no-ops. The runtime ignores ID-by-username
+/// forms (Node accepts `process.setuid("alice")` and resolves via NSS);
+/// passing a string here is a no-op — supporting the username form needs
+/// `getpwnam_r` plumbing that's out of scope for the surface-level fix.
+fn unix_id_arg(value: f64) -> Option<u32> {
+    let v = value;
+    if v.is_finite() {
+        let n = v as i64;
+        if n >= 0 && n <= u32::MAX as i64 {
+            return Some(n as u32);
+        }
+    }
+    None
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_setuid(uid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(uid) {
+            unsafe {
+                libc::setuid(id as libc::uid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = uid;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_seteuid(uid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(uid) {
+            unsafe {
+                libc::seteuid(id as libc::uid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = uid;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_setgid(gid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(gid) {
+            unsafe {
+                libc::setgid(id as libc::gid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = gid;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_setegid(gid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(gid) {
+            unsafe {
+                libc::setegid(id as libc::gid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = gid;
+    }
+}
+
 /// `process.getgroups()` — supplementary group IDs the process is a member
 /// of, as a JS array of numbers. Wraps `libc::getgroups(2)`; on non-unix
 /// targets returns an empty array (Node throws there, but Perry's existing
