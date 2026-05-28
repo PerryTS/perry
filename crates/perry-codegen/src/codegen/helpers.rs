@@ -568,7 +568,7 @@ pub(super) fn init_static_fields_late(
     // class whose static_methods include a block not yet hooked via
     // init (e.g. class expressions that bypass the stmt-decl path);
     // calling it here keeps the legacy behavior of "always run, just
-    // late" for those.
+    // late" for those. (#2278)
     for c in &hir.classes {
         for sm in &c.static_methods {
             if !sm.name.starts_with("__perry_static_init_") {
@@ -599,7 +599,9 @@ pub(super) fn init_static_fields_late(
 /// Returns true if `stmt` is a top-level `Expr(StaticMethodCall)`
 /// invoking the (`class_name`, `method_name`) pair — the shape HIR
 /// lowering emits at the class-decl position for each
-/// `__perry_static_init_*` synthetic method.
+/// `__perry_static_init_*` synthetic method. Used by
+/// `init_static_fields_late` to skip per-(class, block) pairs that
+/// have already been invoked inline. (#2278)
 fn init_calls_static_block(stmt: &perry_hir::Stmt, class_name: &str, method_name: &str) -> bool {
     if let perry_hir::Stmt::Expr(perry_hir::Expr::StaticMethodCall {
         class_name: c,

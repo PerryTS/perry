@@ -874,7 +874,7 @@ pub(crate) fn lower_stmt(
                     // is kept for class expressions that bypass this
                     // declaration path; it skips blocks already invoked
                     // via this inline call. Closes the `test_gap_class_advanced`
-                    // "static block initialized" diff.
+                    // "static block initialized" diff (#2278).
                     for sm in &class.static_methods {
                         if sm.name.starts_with("__perry_static_init_") {
                             module.init.push(Stmt::Expr(Expr::StaticMethodCall {
