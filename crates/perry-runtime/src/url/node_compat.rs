@@ -5,7 +5,43 @@
 use super::*;
 
 use super::parse::{create_url_object, is_valid_absolute_url, parse_url, resolve_url};
-use super::search_params::{url_decode, url_encode};
+use super::search_params::url_decode;
+
+const QUERYSTRING_ESCAPE_HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+fn legacy_querystring_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for &b in input.as_bytes() {
+        match b {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => out.push(b as char),
+            _ => {
+                out.push('%');
+                out.push(QUERYSTRING_ESCAPE_HEX[(b >> 4) as usize] as char);
+                out.push(QUERYSTRING_ESCAPE_HEX[(b & 0x0F) as usize] as char);
+            }
+        }
+    }
+    out
+}
+
+fn throw_url_format_invalid_arg() -> ! {
+    let msg = b"The \"urlObject\" argument must be of type object or string.";
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(msg_ptr);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
 
 /// Convert a file:// URL to a filesystem path
 /// Strips the "file://" prefix and percent-decodes the result
@@ -182,8 +218,8 @@ fn legacy_format_from_object(obj: *mut ObjectHeader) -> String {
                 let val = crate::object::js_object_get_field_by_name_f64(qobj, val_key);
                 parts.push(format!(
                     "{}={}",
-                    url_encode(&key),
-                    url_encode(&get_string_content(val))
+                    legacy_querystring_escape(&key),
+                    legacy_querystring_escape(&get_string_content(val))
                 ));
             }
             if !parts.is_empty() {
@@ -205,7 +241,13 @@ fn legacy_format_from_object(obj: *mut ObjectHeader) -> String {
 #[no_mangle]
 pub extern "C" fn js_url_format(value: f64, options: f64) -> f64 {
     let Some(obj) = object_from_f64(value) else {
-        return create_string_f64("");
+        let js_value = crate::value::JSValue::from_bits(value.to_bits());
+        if js_value.is_any_string() {
+            let ptr =
+                crate::value::js_get_string_pointer_unified(value) as *mut crate::StringHeader;
+            return create_string_f64(&string_from_header(ptr));
+        }
+        throw_url_format_invalid_arg();
     };
     let href = object_prop_string(obj, "href");
     let mut out = if !href.is_empty() {
