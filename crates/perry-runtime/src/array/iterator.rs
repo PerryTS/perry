@@ -146,6 +146,28 @@ fn has_named_next(value: f64) -> bool {
     is_callable_value(named_field(value, b"next"))
 }
 
+/// Issue #1572 — node:stream uses this from `node_stream::ns_iter_flat_map`
+/// to drive an async-iterable mapper result (an `async function*` return
+/// value) without re-deriving the `Symbol.asyncIterator` lookup +
+/// implicit-this dance.
+pub(crate) fn call_symbol_async_iterator_for_flat_map(value: f64) -> Option<f64> {
+    call_symbol_async_iterator(value)
+}
+
+/// Issue #1572 — same as `js_async_iterator_to_array` but reachable from
+/// the node_stream crate path so flatMap can flatten an `async function*`
+/// mapper result without duplicating the next()/done/value loop.
+pub(crate) fn async_iterator_to_array_for_flat_map(iter_f64: f64) -> *mut ArrayHeader {
+    js_async_iterator_to_array(iter_f64)
+}
+
+/// Issue #1572 — true when `value` is itself an iterator object (has a
+/// callable `.next()` own field). Used by flatMap to recognise a bare
+/// generator object that doesn't carry `[Symbol.asyncIterator]`.
+pub(crate) fn has_iterator_next(value: f64) -> bool {
+    has_named_next(value)
+}
+
 fn call_symbol_async_iterator(value: f64) -> Option<f64> {
     let sym = crate::symbol::well_known_symbol("asyncIterator");
     if sym.is_null() {
