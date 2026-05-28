@@ -1094,12 +1094,6 @@
     "category": "bug-open",
     "reason": "Regression test from #911 (express map undefined / http.METHODS). The METHODS property is now in the manifest (PR adding it alongside this entry); the test may still diverge from Node in the exact METHODS list shape. Re-evaluate once express compiles cleanly."
   },
-  "test_parity_stream_promises": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "node-suite/stream/imports/promises-ns": {
     "issue": "1533",
     "added": "2026-05-23",
