@@ -510,9 +510,30 @@ pub extern "C" fn js_console_count_value(label_value: f64) {
     js_console_count(console_label_from_value(label_value));
 }
 
+fn warn_console_count_missing(label: &str) {
+    eprintln!("Warning: Count for '{}' does not exist", label);
+}
+
 #[no_mangle]
 pub extern "C" fn js_console_count_reset_value(label_value: f64) {
-    js_console_count_reset(console_label_from_value(label_value));
+    let jsval = JSValue::from_bits(label_value.to_bits());
+    if jsval.is_undefined() || jsval.is_any_string() {
+        js_console_count_reset(console_label_from_value(label_value));
+        return;
+    }
+    if jsval.is_pointer() {
+        let ptr = jsval.as_pointer::<u8>() as usize;
+        if crate::symbol::is_registered_symbol(ptr) {
+            console_type_error_for_symbol_label();
+        }
+    }
+
+    // Node's current countReset checks the raw label against its counter map
+    // before deleting `${label}`. Non-string labels counted under their string
+    // form therefore warn and do not reset.
+    let label_ptr = js_string_coerce(label_value) as *const StringHeader;
+    let label = unsafe { label_from_str_ptr(label_ptr) };
+    warn_console_count_missing(&label);
 }
 
 #[no_mangle]
@@ -583,13 +604,13 @@ pub extern "C" fn js_console_count(label_ptr: *const StringHeader) {
 pub extern "C" fn js_console_count_reset(label_ptr: *const StringHeader) {
     let label = unsafe { label_from_str_ptr(label_ptr) };
     if label == "NaN" {
-        eprintln!("Warning: Count for '{}' does not exist", label);
+        warn_console_count_missing(&label);
         return;
     }
     CONSOLE_COUNTERS.with(|c| {
         let mut map = c.borrow_mut();
         if map.remove(&label).is_none() {
-            eprintln!("Warning: Count for '{}' does not exist", label);
+            warn_console_count_missing(&label);
         }
     });
 }
