@@ -7,29 +7,81 @@ use super::*;
 use super::parse::{create_url_object, is_valid_absolute_url, parse_url, resolve_url};
 use super::search_params::{url_decode, url_encode};
 
+fn throw_url_type_error_with_code(message: &str, code: &'static str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_file_url_pathname(pathname: &str) -> String {
+    let bytes = pathname.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if bytes[i + 1] == b'2' && (bytes[i + 2] | 0x20) == b'f' {
+                throw_url_type_error_with_code(
+                    "File URL path must not include encoded / characters",
+                    "ERR_INVALID_FILE_URL_PATH",
+                );
+            }
+            if let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Convert a file:// URL to a filesystem path
 /// Strips the "file://" prefix and percent-decodes the result
 /// js_url_file_url_to_path(url_f64: f64) -> f64 (NaN-boxed string)
 #[no_mangle]
 pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
-    let url_string = get_string_content(url_f64);
+    let url_string = object_from_f64(url_f64)
+        .map(|obj| object_prop_string(obj, "href"))
+        .unwrap_or_else(|| {
+            let ptr =
+                crate::value::js_get_string_pointer_unified(url_f64) as *mut crate::StringHeader;
+            string_from_header(ptr)
+        });
 
-    // Strip file:// prefix
-    let path = if url_string.starts_with("file:///") {
-        // file:///path → /path (Unix)
-        &url_string[7..]
-    } else if url_string.starts_with("file://") {
-        // file://host/path or file:///path
-        &url_string[7..]
-    } else if url_string.starts_with("file:") {
-        &url_string[5..]
-    } else {
-        // Not a file URL, return as-is
-        &url_string
+    let Some(after_scheme) = url_string.strip_prefix("file:") else {
+        throw_url_type_error_with_code("The URL must be of scheme file", "ERR_INVALID_URL_SCHEME");
     };
 
-    // Percent-decode the path
-    let decoded = url_decode(path);
+    let pathname = if let Some(authority_and_path) = after_scheme.strip_prefix("//") {
+        let path_start = authority_and_path
+            .find('/')
+            .unwrap_or(authority_and_path.len());
+        let host = &authority_and_path[..path_start];
+        if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+            throw_url_type_error_with_code(
+                "File URL host must be \"localhost\" or empty on darwin",
+                "ERR_INVALID_FILE_URL_HOST",
+            );
+        }
+        &authority_and_path[path_start..]
+    } else {
+        after_scheme
+    };
+    let pathname = pathname.split(['?', '#']).next().unwrap_or_default();
+
+    let decoded = decode_file_url_pathname(pathname);
     create_string_f64(&decoded)
 }
 
