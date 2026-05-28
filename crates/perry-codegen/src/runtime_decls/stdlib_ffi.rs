@@ -1166,6 +1166,24 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_net_server_close", VOID, &[I64, I64]);
     module.declare_function("js_net_server_address", I64, &[I64]);
     module.declare_function("js_net_server_on", VOID, &[I64, I64, I64]);
+    // Issue #2131 — net.Socket / net.Server lifecycle + EventEmitter
+    // surface (lifecycle.rs in perry-ext-net). Listener-mutating
+    // entry points all return the handle for chaining (Node's
+    // semantics): the codegen NaN-boxes the I64 with POINTER_TAG via
+    // NR_PTR. `address` / `eventNames` return raw StringHeader
+    // pointers consumed by the NR_OBJ_FROM_JSON_STR pipeline.
+    module.declare_function("js_net_socket_address", I64, &[I64]);
+    module.declare_function("js_net_socket_once", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_socket_remove_listener", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_socket_remove_all_listeners", I64, &[I64, I64]);
+    module.declare_function("js_net_socket_listener_count", DOUBLE, &[I64, I64]);
+    module.declare_function("js_net_socket_event_names", I64, &[I64]);
+    module.declare_function("js_net_socket_reset_and_destroy", I64, &[I64]);
+    module.declare_function("js_net_server_once", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_server_remove_listener", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_server_remove_all_listeners", I64, &[I64, I64]);
+    module.declare_function("js_net_server_listener_count", DOUBLE, &[I64, I64]);
+    module.declare_function("js_net_server_event_names", I64, &[I64]);
 
     // ========== Performance ==========
     module.declare_function("js_performance_now", DOUBLE, &[]);

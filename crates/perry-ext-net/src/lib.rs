@@ -35,8 +35,9 @@ use perry_ffi::{
     js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, BufferHeader,
     GcRootVisitor, JsClosure, JsPromise, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
@@ -52,6 +53,14 @@ use tokio_rustls::client::TlsStream;
 // holds the `net.isIP*` + auto-select-family helpers.
 mod ip;
 mod tls;
+// #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
+// (once / off / removeAllListeners / listenerCount / eventNames /
+// resetAndDestroy, plus `socket.address()`). Re-exports keep the
+// `pub unsafe extern "C" fn js_net_*` symbols at the crate root so the
+// ext_registry well-known flip + native_table entries link the same as
+// the rest of the FFI surface.
+mod lifecycle;
+pub use lifecycle::*;
 
 use crate::tls::do_tls_handshake;
 
@@ -109,7 +118,7 @@ impl AsyncWrite for Transport {
 // them into one `SocketHandle` value would make the GC scanner walk noisier.
 // The pattern matches perry-stdlib's existing copy exactly.
 
-mod statics {
+pub(crate) mod statics {
     use super::*;
     use std::sync::OnceLock;
 
@@ -121,6 +130,19 @@ mod statics {
     pub fn listeners() -> &'static Mutex<HashMap<i64, HashMap<String, Vec<i64>>>> {
         static L: OnceLock<Mutex<HashMap<i64, HashMap<String, Vec<i64>>>>> = OnceLock::new();
         L.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Issue #2131 — closure pointers that were registered via
+    /// `socket.once(event, cb)` / `server.once(event, cb)`. Keyed by
+    /// handle id (socket OR server — they share the listener namespace)
+    /// then event name. After the pump fires an event, any callback in
+    /// this set is removed from both the regular listener vector AND
+    /// this set, giving Node's "fire once and auto-remove" semantics.
+    /// Kept as a side table so the flat `Vec<i64>` listener storage
+    /// (and the GC scanner that walks it) stays unchanged.
+    pub fn once_flags() -> &'static Mutex<HashMap<i64, HashMap<String, HashSet<i64>>>> {
+        static O: OnceLock<Mutex<HashMap<i64, HashMap<String, HashSet<i64>>>>> = OnceLock::new();
+        O.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
     pub fn pending_events() -> &'static Mutex<Vec<PendingNetEvent>> {
@@ -165,7 +187,7 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 /// Register the net GC root scanner exactly once. Safe to call from any
 /// `js_net_*` entry point on the main thread.
-fn ensure_gc_scanner_registered() {
+pub(crate) fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
     });
@@ -188,17 +210,21 @@ fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
     }
 }
 
-struct SocketState {
-    cmd_tx: mpsc::UnboundedSender<SocketCommand>,
+pub(crate) struct SocketState {
+    pub(crate) cmd_tx: mpsc::UnboundedSender<SocketCommand>,
     /// `Some` only between `js_net_socket_alloc` and the first
     /// `js_net_socket_method_connect`. Held here so the deferred-connect
     /// path (issue #422: `new net.Socket()` then `sock.connect(port,host)`)
     /// can move it into the spawned task at connect time.
     pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
     is_open: bool,
+    /// Issue #2131 — the kernel-assigned local address, populated after
+    /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
+    /// "undefined.address" cluster reports the actual bound port/family.
+    pub(crate) local_addr: Option<SocketAddr>,
 }
 
-enum SocketCommand {
+pub(crate) enum SocketCommand {
     Write(Vec<u8>),
     End,
     Destroy,
@@ -624,6 +650,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
+            local_addr: None,
         },
     );
     statics::listeners()
@@ -858,12 +885,19 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                                 // the accepted stream.
                                 let socket_id = next_id();
                                 let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+                                // Issue #2131 — record the accepted
+                                // stream's local address so `sock.address()`
+                                // on the server-side socket reports the
+                                // bound port/family instead of returning
+                                // undefined.
+                                let accepted_local = stream.local_addr().ok();
                                 statics::sockets().lock().unwrap().insert(
                                     socket_id,
                                     SocketState {
                                         cmd_tx: tx,
                                         pending_rx: None,
                                         is_open: true,
+                                        local_addr: accepted_local,
                                     },
                                 );
                                 statics::listeners()
@@ -1071,8 +1105,12 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
                 }
             };
 
+            // Issue #2131 — record the local addr so `socket.address()`
+            // returns the bound port/family on the deferred-connect path.
+            let local = tcp.local_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
+                s.local_addr = local;
             }
             push_event(PendingNetEvent::Connect(handle));
 
@@ -1125,6 +1163,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
+            local_addr: None,
         },
     );
     statics::listeners()
@@ -1146,6 +1185,10 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
                 }
             };
 
+            // Issue #2131 — capture the local addr before we possibly
+            // hand the stream to rustls (the TLS path consumes it).
+            let local = tcp.local_addr().ok();
+
             let transport = match direct_tls {
                 Some((servername, verify)) => {
                     match do_tls_handshake(tcp, &servername, verify).await {
@@ -1163,6 +1206,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
 
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
+                s.local_addr = local;
             }
             push_event(PendingNetEvent::Connect(id));
 
@@ -1503,6 +1547,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
+                drain_once_listeners(id, "connect");
             }
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
@@ -1521,6 +1566,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(buf_f64);
                     }
                 }
+                drain_once_listeners(id, "data");
             }
             PendingNetEvent::Error(id, msg) => {
                 let cbs = listeners_for(id, "error");
@@ -1536,6 +1582,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
                     }
                 }
+                drain_once_listeners(id, "error");
             }
             PendingNetEvent::End(id) => {
                 // Issue #1852 — readable side ended (peer FIN). Fire the
@@ -1548,6 +1595,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
+                drain_once_listeners(id, "end");
             }
             PendingNetEvent::Close(id) => {
                 for cb in listeners_for(id, "close") {
@@ -1557,6 +1605,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 }
                 statics::listeners().lock().unwrap().remove(&id);
                 statics::sockets().lock().unwrap().remove(&id);
+                statics::once_flags().lock().unwrap().remove(&id);
             }
             // Issue #1123 followup — server-side events. The
             // accept loop pushes `ServerConnection`/`ServerListening`/
@@ -1565,6 +1614,10 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
             PendingNetEvent::ServerConnection(server_id, socket_id) => {
                 let cbs = listeners_for(server_id, "connection");
                 if cbs.is_empty() {
+                    // Drain any `server.once('connection', cb)` flagged
+                    // here too — listeners_for returned empty but the
+                    // once-set may still be holding stale entries.
+                    drain_once_listeners(server_id, "connection");
                     continue;
                 }
                 // Sockets returned by the codegen's `net.connect`
@@ -1586,6 +1639,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(sock_f64);
                     }
                 }
+                drain_once_listeners(server_id, "connection");
             }
             PendingNetEvent::ServerListening(server_id) => {
                 // Take + drain the 'listening' listeners so the
@@ -1629,6 +1683,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 // exit cleanly after the user's close() resolves.
                 statics::servers().lock().unwrap().remove(&server_id);
                 statics::listeners().lock().unwrap().remove(&server_id);
+                statics::once_flags().lock().unwrap().remove(&server_id);
             }
             PendingNetEvent::ServerError(server_id, msg) => {
                 let cbs = listeners_for(server_id, "error");
@@ -1646,6 +1701,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
                     }
                 }
+                drain_once_listeners(server_id, "error");
             }
         }
     }
@@ -1670,6 +1726,40 @@ fn listeners_for(id: i64, event: &str) -> Vec<i64> {
         .get(&id)
         .and_then(|m| m.get(event).cloned())
         .unwrap_or_default()
+}
+
+/// Issue #2131 — drop any callback pointer flagged as a `once` listener
+/// for `(handle, event)` from both the listener vector and the
+/// once-flag side table. Called right after the pump finishes
+/// dispatching an event so the next emit doesn't re-fire it. The early
+/// return on an empty/missing set keeps the steady-state path (no
+/// `once` users) lock-light: one map probe + drop.
+fn drain_once_listeners(handle: i64, event: &str) {
+    let to_drop: HashSet<i64> = {
+        let mut once = statics::once_flags().lock().unwrap();
+        let Some(per) = once.get_mut(&handle) else {
+            return;
+        };
+        let Some(set) = per.remove(event) else {
+            return;
+        };
+        if per.is_empty() {
+            once.remove(&handle);
+        }
+        set
+    };
+    if to_drop.is_empty() {
+        return;
+    }
+    let mut listeners = statics::listeners().lock().unwrap();
+    if let Some(per) = listeners.get_mut(&handle) {
+        if let Some(vec) = per.get_mut(event) {
+            vec.retain(|cb| !to_drop.contains(cb));
+            if vec.is_empty() {
+                per.remove(event);
+            }
+        }
+    }
 }
 
 /// Returns 1 if there are pending events or live sockets keeping the

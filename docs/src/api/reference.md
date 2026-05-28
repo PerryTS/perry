@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1395 entries across 82 modules.
+Total: 1410 entries across 82 modules.
 
 ## Modules
 
@@ -1033,7 +1033,9 @@ Total: 1395 entries across 82 modules.
 ### Methods
 
 - `Socket` — module
+- `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
+- `address` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Server`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
@@ -1042,15 +1044,28 @@ Total: 1395 entries across 82 modules.
 - `createConnection` — module
 - `destroy` — instance *(class: `Socket`)*
 - `end` — instance *(class: `Socket`)*
+- `eventNames` — instance *(class: `Socket`)*
+- `eventNames` — instance *(class: `Server`)*
 - `getDefaultAutoSelectFamily` — module
 - `getDefaultAutoSelectFamilyAttemptTimeout` — module
 - `isIP` — module
 - `isIPv4` — module
 - `isIPv6` — module
 - `listen` — instance *(class: `Server`)*
+- `listenerCount` — instance *(class: `Socket`)*
+- `listenerCount` — instance *(class: `Server`)*
+- `off` — instance *(class: `Socket`)*
+- `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
+- `once` — instance *(class: `Socket`)*
+- `once` — instance *(class: `Server`)*
 - `pause` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
+- `removeAllListeners` — instance *(class: `Socket`)*
+- `removeAllListeners` — instance *(class: `Server`)*
+- `removeListener` — instance *(class: `Socket`)*
+- `removeListener` — instance *(class: `Server`)*
+- `resetAndDestroy` — instance *(class: `Socket`)*
 - `resume` — instance *(class: `Socket`)*
 - `setDefaultAutoSelectFamily` — module
 - `setDefaultAutoSelectFamilyAttemptTimeout` — module

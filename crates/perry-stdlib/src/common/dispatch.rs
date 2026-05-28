@@ -868,6 +868,13 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
     fn unbox_to_i64(v: f64) -> i64 {
         (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
     }
+    // Pack a raw i64 handle back as a NaN-boxed POINTER_TAG f64 — the
+    // shape every chainable Socket method returns so subsequent
+    // `.on(...)` / `.write(...)` calls dispatch through the same
+    // small-handle range check at the top of `js_native_call_method`.
+    fn nanbox_handle(h: i64) -> f64 {
+        f64::from_bits(0x7FFD_0000_0000_0000u64 | (h as u64 & 0x0000_FFFF_FFFF_FFFF))
+    }
     extern "C" {
         fn js_net_socket_write(handle: i64, buf_ptr: i64);
         // Issue #1852 — `js_net_socket_end` now takes the optional final
@@ -881,6 +888,29 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             servername_ptr: i64,
             verify: f64,
         ) -> *mut perry_runtime::Promise;
+        // Issue #2131 — lifecycle + EventEmitter surface beyond `on`.
+        // Same FFIs the NATIVE_MODULE_TABLE typed path uses; the
+        // dispatch arms below route any-typed receivers (e.g. the
+        // socket arg of `server.on('connection', sock => …)` after
+        // codegen loses the static class) to them.
+        fn js_net_socket_address(handle: i64) -> *mut perry_runtime::StringHeader;
+        fn js_net_socket_once(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
+        fn js_net_socket_remove_listener(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
+        fn js_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;
+        fn js_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
+        fn js_net_socket_event_names(handle: i64) -> *mut perry_runtime::StringHeader;
+        fn js_net_socket_reset_and_destroy(handle: i64) -> i64;
+    }
+
+    // Parse a runtime StringHeader pointer (`address` / `eventNames`
+    // return value) into a NaN-boxed JS value via `js_json_parse_or_null`.
+    // Mirrors the codegen's NR_OBJ_FROM_JSON_STR lowering so the
+    // typed-path and any-typed-path return shapes match byte-for-byte.
+    fn json_str_to_value(s: *mut perry_runtime::StringHeader) -> f64 {
+        if s.is_null() {
+            return f64::from_bits(0x7FFC_0000_0000_0002); // null
+        }
+        f64::from_bits(unsafe { perry_runtime::json::js_json_parse_or_null(s).bits() })
     }
 
     match method {
@@ -905,11 +935,11 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             js_net_socket_destroy(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
-        "on" if args.len() >= 2 => {
+        "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = unbox_to_i64(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
             js_net_socket_on(handle, event_ptr, cb_ptr);
-            f64::from_bits(0x7FFC_0000_0000_0001)
+            nanbox_handle(handle)
         }
         "connect" if args.len() >= 2 => {
             let port = args[0];
@@ -923,6 +953,46 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             let promise = js_net_socket_upgrade_tls(handle, servername_ptr, verify);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
+        // Issue #2131 — EventEmitter surface on any-typed receivers
+        // (the accepted-socket arg of `server.on('connection', s => …)`
+        // is the dominant case; the static class info is lost between
+        // the connection event push and the user callback).
+        "once" if args.len() >= 2 => {
+            let event_ptr = unbox_to_i64(args[0]);
+            let cb_ptr = unbox_to_i64(args[1]);
+            js_net_socket_once(handle, event_ptr, cb_ptr);
+            nanbox_handle(handle)
+        }
+        "off" | "removeListener" if args.len() >= 2 => {
+            let event_ptr = unbox_to_i64(args[0]);
+            let cb_ptr = unbox_to_i64(args[1]);
+            js_net_socket_remove_listener(handle, event_ptr, cb_ptr);
+            nanbox_handle(handle)
+        }
+        "removeAllListeners" => {
+            // Bare `removeAllListeners()` passes no event, padded as
+            // `undefined`; the FFI treats a null/non-string ptr as
+            // "drain every event".
+            let event_ptr = args.first().copied().map(unbox_to_i64).unwrap_or(0);
+            js_net_socket_remove_all_listeners(handle, event_ptr);
+            nanbox_handle(handle)
+        }
+        "listenerCount" if !args.is_empty() => {
+            let event_ptr = unbox_to_i64(args[0]);
+            js_net_socket_listener_count(handle, event_ptr)
+        }
+        "eventNames" => json_str_to_value(js_net_socket_event_names(handle)),
+        "address" => json_str_to_value(js_net_socket_address(handle)),
+        "resetAndDestroy" => {
+            js_net_socket_reset_and_destroy(handle);
+            nanbox_handle(handle)
+        }
+        // Chainable Socket option setters — Node returns `this` from each
+        // so feature-detect-and-call sites stay flowing on any-typed
+        // receivers. Pre-#2131 these returned `undefined` here and the
+        // very next `.write(...)` lost its handle.
+        "setNoDelay" | "setKeepAlive" | "setTimeout" | "setEncoding" | "pause" | "resume"
+        | "ref" | "unref" | "cork" | "uncork" | "setDefaultEncoding" => nanbox_handle(handle),
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     }
 }

@@ -568,6 +568,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "unref", true, Some("Socket")),
     method("net", "cork", true, Some("Socket")),
     method("net", "uncork", true, Some("Socket")),
+    // Issue #2131 — lifecycle + EventEmitter surface beyond `.on`.
+    // `address()` resolves to a real `{ port, family, address }` object;
+    // the rest match the Node EventEmitter shape so any-typed
+    // receivers (the accepted-socket arg of
+    // `server.on('connection', s => …)` is the dominant case) keep
+    // dispatching instead of throwing "not a function".
+    method("net", "address", true, Some("Socket")),
+    method("net", "once", true, Some("Socket")),
+    method("net", "addListener", true, Some("Socket")),
+    method("net", "off", true, Some("Socket")),
+    method("net", "removeListener", true, Some("Socket")),
+    method("net", "removeAllListeners", true, Some("Socket")),
+    method("net", "listenerCount", true, Some("Socket")),
+    method("net", "eventNames", true, Some("Socket")),
+    method("net", "resetAndDestroy", true, Some("Socket")),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
     // shape of the http-server rows at entries.rs:2298. The
@@ -580,6 +595,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "close", true, Some("Server")),
     method("net", "address", true, Some("Server")),
     method("net", "addListener", true, Some("Server")),
+    // Issue #2131 — `net.Server` EventEmitter surface (twin of the
+    // Socket entries above). Same handle namespace, same listener +
+    // once-flag storage.
+    method("net", "once", true, Some("Server")),
+    method("net", "off", true, Some("Server")),
+    method("net", "removeListener", true, Some("Server")),
+    method("net", "removeAllListeners", true, Some("Server")),
+    method("net", "listenerCount", true, Some("Server")),
+    method("net", "eventNames", true, Some("Server")),
     // Issue #811 — IP classification helpers + Happy-Eyeballs default
     // accessors. Pure string/global-flag functions.
     method("net", "isIP", false, None),

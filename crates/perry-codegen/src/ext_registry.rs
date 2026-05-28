@@ -189,6 +189,24 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // #1852 — chainable no-op option setters for Socket/Server.
     ("js_net_socket_noop_self",                     OwnerKind::WellKnown("net")),
     ("js_net_server_noop_self",                     OwnerKind::WellKnown("net")),
+    // #2131 — net.Socket / net.Server lifecycle + EventEmitter surface
+    // (once / off / removeAllListeners / listenerCount / eventNames /
+    // resetAndDestroy, plus the socket-side address()). Same well-known
+    // anchor as the rest of the net FFI — tagging here pulls in
+    // libperry_ext_net.a when these symbols are referenced from a
+    // program that doesn't otherwise import socket-side surface.
+    ("js_net_socket_address",                       OwnerKind::WellKnown("net")),
+    ("js_net_socket_once",                          OwnerKind::WellKnown("net")),
+    ("js_net_socket_remove_listener",               OwnerKind::WellKnown("net")),
+    ("js_net_socket_remove_all_listeners",          OwnerKind::WellKnown("net")),
+    ("js_net_socket_listener_count",                OwnerKind::WellKnown("net")),
+    ("js_net_socket_event_names",                   OwnerKind::WellKnown("net")),
+    ("js_net_socket_reset_and_destroy",             OwnerKind::WellKnown("net")),
+    ("js_net_server_once",                          OwnerKind::WellKnown("net")),
+    ("js_net_server_remove_listener",               OwnerKind::WellKnown("net")),
+    ("js_net_server_remove_all_listeners",          OwnerKind::WellKnown("net")),
+    ("js_net_server_listener_count",                OwnerKind::WellKnown("net")),
+    ("js_net_server_event_names",                   OwnerKind::WellKnown("net")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,
