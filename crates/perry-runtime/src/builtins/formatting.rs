@@ -10,6 +10,7 @@ use super::println;
 use super::*;
 
 mod boxed_primitives;
+pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
@@ -1036,6 +1037,7 @@ unsafe fn format_object_as_json(
         }
     }
 
+    let boxed_base = boxed_primitives::boxed_primitive_base_for_object(obj_ptr);
     let class_name = {
         let class_id = (*obj_ptr).class_id;
         if class_id == 0 {
@@ -1045,9 +1047,14 @@ unsafe fn format_object_as_json(
         }
     };
     let class_name_ref = class_name.as_deref();
-    let empty_object = || match class_name_ref {
-        Some(name) => format!("{name} {{}}"),
-        None => "{}".to_string(),
+    let empty_object = || {
+        if let Some(base) = boxed_base.as_deref() {
+            return base.to_string();
+        }
+        match class_name_ref {
+            Some(name) => format!("{name} {{}}"),
+            None => "{}".to_string(),
+        }
     };
 
     let keys_array = (*obj_ptr).keys_array;
@@ -1162,9 +1169,10 @@ unsafe fn format_object_as_json(
     if parts.is_empty() {
         return empty_object();
     }
-    let single_line = match class_name_ref {
-        Some(name) => format!("{} {{ {} }}", name, parts.join(", ")),
-        None => format!("{{ {} }}", parts.join(", ")),
+    let single_line = match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{ {} }}", base, parts.join(", ")),
+        (None, Some(name)) => format!("{} {{ {} }}", name, parts.join(", ")),
+        (None, None) => format!("{{ {} }}", parts.join(", ")),
     };
     // Node's `util.inspect` switches to multi-line layout when the single-line
     // rendering would exceed `breakLength` (default 80). The threshold is
@@ -1188,9 +1196,10 @@ unsafe fn format_object_as_json(
         .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
-    match class_name_ref {
-        Some(name) => format!("{} {{\n{}\n}}", name, body),
-        None => format!("{{\n{}\n}}", body),
+    match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{\n{}\n}}", base, body),
+        (None, Some(name)) => format!("{} {{\n{}\n}}", name, body),
+        (None, None) => format!("{{\n{}\n}}", body),
     }
 }
 
