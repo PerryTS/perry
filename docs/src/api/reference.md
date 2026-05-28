@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1437 entries across 82 modules.
+Total: 1441 entries across 82 modules.
 
 ## Modules
 
@@ -1081,12 +1081,16 @@ Total: 1437 entries across 82 modules.
 - `listen` — instance *(class: `Server`)*
 - `listenerCount` — instance *(class: `Socket`)*
 - `listenerCount` — instance *(class: `Server`)*
+- `listeners` — instance *(class: `Socket`)*
+- `listeners` — instance *(class: `Server`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
 - `pause` — instance *(class: `Socket`)*
+- `rawListeners` — instance *(class: `Socket`)*
+- `rawListeners` — instance *(class: `Server`)*
 - `ref` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Server`)*
