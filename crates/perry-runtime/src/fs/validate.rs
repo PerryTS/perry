@@ -167,6 +167,28 @@ pub(crate) fn validate_fd(value: f64) {
     validate_int32(value, "fd", 0, i32::MAX as i64);
 }
 
+/// Issue #2013 — validate an `fd` argument AND verify it's an open
+/// descriptor in Perry's `FD_REGISTRY`. Mirrors Node's "validate fd
+/// type, then bounce on EBADF" pattern for the fd-only sync surface
+/// (`fs.closeSync`, `fs.readSync`, `fs.readvSync`, `fs.fsyncSync`,
+/// `fs.fdatasyncSync`, `fs.fchmodSync`, `fs.fchownSync`, …). Path-or-fd
+/// readers/writers route through `validate_path_or_fd` instead, which
+/// has its own EBADF branch keyed on the same registry probe.
+pub(crate) fn validate_fd_open(value: f64, syscall: &'static str) {
+    validate_fd(value);
+    let jv = JSValue::from_bits(value.to_bits());
+    let fd = numeric_to_i32(jv);
+    if !crate::fs::fd_is_registered(fd) {
+        throw_ebadf_pub(syscall);
+    }
+}
+
+/// Public alias for `throw_ebadf` so the fs entry points can throw a
+/// matching `EBADF` from outside this module (#2013).
+pub(crate) fn throw_ebadf_pub(syscall: &'static str) -> ! {
+    throw_ebadf(syscall)
+}
+
 /// Validate that `value` is a finite integer in `[min, max]`. On type or
 /// range failure throws Node's `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE`
 /// with the same `Received` clause shape Node uses.
