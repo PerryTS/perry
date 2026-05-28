@@ -414,9 +414,21 @@ pub fn lower_class_decl(
                                 } else {
                                     "__perry_dispose__".to_string()
                                 }
+                            } else if wk == "asyncIterator"
+                                && !method.is_static
+                                && matches!(method.kind, ast::MethodKind::Method)
+                            {
+                                // #1838 follow-up: `[Symbol.asyncIterator]() {}`
+                                // on a class — register under `@@asyncIterator`
+                                // so the symbol resolver in `runtime/src/symbol.rs`
+                                // (`well_known_symbol_method_key`) binds it as
+                                // `instance[Symbol.asyncIterator]`. Mirrors the
+                                // `@@iterator` path; for-await over a class
+                                // instance picks the same vtable entry.
+                                "@@asyncIterator".to_string()
                             } else {
-                                // Other well-known (toPrimitive, asyncIterator)
-                                // on a class: not yet implemented, skip.
+                                // Other well-known (toPrimitive) on a class:
+                                // not yet implemented, skip.
                                 continue;
                             }
                         } else {
