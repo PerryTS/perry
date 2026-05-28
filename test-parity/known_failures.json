@@ -866,12 +866,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, asyncGenWithAwait) — async-await handler not iterated correctly. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/flow/multi-data-event-no-concat": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: flowing-mode push() yields concatenated chunk instead of separate 'data' events. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/byob-reader-getReader": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1153,12 +1147,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: read(1) on multibyte UTF-8 chunk — fails to compile (Buffer-length access). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/flow/data-after-pause-resume": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pause→resume cycle — does not deliver all data events. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/writable/sink-write-rejection-becomes-error": {
     "issue": "1532",
