@@ -1544,12 +1544,6 @@
     "category": "bug-open",
     "reason": "node:stream: wrap(EE) + pipe(dst) — piped output empty or wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/async-iter/return-method-explicit": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: asyncIterator.return() — does not destroy/end properly or returns wrong shape. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/destroy/destroy-during-read": {
     "issue": "1532",
     "added": "2026-05-24",
