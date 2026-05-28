@@ -652,6 +652,87 @@ mod tests {
     }
 
     #[test]
+    fn native_memory_copy_rejects_finalized_old_arena_typed_array() {
+        let view = typedarray::typed_array_alloc(
+            typedarray::KIND_UINT8,
+            crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32,
+        );
+        assert!(crate::arena::pointer_in_old_gen(view as usize));
+        assert_eq!(
+            typedarray::lookup_typed_array_kind(view as usize),
+            Some(typedarray::KIND_UINT8)
+        );
+
+        unsafe {
+            crate::gc::gc_type_finalize_unmarked_payload(
+                crate::gc::GC_TYPE_TYPED_ARRAY,
+                view as *mut u8,
+            );
+        }
+
+        assert_eq!(typedarray::lookup_typed_array_kind(view as usize), None);
+        assert!(catch_runtime_throw(|| {
+            crate::typedarray::js_native_memory_copy(view as u64, view as u64);
+        }));
+    }
+
+    #[test]
+    fn native_memory_copy_rejects_finalized_old_arena_uint8array_buffer() {
+        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
+        assert!(crate::arena::pointer_in_old_gen(buf as usize));
+        crate::buffer::mark_as_uint8array(buf as usize);
+        crate::buffer::set_buffer_ab_alias(buf as usize, 0xDEAD);
+        unsafe {
+            (*buf).length = 16;
+        }
+        assert!(crate::buffer::is_registered_buffer(buf as usize));
+        assert!(crate::buffer::is_uint8array_buffer(buf as usize));
+        assert_eq!(crate::buffer::buffer_ab_alias(buf as usize), Some(0xDEAD));
+
+        unsafe {
+            crate::gc::gc_type_finalize_unmarked_payload(crate::gc::GC_TYPE_BUFFER, buf as *mut u8);
+        }
+
+        assert!(!crate::buffer::is_registered_buffer(buf as usize));
+        assert!(!crate::buffer::is_uint8array_buffer(buf as usize));
+        assert_eq!(crate::buffer::buffer_ab_alias(buf as usize), None);
+        assert!(catch_runtime_throw(|| {
+            crate::typedarray::js_native_memory_copy(buf as u64, buf as u64);
+        }));
+    }
+
+    #[test]
+    fn native_memory_fill_u32_rejects_typed_array_registry_forged_to_old_buffer() {
+        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
+        assert!(crate::arena::pointer_in_old_gen(buf as usize));
+        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT32);
+
+        assert!(catch_runtime_throw(|| {
+            crate::typedarray::js_native_memory_fill_u32(buf as u64, 1.0);
+        }));
+
+        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
+    }
+
+    #[test]
+    fn native_memory_copy_rejects_buffer_registry_forged_to_old_non_buffer() {
+        let fake = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<crate::buffer::BufferHeader>(),
+            8,
+            crate::gc::GC_TYPE_OBJECT,
+        ) as *mut crate::buffer::BufferHeader;
+        assert!(crate::arena::pointer_in_old_gen(fake as usize));
+        crate::buffer::register_buffer(fake as *const crate::buffer::BufferHeader);
+        crate::buffer::mark_as_uint8array(fake as usize);
+
+        assert!(catch_runtime_throw(|| {
+            crate::typedarray::js_native_memory_copy(fake as u64, fake as u64);
+        }));
+
+        crate::buffer::unregister_buffer(fake as *const crate::buffer::BufferHeader);
+    }
+
+    #[test]
     fn random_fill_sync_native_uint8_view_preserves_metadata() {
         let owner = js_native_arena_alloc(96);
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 8, 64);

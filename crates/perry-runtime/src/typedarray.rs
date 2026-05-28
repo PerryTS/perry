@@ -228,6 +228,48 @@ fn throw_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+#[inline]
+fn is_arena_backed_addr(addr: usize) -> bool {
+    !matches!(
+        crate::arena::classify_heap_space(addr),
+        crate::arena::HeapSpace::Unknown
+    )
+}
+
+#[inline]
+unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -> bool {
+    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let header_addr = addr - crate::gc::GC_HEADER_SIZE;
+    if matches!(
+        crate::arena::classify_heap_space(header_addr),
+        crate::arena::HeapSpace::Unknown
+    ) {
+        return false;
+    }
+    let header = header_addr as *const crate::gc::GcHeader;
+    let obj_type = (*header).obj_type;
+    if crate::gc::gc_type_info(obj_type).is_none() {
+        return false;
+    }
+    let size = (*header).size as usize;
+    if size < crate::gc::GC_HEADER_SIZE || size > (1usize << 34) {
+        return false;
+    }
+    if (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0 {
+        return false;
+    }
+    obj_type == expected_type
+}
+
+#[inline]
+unsafe fn validate_arena_payload_gc_type(addr: usize, expected_type: u8, message: &[u8]) {
+    if is_arena_backed_addr(addr) && !arena_payload_has_gc_type(addr, expected_type) {
+        throw_type_error(message);
+    }
+}
+
 unsafe fn strict_typed_array_from_raw(
     raw: u64,
     expected_kind: Option<u8>,
@@ -248,6 +290,8 @@ unsafe fn strict_typed_array_from_raw(
         crate::native_arena::validate_view_alive(
             crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
         );
+    } else {
+        validate_arena_payload_gc_type(addr, crate::gc::GC_TYPE_TYPED_ARRAY, message);
     }
     ta
 }
@@ -283,10 +327,7 @@ unsafe fn native_memory_copy_src_bytes(raw: u64) -> (*const u8, usize) {
             strict_typed_array_from_raw(raw, None, b"NativeMemory.copy expects typed array views");
         return typed_array_raw_bytes(ta);
     }
-    if addr >= 0x1000
-        && crate::buffer::is_registered_buffer(addr)
-        && crate::buffer::is_uint8array_buffer(addr)
-    {
+    if native_memory_copy_accepts_buffer(addr) {
         let buffer = addr as *const crate::buffer::BufferHeader;
         return (
             crate::buffer::buffer_data(buffer),
@@ -303,10 +344,7 @@ unsafe fn native_memory_copy_dst_bytes(raw: u64) -> (*mut u8, usize) {
             strict_typed_array_from_raw(raw, None, b"NativeMemory.copy expects typed array views");
         return typed_array_raw_bytes_mut(ta);
     }
-    if addr >= 0x1000
-        && crate::buffer::is_registered_buffer(addr)
-        && crate::buffer::is_uint8array_buffer(addr)
-    {
+    if native_memory_copy_accepts_buffer(addr) {
         let buffer = addr as *mut crate::buffer::BufferHeader;
         return (
             crate::buffer::buffer_data_mut(buffer),
@@ -314,6 +352,23 @@ unsafe fn native_memory_copy_dst_bytes(raw: u64) -> (*mut u8, usize) {
         );
     }
     throw_type_error(b"NativeMemory.copy expects typed array views");
+}
+
+unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
+    if addr < 0x1000
+        || !crate::buffer::is_registered_buffer(addr)
+        || !crate::buffer::is_uint8array_buffer(addr)
+    {
+        return false;
+    }
+    if is_arena_backed_addr(addr) {
+        return arena_payload_has_gc_type(addr, crate::gc::GC_TYPE_BUFFER);
+    }
+    true
+}
+
+pub(crate) unsafe fn finalize_typed_array_for_gc(ta: *mut TypedArrayHeader) {
+    unregister_typed_array(ta as *const TypedArrayHeader);
 }
 
 fn ta_layout(capacity: u32, elem_size: usize) -> Layout {

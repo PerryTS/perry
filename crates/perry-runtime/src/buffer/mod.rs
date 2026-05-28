@@ -33,7 +33,7 @@ pub use header::{
     is_secret_key, is_shared_array_buffer, is_uint8array_buffer, mark_as_array_buffer,
     mark_as_asymmetric_key, mark_as_crypto_key, mark_as_data_view, mark_as_secret_key,
     mark_as_shared_array_buffer, mark_as_uint8array, register_buffer, resolve_buffer_ab_alias,
-    set_buffer_ab_alias,
+    set_buffer_ab_alias, unregister_buffer,
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
