@@ -450,6 +450,32 @@ fn readable_read_default_size_drains_buffer_as_buffer_then_null() {
     });
 }
 
+#[test]
+fn readable_unshift_prepends_chunk_and_returns_hwm_signal() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    let _ = js_node_stream_method_push(handle, string_value("world"));
+    assert_eq!(
+        js_node_stream_method_unshift(handle, string_value("hello ")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(js_node_stream_method_readable_length(handle), 11.0);
+
+    let joined = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(joined), b"hello world");
+    assert_eq!(js_node_stream_method_readable_length(handle), 0.0);
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"highWaterMark"), 2.0);
+    let low_hwm = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let low_handle = raw_ptr_from_value(low_hwm) as i64;
+    assert_eq!(
+        js_node_stream_method_unshift(low_handle, string_value("abc")).to_bits(),
+        TAG_FALSE
+    );
+}
+
 fn stream_test_buffer_bytes(value: f64) -> Vec<u8> {
     let len = crate::buffer::js_native_buffer_byte_len(value);
     let data = crate::buffer::js_native_buffer_data_ptr(value);

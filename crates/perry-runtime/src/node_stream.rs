@@ -327,6 +327,44 @@ extern "C" fn ns_push1(closure: *const ClosureHeader, chunk: f64) -> f64 {
     push_chunk(this_value(closure), chunk)
 }
 
+fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
+    if stream_destroyed(stream) {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let jsval = JSValue::from_bits(chunk.to_bits());
+    if jsval.is_null() || jsval.is_undefined() {
+        return push_chunk(stream, chunk);
+    }
+    if has_truthy_hidden(stream, hidden_ended_key()) {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let added = chunk_byte_len(chunk) as f64;
+    let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
+    let total = prev + added;
+    set_hidden_value(stream, hidden_buffered_key(), total);
+    set_hidden_value(stream, hidden_key(b"readableLength"), total);
+    if added > 0.0 {
+        unshift_readable_buffered_chunk(stream, chunk);
+        mark_disturbed(stream);
+        schedule_readable_event(stream);
+        if readable_is_flowing(stream) {
+            emit_readable_data(stream, chunk);
+        } else {
+            unshift_pending_readable_chunk(stream, chunk);
+        }
+    }
+    let hwm = get_hidden_value(stream, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
+    if total < hwm {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
+    }
+}
+
+extern "C" fn ns_unshift1(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    unshift_chunk(this_value(closure), chunk)
+}
+
 /// `readable.compose(stream)` (#1539): the instance-method form of
 /// `stream.compose`. Returns a fresh Duplex stub so shape checks
 /// (`typeof composed.on === "function"`) hold; real data composition is
@@ -747,6 +785,11 @@ pub extern "C" fn js_node_stream_method_emit_args(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_push(stream_handle: i64, chunk: f64) -> f64 {
     push_chunk(stream_value_from_handle(stream_handle), chunk)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_unshift(stream_handle: i64, chunk: f64) -> f64 {
+    unshift_chunk(stream_value_from_handle(stream_handle), chunk)
 }
 
 /// `stream.readableHighWaterMark` property getter on a typed instance
@@ -1631,6 +1674,7 @@ fn register_stub_arities() {
     register(ns_raw_listeners as *const u8, 1);
     register(ns_undefined0 as *const u8, 0);
     register(ns_push1 as *const u8, 1);
+    register(ns_unshift1 as *const u8, 1);
     register(ns_compose1 as *const u8, 1);
     register(ns_pause0 as *const u8, 0);
     register(ns_is_paused0 as *const u8, 0);
@@ -2398,6 +2442,30 @@ fn push_readable_buffered_chunk(stream: f64, chunk: f64) {
     let arr = raw_ptr_from_value(existing) as *mut crate::array::ArrayHeader;
     let arr = crate::array::js_array_push_f64(arr, chunk);
     set_hidden_value(stream, hidden_chunks_key(), box_pointer(arr as *const u8));
+}
+
+fn unshift_readable_buffered_chunk(stream: f64, chunk: f64) {
+    let existing = readable_hidden_chunks(stream).unwrap_or_else(|| {
+        let arr = crate::array::js_array_alloc(0);
+        box_pointer(arr as *const u8)
+    });
+    if !is_array_like_value(existing) {
+        return;
+    }
+    let arr = raw_ptr_from_value(existing) as *mut crate::array::ArrayHeader;
+    let arr = crate::array::js_array_unshift_f64(arr, chunk);
+    set_hidden_value(stream, hidden_chunks_key(), box_pointer(arr as *const u8));
+}
+
+fn unshift_pending_readable_chunk(stream: f64, chunk: f64) {
+    let pending = ensure_hidden_array(stream, hidden_readable_pending_key());
+    let arr = raw_ptr_from_value(pending) as *mut crate::array::ArrayHeader;
+    let arr = crate::array::js_array_unshift_f64(arr, chunk);
+    set_hidden_value(
+        stream,
+        hidden_readable_pending_key(),
+        box_pointer(arr as *const u8),
+    );
 }
 
 fn clear_readable_buffer(stream: f64) {
@@ -3193,7 +3261,7 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
 // Writable, and Duplex method tables stay in distinct shape bands.
 // ─────────────────────────────────────────────────────────────────
 
-fn readable_methods() -> [(&'static str, StubFn); 38] {
+fn readable_methods() -> [(&'static str, StubFn); 39] {
     [
         ("on", cast2(ns_on2)),
         ("once", cast2(ns_once2)),
@@ -3238,6 +3306,7 @@ fn readable_methods() -> [(&'static str, StubFn); 38] {
         ("iterator", cast1(async_iterator::ns_iterator1)),
         // #1539 — push() backpressure return + readable.compose() instance form.
         ("push", cast1(ns_push1)),
+        ("unshift", cast1(ns_unshift1)),
         ("compose", cast1(ns_compose1)),
     ]
 }
@@ -3269,7 +3338,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
     ]
 }
 
-fn duplex_methods() -> [(&'static str, StubFn); 31] {
+fn duplex_methods() -> [(&'static str, StubFn); 32] {
     // Union of readable + writable, deduped (`on/once/off/addListener/
     // removeListener/removeAllListeners/emit/listenerCount/listeners/
     // destroy` appear once each).
@@ -3298,6 +3367,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 31] {
         ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_is_paused0)),
         ("push", cast1(ns_push1)),
+        ("unshift", cast1(ns_unshift1)),
         ("compose", cast1(ns_compose1)),
         ("write", cast3(ns_write3)),
         ("end", cast3(ns_end3)),

@@ -933,6 +933,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "unshift",
+        class_filter: None,
+        runtime: "js_node_stream_method_unshift",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // #1539: readableHighWaterMark / writableHighWaterMark property
     // getters (no-arg, lowered as a property read on the instance).
     // Transform can carry distinct readable/writable marks.

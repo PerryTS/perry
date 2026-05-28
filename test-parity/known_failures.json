@@ -734,12 +734,6 @@
     "category": "bug-open",
     "reason": "node:stream: iter-helper closure capture — outer-var reference in arrow fn yields wrong values. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/readable/unshift-increases-length": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift() — readableLength does not grow by chunk size. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/instance-chain": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -794,12 +788,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(POJO-with-Symbol.iterator) — does not iterate the custom iterable. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/unshift-return-value": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift() return value — not undefined. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipeline/promise-form": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -847,12 +835,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(stream) — single-stream form does not return Duplex wrap. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/readable/unshift-buffer": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift(Buffer) — explicit Buffer not properly added to front of buffer queue. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/desired-size-restores-after-drain": {
     "issue": "1545",
@@ -979,12 +961,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: objectMode pipe — raw object data not preserved through pipe. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/unshift-while-flowing": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift() during flowing mode — chunk not re-emitted in order. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/compose-with-passthrough": {
     "issue": "1531",
