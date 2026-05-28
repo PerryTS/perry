@@ -9,6 +9,7 @@
 use super::println;
 use super::*;
 
+mod array_buffer;
 mod boxed_primitives;
 mod collections;
 
@@ -650,6 +651,19 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // Typed array — Int32Array(N) [ a, b, c ] etc.
                 let ta = ptr as *const crate::typedarray::TypedArrayHeader;
                 crate::typedarray::format_typed_array(ta)
+            } else if crate::buffer::is_data_view(ptr as usize) {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                array_buffer::format_data_view_value(buf_ptr)
+            } else if crate::buffer::is_any_array_buffer(ptr as usize)
+                && !crate::buffer::is_uint8array_buffer(ptr as usize)
+            {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                let label = if crate::buffer::is_shared_array_buffer(ptr as usize) {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                };
+                array_buffer::format_array_buffer_value(buf_ptr, label)
             } else if crate::buffer::is_registered_buffer(ptr as usize) {
                 // Buffer/Uint8Array — `<Buffer xx xx ...>`. No GC header, so
                 // this must precede the GC_HEADER_SIZE arithmetic below (which
