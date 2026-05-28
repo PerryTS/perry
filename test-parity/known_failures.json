@@ -254,12 +254,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable objectMode push/data events don't deliver. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/set-encoding": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding + data event chain doesn't deliver decoded chunks. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/unshift-chunk": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -350,18 +344,6 @@
     "category": "bug-open",
     "reason": "node:stream: class extends Readable with _read() doesn't deliver data via push. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/encoding/base64": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding(base64) + data delivery doesn't fire. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/encoding/hex": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding(hex) + data delivery doesn't fire. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/events/readable-event": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -427,12 +409,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: class extends Writable + _write doesn't deliver finish. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/encoding/latin1": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding(latin1) + data delivery doesn't fire. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/unshift-after-read": {
     "issue": "1532",
