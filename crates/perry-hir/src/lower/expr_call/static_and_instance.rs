@@ -279,9 +279,35 @@ pub(super) fn try_static_method_and_instance(
                     method_name.as_str(),
                     "code" | "status" | "header" | "type" | "send"
                 );
+                // #2208 — http(s) `ClientRequest` fluent methods. Node's
+                // `EventEmitter.prototype.on`/`once`/`off`/etc. return the
+                // emitter itself, and `setHeader`/`setTimeout` likewise
+                // return the request, so `http.request(...).on(...).on(...)`
+                // (or any `.setHeader(...).end()` shape) must keep the
+                // ClientRequest class tag flowing through each chain step.
+                // Without this branch the second `.on(...)` fell through to
+                // the generic Call+PropertyGet path, the receiver came back
+                // as an untagged number, and the next step crashed with
+                // "(number).end is not a function". Same shape as the
+                // fastify Reply chain above.
+                let is_http_client_request =
+                    module.as_str() == "http" && class_name.as_deref() == Some("ClientRequest");
+                let is_client_request_chain_method = matches!(
+                    method_name.as_str(),
+                    "on" | "once"
+                        | "off"
+                        | "addListener"
+                        | "removeListener"
+                        | "removeAllListeners"
+                        | "setHeader"
+                        | "setTimeout"
+                        | "write"
+                        | "end"
+                );
                 if (is_math_lib && is_math_method)
                     || (is_commander && is_commander_method)
                     || (is_fastify_reply && is_fastify_reply_chain_method)
+                    || (is_http_client_request && is_client_request_chain_method)
                 {
                     return Ok(Ok(Expr::NativeMethodCall {
                         module: module.clone(),
@@ -372,6 +398,17 @@ fn native_class_from_factory_call(
         ("http", "createServer") => Some(("http", "HttpServer")),
         ("https", "createServer") => Some(("https", "HttpsServer")),
         ("http2", "createSecureServer") => Some(("http2", "Http2SecureServer")),
+        // Issue #2208: `http.request(...).on(...)` / `https.get(...).on(...)`
+        // chains — the inline factory call returns a `ClientRequest` whose
+        // instance methods (`on`/`end`/`write`/`setHeader`/`setTimeout`) are
+        // registered under module `"http"` for both schemes (see
+        // `lower_call/native_table/http.rs`). Without these arms the chained
+        // `.on(...)` fell through to the generic typed-feedback dispatch,
+        // which has no `ClientRequest` arm and returned NaN; each subsequent
+        // chain step then dereffed NaN as a number ("(number).on is not a
+        // function"). Mirrors the createServer entry above.
+        ("http", "request") | ("http", "get") => Some(("http", "ClientRequest")),
+        ("https", "request") | ("https", "get") => Some(("http", "ClientRequest")),
         _ => None,
     }
 }
