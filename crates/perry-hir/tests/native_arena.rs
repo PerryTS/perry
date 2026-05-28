@@ -18,6 +18,11 @@ fn lower_src(src: &str) -> Result<Module, String> {
         .expect("lower thread panicked")
 }
 
+fn assert_lower_err_eq(src: &str, expected: &str) {
+    let err = lower_src(src).expect_err("lowering should fail");
+    assert_eq!(err, expected);
+}
+
 fn find_let<'m>(module: &'m Module, name: &str) -> &'m Stmt {
     module
         .init
@@ -204,6 +209,44 @@ fn native_arena_public_pod_view_lowers_explicit_type_arg() {
 }
 
 #[test]
+fn native_arena_public_api_rejects_spread_arguments() {
+    assert_lower_err_eq(
+        r#"
+        const args: any = [64];
+        const arena = NativeArena.alloc(...args);
+        "#,
+        "NativeArena.alloc(byteLength) does not accept spread arguments",
+    );
+
+    assert_lower_err_eq(
+        r#"
+        const arena = NativeArena.alloc(64);
+        const args: any = [Float64Array, 0, 8];
+        const view = arena.view(...args);
+        "#,
+        "NativeArena.view(kind, byteOffset, length) does not accept spread arguments",
+    );
+
+    assert_lower_err_eq(
+        r#"
+        const arena = NativeArena.alloc(16);
+        const args: any = [0, 1];
+        const view = arena.podView(...args);
+        "#,
+        "NativeArena.podView(byteOffset, count) does not accept spread arguments",
+    );
+
+    assert_lower_err_eq(
+        r#"
+        const arena = NativeArena.alloc(16);
+        const args: any = [];
+        arena.dispose(...args);
+        "#,
+        "NativeArena.dispose() does not accept spread arguments",
+    );
+}
+
+#[test]
 fn pod_layout_constants_lower_to_compile_time_hir_nodes() {
     let module = lower_src(
         r#"
@@ -349,6 +392,23 @@ fn native_arena_public_api_respects_shadowing() {
     .expect("lowering should succeed");
 
     assert!(!module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeArenaAlloc(_)
+            | Expr::NativeArenaView { .. }
+            | Expr::NativePodView { .. }
+            | Expr::NativeArenaDispose(_)
+    )));
+
+    let spread_module = lower_src(
+        r#"
+        const NativeArena: any = { alloc: 1 };
+        const args: any = [64];
+        const value = NativeArena.alloc(...args);
+        "#,
+    )
+    .expect("shadowed spread call should use generic call lowering");
+
+    assert!(!module_any(&spread_module, |expr| matches!(
         expr,
         Expr::NativeArenaAlloc(_)
             | Expr::NativeArenaView { .. }

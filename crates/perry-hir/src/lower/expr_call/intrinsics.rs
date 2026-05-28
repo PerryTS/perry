@@ -575,9 +575,6 @@ pub(super) fn try_native_arena_public_api(
     call: &ast::CallExpr,
     has_spread: bool,
 ) -> Result<Option<Expr>> {
-    if has_spread {
-        return Ok(None);
-    }
     let ast::Callee::Expr(callee_expr) = &call.callee else {
         return Ok(None);
     };
@@ -592,6 +589,12 @@ pub(super) fn try_native_arena_public_api(
     if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena") {
         if method != "alloc" || native_arena_global_is_shadowed(ctx) {
             return Ok(None);
+        }
+        if has_spread {
+            crate::lower_bail!(
+                call.span,
+                "NativeArena.alloc(byteLength) does not accept spread arguments"
+            );
         }
         if call.args.len() != 1 {
             crate::lower_bail!(
@@ -611,6 +614,12 @@ pub(super) fn try_native_arena_public_api(
 
     match method {
         "view" => {
+            if has_spread {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeArena.view(kind, byteOffset, length) does not accept spread arguments"
+                );
+            }
             if call.args.len() != 3 {
                 crate::lower_bail!(
                     call.span,
@@ -632,6 +641,12 @@ pub(super) fn try_native_arena_public_api(
             }))
         }
         "podView" => {
+            if has_spread {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeArena.podView(byteOffset, count) does not accept spread arguments"
+                );
+            }
             if call.args.len() != 2 {
                 crate::lower_bail!(
                     call.span,
@@ -659,6 +674,12 @@ pub(super) fn try_native_arena_public_api(
             }))
         }
         "dispose" => {
+            if has_spread {
+                crate::lower_bail!(
+                    call.span,
+                    "NativeArena.dispose() does not accept spread arguments"
+                );
+            }
             if !call.args.is_empty() {
                 crate::lower_bail!(call.span, "NativeArena.dispose() expects no arguments");
             }
