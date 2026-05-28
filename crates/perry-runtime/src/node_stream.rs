@@ -14,21 +14,20 @@
 //! slot 0, so chained calls like `.on(...).on(...).pipe(...)` return
 //! `this` and the chain doesn't lose identity.
 //!
-//! Method semantics are minimal stubs — Node's stream surface (full
-//! EventEmitter pump, backpressure, async iteration) is far beyond
-//! the scope of this issue. The acceptance criterion (#631) is
-//! byte-identical typeof output: every method name reports
-//! `"function"`, and chained calls don't crash. Real data flow
-//! through `read`/`write`/`pipe` is left for a dedicated streams
-//! runtime rewrite.
+//! Method semantics are intentionally pragmatic rather than a full Node
+//! stream rewrite: common EventEmitter, buffering, read/write/pipe, and
+//! pipeline lifecycle paths are implemented here, while deeper async
+//! iterator, Web Stream, and backpressure edge cases continue to land as
+//! focused compatibility work.
 
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
     js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{
-    js_object_alloc_with_shape, js_object_get_field, js_object_get_field_by_name_f64,
-    js_object_set_field, js_object_set_field_by_name, ObjectHeader,
+    js_object_alloc, js_object_alloc_with_shape, js_object_get_field,
+    js_object_get_field_by_name_f64, js_object_set_field, js_object_set_field_by_name,
+    ObjectHeader,
 };
 use crate::value::JSValue;
 
@@ -37,11 +36,11 @@ mod async_iterator;
 #[path = "node_stream_event_emitter.rs"]
 mod event_emitter;
 use event_emitter::{
-    call_listener_args, emit_stream_event, emit_stream_event_from_array, is_callable_value,
-    ns_event_names, ns_get_max_listeners, ns_listener_count, ns_listeners, ns_off2, ns_on2,
-    ns_once2, ns_prepend_listener2, ns_prepend_once_listener2, ns_raw_listeners,
-    ns_remove_all_listeners1, ns_remove_listener2, ns_set_max_listeners,
-    stream_listener_count_for_event,
+    add_stream_listener_for_event, call_listener_args, emit_stream_event,
+    emit_stream_event_from_array, is_callable_value, ns_event_names, ns_get_max_listeners,
+    ns_listener_count, ns_listeners, ns_off2, ns_on2, ns_once2, ns_prepend_listener2,
+    ns_prepend_once_listener2, ns_raw_listeners, ns_remove_all_listeners1, ns_remove_listener2,
+    ns_set_max_listeners, stream_listener_count_for_event,
 };
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
@@ -108,6 +107,8 @@ const READABLE_HWM_KEY: &[u8] = b"__perryReadableHwm";
 const READABLE_PENDING_KEY: &[u8] = b"__perryReadablePending";
 const READABLE_RESUME_SCHEDULED_KEY: &[u8] = b"__perryReadableResumeScheduled";
 const STREAM_PIPES_KEY: &[u8] = b"__perryStreamPipes";
+const STREAM_PIPE_NO_END_KEY: &[u8] = b"__perryStreamPipeNoEnd";
+const STREAM_PIPELINE_CALLBACK_DONE_KEY: &[u8] = b"__perryStreamPipelineCallbackDone";
 
 use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
@@ -353,17 +354,12 @@ fn chunk_byte_len(chunk: f64) -> usize {
     }
     1
 }
-extern "C" fn ns_pipe1(closure: *const ClosureHeader, dest: f64) -> f64 {
+extern "C" fn ns_pipe2(closure: *const ClosureHeader, dest: f64, options: f64) -> f64 {
     if pipe_destination_is_missing(dest) {
         throw_readable_pipe_missing_destination();
     }
     let stream = this_value(closure);
-    add_pipe_destination(stream, dest);
-    let _ = emit_stream_event(dest, string_value(b"pipe"), &[stream]);
-    set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-    flush_pending_readable_chunks(stream);
-    schedule_readable_from_drain(stream);
-    dest
+    pipe_stream_to_destination(stream, dest, pipe_options_end(options))
 }
 extern "C" fn ns_writable_write_done(closure: *const ClosureHeader, err: f64) -> f64 {
     if closure.is_null() {
@@ -389,6 +385,266 @@ extern "C" fn ns_unpipe1(closure: *const ClosureHeader, dest: f64) -> f64 {
 fn pipe_destination_is_missing(dest: f64) -> bool {
     let value = JSValue::from_bits(dest.to_bits());
     value.is_undefined() || value.is_null()
+}
+
+#[derive(Clone, Copy)]
+struct PipelineOptions {
+    end_final: bool,
+    signal: Option<f64>,
+}
+
+extern "C" fn pipeline_success_callback(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let state = js_closure_get_capture_f64(closure, 0);
+    let callback = js_closure_get_capture_f64(closure, 1);
+    if !mark_pipeline_callback_called(state) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    if is_callable_value(callback) {
+        call_listener_args(f64::from_bits(TAG_UNDEFINED), callback, &[]);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn pipeline_error_callback(closure: *const ClosureHeader, err: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let state = js_closure_get_capture_f64(closure, 0);
+    let callback = js_closure_get_capture_f64(closure, 1);
+    let stages = js_closure_get_capture_f64(closure, 2);
+    if !mark_pipeline_callback_called(state) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    destroy_pipeline_stages(stages, err);
+    if is_callable_value(callback) {
+        call_listener_args(f64::from_bits(TAG_UNDEFINED), callback, &[err]);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn pipeline_close_callback(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let state = js_closure_get_capture_f64(closure, 0);
+    let callback = js_closure_get_capture_f64(closure, 1);
+    let stages = js_closure_get_capture_f64(closure, 2);
+    if !mark_pipeline_callback_called(state) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let err = pipeline_premature_close_error();
+    destroy_pipeline_stages(stages, err);
+    if is_callable_value(callback) {
+        call_listener_args(f64::from_bits(TAG_UNDEFINED), callback, &[err]);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn pipeline_args(args: *const crate::array::ArrayHeader) -> Vec<f64> {
+    if args.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(args);
+    let mut values = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        values.push(crate::array::js_array_get_f64(args, i));
+    }
+    values
+}
+
+fn pipeline_array_like_values(value: f64) -> Vec<f64> {
+    if !is_array_like_value(value) {
+        return Vec::new();
+    }
+    let arr = raw_ptr_from_value(value) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    let mut values = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        values.push(crate::array::js_array_get_f64(arr, i));
+    }
+    values
+}
+
+fn is_pipeline_stream(value: f64) -> bool {
+    get_hidden_value(value, hidden_readable_flag_key()).is_some()
+        || get_hidden_value(value, hidden_writable_flag_key()).is_some()
+}
+
+fn is_pipeline_options_arg(value: f64) -> bool {
+    object_ptr_from_value(value).is_some()
+        && !is_pipeline_stream(value)
+        && !is_array_like_value(value)
+}
+
+fn pipeline_options_from_arg(value: f64) -> PipelineOptions {
+    let end_final = get_hidden_value(value, hidden_key(b"end"))
+        .map(|v| v.to_bits() != TAG_FALSE)
+        .unwrap_or(true);
+    PipelineOptions {
+        end_final,
+        signal: options_signal(value),
+    }
+}
+
+fn pipe_options_end(value: f64) -> bool {
+    get_hidden_value(value, hidden_key(b"end"))
+        .map(|v| v.to_bits() != TAG_FALSE)
+        .unwrap_or(true)
+}
+
+fn normalize_pipeline_source(value: f64, index: usize) -> f64 {
+    if index == 0
+        && !is_pipeline_stream(value)
+        && !is_non_iterable_primitive_for_readable_from(value)
+    {
+        js_node_stream_readable_from(value)
+    } else {
+        value
+    }
+}
+
+fn pipeline_stage_array(stages: &[f64]) -> f64 {
+    let mut arr = crate::array::js_array_alloc(stages.len() as u32);
+    for stage in stages {
+        arr = crate::array::js_array_push_f64(arr, *stage);
+    }
+    box_pointer(arr as *const u8)
+}
+
+fn new_pipeline_callback_state() -> f64 {
+    let state = js_object_alloc(0, 0);
+    let value = box_pointer(state as *const u8);
+    set_hidden_value(
+        value,
+        hidden_pipeline_callback_done_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    value
+}
+
+fn mark_pipeline_callback_called(state: f64) -> bool {
+    if has_truthy_hidden(state, hidden_pipeline_callback_done_key()) {
+        return false;
+    }
+    set_hidden_value(
+        state,
+        hidden_pipeline_callback_done_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    true
+}
+
+fn destroy_pipeline_stages(stages: f64, err: f64) {
+    if !is_array_like_value(stages) {
+        return;
+    }
+    let arr = raw_ptr_from_value(stages) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        destroy_stream(crate::array::js_array_get_f64(arr, i), err);
+    }
+}
+
+fn pipeline_premature_close_error() -> f64 {
+    let msg = b"Premature close";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_PREMATURE_CLOSE");
+    let err = crate::error::js_error_new_with_message(s);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn pipeline_stage_already_complete(stage: f64) -> bool {
+    stream_hidden_ended(stage)
+        || has_truthy_hidden(stage, hidden_end_emitted_key())
+        || has_truthy_hidden(stage, hidden_finish_emitted_key())
+}
+
+fn add_pipeline_callback_listeners(stages: &[f64], callback: f64, options: PipelineOptions) {
+    let state = new_pipeline_callback_state();
+    let stage_array = pipeline_stage_array(stages);
+    let error_event = string_value(b"error");
+    let close_event = string_value(b"close");
+    for stage in stages {
+        let listener = js_closure_alloc(pipeline_error_callback as *const u8, 3);
+        js_closure_set_capture_f64(listener, 0, state);
+        js_closure_set_capture_f64(listener, 1, callback);
+        js_closure_set_capture_f64(listener, 2, stage_array);
+        add_stream_listener_for_event(*stage, error_event, box_pointer(listener as *const u8));
+        if !pipeline_stage_already_complete(*stage) {
+            let close_listener = js_closure_alloc(pipeline_close_callback as *const u8, 3);
+            js_closure_set_capture_f64(close_listener, 0, state);
+            js_closure_set_capture_f64(close_listener, 1, callback);
+            js_closure_set_capture_f64(close_listener, 2, stage_array);
+            add_stream_listener_for_event(
+                *stage,
+                close_event,
+                box_pointer(close_listener as *const u8),
+            );
+        }
+        if let Some(signal) = options.signal {
+            attach_abort_signal(signal, *stage);
+        }
+    }
+
+    let success_stage = if !options.end_final && stages.len() >= 2 {
+        stages[stages.len() - 2]
+    } else {
+        stages[stages.len() - 1]
+    };
+    let success_event = if get_hidden_value(success_stage, hidden_writable_flag_key()).is_some()
+        && options.end_final
+    {
+        string_value(b"finish")
+    } else {
+        string_value(b"end")
+    };
+    let success = js_closure_alloc(pipeline_success_callback as *const u8, 2);
+    js_closure_set_capture_f64(success, 0, state);
+    js_closure_set_capture_f64(success, 1, callback);
+    add_stream_listener_for_event(
+        success_stage,
+        success_event,
+        box_pointer(success as *const u8),
+    );
+}
+
+fn wire_pipeline_pair(src: f64, dest: f64, end_dest: bool) {
+    add_pipe_destination(src, dest);
+    if !end_dest {
+        add_pipe_no_end_destination(src, dest);
+    }
+    let _ = emit_stream_event(dest, string_value(b"pipe"), &[src]);
+    set_readable_flowing(src, f64::from_bits(TAG_TRUE));
+}
+
+fn start_pipeline_readable(stream: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return;
+    }
+    set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
+    flush_pending_readable_chunks(stream);
+    invoke_read_once(stream);
+    schedule_readable_from_drain(stream);
+    if stream_hidden_ended(stream) || has_truthy_hidden(stream, hidden_end_emitted_key()) {
+        end_pipe_destinations(stream);
+    }
+}
+
+#[cold]
+fn throw_pipeline_missing_streams() -> ! {
+    crate::node_submodules::diagnostics::throw_type_error_no_code(
+        b"The \"streams\" argument must be specified",
+    )
+}
+
+#[cold]
+fn throw_pipeline_callback_required() -> ! {
+    crate::node_submodules::diagnostics::throw_type_error_no_code(
+        b"The \"streams[stream.length - 1]\" property must be of type function",
+    )
 }
 
 #[cold]
@@ -664,6 +920,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
+        end_pipe_destinations(stream);
     }
     if writable_length(stream) > 0.0 {
         set_pending_writable_finish_callback(stream, callback);
@@ -961,17 +1218,12 @@ pub extern "C" fn js_node_stream_method_readable_flowing(stream_handle: i64) -> 
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_method_pipe(stream_handle: i64, dest: f64) -> f64 {
+pub extern "C" fn js_node_stream_method_pipe(stream_handle: i64, dest: f64, options: f64) -> f64 {
     if pipe_destination_is_missing(dest) {
         throw_readable_pipe_missing_destination();
     }
     let stream = stream_value_from_handle(stream_handle);
-    add_pipe_destination(stream, dest);
-    let _ = emit_stream_event(dest, string_value(b"pipe"), &[stream]);
-    set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-    flush_pending_readable_chunks(stream);
-    schedule_readable_from_drain(stream);
-    dest
+    pipe_stream_to_destination(stream, dest, pipe_options_end(options))
 }
 
 #[no_mangle]
@@ -1614,11 +1866,14 @@ fn register_stub_arities() {
     register(ns_resume0 as *const u8, 0);
     register(ns_async_dispose as *const u8, 0);
     register(ns_read1 as *const u8, 1);
-    register(ns_pipe1 as *const u8, 1);
+    register(ns_pipe2 as *const u8, 2);
     register(ns_writable_write_done as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
     register(transform_write_callback as *const u8, 2);
     register(transform_flush_callback as *const u8, 2);
+    register(pipeline_success_callback as *const u8, 0);
+    register(pipeline_error_callback as *const u8, 1);
+    register(pipeline_close_callback as *const u8, 0);
     register(ns_write3 as *const u8, 3);
     register(ns_end3 as *const u8, 3);
     register(ns_cork0 as *const u8, 0);
@@ -1851,6 +2106,16 @@ fn hidden_readable_resume_scheduled_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_stream_pipes_key() -> *mut crate::string::StringHeader {
     hidden_key(STREAM_PIPES_KEY)
+}
+
+#[inline]
+fn hidden_stream_pipe_no_end_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_PIPE_NO_END_KEY)
+}
+
+#[inline]
+fn hidden_pipeline_callback_done_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_PIPELINE_CALLBACK_DONE_KEY)
 }
 
 #[inline]
@@ -2164,8 +2429,24 @@ fn pipe_destinations(stream: f64) -> f64 {
     ensure_hidden_array(stream, hidden_stream_pipes_key())
 }
 
+fn pipe_no_end_destinations(stream: f64) -> f64 {
+    ensure_hidden_array(stream, hidden_stream_pipe_no_end_key())
+}
+
 fn pipe_destination_contains(stream: f64, dest: f64) -> bool {
     let arr_value = pipe_destinations(stream);
+    let arr = raw_ptr_from_value(arr_value) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        if crate::array::js_array_get_f64(arr, i).to_bits() == dest.to_bits() {
+            return true;
+        }
+    }
+    false
+}
+
+fn pipe_no_end_destination_contains(stream: f64, dest: f64) -> bool {
+    let arr_value = pipe_no_end_destinations(stream);
     let arr = raw_ptr_from_value(arr_value) as *const crate::array::ArrayHeader;
     let len = crate::array::js_array_length(arr);
     for i in 0..len {
@@ -2188,6 +2469,32 @@ fn add_pipe_destination(stream: f64, dest: f64) {
         hidden_stream_pipes_key(),
         box_pointer(arr as *const u8),
     );
+}
+
+fn add_pipe_no_end_destination(stream: f64, dest: f64) {
+    if dest.to_bits() == TAG_UNDEFINED || pipe_no_end_destination_contains(stream, dest) {
+        return;
+    }
+    let arr_value = pipe_no_end_destinations(stream);
+    let arr = raw_ptr_from_value(arr_value) as *mut crate::array::ArrayHeader;
+    let arr = crate::array::js_array_push_f64(arr, dest);
+    set_hidden_value(
+        stream,
+        hidden_stream_pipe_no_end_key(),
+        box_pointer(arr as *const u8),
+    );
+}
+
+fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool) -> f64 {
+    add_pipe_destination(stream, dest);
+    if !end_dest {
+        add_pipe_no_end_destination(stream, dest);
+    }
+    let _ = emit_stream_event(dest, string_value(b"pipe"), &[stream]);
+    set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
+    flush_pending_readable_chunks(stream);
+    schedule_readable_from_drain(stream);
+    dest
 }
 
 fn unpipe_destination(stream: f64, dest: f64) -> bool {
@@ -2267,8 +2574,10 @@ fn end_pipe_destinations(stream: f64) {
         if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_end_emitted_key()) {
             continue;
         }
+        if pipe_no_end_destination_contains(stream, dest) {
+            continue;
+        }
         finish_stream(dest, None);
-        end_pipe_destinations(dest);
     }
 }
 
@@ -3211,7 +3520,7 @@ fn readable_methods() -> [(&'static str, StubFn); 38] {
         ("listeners", cast1(ns_listeners)),
         ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
-        ("pipe", cast1(ns_pipe1)),
+        ("pipe", cast2(ns_pipe2)),
         ("unpipe", cast1(ns_unpipe1)),
         ("wrap", cast1(ns_chain1)),
         ("pause", cast0(ns_pause0)),
@@ -3290,7 +3599,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 31] {
         ("listeners", cast1(ns_listeners)),
         ("rawListeners", cast1(ns_raw_listeners)),
         ("read", cast1(ns_read1)),
-        ("pipe", cast1(ns_pipe1)),
+        ("pipe", cast2(ns_pipe2)),
         ("unpipe", cast1(ns_unpipe1)),
         ("wrap", cast1(ns_chain1)),
         ("pause", cast0(ns_pause0)),
@@ -3885,6 +4194,59 @@ pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f
 #[no_mangle]
 pub extern "C" fn js_node_stream_compose(_streams_array: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}
+
+/// `stream.pipeline(...streams, cb)` wires classic streams end-to-end and
+/// invokes the callback once on success or on the first observed error.
+#[no_mangle]
+pub extern "C" fn js_node_stream_pipeline(args: *const crate::array::ArrayHeader) -> f64 {
+    let mut args = pipeline_args(args);
+    if args.is_empty() {
+        throw_pipeline_missing_streams();
+    }
+
+    let callback = *args.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED));
+    if !is_callable_value(callback) {
+        throw_pipeline_callback_required();
+    }
+    args.pop();
+
+    let mut options = PipelineOptions {
+        end_final: true,
+        signal: None,
+    };
+    if args.last().copied().is_some_and(is_pipeline_options_arg) {
+        let option_arg = args.pop().unwrap_or(f64::from_bits(TAG_UNDEFINED));
+        options = pipeline_options_from_arg(option_arg);
+    }
+
+    if args.len() == 1 && is_array_like_value(args[0]) {
+        args = pipeline_array_like_values(args[0]);
+    }
+    if args.len() < 2 {
+        throw_pipeline_missing_streams();
+    }
+
+    let stages: Vec<f64> = args
+        .into_iter()
+        .enumerate()
+        .map(|(idx, stage)| normalize_pipeline_source(stage, idx))
+        .collect();
+    add_pipeline_callback_listeners(&stages, callback, options);
+
+    for i in 0..stages.len() - 1 {
+        let is_final_pair = i + 1 == stages.len() - 1;
+        wire_pipeline_pair(
+            stages[i],
+            stages[i + 1],
+            options.end_final || !is_final_pair,
+        );
+    }
+    for stage in stages.iter().take(stages.len() - 1) {
+        start_pipeline_readable(*stage);
+    }
+
+    *stages.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED))
 }
 
 /// #1539: `stream.duplexPair([options])` returns a two-element array

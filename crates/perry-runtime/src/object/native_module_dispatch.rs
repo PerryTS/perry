@@ -1122,6 +1122,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.
+        ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         ("stream", "Readable") => crate::node_stream::js_node_stream_readable_new(arg(0)),
         ("stream", "Writable") => crate::node_stream::js_node_stream_writable_new(arg(0)),
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
