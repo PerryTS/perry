@@ -154,16 +154,25 @@ pub unsafe extern "C" fn js_json_parse_with_reviver(
     text_ptr: *const StringHeader,
     reviver_ptr: i64,
 ) -> JSValue {
-    // First, parse normally
-    let parsed = js_json_parse(text_ptr);
-
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let text_handle = scope.root_string_ptr(text_ptr);
     let reviver = reviver_ptr as *const crate::closure::ClosureHeader;
+    let reviver_handle = scope.root_raw_const_ptr(reviver);
+
+    // First, parse normally
+    let parsed = js_json_parse(text_handle.get_raw_const_ptr::<StringHeader>());
+    let parsed_handle = scope.root_nanbox_u64(parsed.bits());
+
     if reviver.is_null() || (reviver_ptr as u64) < 0x1000 {
-        return parsed;
+        return JSValue::from_bits(parsed_handle.get_nanbox_u64());
     }
 
     // Apply reviver starting from root
     let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
-    let empty_key_f64 = nanbox_string_f64(empty_str);
-    apply_reviver(parsed, empty_key_f64, reviver)
+    let empty_key_handle = scope.root_nanbox_f64(nanbox_string_f64(empty_str));
+    apply_reviver(
+        JSValue::from_bits(parsed_handle.get_nanbox_u64()),
+        empty_key_handle.get_nanbox_f64(),
+        reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
+    )
 }
