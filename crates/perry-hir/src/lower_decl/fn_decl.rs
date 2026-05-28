@@ -274,6 +274,12 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // Exit type parameter scope
     ctx.exit_type_param_scope();
 
+    // Track async/generator declarations while the original function kind is
+    // still present. Later transforms may rewrite bodies into state machines.
+    if fn_decl.function.is_async {
+        ctx.async_func_names.insert(name.clone());
+    }
+
     // Track generator functions so for-of can use iterator protocol.
     // Async generators are tracked separately so for-of paths can wrap
     // `__iter.next()` in `Expr::Await` (`async function*` returns

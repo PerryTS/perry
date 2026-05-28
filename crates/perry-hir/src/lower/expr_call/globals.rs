@@ -14,6 +14,7 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 use super::os::user_info_expr_for_call;
+use super::util_types::try_static_util_types_predicate;
 
 pub(super) fn try_global_builtins(
     ctx: &mut LoweringContext,
@@ -811,6 +812,11 @@ pub(super) fn try_global_builtins(
                         }));
                     }
                     _ => {}
+                }
+            }
+            if module_name == "util/types" {
+                if let Some(expr) = try_static_util_types_predicate(ctx, method_name, &args) {
+                    return Ok(Ok(expr));
                 }
             }
             return Ok(Ok(Expr::NativeMethodCall {

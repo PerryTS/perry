@@ -83,6 +83,7 @@ impl LoweringContext {
             weakmap_locals: HashSet::new(),
             weakset_locals: HashSet::new(),
             namespace_import_locals: HashSet::new(),
+            async_func_names: HashSet::new(),
             generator_func_names: HashSet::new(),
             async_generator_func_names: HashSet::new(),
             iterator_func_for_class: std::collections::HashMap::new(),

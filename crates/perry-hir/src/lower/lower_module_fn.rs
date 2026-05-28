@@ -234,6 +234,15 @@ pub fn lower_module_full(
             // (inner-scope functions shadow outer-scope same-name functions via reverse lookup)
             let func_id = ctx.fresh_func();
             ctx.register_func(func_name.clone(), func_id);
+            if fn_decl.function.is_async {
+                ctx.async_func_names.insert(func_name.clone());
+            }
+            if fn_decl.function.is_generator {
+                ctx.generator_func_names.insert(func_name.clone());
+                if fn_decl.function.is_async {
+                    ctx.async_generator_func_names.insert(func_name.clone());
+                }
+            }
 
             // Pre-register return type annotation for call-site type inference
             // (so variables initialized from function calls can infer their type)

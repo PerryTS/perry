@@ -510,6 +510,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_async_function", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_generator_function", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_generator_object", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_native_error", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_number_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);

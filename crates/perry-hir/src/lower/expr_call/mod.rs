@@ -51,6 +51,7 @@ mod stream;
 mod textencoder;
 mod url_date_instance;
 mod url_search_params;
+mod util_types;
 mod wasm_exports;
 
 use array_only_methods::try_array_only_methods;

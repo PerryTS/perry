@@ -51,6 +51,25 @@ fn object_class_id(value: f64) -> Option<u32> {
     Some(unsafe { (*ptr).class_id })
 }
 
+#[inline]
+fn heap_gc_type(value: f64) -> Option<u8> {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return None;
+    }
+    let ptr = v.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    if matches!(
+        crate::arena::classify_heap_generation(ptr as usize),
+        crate::arena::HeapGeneration::Unknown
+    ) {
+        return None;
+    }
+    Some(unsafe { crate::json::gc_obj_type(ptr as *const u8) })
+}
+
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
@@ -160,6 +179,26 @@ pub extern "C" fn js_util_types_is_date(value: f64) -> f64 {
 pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
     nanbox_bool(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_async_function(_value: f64) -> f64 {
+    nanbox_bool(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_generator_function(_value: f64) -> f64 {
+    nanbox_bool(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_generator_object(_value: f64) -> f64 {
+    nanbox_bool(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_native_error(value: f64) -> f64 {
+    nanbox_bool(heap_gc_type(value) == Some(crate::gc::GC_TYPE_ERROR))
 }
 
 #[no_mangle]

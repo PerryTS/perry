@@ -18,6 +18,7 @@ use swc_ecma_ast as ast;
 use crate::ir::*;
 
 use super::super::LoweringContext;
+use super::util_types::try_static_util_types_predicate;
 
 /// `process.hrtime.bigint()` — nested 3-level member call.
 pub(super) fn try_process_hrtime_bigint(
@@ -323,6 +324,11 @@ pub(super) fn try_util_types_namespace(
                                      or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)",
                                     method_name,
                                 );
+                            }
+                            if let Some(expr) =
+                                try_static_util_types_predicate(ctx, method_name, &args)
+                            {
+                                return Ok(Ok(expr));
                             }
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "util/types".to_string(),

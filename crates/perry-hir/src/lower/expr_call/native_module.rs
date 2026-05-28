@@ -17,6 +17,7 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 use super::os::user_info_expr_for_call;
+use super::util_types::try_static_util_types_predicate;
 
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
@@ -1123,6 +1124,13 @@ pub(super) fn try_native_module_methods(
                                 method_name,
                                 hint,
                             );
+                        }
+                        if module_name == "util/types" {
+                            if let Some(expr) =
+                                try_static_util_types_predicate(ctx, &method_name, &args)
+                            {
+                                return Ok(Ok(expr));
+                            }
                         }
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: module_name.to_string(),

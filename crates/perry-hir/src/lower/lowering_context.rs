@@ -248,6 +248,10 @@ pub struct LoweringContext {
     /// default imports of actual classes (`import { MongoClient }`) are NOT in
     /// this set and keep the static-method path.
     pub(crate) namespace_import_locals: HashSet<String>,
+    /// Names of functions declared with `async function` or `async function*`.
+    /// util.types static predicate folding uses this alongside
+    /// `generator_func_names` before later transforms erase the original kind.
+    pub(crate) async_func_names: HashSet<String>,
     /// Names of functions declared with `function*` — used to detect generator
     /// calls in `for...of` so the iterator protocol loop is emitted instead of
     /// the array-index loop.
