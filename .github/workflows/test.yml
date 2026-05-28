@@ -822,6 +822,84 @@ jobs:
             -- --nocapture
 
   # ---------------------------------------------------------------------------
+  # drizzle-mysql smoke: runs the tier-3 release fixture
+  # `tests/release/packages/drizzle-mysql/` against a real MySQL — the CI
+  # counterpart of #489's local acceptance, closing #804.
+  #
+  # The fixture itself stays Docker-free (per the tier-3 "no Docker"
+  # preference in scripts/release_sweep_tiers/tier03_real_packages.sh —
+  # locally it skips when no mysqld is reachable on 127.0.0.1:3306). The
+  # `services: mysql:8` block below is runner-side setup, transparent to
+  # the fixture. `MYSQL_ALLOW_EMPTY_PASSWORD` matches the fixture's
+  # root-no-password convention; `MYSQL_DATABASE` auto-creates the test
+  # DB on init so the fixture's CREATE-IF-NOT-EXISTS is a no-op.
+  #
+  # Gated to tag pushes + opt-in (parity with compile-smoke / doc-tests
+  # / parity). Real-DB setup + perry release build + drizzle +
+  # @perryts/mysql compile is ~15 min wall — PRs shouldn't pay it by
+  # default. Opt-in via the `run-extended-tests` label.
+  # ---------------------------------------------------------------------------
+  drizzle-mysql-smoke:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: perry_drizzle_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -P 3306 --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install mysql client (for fixture health probe)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mysql-client
+
+      - name: Wait for MySQL service to accept connections
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            if mysql -h 127.0.0.1 -P 3306 -u root -e "SELECT 1" >/dev/null 2>&1; then
+              echo "mysql ready after $i attempts"
+              break
+            fi
+            sleep 1
+          done
+          mysql -h 127.0.0.1 -P 3306 -u root -e "SELECT VERSION();"
+
+      - name: Build perry compiler
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+
+      - name: Run drizzle-mysql fixture
+        run: |
+          cd tests/release/packages/drizzle-mysql
+          PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
+
+  # ---------------------------------------------------------------------------
   # Doc-example tests: compile + run every .ts under docs/examples/.
   # UI examples launch with PERRY_UI_TEST_MODE=1 so they auto-exit after one
   # frame. Gallery screenshots are diffed against per-OS baselines (advisory
