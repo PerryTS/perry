@@ -515,6 +515,23 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             let setter_method = match (class_name.as_str(), prop.as_str()) {
                                 ("ServerResponse", "statusCode") => Some("__set_statusCode"),
                                 ("ServerResponse", "statusMessage") => Some("__set_statusMessage"),
+                                // Issue #2210 — `server.<name> = …` Phase 1 setters
+                                // for the http.Server timeout / keep-alive knobs.
+                                ("HttpServer", "headersTimeout") => Some("__set_headersTimeout"),
+                                ("HttpServer", "keepAliveTimeout") => {
+                                    Some("__set_keepAliveTimeout")
+                                }
+                                ("HttpServer", "requestTimeout") => Some("__set_requestTimeout"),
+                                ("HttpServer", "timeout") => Some("__set_timeout"),
+                                ("HttpServer", "maxHeadersCount") => Some("__set_maxHeadersCount"),
+                                ("HttpServer", "maxRequestsPerSocket") => {
+                                    Some("__set_maxRequestsPerSocket")
+                                }
+                                ("HttpServer", "keepAliveInitialDelay") => {
+                                    Some("__set_keepAliveInitialDelay")
+                                }
+                                ("HttpServer", "noDelay") => Some("__set_noDelay"),
+                                ("HttpServer", "keepAlive") => Some("__set_keepAlive"),
                                 _ => None,
                             };
                             if let Some(method) = setter_method {

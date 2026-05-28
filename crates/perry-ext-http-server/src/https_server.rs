@@ -107,6 +107,7 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
                     shutdown_tx: None,
                     request_rx: None,
                     upgrade_rx: None,
+                    options: crate::server::HttpServerOptions::from_jsvalue(opts_f64),
                 },
             });
         }
@@ -131,6 +132,7 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
             shutdown_tx: None,
             request_rx: None,
             upgrade_rx: None,
+            options: crate::server::HttpServerOptions::from_jsvalue(opts_f64),
         },
     })
 }

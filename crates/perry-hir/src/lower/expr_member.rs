@@ -957,7 +957,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("ServerResponse", "statusCode")
                             | ("ServerResponse", "headersSent")
                             | ("ServerResponse", "writableEnded")
-                            | ("ServerResponse", "writableFinished") => {
+                            | ("ServerResponse", "writableFinished")
+                            // Issue #2210 — Server option getters.
+                            | ("HttpServer", "headersTimeout")
+                            | ("HttpServer", "keepAliveTimeout")
+                            | ("HttpServer", "requestTimeout")
+                            | ("HttpServer", "timeout")
+                            | ("HttpServer", "maxHeadersCount")
+                            | ("HttpServer", "maxRequestsPerSocket")
+                            | ("HttpServer", "keepAliveInitialDelay")
+                            | ("HttpServer", "noDelay")
+                            | ("HttpServer", "keepAlive") => {
                                 format!("__get_{}", property_name)
                             }
                             _ => property_name,

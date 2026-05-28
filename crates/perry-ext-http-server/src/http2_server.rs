@@ -114,6 +114,7 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
             shutdown_tx: None,
             request_rx: None,
             upgrade_rx: None,
+            options: crate::server::HttpServerOptions::from_jsvalue(opts_f64),
         },
     })
 }

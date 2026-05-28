@@ -181,6 +181,7 @@ mod tests {
             shutdown_tx: None,
             request_rx: None,
             upgrade_rx: None,
+            options: crate::server::HttpServerOptions::default(),
         }
     }
 

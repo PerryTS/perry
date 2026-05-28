@@ -75,7 +75,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // existing `bindings.http` / `bindings.https` / `bindings.http2`
     // entries in well_known_bindings.toml route imports here.
     // Server / lifecycle:
-    module.declare_function("js_node_http_create_server", I64, &[I64]);
+    // #2210 — 2nd arg is the (NaN-boxed, padded TAG_UNDEFINED when
+    // absent) `createServer(handler, options)` options bag.
+    module.declare_function("js_node_http_create_server", I64, &[I64, DOUBLE]);
     // Returns the server handle so chains like
     // `createServer(...).listen(...).on(...)` resolve correctly (#2129).
     module.declare_function("js_node_http_server_listen", I64, &[I64, I64]);
@@ -85,6 +87,59 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http_server_listening", I32, &[I64]);
     module.declare_function("js_node_http_server_on", DOUBLE, &[I64, I64, I64]);
+    // #2210 — server option getters / setters. F64 numeric option round-trip;
+    // boolean knobs use I32 returns to match the codegen's NR_I32 expectation
+    // and accept a NaN-boxed truthy value (DOUBLE) on the setter side.
+    module.declare_function("js_node_http_server_get_headers_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_http_server_set_headers_timeout",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_http_server_get_keep_alive_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_http_server_set_keep_alive_timeout",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_http_server_get_request_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_http_server_set_request_timeout",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_http_server_get_timeout", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_server_set_timeout", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_server_get_max_headers_count", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_http_server_set_max_headers_count",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_http_server_get_max_requests_per_socket",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_node_http_server_set_max_requests_per_socket",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_http_server_get_keep_alive_initial_delay",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_node_http_server_set_keep_alive_initial_delay",
+        VOID,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_http_server_get_no_delay", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_server_set_no_delay", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_server_get_keep_alive", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_server_set_keep_alive", VOID, &[I64, DOUBLE]);
     // IncomingMessage:
     module.declare_function("js_node_http_im_method", I64, &[I64]);
     module.declare_function("js_node_http_im_url", I64, &[I64]);

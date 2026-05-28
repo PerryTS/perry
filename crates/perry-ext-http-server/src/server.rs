@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, iter_handles_of, register_handle, JsClosure,
+    alloc_string, get_handle, get_handle_mut, iter_handles_of, register_handle, JsClosure, JsValue,
     RawClosureHeader, StringHeader,
 };
 
@@ -56,6 +56,118 @@ pub struct HttpServer {
     /// the WebSocket handshake completes. Drained alongside
     /// `request_rx` in `event_loop`.
     pub upgrade_rx: Option<mpsc::Receiver<HttpPendingUpgrade>>,
+    /// Issue #2210 — Phase 1 option storage. Accepted from the
+    /// `createServer(handler, options)` 2nd arg and from the
+    /// `server.<name> = …` setters; read back by the matching
+    /// getters. Not yet wired into hyper's connection lifecycle —
+    /// that's Phase 2.
+    pub options: HttpServerOptions,
+}
+
+/// Server-instance tunables exposed at the JS layer as both
+/// `createServer(handler, options)` keys and `server.<name>` getter /
+/// setter pairs. Values default to Node's documented defaults so a
+/// bare `createServer(handler)` round-trips the right numbers.
+#[derive(Clone, Copy)]
+pub struct HttpServerOptions {
+    /// Max ms hyper waits for the request headers to arrive after the
+    /// connection opens. Node default: 60_000.
+    pub headers_timeout: f64,
+    /// Idle keep-alive timeout in ms. Node default: 5_000.
+    pub keep_alive_timeout: f64,
+    /// Total per-request deadline in ms. Node default: 300_000.
+    pub request_timeout: f64,
+    /// Socket idle timeout in ms. Node default: 0 (disabled).
+    pub timeout: f64,
+    /// Max number of headers Node will parse per request.
+    /// Node default: 2_000.
+    pub max_headers_count: f64,
+    /// Max requests served on a single keep-alive connection.
+    /// Node default: 0 (no limit).
+    pub max_requests_per_socket: f64,
+    /// Whether Nagle's algorithm is disabled on accepted sockets.
+    /// Node default: true.
+    pub no_delay: bool,
+    /// Whether SO_KEEPALIVE is set on accepted sockets.
+    /// Node default: false.
+    pub keep_alive: bool,
+    /// Initial delay before TCP keep-alive probes begin, in ms.
+    /// Node default: 0.
+    pub keep_alive_initial_delay: f64,
+}
+
+impl Default for HttpServerOptions {
+    fn default() -> Self {
+        Self {
+            headers_timeout: 60_000.0,
+            keep_alive_timeout: 5_000.0,
+            request_timeout: 300_000.0,
+            timeout: 0.0,
+            max_headers_count: 2_000.0,
+            max_requests_per_socket: 0.0,
+            no_delay: true,
+            keep_alive: false,
+            keep_alive_initial_delay: 0.0,
+        }
+    }
+}
+
+impl HttpServerOptions {
+    /// Parse a NaN-boxed `{ headersTimeout, keepAliveTimeout, … }`
+    /// object handed to `createServer(handler, options)`. Missing
+    /// keys keep their default; any non-object input is treated as
+    /// `undefined` and yields all defaults.
+    pub fn from_jsvalue(opts_f64: f64) -> Self {
+        let mut out = Self::default();
+        out.apply_from_jsvalue(opts_f64);
+        out
+    }
+
+    /// Apply any keys present on `opts_f64` to `self`. Used both by
+    /// `createServer` (starting from defaults) and as a primitive the
+    /// codegen-emitted dispatch could call in future phases.
+    pub fn apply_from_jsvalue(&mut self, opts_f64: f64) {
+        let v = JsValue::from_bits(opts_f64.to_bits());
+        if !v.is_pointer() {
+            return;
+        }
+        let Some(json) = perry_ffi::json_stringify(v) else {
+            return;
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
+            return;
+        };
+        let Some(obj) = parsed.as_object() else {
+            return;
+        };
+        if let Some(n) = obj.get("headersTimeout").and_then(|v| v.as_f64()) {
+            self.headers_timeout = n;
+        }
+        if let Some(n) = obj.get("keepAliveTimeout").and_then(|v| v.as_f64()) {
+            self.keep_alive_timeout = n;
+        }
+        if let Some(n) = obj.get("requestTimeout").and_then(|v| v.as_f64()) {
+            self.request_timeout = n;
+        }
+        if let Some(n) = obj.get("timeout").and_then(|v| v.as_f64()) {
+            self.timeout = n;
+        }
+        if let Some(n) = obj.get("maxHeadersCount").and_then(|v| v.as_f64()) {
+            self.max_headers_count = n;
+        }
+        if let Some(n) = obj.get("maxRequestsPerSocket").and_then(|v| v.as_f64()) {
+            self.max_requests_per_socket = n;
+        }
+        if let Some(b) = obj.get("noDelay").and_then(|v| v.as_bool()) {
+            self.no_delay = b;
+        }
+        if let Some(b) = obj.get("keepAlive").and_then(|v| v.as_bool()) {
+            self.keep_alive = b;
+        }
+        if let Some(n) = obj.get("keepAliveInitialDelay").and_then(|v| v.as_f64()) {
+            self.keep_alive_initial_delay = n;
+        }
+    }
 }
 
 /// Pending request from the hyper service fn to the main thread.
@@ -83,9 +195,16 @@ pub struct HttpPendingUpgrade {
 // FFI: createServer / listen / close / address
 // ============================================================================
 
-/// `http.createServer(handler)` — register an `HttpServer` handle.
+/// `http.createServer(handler, options?)` — register an `HttpServer`
+/// handle. The optional 2nd arg (Node 18.4+) carries
+/// `{ headersTimeout, keepAliveTimeout, requestTimeout, timeout,
+/// maxHeadersCount, maxRequestsPerSocket, noDelay, keepAlive,
+/// keepAliveInitialDelay }`. Missing keys default to Node's documented
+/// defaults; non-object inputs (including a padded `undefined` when
+/// the user calls `createServer(handler)` without a 2nd arg) yield
+/// the default options. Issue #2210.
 #[no_mangle]
-pub extern "C" fn js_node_http_create_server(handler: i64) -> i64 {
+pub extern "C" fn js_node_http_create_server(handler: i64, opts_f64: f64) -> i64 {
     ensure_gc_scanner_registered();
     register_handle(HttpServer {
         handler,
@@ -96,6 +215,7 @@ pub extern "C" fn js_node_http_create_server(handler: i64) -> i64 {
         shutdown_tx: None,
         request_rx: None,
         upgrade_rx: None,
+        options: HttpServerOptions::from_jsvalue(opts_f64),
     })
 }
 
@@ -788,6 +908,151 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
     }
 }
 
+// ============================================================================
+// Issue #2210 — Server option getters / setters
+//
+// The native_table rows below this in
+// `crates/perry-codegen/src/lower_call/native_table/http.rs` map both
+// `server.<name>` reads / `server.<name> = …` writes (via the HIR's
+// PropertyGet/Set → `__get_<name>`/`__set_<name>` rewrite) and direct
+// `server.<name>()` method calls to these FFI symbols. Phase 1 only
+// round-trips the values through the `HttpServer::options` struct —
+// no hyper-side enforcement yet.
+// ============================================================================
+
+fn with_options<R>(handle: i64, f: impl FnOnce(&HttpServerOptions) -> R, default: R) -> R {
+    if let Some(s) = get_handle::<HttpServer>(handle) {
+        f(&s.options)
+    } else if let Some(s) = get_handle::<crate::https_server::HttpsServer>(handle) {
+        f(&s.base.options)
+    } else if let Some(s) = get_handle::<crate::http2_server::Http2SecureServer>(handle) {
+        f(&s.base.options)
+    } else {
+        default
+    }
+}
+
+fn with_options_mut(handle: i64, f: impl FnOnce(&mut HttpServerOptions)) {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        f(&mut s.options);
+        return;
+    }
+    if let Some(s) = get_handle_mut::<crate::https_server::HttpsServer>(handle) {
+        f(&mut s.base.options);
+        return;
+    }
+    if let Some(s) = get_handle_mut::<crate::http2_server::Http2SecureServer>(handle) {
+        f(&mut s.base.options);
+    }
+}
+
+macro_rules! server_f64_accessor {
+    ($get:ident, $set:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $get(handle: i64) -> f64 {
+            with_options(handle, |o| o.$field, HttpServerOptions::default().$field)
+        }
+        #[no_mangle]
+        pub extern "C" fn $set(handle: i64, value: f64) {
+            with_options_mut(handle, |o| {
+                if value.is_finite() {
+                    o.$field = value;
+                }
+            });
+        }
+    };
+}
+
+/// Bit pattern for JS `true` / `false` (NaN-boxed). Returning these as
+/// f64 from a getter lets `NR_F64` dispatch produce a JS-visible boolean
+/// (`typeof server.noDelay === "boolean"`) rather than `undefined`
+/// (which is what `NR_I32` / `NativeRetKind::I32Void` would yield — see
+/// `crates/perry-codegen/src/lower_call/native_module_dispatch.rs`).
+const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+const TAG_FALSE_BITS: u64 = 0x7FFC_0000_0000_0003;
+
+#[inline]
+fn nanbox_bool(b: bool) -> f64 {
+    f64::from_bits(if b { TAG_TRUE_BITS } else { TAG_FALSE_BITS })
+}
+
+macro_rules! server_bool_accessor {
+    ($get:ident, $set:ident, $field:ident) => {
+        #[no_mangle]
+        pub extern "C" fn $get(handle: i64) -> f64 {
+            with_options(
+                handle,
+                |o| nanbox_bool(o.$field),
+                nanbox_bool(HttpServerOptions::default().$field),
+            )
+        }
+        #[no_mangle]
+        pub extern "C" fn $set(handle: i64, value: f64) {
+            // `value` is the NaN-boxed JS value. JS-style truthiness: `false` /
+            // `0` / `NaN` / `null` / `undefined` are false, everything else is true.
+            let v = JsValue::from_bits(value.to_bits());
+            let final_value = if v.is_bool() {
+                v.to_bool()
+            } else if v.is_number() {
+                let n = v.to_number();
+                n != 0.0 && !n.is_nan()
+            } else if v.is_null() || v.is_undefined() {
+                false
+            } else {
+                // Strings / objects: truthy.
+                true
+            };
+            with_options_mut(handle, |o| o.$field = final_value);
+        }
+    };
+}
+
+server_f64_accessor!(
+    js_node_http_server_get_headers_timeout,
+    js_node_http_server_set_headers_timeout,
+    headers_timeout
+);
+server_f64_accessor!(
+    js_node_http_server_get_keep_alive_timeout,
+    js_node_http_server_set_keep_alive_timeout,
+    keep_alive_timeout
+);
+server_f64_accessor!(
+    js_node_http_server_get_request_timeout,
+    js_node_http_server_set_request_timeout,
+    request_timeout
+);
+server_f64_accessor!(
+    js_node_http_server_get_timeout,
+    js_node_http_server_set_timeout,
+    timeout
+);
+server_f64_accessor!(
+    js_node_http_server_get_max_headers_count,
+    js_node_http_server_set_max_headers_count,
+    max_headers_count
+);
+server_f64_accessor!(
+    js_node_http_server_get_max_requests_per_socket,
+    js_node_http_server_set_max_requests_per_socket,
+    max_requests_per_socket
+);
+server_f64_accessor!(
+    js_node_http_server_get_keep_alive_initial_delay,
+    js_node_http_server_set_keep_alive_initial_delay,
+    keep_alive_initial_delay
+);
+server_bool_accessor!(
+    js_node_http_server_get_no_delay,
+    js_node_http_server_set_no_delay,
+    no_delay
+);
+server_bool_accessor!(
+    js_node_http_server_get_keep_alive,
+    js_node_http_server_set_keep_alive,
+    keep_alive
+);
+
 #[allow(dead_code)]
 fn _force_link_helpers(v: f64) -> Option<String> {
     jsvalue_to_owned_string(v)
@@ -801,4 +1066,43 @@ fn _force_promise_link(p: *mut Promise) -> i32 {
 #[allow(dead_code)]
 fn _force_tag_link() -> u64 {
     TAG_NULL | (POINTER_TAG & PTR_MASK)
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::*;
+
+    #[test]
+    fn default_options_match_node_defaults() {
+        let o = HttpServerOptions::default();
+        assert_eq!(o.headers_timeout, 60_000.0);
+        assert_eq!(o.keep_alive_timeout, 5_000.0);
+        assert_eq!(o.request_timeout, 300_000.0);
+        assert_eq!(o.timeout, 0.0);
+        assert_eq!(o.max_headers_count, 2_000.0);
+        assert_eq!(o.max_requests_per_socket, 0.0);
+        assert_eq!(o.keep_alive_initial_delay, 0.0);
+        assert!(o.no_delay);
+        assert!(!o.keep_alive);
+    }
+
+    #[test]
+    fn undefined_options_yield_defaults() {
+        // A padded `undefined` is what the codegen's NA_F64 missing-arg path
+        // produces when the user calls `createServer(handler)` without an
+        // options object. The parser must treat it as "no overrides" rather
+        // than crashing or zeroing the fields.
+        let o = HttpServerOptions::from_jsvalue(f64::from_bits(crate::types::TAG_UNDEFINED));
+        assert_eq!(o.headers_timeout, 60_000.0);
+        assert!(o.no_delay);
+    }
+
+    #[test]
+    fn nanbox_bool_helpers_round_trip() {
+        // `js_node_http_server_get_no_delay` returns these bit patterns; the
+        // codegen NaN-boxes the f64 result as a JS boolean. Verify both
+        // sides of the truthiness map land on the right tag.
+        assert_eq!(nanbox_bool(true).to_bits(), TAG_TRUE_BITS);
+        assert_eq!(nanbox_bool(false).to_bits(), TAG_FALSE_BITS);
+    }
 }
