@@ -1065,6 +1065,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             "emit" => Some(b"emit"),
             "pipe" => Some(b"pipe"),
             "flush" => Some(b"flush"),
+            "close" => Some(b"close"),
+            "destroy" => Some(b"destroy"),
             "removeListener" => Some(b"removeListener"),
             "removeAllListeners" => Some(b"removeAllListeners"),
             _ => None,
