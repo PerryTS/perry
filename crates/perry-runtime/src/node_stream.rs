@@ -443,6 +443,14 @@ pub extern "C" fn js_node_stream_method_readable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"readableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.readableObjectMode` property getter on a typed instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_object_mode(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"readableObjectMode"))
+        .unwrap_or_else(|| f64::from_bits(TAG_FALSE))
+}
+
 /// `stream.readable` property getter on a typed readable-side instance.
 /// Mirrors `Readable.isReadable(stream)` for the current stub state.
 #[no_mangle]
@@ -467,6 +475,14 @@ pub extern "C" fn js_node_stream_method_readable_ended(stream_handle: i64) -> f6
 pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
+}
+
+/// `stream.writableObjectMode` property getter on a typed instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_object_mode(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_key(b"writableObjectMode"))
+        .unwrap_or_else(|| f64::from_bits(TAG_FALSE))
 }
 
 /// `stream.readableAborted` property getter on a typed readable-side instance.
@@ -2039,6 +2055,10 @@ fn opt_bool(opts: f64, key: &[u8]) -> bool {
     get_hidden_value(opts, hidden_key(key)).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
+fn resolve_object_mode(opts: f64, specific_object_mode: &[u8]) -> bool {
+    opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode")
+}
+
 // #1537: the platform-default highWaterMark, settable at runtime via
 // `stream.setDefaultHighWaterMark(objectMode, value)`. Node's defaults are
 // 65536 bytes for byte streams and 16 for objectMode; both are mutable for
@@ -2066,7 +2086,7 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
     if let Some(v) = opt_number(opts, specific).or_else(|| opt_number(opts, b"highWaterMark")) {
         return v;
     }
-    let object_mode = opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode");
+    let object_mode = resolve_object_mode(opts, specific_object_mode);
     default_hwm(object_mode)
 }
 
@@ -2148,6 +2168,16 @@ fn init_readable_state(stream: f64, opts: f64) {
         f64::from_bits(TAG_FALSE),
     );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
+    let readable_object_mode = resolve_object_mode(opts, b"readableObjectMode");
+    set_hidden_value(
+        stream,
+        hidden_key(b"readableObjectMode"),
+        f64::from_bits(if readable_object_mode {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
     let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
@@ -2159,6 +2189,16 @@ fn init_readable_state(stream: f64, opts: f64) {
 fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_writable_flag_key(), f64::from_bits(TAG_TRUE));
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    let writable_object_mode = resolve_object_mode(opts, b"writableObjectMode");
+    set_hidden_value(
+        stream,
+        hidden_key(b"writableObjectMode"),
+        f64::from_bits(if writable_object_mode {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
     set_writable_corked_count(stream, 0.0);

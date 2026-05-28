@@ -573,6 +573,50 @@ fn readable_lifecycle_flags_reflect_ended_state() {
 }
 
 #[test]
+fn stream_object_mode_fields_reflect_defaults_and_options() {
+    let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let readable_obj = raw_ptr_from_value(readable) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(readable_obj, hidden_key(b"readableObjectMode")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(raw_ptr_from_value(readable) as i64).to_bits(),
+        TAG_FALSE
+    );
+
+    let writable = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let writable_obj = raw_ptr_from_value(writable) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(writable_obj, hidden_key(b"writableObjectMode")).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_writable_object_mode(raw_ptr_from_value(writable) as i64).to_bits(),
+        TAG_FALSE
+    );
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"objectMode"), f64::from_bits(TAG_TRUE));
+    let object_readable = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let object_readable_obj = raw_ptr_from_value(object_readable) as *const ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name_f64(object_readable_obj, hidden_key(b"readableObjectMode"))
+            .to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(raw_ptr_from_value(object_readable) as i64)
+            .to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        js_node_stream_method_readable_hwm(raw_ptr_from_value(object_readable) as i64),
+        16.0
+    );
+}
+
+#[test]
 fn writable_corked_counter_tracks_cork_balance() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;

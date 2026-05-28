@@ -410,12 +410,6 @@
     "category": "bug-open",
     "reason": "node:stream: write() should return false when buffer exceeds highWaterMark. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/duplex/options-merge": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex readableObjectMode/writableObjectMode option-split not surfaced on instance. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/options/construct-callback": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -721,12 +715,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/no-options-defaults": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: new Readable() with no options does not expose default flags + hwm. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/readable/read-zero": {
     "issue": "1531",
@@ -1357,12 +1345,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose() — Buffer chunks not preserved through pipeline (typed as string?). Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/transform/object-mode-default-false": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Transform default objectMode — readableObjectMode/writableObjectMode wrong default. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/readable/read-with-nan-size": {
     "issue": "1532",

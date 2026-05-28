@@ -2510,9 +2510,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // property getters on typed stream instances.
     method("stream", "push", true, None),
     method("stream", "readableHighWaterMark", true, None),
+    method("stream", "readableObjectMode", true, None),
     method("stream", "readable", true, None),
     method("stream", "readableEnded", true, None),
     method("stream", "writableHighWaterMark", true, None),
+    method("stream", "writableObjectMode", true, None),
     method("stream", "readableAborted", true, None),
     method("stream", "writableCorked", true, None),
     method("stream", "writable", true, None),
