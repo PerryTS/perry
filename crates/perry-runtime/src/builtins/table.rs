@@ -370,14 +370,17 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     if get_gc_type(elem) == crate::gc::GC_TYPE_OBJECT {
                         let obj_ptr = elem_jsval.as_pointer::<crate::object::ObjectHeader>();
                         for key in &all_keys {
+                            let present = row_keys
+                                .get(i)
+                                .map(|keys| keys.contains(key))
+                                .unwrap_or(false);
                             // Build a temporary StringHeader for the lookup
                             let key_ptr = build_temp_string_header(key);
                             let v =
                                 crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr);
                             free_temp_string_header(key_ptr);
-                            // If undefined, leave cell empty
                             let v_jsval = JSValue::from_bits(v.to_bits());
-                            if v_jsval.is_undefined() {
+                            if v_jsval.is_undefined() && !present {
                                 row.push("".to_string());
                             } else {
                                 row.push(format_table_cell(v));
@@ -494,23 +497,39 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     all_nested = false;
                 }
             }
-            if all_nested && !nested_keys.is_empty() {
+            if !nested_keys.is_empty() {
+                let include_values_col = !all_nested;
                 let mut headers = vec!["(index)".to_string()];
                 headers.extend(nested_keys.iter().cloned());
+                if include_values_col {
+                    headers.push("Values".to_string());
+                }
                 let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
                 for (i, key) in keys.iter().enumerate() {
                     let v = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
-                    let vp =
-                        JSValue::from_bits(v.to_bits()).as_pointer::<crate::object::ObjectHeader>();
                     let mut row = vec![key.clone()];
-                    for nested_key in &nested_keys {
-                        let key_ptr = build_temp_string_header(nested_key);
-                        let cell = crate::object::js_object_get_field_by_name_f64(vp, key_ptr);
-                        free_temp_string_header(key_ptr);
-                        if JSValue::from_bits(cell.to_bits()).is_undefined() {
+                    if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
+                        let vp = JSValue::from_bits(v.to_bits())
+                            .as_pointer::<crate::object::ObjectHeader>();
+                        for nested_key in &nested_keys {
+                            let key_ptr = build_temp_string_header(nested_key);
+                            let cell = crate::object::js_object_get_field_by_name_f64(vp, key_ptr);
+                            free_temp_string_header(key_ptr);
+                            if JSValue::from_bits(cell.to_bits()).is_undefined() {
+                                row.push("".to_string());
+                            } else {
+                                row.push(format_table_cell(cell));
+                            }
+                        }
+                        if include_values_col {
                             row.push("".to_string());
-                        } else {
-                            row.push(format_table_cell(cell));
+                        }
+                    } else {
+                        for _ in &nested_keys {
+                            row.push("".to_string());
+                        }
+                        if include_values_col {
+                            row.push(format_table_cell(v));
                         }
                     }
                     rows.push(row);
