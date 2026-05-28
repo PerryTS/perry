@@ -75,6 +75,35 @@ fn test_array_from_f64() {
 }
 
 #[test]
+fn test_array_clone_prefers_buffer_registry_before_gc_header_probe() {
+    let mut adjacent = None;
+    for _ in 0..4 {
+        let fake_prev = crate::buffer::buffer_alloc(8);
+        let buf = crate::buffer::buffer_alloc(4);
+        let expected_next = fake_prev as usize
+            + ((std::mem::size_of::<crate::buffer::BufferHeader>() + 8 + 7) & !7);
+        if buf as usize == expected_next {
+            adjacent = Some((fake_prev, buf));
+            break;
+        }
+    }
+    let (fake_prev, buf) = adjacent.expect("expected adjacent small-buffer slab allocations");
+
+    unsafe {
+        *crate::buffer::buffer_data_mut(fake_prev) = crate::gc::GC_TYPE_STRING;
+        (*buf).length = 4;
+        std::ptr::copy_nonoverlapping(
+            [1u8, 2, 3, 4].as_ptr(),
+            crate::buffer::buffer_data_mut(buf),
+            4,
+        );
+    }
+
+    let cloned = js_array_clone(buf as *const ArrayHeader);
+    assert_numeric_raw_values(cloned, &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
 fn test_array_set() {
     let arr = js_array_alloc(3);
     js_array_push_f64(arr, 1.0);

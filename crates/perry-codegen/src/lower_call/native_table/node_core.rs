@@ -166,6 +166,67 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // #2135 (Node process parity): process.loadEnvFile(path?) — HIR
+    // defaults the missing path to ".env" so this row always sees a
+    // single string argument.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "loadEnvFile",
+        class_filter: None,
+        runtime: "js_process_load_env_file",
+        args: &[NA_STR],
+        ret: NR_VOID,
+    },
+    // #2135 (Node process parity): process.getgroups() — Array<number>
+    // of supplementary GIDs from libc::getgroups (empty on non-unix).
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "getgroups",
+        class_filter: None,
+        runtime: "js_process_getgroups",
+        args: &[],
+        ret: NR_F64,
+    },
+    // #2135 (Node process parity): POSIX credential setters — single
+    // numeric ID arg, void return.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setuid",
+        class_filter: None,
+        runtime: "js_process_setuid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "seteuid",
+        class_filter: None,
+        runtime: "js_process_seteuid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setgid",
+        class_filter: None,
+        runtime: "js_process_setgid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setegid",
+        class_filter: None,
+        runtime: "js_process_setegid",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
     // ========== Node URL ==========
     // `new Number/String/Boolean(...)` now lowers to
     // `Expr::BoxedPrimitiveNew` (see crates/perry-hir/src/lower/expr_new.rs)
