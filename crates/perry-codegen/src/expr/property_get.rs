@@ -664,6 +664,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         | "seteuid"
                         | "setgid"
                         | "setegid"
+                        | "setgroups"
+                        | "initgroups"
                         | "emitWarning"
                         | "on"
                         | "addListener"

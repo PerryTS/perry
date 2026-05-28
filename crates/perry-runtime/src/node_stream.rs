@@ -3393,8 +3393,20 @@ fn emit_readable_end_once(stream: f64) {
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
         end_pipe_destinations(stream);
+        // autoDestroy (default) tears the stream down after 'end'; the
+        // destroy microtask marks it closed and emits 'close'. Only when
+        // autoDestroy is off do we fall back to the readable-only direct
+        // close path (#2302): a Readable-only stream (no writable side)
+        // emits 'close' after 'end' so `readable.closed` flips to true once
+        // the data is fully consumed. A Duplex defers `close` until BOTH
+        // 'end' and 'finish' have fired (handled in the writable-side
+        // `ns_end1`). Routing both through one branch avoids a double
+        // 'close' emission. Refs node-suite/stream/readable/closed-flag.
         if stream_auto_destroy_enabled(stream) {
             destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+        } else if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
+            mark_stream_closed(stream);
+            let _ = emit_stream_event(stream, string_value(b"close"), &[]);
         }
     }
 }

@@ -236,12 +236,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(generator) → data event chain doesn't deliver. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/closed-flag": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.closed flag + close event don't deliver. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/finished/with-options-signal": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -476,12 +470,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, transform, sink) — spread-arg form does not produce a working pipeline. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/web/writable-stream-start-hook": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: WritableStream sink.start() hook not awaited before first write. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/readable/from-infinite-take": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -626,12 +614,6 @@
     "category": "bug-open",
     "reason": "node:stream: for-await on Readable without setEncoding — chunks are not Buffer instances. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/byte-stream-construction": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: new ReadableStream({type:'bytes'}) — byte stream construction fails or BYOB unavailable. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/compose/error-propagates-to-source": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -667,24 +649,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: find() — return value is not a Promise<value|undefined>. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/web/byob-on-byte-stream": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: getReader({mode:'byob'}) on bytes-type stream fails or returns wrong shape. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/pipethrough-preventclose-flag": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeThrough(transform, {preventClose:true}) — transform.writable should remain unlocked. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/cancel-during-pipeto": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: rs.cancel() during pipeTo — should reject (locked stream); resolves or wrong err name. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/transform-stream-with-strategies": {
     "issue": "1545",
@@ -848,12 +812,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: TS readable.cancel — writable.write does not reject after. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/web/for-await-on-transform": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: for-await directly on TransformStream.readable — empty or wrong output. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/iter-helpers/for-each-await-each": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -889,12 +847,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: WritableStream({type:'bytes'}) — handling differs from Node (accept-and-ignore or throw). Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/sink-all-four-methods": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: sink with start+write+close+abort — methods not invoked in correct order or some skipped. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/from-promise-iterable": {
     "issue": "1545",
