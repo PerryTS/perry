@@ -20,6 +20,11 @@ fn buffer_slice_at<'a>(buf: *const BufferHeader, offset: i32, n: usize) -> Optio
 }
 
 #[inline]
+fn buffer_slice_at_or_throw<'a>(buf: *const BufferHeader, offset: i32, n: usize) -> &'a [u8] {
+    buffer_slice_at(buf, offset, n).unwrap_or_else(|| throw_out_of_range())
+}
+
+#[inline]
 fn buffer_slice_at_mut<'a>(buf: *mut BufferHeader, offset: i32, n: usize) -> Option<&'a mut [u8]> {
     if buf.is_null() || offset < 0 {
         return None;
@@ -90,91 +95,71 @@ fn checked_int_write_value(value: f64, bits: u32) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_buffer_read_uint8(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 1) {
-        Some(s) => s[0] as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 1);
+    s[0] as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_int8(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 1) {
-        Some(s) => (s[0] as i8) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 1);
+    (s[0] as i8) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_uint16_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 2) {
-        Some(s) => u16::from_be_bytes([s[0], s[1]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 2);
+    u16::from_be_bytes([s[0], s[1]]) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_uint16_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 2) {
-        Some(s) => u16::from_le_bytes([s[0], s[1]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 2);
+    u16::from_le_bytes([s[0], s[1]]) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_int16_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 2) {
-        Some(s) => i16::from_be_bytes([s[0], s[1]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 2);
+    i16::from_be_bytes([s[0], s[1]]) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_int16_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 2) {
-        Some(s) => i16::from_le_bytes([s[0], s[1]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 2);
+    i16::from_le_bytes([s[0], s[1]]) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_uint32_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 4) {
-        Some(s) => u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 4);
+    u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_uint32_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 4) {
-        Some(s) => u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 4);
+    u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_int32_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 4) {
-        Some(s) => i32::from_be_bytes([s[0], s[1], s[2], s[3]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 4);
+    i32::from_be_bytes([s[0], s[1], s[2], s[3]]) as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_int32_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    match buffer_slice_at(buf, offset, 4) {
-        Some(s) => i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64,
-        None => 0.0,
-    }
+    let s = buffer_slice_at_or_throw(buf, offset, 4);
+    i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64
 }
 
 #[no_mangle]
