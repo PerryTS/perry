@@ -1100,12 +1100,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory — `node:stream/promises` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "node-suite/stream/imports/promises-ns": {
-    "issue": "1533",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.promises namespace is undefined (used for `await pipeline()` / `await finished()`). Flips to PASS when #1533 lands."
-  },
   "node-suite/stream/pipe/returns-destination": {
     "issue": "1532",
     "added": "2026-05-24",
