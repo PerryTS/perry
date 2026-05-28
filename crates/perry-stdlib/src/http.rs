@@ -238,6 +238,74 @@ unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64>
     None
 }
 
+/// Helper to fetch a raw NaN-boxed field value from a JS object by name.
+/// Returns None when the receiver is not a pointer-like value; returns
+/// `Some(JSValue::undefined())` when the field is absent (matches the
+/// underlying `js_object_get_field_by_name` behavior for `obj.missing`).
+unsafe fn get_object_field_raw(obj_f64: f64, field_name: &str) -> Option<JSValue> {
+    let obj_bits = obj_f64.to_bits();
+    let upper = obj_bits >> 48;
+    let obj_ptr = if upper >= 0x7FF8 {
+        (obj_bits & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::ObjectHeader
+    } else if upper == 0 && obj_bits >= 0x10000 {
+        obj_bits as *const perry_runtime::ObjectHeader
+    } else {
+        return None;
+    };
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key_str = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    Some(js_object_get_field_by_name(obj_ptr, key_str))
+}
+
+/// Returns true iff the JS value is "truthy" enough that Node's
+/// `name += options.field` branch fires (i.e. `if (options.field)`):
+/// not undefined, not null, not the empty string, not 0, not false.
+fn jsvalue_is_truthy(v: JSValue) -> bool {
+    if v.is_undefined() || v.is_null() {
+        return false;
+    }
+    if v.is_bool() {
+        return v.as_bool();
+    }
+    if v.is_int32() {
+        return v.as_int32() != 0;
+    }
+    if v.is_number() {
+        let n = v.as_number();
+        return n != 0.0 && !n.is_nan();
+    }
+    if v.is_string() || v.is_short_string() {
+        let s_ptr = perry_runtime::value::js_get_string_pointer_unified(f64::from_bits(v.bits()));
+        if s_ptr == 0 {
+            return false;
+        }
+        let header = s_ptr as *const StringHeader;
+        unsafe { (*header).byte_len > 0 }
+    } else {
+        // Other pointer values (objects, arrays, buffers) are always truthy
+        // in JS.
+        true
+    }
+}
+
+/// Coerce a JS value to its string representation, matching how
+/// `name += options.field` does ToString in JS. Strings/numbers/bools
+/// flow through directly; arrays comma-join; buffers stringify their
+/// content; objects fall back to "[object Object]".
+unsafe fn jsvalue_to_string(v: JSValue) -> String {
+    let header = perry_runtime::value::js_jsvalue_to_string(f64::from_bits(v.bits()));
+    string_from_header(header).unwrap_or_default()
+}
+
+/// `JSON.stringify(v)` as a Rust `String`. Used by https.Agent.getName
+/// for the `sigalgs` field, which Node serializes as JSON.
+unsafe fn jsvalue_to_json_string(v: JSValue) -> String {
+    let header = perry_runtime::json::js_json_stringify(f64::from_bits(v.bits()), 0);
+    string_from_header(header).unwrap_or_default()
+}
+
 /// Helper to extract headers from a NaN-boxed JS headers object
 unsafe fn extract_headers_from_object(obj_f64: f64) -> HashMap<String, String> {
     let mut result = HashMap::new();
@@ -1038,22 +1106,36 @@ unsafe fn js_http_agent_new_with_protocol(
 }
 
 /// `agent.getName([options])` — Node's canonical key under which sockets are
-/// pooled. Format: `${host}:${port}:${localAddress}` with optional
-/// `:${socketPath}` or `:${family}` appended. Tests assert exact strings;
-/// see `test/parallel/test-http-agent-getname.js`.
+/// pooled. The base shape is `${host}:${port}:${localAddress}` with optional
+/// `:${family}` and `:${socketPath}` appended. For https.Agent instances
+/// 20 extra fields are appended (ca, cert, ciphers, key, …) per Node's
+/// `lib/https.js`. Tests assert exact strings; see
+/// `test/parallel/test-http-agent-getname.js` and
+/// `test/parallel/test-https-agent-getname.js`.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_agent_get_name(
     handle: Handle,
     options_f64: f64,
 ) -> *mut StringHeader {
-    let _ = handle; // name is computed purely from options
+    let is_https = get_handle_mut::<AgentHandle>(handle)
+        .and_then(|a| a.protocol.as_deref().map(|p| p == "https:"))
+        .unwrap_or(false);
+
+    let mut name = build_http_agent_name(options_f64);
+    if is_https {
+        append_https_agent_name_fields(&mut name, options_f64);
+    }
+    js_string_from_bytes(name.as_ptr(), name.len() as u32)
+}
+
+/// Compute the http.Agent.getName portion of the pool key.
+unsafe fn build_http_agent_name(options_f64: f64) -> String {
     let opts_bits = options_f64.to_bits();
     let opts_undef =
         opts_bits == JSValue::undefined().bits() || opts_bits == JSValue::null().bits();
 
     if opts_undef {
-        let s = "localhost::";
-        return js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        return "localhost::".to_string();
     }
 
     let host =
@@ -1063,22 +1145,107 @@ pub unsafe extern "C" fn js_http_agent_get_name(
 
     let mut name = format!("{}:{}:{}", host, port, local_address);
 
-    if let Some(socket_path) = get_object_string_field(options_f64, "socketPath") {
-        name.push(':');
-        name.push_str(&socket_path);
-    } else if let Some(family) = get_object_number_field(options_f64, "family") {
-        // Node only appends family when it is 4 or 6 — every other value
-        // (0, NaN, strings) is silently dropped. `get_object_number_field`
-        // turns missing into None and strings into None too, so we only
-        // see the cases that survived.
+    // Per Node's lib/_http_agent.js: family is appended FIRST (when 4 or 6),
+    // then socketPath. Both are independent — Node appends each separately
+    // if present.
+    if let Some(family) = get_object_number_field(options_f64, "family") {
         let f = family as i64;
         if f == 4 || f == 6 {
             name.push(':');
             name.push_str(&f.to_string());
         }
     }
+    if let Some(socket_path) = get_object_string_field(options_f64, "socketPath") {
+        name.push(':');
+        name.push_str(&socket_path);
+    }
 
-    js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    name
+}
+
+/// Append the 20 https.Agent.getName extension fields onto an already-built
+/// http.Agent.getName prefix. Mirrors `Agent.prototype.getName` in Node's
+/// `lib/https.js` (v22.x): every field gets its own `:` separator regardless
+/// of whether the value is present, so an Agent with no options produces 20
+/// trailing colons.
+unsafe fn append_https_agent_name_fields(name: &mut String, options_f64: f64) {
+    let opts_bits = options_f64.to_bits();
+    let opts_undef =
+        opts_bits == JSValue::undefined().bits() || opts_bits == JSValue::null().bits();
+
+    if opts_undef {
+        // 20 empty fields → 20 trailing colons (1 separator per field).
+        for _ in 0..20 {
+            name.push(':');
+        }
+        return;
+    }
+
+    // Most fields use the `if (options.field) name += options.field;` shape
+    // — truthy → append ToString-coerced value. A small group
+    // (rejectUnauthorized, honorCipherOrder, secureOptions) checks
+    // `!== undefined` instead, so `false` and `0` are appended.
+    let host_value = get_object_field_raw(options_f64, "host");
+
+    let push_truthy_string = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(v) = get_object_field_raw(options_f64, field) {
+            if jsvalue_is_truthy(v) {
+                name.push_str(&jsvalue_to_string(v));
+            }
+        }
+    };
+    let push_defined = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(v) = get_object_field_raw(options_f64, field) {
+            if !v.is_undefined() {
+                name.push_str(&jsvalue_to_string(v));
+            }
+        }
+    };
+
+    push_truthy_string(name, "ca");
+    push_truthy_string(name, "cert");
+    push_truthy_string(name, "clientCertEngine");
+    push_truthy_string(name, "ciphers");
+    push_truthy_string(name, "key");
+    push_truthy_string(name, "pfx");
+    push_defined(name, "rejectUnauthorized");
+
+    // servername appears only when defined AND distinct from host.
+    name.push(':');
+    if let Some(sn) = get_object_field_raw(options_f64, "servername") {
+        if jsvalue_is_truthy(sn) {
+            let same_as_host = match host_value {
+                Some(h) if jsvalue_is_truthy(h) => jsvalue_to_string(h) == jsvalue_to_string(sn),
+                _ => false,
+            };
+            if !same_as_host {
+                name.push_str(&jsvalue_to_string(sn));
+            }
+        }
+    }
+
+    push_truthy_string(name, "minVersion");
+    push_truthy_string(name, "maxVersion");
+    push_truthy_string(name, "secureProtocol");
+    push_truthy_string(name, "crl");
+    push_defined(name, "honorCipherOrder");
+    push_truthy_string(name, "ecdhCurve");
+    push_truthy_string(name, "dhparam");
+    push_defined(name, "secureOptions");
+    push_truthy_string(name, "sessionIdContext");
+
+    // sigalgs is JSON-stringified (Node: `name += JSONStringify(options.sigalgs)`).
+    name.push(':');
+    if let Some(v) = get_object_field_raw(options_f64, "sigalgs") {
+        if jsvalue_is_truthy(v) {
+            name.push_str(&jsvalue_to_json_string(v));
+        }
+    }
+
+    push_truthy_string(name, "privateKeyIdentifier");
+    push_truthy_string(name, "privateKeyEngine");
 }
 
 /// `agent.destroy()` / `.close()` — release pooled sockets. Perry doesn't

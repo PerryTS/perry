@@ -773,18 +773,33 @@ pub unsafe extern "C" fn js_https_agent_new(options_f64: f64) -> Handle {
 }
 
 /// `agent.getName([options])` — Node's canonical key under which sockets
-/// are pooled. Format: `${host}:${port}:${localAddress}` with optional
-/// `:${socketPath}` or `:${family}` appended. Tests assert exact strings
-/// (see `test/parallel/test-http-agent-getname.js`).
+/// are pooled. The base shape is `${host}:${port}:${localAddress}` with
+/// optional `:${family}` and `:${socketPath}` appended. For https.Agent
+/// instances Node appends 20 extra fields (ca, cert, ciphers, key, …)
+/// per `lib/https.js`. Tests assert exact strings (see
+/// `test/parallel/test-http-agent-getname.js` and
+/// `test/parallel/test-https-agent-getname.js`).
 #[no_mangle]
 pub unsafe extern "C" fn js_http_agent_get_name(
     handle: Handle,
     options_f64: f64,
 ) -> *mut StringHeader {
-    let _ = handle; // name is computed purely from `options`
-    let opts = match parse_options_object(options_f64) {
+    let is_https = get_handle_mut::<AgentHandle>(handle)
+        .and_then(|a| a.protocol.as_deref().map(|p| p == "https:"))
+        .unwrap_or(false);
+
+    let opts = parse_options_object(options_f64);
+    let mut name = build_http_agent_name(opts.as_ref());
+    if is_https {
+        append_https_agent_name_fields(&mut name, opts.as_ref());
+    }
+    alloc_string(&name).as_raw()
+}
+
+fn build_http_agent_name(opts: Option<&serde_json::Value>) -> String {
+    let opts = match opts {
         Some(v) => v,
-        None => return alloc_string("localhost::").as_raw(),
+        None => return "localhost::".to_string(),
     };
 
     let host = opts
@@ -808,20 +823,153 @@ pub unsafe extern "C" fn js_http_agent_get_name(
 
     let mut name = format!("{}:{}:{}", host, port, local_address);
 
-    if let Some(socket_path) = opts.get("socketPath").and_then(|v| v.as_str()) {
-        name.push(':');
-        name.push_str(socket_path);
-    } else if let Some(family) = opts.get("family") {
-        // Node only appends family when it is exactly 4 or 6; every
-        // other value (0, null, undefined, strings) is silently dropped.
+    // Per Node's `lib/_http_agent.js`: family is appended first when it
+    // is exactly 4 or 6, then socketPath. Both are independent.
+    if let Some(family) = opts.get("family") {
         let f = family.as_i64().unwrap_or(0);
         if f == 4 || f == 6 {
             name.push(':');
             name.push_str(&f.to_string());
         }
     }
+    if let Some(socket_path) = opts.get("socketPath").and_then(|v| v.as_str()) {
+        name.push(':');
+        name.push_str(socket_path);
+    }
 
-    alloc_string(&name).as_raw()
+    name
+}
+
+/// Append the 20 extension fields that `lib/https.js`'s Agent.getName
+/// adds on top of the http parent. Each field has its own `:` separator
+/// regardless of whether the value is present, so an Agent with no
+/// options produces 20 trailing colons.
+fn append_https_agent_name_fields(name: &mut String, opts: Option<&serde_json::Value>) {
+    let opts = match opts {
+        Some(v) => v,
+        None => {
+            for _ in 0..20 {
+                name.push(':');
+            }
+            return;
+        }
+    };
+
+    let host_str = opts.get("host").and_then(|v| v.as_str()).unwrap_or("");
+
+    let push_truthy_string = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(v) = opts.get(field) {
+            if json_value_is_truthy(v) {
+                name.push_str(&json_value_to_string(v));
+            }
+        }
+    };
+    let push_defined = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(v) = opts.get(field) {
+            if !v.is_null() {
+                name.push_str(&json_value_to_string(v));
+            }
+        }
+    };
+
+    push_truthy_string(name, "ca");
+    push_truthy_string(name, "cert");
+    push_truthy_string(name, "clientCertEngine");
+    push_truthy_string(name, "ciphers");
+    push_truthy_string(name, "key");
+    push_truthy_string(name, "pfx");
+    push_defined(name, "rejectUnauthorized");
+
+    // servername appears only when truthy AND distinct from host.
+    name.push(':');
+    if let Some(sn) = opts.get("servername") {
+        if json_value_is_truthy(sn) {
+            let sn_str = json_value_to_string(sn);
+            if sn_str != host_str {
+                name.push_str(&sn_str);
+            }
+        }
+    }
+
+    push_truthy_string(name, "minVersion");
+    push_truthy_string(name, "maxVersion");
+    push_truthy_string(name, "secureProtocol");
+    push_truthy_string(name, "crl");
+    push_defined(name, "honorCipherOrder");
+    push_truthy_string(name, "ecdhCurve");
+    push_truthy_string(name, "dhparam");
+    push_defined(name, "secureOptions");
+    push_truthy_string(name, "sessionIdContext");
+
+    // sigalgs goes through JSON.stringify per Node.
+    name.push(':');
+    if let Some(v) = opts.get("sigalgs") {
+        if json_value_is_truthy(v) {
+            name.push_str(&serde_json::to_string(v).unwrap_or_default());
+        }
+    }
+
+    push_truthy_string(name, "privateKeyIdentifier");
+    push_truthy_string(name, "privateKeyEngine");
+}
+
+/// JS-style truthiness check on a `serde_json::Value`. Mirrors Node's
+/// `if (options.field)` guard.
+fn json_value_is_truthy(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::Number(n) => {
+            n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false)
+        }
+        serde_json::Value::String(s) => !s.is_empty(),
+        // Arrays/objects are always truthy in JS regardless of contents.
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => true,
+    }
+}
+
+/// JS-style ToString coercion on a `serde_json::Value`, mirroring how
+/// `name += options.field` flows through Array.prototype.toString and
+/// Buffer.prototype.toString:
+/// - arrays comma-join their element ToStrings
+/// - the `{"type":"Buffer","data":[…]}` shape that `JSON.stringify(buf)`
+///   emits becomes the UTF-8 string of the bytes, matching
+///   `Buffer.toString()`
+/// - other objects fall back to `"[object Object]"`
+fn json_value_to_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(json_value_to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        serde_json::Value::Object(map) => {
+            if let (Some(serde_json::Value::String(ty)), Some(serde_json::Value::Array(data))) =
+                (map.get("type"), map.get("data"))
+            {
+                if ty == "Buffer" {
+                    let bytes: Vec<u8> = data
+                        .iter()
+                        .filter_map(|el| el.as_u64().map(|n| n as u8))
+                        .collect();
+                    return String::from_utf8_lossy(&bytes).into_owned();
+                }
+            }
+            "[object Object]".to_string()
+        }
+    }
 }
 
 #[no_mangle]
