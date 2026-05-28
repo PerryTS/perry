@@ -784,6 +784,26 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Buffers inherit TypedArray iteration semantics in Node: the default
+    // iterator is `values()`, yielding numeric bytes.
+    let raw_addr = if (bits >> 48) >= 0x7FF8 {
+        (bits & POINTER_MASK) as usize
+    } else {
+        bits as usize
+    };
+    if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(raw_addr as i64).to_bits());
+                let mname = b"values";
+                return crate::object::js_class_method_bind(this_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
     // #321: arrays expose `Symbol.iterator`. perry has no standalone array
     // iterator object (for-of is special-cased), but `arr[Symbol.iterator]`
     // must resolve to a callable so `Symbol.iterator in arr` is true

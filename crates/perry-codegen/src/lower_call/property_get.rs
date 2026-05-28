@@ -155,6 +155,7 @@ pub fn try_lower_property_get_method_call(
                     "base64url" => 3,
                     "latin1" | "binary" => 4,
                     "ascii" => 5,
+                    "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => 6,
                     _ => 0,
                 };
                 tag.to_string()

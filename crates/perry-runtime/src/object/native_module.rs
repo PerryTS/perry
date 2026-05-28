@@ -1356,9 +1356,9 @@ pub(crate) unsafe fn get_native_module_constant(
     };
 
     // `zlib.constants` — the Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
-    // table Node exposes on `require('node:zlib').constants`. Values
-    // are taken straight from `node-internal/zlib/constants.h` (the
-    // upstream lib snapshots) so reads are byte-identical to Node.
+    // table Node exposes on `require('node:zlib').constants`. Match the
+    // JavaScript-visible table rather than blindly mirroring every zlib.h
+    // macro: modern Node exposes ZLIB_VERNUM but omits Z_TREES.
     // Required by axios for its stream wiring.
     let zlib_const = |prop: &str| -> Option<f64> {
         let v: i64 = match prop {
@@ -1373,6 +1373,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "Z_RLE" => 3,
             "Z_FIXED" => 4,
             "Z_DEFAULT_STRATEGY" => 0,
+            "ZLIB_VERNUM" => 0x1310,
             // Flush values
             "Z_NO_FLUSH" => 0,
             "Z_PARTIAL_FLUSH" => 1,
@@ -1380,7 +1381,6 @@ pub(crate) unsafe fn get_native_module_constant(
             "Z_FULL_FLUSH" => 3,
             "Z_FINISH" => 4,
             "Z_BLOCK" => 5,
-            "Z_TREES" => 6,
             // Return codes
             "Z_OK" => 0,
             "Z_STREAM_END" => 1,
@@ -1641,6 +1641,7 @@ pub(crate) unsafe fn get_native_module_constant(
             // packages feature-detect the Buffer surface without falling over.
             "kMaxLength" => Some(4294967296.0),
             "kStringMaxLength" => Some(536870888.0),
+            "INSPECT_MAX_BYTES" => Some(50.0),
             _ => None,
         },
         "buffer.constants" => match property {
