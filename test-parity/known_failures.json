@@ -476,12 +476,6 @@
     "category": "bug-open",
     "reason": "node:stream: after error, end event should NOT fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/options/auto-destroy-false": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy:false option not honored. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/options/construct-cb-error": {
     "issue": "1532",
     "added": "2026-05-23",
