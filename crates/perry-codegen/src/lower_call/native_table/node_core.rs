@@ -1036,6 +1036,26 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // node:buffer legacy web aliases. The globals already lower to these
+    // runtime helpers; namespace and named imports should hit the same path.
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "atob",
+        class_filter: None,
+        runtime: "js_atob",
+        args: &[NA_F64],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "btoa",
+        class_filter: None,
+        runtime: "js_btoa",
+        args: &[NA_F64],
+        ret: NR_STR,
+    },
     // Issue #1210: `buffer.transcode(source, fromEnc, toEnc)`.
     // Receiver-less Node-buffer export; arguments are NaN-boxed (source
     // is a Buffer pointer, encodings are strings). Returns a Buffer

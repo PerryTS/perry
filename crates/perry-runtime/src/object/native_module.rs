@@ -627,6 +627,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("cluster", "setupPrimary")
             | ("cluster", "setupMaster")
             | ("cluster", "Worker")
+            | ("buffer", "atob")
+            | ("buffer", "btoa")
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
