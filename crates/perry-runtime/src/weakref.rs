@@ -40,10 +40,12 @@ pub(crate) fn weak_wrapper_inspect_label(obj: *const ObjectHeader) -> Option<&'s
 }
 
 /// Allocate a `WeakRef` wrapper object that strongly holds the target value
-/// in a single field named `target`.
+/// in a single sentinel-named field. #1766: the field name uses a `__perry_`
+/// prefix so user code reading `(wr as any).target` returns `undefined` like
+/// Node, instead of leaking the internal storage slot.
 #[no_mangle]
 pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
-    let packed = b"target\0";
+    let packed = b"__perry_wr_target\0";
     let obj = js_object_alloc_with_shape(WEAKREF_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     js_object_set_field(obj, 0, JSValue::from_bits(target.to_bits()));
     unsafe {
@@ -62,7 +64,7 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     if ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let key_ptr = crate::string::js_string_from_bytes(b"target".as_ptr(), 6);
+    let key_ptr = crate::string::js_string_from_bytes(b"__perry_wr_target".as_ptr(), 17);
     let val = js_object_get_field_by_name(ptr, key_ptr);
     if val.is_undefined() {
         f64::from_bits(TAG_UNDEFINED)
@@ -76,7 +78,9 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
 /// 2-element `[token, held]` array used by `unregister(token)` to find matches.
 #[no_mangle]
 pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
-    let packed = b"callback\0entries\0";
+    // #1766: sentinel-name internal slots so `(fr as any).callback` /
+    // `.entries` return `undefined` like Node.
+    let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
     let obj = js_object_alloc_with_shape(FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
     js_object_set_field(obj, 0, JSValue::from_bits(callback.to_bits()));
     let entries_arr = js_array_alloc(0);
@@ -98,7 +102,7 @@ pub extern "C" fn js_finreg_register(registry: f64, _target: f64, held: f64, tok
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -123,7 +127,7 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
-    let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -222,14 +226,16 @@ pub unsafe fn try_weak_method_dispatch(
 }
 
 unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
-    let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
+    let entries_key = crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18);
     let entries_val = js_object_get_field_by_name(reg, entries_key);
     (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader
 }
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
-    let packed = b"entries\0";
+    // #1766: sentinel-named slot so `(wm as any).entries` returns
+    // `undefined` like Node, instead of leaking the [k, v]-pair array.
+    let packed = b"__perry_wk_entries\0";
     let obj = js_object_alloc_with_shape(WEAKMAP_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 0, JSValue::array_ptr(entries_arr));
@@ -368,7 +374,9 @@ pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
-    let packed = b"entries\0";
+    // #1766: shares the sentinel name with js_weakmap_new so the same
+    // `entries_array` helper reaches the [k,v]-pair storage.
+    let packed = b"__perry_wk_entries\0";
     let obj = js_object_alloc_with_shape(WEAKSET_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     let entries_arr = js_array_alloc(0);
     js_object_set_field(obj, 0, JSValue::array_ptr(entries_arr));
