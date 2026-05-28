@@ -794,12 +794,6 @@
     "category": "bug-open",
     "reason": "node:events.getEventListeners(stream, name) does not return the listener array. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/iterator/return-method": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: async iterator's return() does not resolve { value: undefined, done: true }. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/web/writable-multiple-writers-fails": {
     "issue": "1545",
     "added": "2026-05-23",
