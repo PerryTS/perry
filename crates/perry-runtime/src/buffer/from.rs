@@ -124,6 +124,58 @@ pub extern "C" fn js_encoding_tag_from_value(value: f64) -> i32 {
     }
 }
 
+fn buffer_byte_from_js_value(value: f64) -> u8 {
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_finite() {
+        ((number as i64) & 0xFF) as u8
+    } else {
+        0
+    }
+}
+
+unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader> {
+    if ptr < 0x1000 {
+        return None;
+    }
+    let gc_type = *((ptr - crate::gc::GC_HEADER_SIZE) as *const u8);
+    if gc_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+
+    let length_key = js_string_from_bytes(b"length".as_ptr(), 6);
+    let length_value = crate::object::js_object_get_field_by_name(
+        ptr as *const crate::object::ObjectHeader,
+        length_key,
+    );
+    if length_value.is_undefined() {
+        return None;
+    }
+
+    let length = if length_value.is_int32() {
+        length_value.as_int32() as f64
+    } else if length_value.is_number() {
+        length_value.as_number()
+    } else {
+        return Some(buffer_alloc(0));
+    };
+
+    if !length.is_finite() || length <= 0.0 {
+        return Some(buffer_alloc(0));
+    }
+
+    let len = length.trunc().min(u32::MAX as f64) as u32;
+    let buf = buffer_alloc(len);
+    (*buf).length = len;
+    let buf_data = buffer_data_mut(buf);
+
+    for i in 0..len {
+        let value = crate::object::js_object_get_index_polymorphic(ptr as i64, i as f64);
+        *buf_data.add(i as usize) = buffer_byte_from_js_value(value);
+    }
+
+    Some(buf)
+}
+
 /// Create a Buffer from a value (auto-detects string vs array vs buffer)
 /// This is used by Buffer.from() which accepts multiple input types.
 #[no_mangle]
@@ -196,6 +248,8 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
             }
             buf
         }
+    } else if let Some(buf) = unsafe { buffer_from_array_like_object(ptr) } {
+        buf
     } else {
         // Assume it's an array of numbers
         js_buffer_from_array(ptr as *const ArrayHeader)
@@ -225,22 +279,7 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
         let buf_data = buffer_data_mut(buf);
 
         for i in 0..len {
-            let val = *arr_data.add(i);
-            // Array elements may be NaN-boxed INT32, raw f64 numbers, or
-            // NaN-boxed pointers/strings (rare for byte literals). Decode
-            // numeric kinds; non-numeric values become 0.
-            let bits = val.to_bits();
-            let top16 = bits >> 48;
-            let byte = if top16 == 0x7FFE {
-                // INT32_TAG: lower 32 bits are an i32
-                ((bits as u32) & 0xFF) as u8
-            } else if !val.is_nan() {
-                // Raw double — convert via i64 to handle negatives correctly
-                ((val as i64) & 0xFF) as u8
-            } else {
-                0
-            };
-            *buf_data.add(i) = byte;
+            *buf_data.add(i) = buffer_byte_from_js_value(*arr_data.add(i));
         }
 
         buf
