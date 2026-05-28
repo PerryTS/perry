@@ -944,12 +944,6 @@
     "category": "bug-open",
     "reason": "node:stream: destroy() inside _read() — readCalls count or close-event behavior wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/promises/finished-rejects-on-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: promises.finished() — does not reject when stream errors. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/read-multibyte-boundary": {
     "issue": "1532",
     "added": "2026-05-24",
