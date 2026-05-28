@@ -122,12 +122,6 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Net test needs a TLS-capable echo server fixture; not available on CI. Environmental — needs a CI-side fixture."
   },
-  "test_parity_assert": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory — `node:assert` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_buffer": {
     "issue": "793",
     "added": "2026-05-15",
