@@ -303,6 +303,17 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_PTR],
         ret: NR_PTR,
     },
+    // `http.Server(handler)` is Node's callable-constructor alias for
+    // `http.createServer` (works with or without `new`). #2132.
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "Server",
+        class_filter: None,
+        runtime: "js_node_http_create_server",
+        args: &[NA_PTR],
+        ret: NR_PTR,
+    },
     // HttpServer instance methods (class_filter: HttpServer)
     NativeModSig {
         module: "http",
@@ -806,6 +817,17 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         module: "https",
         has_receiver: false,
         method: "createServer",
+        class_filter: None,
+        runtime: "js_node_https_create_server",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
+    // `https.Server(options, handler)` is Node's callable-constructor
+    // alias for `https.createServer` (works with or without `new`). #2132.
+    NativeModSig {
+        module: "https",
+        has_receiver: false,
+        method: "Server",
         class_filter: None,
         runtime: "js_node_https_create_server",
         args: &[NA_F64, NA_PTR],

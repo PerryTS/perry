@@ -135,8 +135,29 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
     let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
+    // #2132 — synchronous bind so `server.address().port` is correct
+    // before the `listen(port, cb)` callback fires. See
+    // `server::js_node_http_server_listen` for the rationale.
+    let bind_str = format!("{}:{}", host, port);
+    let addr: SocketAddr = match bind_str.parse() {
+        Ok(a) => a,
+        Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
+    };
+    let std_listener = match std::net::TcpListener::bind(addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[node:http2] bind {}:{} failed: {}", host, port, e);
+            return server_handle;
+        }
+    };
+    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
+    if let Err(e) = std_listener.set_nonblocking(true) {
+        eprintln!("[node:http2] set_nonblocking failed: {}", e);
+        return server_handle;
+    }
+
     let tls_config = if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
-        s.base.bound_port = port;
+        s.base.bound_port = actual_port;
         s.base.bound_host = host.clone();
         s.base.listening = true;
         s.base.shutdown_tx = Some(shutdown_tx);
@@ -159,7 +180,6 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
 
     let request_tx = Arc::new(request_tx);
     let request_tx_for_spawn = request_tx.clone();
-    let host_for_spawn = host.clone();
     let acceptor = TlsAcceptor::from(tls_config);
 
     // Issue #577 Phase 3 — `tokio::spawn` from inside
@@ -181,18 +201,10 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
             .build()
             .expect("Failed to create http2 accept-loop runtime");
         handle.block_on(async move {
-            let bind_str = format!("{}:{}", host_for_spawn, port);
-            let addr: SocketAddr = match bind_str.parse() {
-                Ok(a) => a,
-                Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
-            };
-            let listener = match TcpListener::bind(addr).await {
+            let listener = match TcpListener::from_std(std_listener) {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!(
-                        "[node:http2] bind {}:{} failed: {}",
-                        host_for_spawn, port, e
-                    );
+                    eprintln!("[node:http2] tokio adopt failed: {}", e);
                     return;
                 }
             };
