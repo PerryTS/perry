@@ -91,6 +91,13 @@ const WRITABLE_NEED_DRAIN_KEY: &[u8] = b"__perryWritableNeedDrain";
 const WRITABLE_OBJECT_MODE_KEY: &[u8] = b"__perryWritableObjectMode";
 const WRITABLE_PENDING_FINISH_CALLBACK_KEY: &[u8] = b"__perryWritablePendingFinishCallback";
 const WRITABLE_WRITEV_KEY: &[u8] = b"__perryWritableWritev";
+const STREAM_CONSTRUCT_KEY: &[u8] = b"__perryStreamConstruct";
+const STREAM_CONSTRUCTED_KEY: &[u8] = b"__perryStreamConstructed";
+const STREAM_FINAL_KEY: &[u8] = b"__perryStreamFinal";
+const STREAM_FINAL_CALLED_KEY: &[u8] = b"__perryStreamFinalCalled";
+const STREAM_FINAL_PENDING_KEY: &[u8] = b"__perryStreamFinalPending";
+const STREAM_DESTROY_KEY: &[u8] = b"__perryStreamDestroy";
+const STREAM_EMIT_CLOSE_KEY: &[u8] = b"__perryStreamEmitClose";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -105,7 +112,9 @@ const READABLE_PENDING_KEY: &[u8] = b"__perryReadablePending";
 const READABLE_RESUME_SCHEDULED_KEY: &[u8] = b"__perryReadableResumeScheduled";
 const STREAM_PIPES_KEY: &[u8] = b"__perryStreamPipes";
 
-use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
+use destroy_state::{
+    destroy_stream, ns_destroy1, ns_destroy_callback1, ns_destroy_error_microtask,
+};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
 
 // ─────────────────────────────────────────────────────────────────
@@ -219,11 +228,66 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
         );
         mark_writable_finished(stream);
         let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
-        mark_stream_closed(stream);
-        let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+        emit_stream_close_once(stream);
     }
     if is_callable_value(callback) {
         call_listener_args(stream, callback, &[]);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_stream_construct_callback1(closure: *const ClosureHeader, err: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    set_hidden_value(stream, hidden_constructed_key(), f64::from_bits(TAG_TRUE));
+    if err.to_bits() != TAG_UNDEFINED && err.to_bits() != TAG_NULL {
+        destroy_stream(stream, err);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_stream_construct_microtask(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let Some(construct) = get_hidden_value(stream, hidden_construct_key()) else {
+        set_hidden_value(stream, hidden_constructed_key(), f64::from_bits(TAG_TRUE));
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    let cb = js_closure_alloc(ns_stream_construct_callback1 as *const u8, 1);
+    js_closure_set_capture_f64(cb, 0, stream);
+    let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+    call_listener_args(stream, construct, &[cb_value]);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_writable_final_callback1(closure: *const ClosureHeader, err: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let finish_callback = js_closure_get_capture_f64(closure, 1);
+    set_hidden_value(
+        stream,
+        hidden_final_pending_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    if err.to_bits() != TAG_UNDEFINED && err.to_bits() != TAG_NULL {
+        destroy_stream(stream, err);
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let finish_callback =
+        if finish_callback.to_bits() == TAG_UNDEFINED || finish_callback.to_bits() == TAG_NULL {
+            None
+        } else {
+            Some(finish_callback)
+        };
+    schedule_writable_finish(stream, finish_callback);
+    if writable_length(stream) == 0.0 {
+        destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1504,6 +1568,7 @@ fn register_stub_arities() {
     register(ns_chain0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
     register(ns_destroy_error_microtask as *const u8, 0);
+    register(ns_destroy_callback1 as *const u8, 1);
     register(ns_stream_abort_listener as *const u8, 0);
     register(ns_destroy1 as *const u8, 1);
     register(ns_chain2 as *const u8, 2);
@@ -1519,6 +1584,9 @@ fn register_stub_arities() {
     register(ns_readable_event_microtask as *const u8, 0);
     register(ns_readable_end_microtask as *const u8, 0);
     register(ns_writable_finish_microtask as *const u8, 0);
+    register(ns_stream_construct_microtask as *const u8, 0);
+    register(ns_stream_construct_callback1 as *const u8, 1);
+    register(ns_writable_final_callback1 as *const u8, 1);
     register(ns_emit2 as *const u8, 2);
     crate::closure::js_register_closure_rest(ns_emit_rest as *const u8, 1);
     register(ns_resume0 as *const u8, 0);
@@ -1699,6 +1767,41 @@ fn hidden_writable_pending_finish_callback_key() -> *mut crate::string::StringHe
 #[inline]
 fn hidden_writev_key() -> *mut crate::string::StringHeader {
     hidden_key(WRITABLE_WRITEV_KEY)
+}
+
+#[inline]
+fn hidden_construct_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_CONSTRUCT_KEY)
+}
+
+#[inline]
+fn hidden_constructed_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_CONSTRUCTED_KEY)
+}
+
+#[inline]
+fn hidden_final_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_FINAL_KEY)
+}
+
+#[inline]
+fn hidden_final_called_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_FINAL_CALLED_KEY)
+}
+
+#[inline]
+fn hidden_final_pending_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_FINAL_PENDING_KEY)
+}
+
+#[inline]
+pub(super) fn hidden_destroy_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_DESTROY_KEY)
+}
+
+#[inline]
+fn hidden_emit_close_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_EMIT_CLOSE_KEY)
 }
 
 #[inline]
@@ -1899,6 +2002,22 @@ fn has_truthy_hidden(stream: f64, key: *mut crate::string::StringHeader) -> bool
     get_hidden_value(stream, key).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
+pub(super) fn emit_stream_close_once(stream: f64) {
+    if has_truthy_hidden(stream, hidden_key(b"closed")) {
+        return;
+    }
+    mark_stream_closed(stream);
+    if stream_should_emit_close(stream) {
+        let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+    }
+}
+
+pub(super) fn stream_should_emit_close(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_emit_close_key())
+        .map(|value| value.to_bits() != TAG_FALSE)
+        .unwrap_or(true)
+}
+
 fn stream_destroyed(stream: f64) -> bool {
     has_truthy_hidden(stream, hidden_key(b"destroyed"))
 }
@@ -1913,6 +2032,10 @@ fn readable_is_flowing(stream: f64) -> bool {
 
 fn readable_is_paused(stream: f64) -> bool {
     readable_flowing_value(stream).to_bits() == TAG_FALSE
+}
+
+fn has_writable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_writable_flag_key()).is_some()
 }
 
 fn set_readable_flowing(stream: f64, value: f64) {
@@ -2190,6 +2313,13 @@ fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
     {
         return;
     }
+    if writable_length(stream) > 0.0 {
+        set_pending_writable_finish_callback(stream, callback);
+        return;
+    }
+    if maybe_invoke_writable_final(stream, callback) {
+        return;
+    }
     set_hidden_value(
         stream,
         hidden_finish_scheduled_key(),
@@ -2205,6 +2335,32 @@ fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
             .to_bits() as i64,
     );
     crate::builtins::js_queue_microtask(closure as i64);
+}
+
+fn maybe_invoke_writable_final(stream: f64, callback: Option<f64>) -> bool {
+    if has_truthy_hidden(stream, hidden_final_called_key()) {
+        return false;
+    }
+    let Some(final_callback) = get_hidden_value(stream, hidden_final_key()) else {
+        set_hidden_value(stream, hidden_final_called_key(), f64::from_bits(TAG_TRUE));
+        return false;
+    };
+    if !is_callable_value(final_callback) {
+        set_hidden_value(stream, hidden_final_called_key(), f64::from_bits(TAG_TRUE));
+        return false;
+    }
+    set_hidden_value(stream, hidden_final_called_key(), f64::from_bits(TAG_TRUE));
+    set_hidden_value(stream, hidden_final_pending_key(), f64::from_bits(TAG_TRUE));
+    let cb = js_closure_alloc(ns_writable_final_callback1 as *const u8, 2);
+    js_closure_set_capture_f64(cb, 0, stream);
+    js_closure_set_capture_f64(
+        cb,
+        1,
+        callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
+    );
+    let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+    call_listener_args(stream, final_callback, &[cb_value]);
+    true
 }
 
 fn set_pending_writable_finish_callback(stream: f64, callback: Option<f64>) {
@@ -3117,6 +3273,14 @@ fn resolve_object_mode(opts: f64, specific_object_mode: &[u8]) -> bool {
     opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode")
 }
 
+fn opt_is_false(opts: f64, key: &[u8]) -> bool {
+    get_hidden_value(opts, hidden_key(key)).is_some_and(|value| value.to_bits() == TAG_FALSE)
+}
+
+fn lifecycle_callback_from_options(opts: f64, key: &[u8]) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(key)).filter(|value| is_callable_value(*value))
+}
+
 // #1537: the platform-default highWaterMark, settable at runtime via
 // `stream.setDefaultHighWaterMark(objectMode, value)`. Node's defaults are
 // 65536 bytes for byte streams and 16 for objectMode; both are mutable for
@@ -3152,6 +3316,47 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
 fn init_lifecycle_state(stream: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
     set_visible_closed(stream, false);
+    set_hidden_value(stream, hidden_emit_close_key(), f64::from_bits(TAG_TRUE));
+    set_hidden_value(stream, hidden_constructed_key(), f64::from_bits(TAG_TRUE));
+    set_hidden_value(stream, hidden_final_called_key(), f64::from_bits(TAG_FALSE));
+    set_hidden_value(
+        stream,
+        hidden_final_pending_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+}
+
+fn init_lifecycle_options(stream: f64, opts: f64) {
+    if opt_is_false(opts, b"emitClose") {
+        set_hidden_value(stream, hidden_emit_close_key(), f64::from_bits(TAG_FALSE));
+    }
+    if let Some(callback) = lifecycle_callback_from_options(opts, b"destroy") {
+        set_hidden_value(
+            stream,
+            hidden_destroy_key(),
+            rebind_callback_this(callback, stream),
+        );
+    }
+    if has_writable_side(stream) {
+        if let Some(callback) = lifecycle_callback_from_options(opts, b"final") {
+            set_hidden_value(
+                stream,
+                hidden_final_key(),
+                rebind_callback_this(callback, stream),
+            );
+        }
+    }
+    if let Some(callback) = lifecycle_callback_from_options(opts, b"construct") {
+        set_hidden_value(
+            stream,
+            hidden_construct_key(),
+            rebind_callback_this(callback, stream),
+        );
+        set_hidden_value(stream, hidden_constructed_key(), f64::from_bits(TAG_FALSE));
+        let closure = js_closure_alloc(ns_stream_construct_microtask as *const u8, 1);
+        js_closure_set_capture_f64(closure, 0, stream);
+        crate::builtins::js_queue_microtask(closure as i64);
+    }
 }
 
 fn init_constructor(stream: f64, name: &str) {
@@ -3371,6 +3576,7 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     init_lifecycle_state(readable);
     init_constructor(readable, "Readable");
     init_readable_state(readable, opts);
+    init_lifecycle_options(readable, opts);
     init_abort_signal_state(readable, opts);
     async_iterator::install_readable_async_iterator_symbol(readable);
     install_stream_async_dispose_symbol(readable);
@@ -3399,6 +3605,7 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     init_lifecycle_state(writable);
     init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
+    init_lifecycle_options(writable, opts);
     init_abort_signal_state(writable, opts);
     install_stream_async_dispose_symbol(writable);
     writable
@@ -3424,6 +3631,7 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     init_readable_state(duplex, opts);
     init_writable_state(duplex, opts);
     init_duplex_state(duplex, opts);
+    init_lifecycle_options(duplex, opts);
     init_abort_signal_state(duplex, opts);
     async_iterator::install_readable_async_iterator_symbol(duplex);
     install_stream_async_dispose_symbol(duplex);
