@@ -706,13 +706,37 @@ pub extern "C" fn js_path_to_namespaced_path(path_ptr: *const StringHeader) -> *
     }
 }
 
-/// Convert a glob pattern (`*`, `?`, `[abc]`, `**`) into a regex, anchored
-/// at both ends. Mirrors Node's `path.matchesGlob` semantics, which Node
-/// documents as identical to `picomatch` defaults: `*` matches any chars
-/// except `/`, `**` matches across `/`, `?` matches a single char except
-/// `/`, character classes `[...]` work like regex.
-fn glob_to_regex(pattern: &str) -> String {
-    let mut out = String::from("^");
+fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'a str>)> {
+    let bytes = pattern.as_bytes();
+    let mut depth = 0usize;
+    let mut arm_start = open + 1;
+    let mut arms = Vec::new();
+    let mut saw_comma = false;
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] as char {
+            '{' => depth += 1,
+            '}' if depth == 0 => {
+                if !saw_comma {
+                    return None;
+                }
+                arms.push(&pattern[arm_start..i]);
+                return Some((i, arms));
+            }
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                saw_comma = true;
+                arms.push(&pattern[arm_start..i]);
+                arm_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn push_glob_regex(pattern: &str, out: &mut String) {
     let bytes = pattern.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -742,7 +766,23 @@ fn glob_to_regex(pattern: &str) -> String {
                 }
                 out.push(']');
             }
-            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '\\' => {
+            '{' => {
+                if let Some((close, arms)) = brace_alternation(pattern, i) {
+                    out.push_str("(?:");
+                    for (idx, arm) in arms.iter().enumerate() {
+                        if idx > 0 {
+                            out.push('|');
+                        }
+                        push_glob_regex(arm, out);
+                    }
+                    out.push(')');
+                    i = close;
+                } else {
+                    out.push('\\');
+                    out.push(c);
+                }
+            }
+            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => {
                 out.push('\\');
                 out.push(c);
             }
@@ -750,6 +790,16 @@ fn glob_to_regex(pattern: &str) -> String {
         }
         i += 1;
     }
+}
+
+/// Convert a glob pattern (`*`, `?`, `[abc]`, `{a,b}`, `**`) into a regex,
+/// anchored at both ends. Mirrors Node's `path.matchesGlob` basics: `*`
+/// matches any chars except `/`, `**` matches across `/`, `?` matches a
+/// single char except `/`, character classes `[...]` work like regex, and
+/// brace alternation expands alternatives such as `*.{md,txt}`.
+fn glob_to_regex(pattern: &str) -> String {
+    let mut out = String::from("^");
+    push_glob_regex(pattern, &mut out);
     out.push('$');
     out
 }
@@ -1247,6 +1297,25 @@ pub extern "C" fn js_path_win32_relative(
         let mut parts: Vec<&str> = std::iter::repeat_n("..", ups).collect();
         parts.extend(to_segs[common..].iter().copied());
         string_to_js(&parts.join("\\"))
+    }
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::glob_to_regex;
+
+    #[test]
+    fn brace_alternation_expands_to_group() {
+        assert_eq!(glob_to_regex("*.{md,txt}"), "^[^/]*\\.(?:md|txt)$");
+        assert_eq!(
+            glob_to_regex("src/{app,test}.ts"),
+            "^src/(?:app|test)\\.ts$"
+        );
+    }
+
+    #[test]
+    fn braces_without_alternation_stay_literal() {
+        assert_eq!(glob_to_regex("file.{md}"), "^file\\.\\{md\\}$");
     }
 }
 

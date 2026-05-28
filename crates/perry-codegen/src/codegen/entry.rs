@@ -9,7 +9,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{I32, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I8, PTR, VOID};
 
 use super::helpers::{
     emit_namespace_populator, enable_module_init_shadow_frame, init_static_fields_early,
@@ -472,8 +472,25 @@ pub(super) fn compile_module_entry(
                 ctx.block().call_void("js_wait_for_event", &[]);
                 ctx.block().br(&header_label);
 
-                // loop_exit: done
+                // loop_exit: fire `beforeExit` (#2135) with the would-be
+                // exit code, then drain microtasks/timers once more so any
+                // last-minute work the listener queued still runs before
+                // we ret. Mirrors Node's "event loop drained → one
+                // beforeExit pass" semantics.
+                //
+                // We pass `0` as the code today: Perry doesn't yet wire
+                // `process.exitCode` into this codegen path, and the test
+                // surface in #2135 only pins the firing + the default
+                // code. Explicit `process.exit(N)` bypasses this whole
+                // block via libc::_exit.
                 ctx.current_block = exit_idx;
+                let zero_code = "0x0".to_string();
+                ctx.block()
+                    .call_void("js_process_emit_before_exit", &[(DOUBLE, &zero_code)]);
+                let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
+                let _ = ctx.block().call(I32, "js_timer_tick", &[]);
+                let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
+                let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block().ret(I32, "0");
             }
         }
