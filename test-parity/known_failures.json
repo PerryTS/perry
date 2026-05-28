@@ -80,12 +80,6 @@
     "category": "bug-stale",
     "reason": "#561 (Web Crypto subtle.digest/sign for HMAC-SHA-256) closed but the SigV4 chain test still regresses on Linux CI. Bisect needed for crypto/HMAC ordering on Linux; file a Linux-specific tracking issue once the divergence is identified."
   },
-  "test_issue_654_typed_array_dispatch": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "bug-stale",
-    "reason": "#654 (Float64Array typeof + .sort/.at dispatch) closed but the typed-array dispatch test still regresses on Linux CI. Linux-specific dispatch divergence; bisect needed before re-filing."
-  },
   "test_issue_685_nested_class_static_param": {
     "issue": "793",
     "added": "2026-05-15",
