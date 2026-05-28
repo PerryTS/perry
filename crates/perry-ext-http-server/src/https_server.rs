@@ -28,37 +28,33 @@ use crate::request::{
 };
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{HttpPendingRequest, HttpServer};
-use crate::tls::{build_server_config, parse_cert_chain, parse_private_key};
+use crate::tls::{
+    build_server_config, json_value_to_pem_bytes, parse_cert_chain, parse_private_key,
+};
 
 /// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
-/// object literal into Rust strings + a flag for whether to advertise
-/// `h2` in ALPN. Falls back to empty PEMs (which the cert-chain
-/// parser then rejects) on any extraction failure so the user sees
-/// a clear bind error.
-unsafe fn parse_https_opts(opts_f64: f64) -> (String, String, bool) {
+/// object literal into the PEM byte buffers + a flag for whether to
+/// advertise `h2` in ALPN. `key`/`cert` accept either a PEM string
+/// OR a `Buffer` (the form `fs.readFileSync('key.pem')` returns when
+/// no encoding is supplied) — see `json_value_to_pem_bytes`. Falls
+/// back to empty PEMs (which the cert-chain parser then rejects) on
+/// any extraction failure so the user sees a clear bind error.
+unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool) {
     use perry_ffi::JsValue;
     let v = JsValue::from_bits(opts_f64.to_bits());
     if !v.is_pointer() {
-        return (String::new(), String::new(), true);
+        return (Vec::new(), Vec::new(), true);
     }
     let json = match perry_ffi::json_stringify(v) {
         Some(j) => j,
-        None => return (String::new(), String::new(), true),
+        None => return (Vec::new(), Vec::new(), true),
     };
     let parsed: serde_json::Value = match serde_json::from_str(&json) {
         Ok(p) => p,
-        Err(_) => return (String::new(), String::new(), true),
+        Err(_) => return (Vec::new(), Vec::new(), true),
     };
-    let key_pem = parsed
-        .get("key")
-        .and_then(|k| k.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let cert_pem = parsed
-        .get("cert")
-        .and_then(|c| c.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let key_pem = json_value_to_pem_bytes(parsed.get("key"));
+    let cert_pem = json_value_to_pem_bytes(parsed.get("cert"));
     // Default ALPN to `[http/1.1]` only — node:https is HTTP/1.1
     // by spec; users wanting HTTP/2 should reach for node:http2's
     // createSecureServer instead. Opt-in via `alpnProtocols: ["h2", "http/1.1"]`.
@@ -91,8 +87,8 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
 
     let (key_pem, cert_pem, enable_http2_alpn) = parse_https_opts(opts_f64);
 
-    let cert_chain = parse_cert_chain(cert_pem.as_bytes());
-    let private_key = match parse_private_key(key_pem.as_bytes()) {
+    let cert_chain = parse_cert_chain(&cert_pem);
+    let private_key = match parse_private_key(&key_pem) {
         Some(k) => k,
         None => {
             eprintln!("[node:https] no recognized PEM private key");

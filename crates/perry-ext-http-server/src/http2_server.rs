@@ -38,35 +38,30 @@ use crate::request::{
 };
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest, HttpServer};
-use crate::tls::{build_server_config, parse_cert_chain, parse_private_key};
+use crate::tls::{
+    build_server_config, json_value_to_pem_bytes, parse_cert_chain, parse_private_key,
+};
 
 /// Decode `{ key, cert }` from a NaN-boxed JsValue object. Mirrors
-/// the helper in `https_server.rs` but omits the alpnProtocols flag
-/// since http2 server always advertises `[h2, http/1.1]`.
-unsafe fn parse_h2_opts(opts_f64: f64) -> (String, String) {
+/// the helper in `https_server.rs` (including Buffer-typed PEM
+/// support, #2132) but omits the alpnProtocols flag since http2
+/// server always advertises `[h2, http/1.1]`.
+unsafe fn parse_h2_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>) {
     use perry_ffi::JsValue;
     let v = JsValue::from_bits(opts_f64.to_bits());
     if !v.is_pointer() {
-        return (String::new(), String::new());
+        return (Vec::new(), Vec::new());
     }
     let json = match perry_ffi::json_stringify(v) {
         Some(j) => j,
-        None => return (String::new(), String::new()),
+        None => return (Vec::new(), Vec::new()),
     };
     let parsed: serde_json::Value = match serde_json::from_str(&json) {
         Ok(p) => p,
-        Err(_) => return (String::new(), String::new()),
+        Err(_) => return (Vec::new(), Vec::new()),
     };
-    let key_pem = parsed
-        .get("key")
-        .and_then(|k| k.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let cert_pem = parsed
-        .get("cert")
-        .and_then(|c| c.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let key_pem = json_value_to_pem_bytes(parsed.get("key"));
+    let cert_pem = json_value_to_pem_bytes(parsed.get("cert"));
     (key_pem, cert_pem)
 }
 use crate::types::{
@@ -90,8 +85,8 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
     ensure_gc_scanner_registered();
 
     let (key_pem, cert_pem) = parse_h2_opts(opts_f64);
-    let cert_chain = parse_cert_chain(cert_pem.as_bytes());
-    let private_key = parse_private_key(key_pem.as_bytes());
+    let cert_chain = parse_cert_chain(&cert_pem);
+    let private_key = parse_private_key(&key_pem);
 
     let tls_config = match private_key {
         Some(k) => match build_server_config(cert_chain, k, true) {
