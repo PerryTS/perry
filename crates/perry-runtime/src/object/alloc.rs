@@ -567,10 +567,21 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     // silently dropped 9th..Nth properties.
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(src_keys, i as u32);
-        if !key_val.is_string() {
+        // #1781: SSO-aware copy — pre-fix the `is_string()` here
+        // silently dropped any ≤5-byte key stored as a SHORT_STRING_TAG
+        // value, so `Object.assign(target, src)` lost `src.id`,
+        // `src.tag`, `src.name`, etc. when those slots used inline SSO.
+        // Route SSO through `js_get_string_pointer_unified` so the
+        // destination set-by-name path sees a stable heap pointer.
+        if !key_val.is_any_string() {
             continue;
         }
-        let key_ptr = key_val.as_string_ptr();
+        let key_f64 = f64::from_bits(key_val.bits());
+        let key_ptr =
+            crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+        if key_ptr.is_null() {
+            continue;
+        }
         let field_f64 = if i < alloc_limit {
             let field_bits = *src_fields.add(i);
             f64::from_bits(field_bits)
@@ -658,12 +669,18 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         let header_size = std::mem::size_of::<ObjectHeader>();
         let src_fields = (src as *const u8).add(header_size) as *const u64;
         // Same overflow-aware iteration as `js_object_copy_own_fields`.
+        // #1781: SSO-aware — see the sibling helper above.
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(src_keys, i as u32);
-            if !key_val.is_string() {
+            if !key_val.is_any_string() {
                 continue;
             }
-            let key_ptr = key_val.as_string_ptr();
+            let key_f64 = f64::from_bits(key_val.bits());
+            let key_ptr =
+                crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+            if key_ptr.is_null() {
+                continue;
+            }
             let field_f64 = if i < alloc_limit {
                 let field_bits = *src_fields.add(i);
                 f64::from_bits(field_bits)

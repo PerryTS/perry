@@ -85,18 +85,13 @@ pub extern "C" fn js_create_native_module_namespace(
 pub(crate) unsafe fn read_native_module_name(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<String> {
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     let field = crate::object::js_object_get_field(obj_ptr, 0);
-    if !field.is_string() {
-        return None;
-    }
-    let str_ptr = (field.bits() & POINTER_MASK) as *const crate::string::StringHeader;
-    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
-        return None;
-    }
-    let len = (*str_ptr).byte_len as usize;
-    let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
+    // #1781: SSO-aware — a native-module name of ≤ 5 bytes (e.g. `"fs"`,
+    // `"os"`, `"tty"`, `"net"`, `"path"`) is stored as a SHORT_STRING_TAG
+    // value. Pre-fix `is_string()` (STRING_TAG-only) returned None and
+    // the auto-optimize sweep couldn't determine the requested module.
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = crate::string::js_string_key_bytes(field, &mut sso_buf)?;
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
@@ -998,14 +993,23 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'sta
         return "";
     }
     let module_field = js_object_get_field(obj as *mut _, 0);
-    if module_field.is_string() {
-        let str_ptr = module_field.as_string_ptr();
-        let len = (*str_ptr).byte_len as usize;
-        let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
-    } else {
-        ""
+    if !module_field.is_any_string() {
+        return "";
     }
+    // #1781: SSO-aware — ≤5-byte module names (fs, os, …) arrive as
+    // SHORT_STRING_TAG values; route through `js_get_string_pointer_unified`
+    // so SSO materializes onto the GC-managed heap (where its bytes
+    // share the lifetime story the STRING_TAG path already assumes
+    // for the `&'static` lie this signature carries).
+    let module_f64 = f64::from_bits(module_field.bits());
+    let str_ptr =
+        crate::value::js_get_string_pointer_unified(module_f64) as *const crate::StringHeader;
+    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+        return "";
+    }
+    let len = (*str_ptr).byte_len as usize;
+    let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
 }
 
 /// Return constant (non-method) property values for native modules.

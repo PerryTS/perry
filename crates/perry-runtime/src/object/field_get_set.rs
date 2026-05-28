@@ -95,8 +95,10 @@ unsafe fn own_data_field_by_name(
     let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
-        if key_val.is_string() && crate::string::js_string_equals(key, key_val.as_string_ptr()) != 0
-        {
+        // #1781: accept inline SSO short keys — `is_string()` is
+        // STRING_TAG-only, so the pre-fix shape silently skipped any
+        // ≤5-byte key stored as a `SHORT_STRING_TAG` value.
+        if crate::string::js_string_key_matches(key_val, key) {
             if i < alloc_limit {
                 return Some(js_object_get_field(obj, i as u32));
             }
@@ -556,19 +558,16 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         }
         // Slow path: filter out non-enumerable keys.
         let filtered = crate::array::js_array_alloc(len as u32);
+        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if !key_val.is_string() {
-                continue;
-            }
-            let stored_key = key_val.as_string_ptr();
-            if stored_key.is_null() {
-                continue;
-            }
-            let name_ptr =
-                (stored_key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let name_len = (*stored_key).byte_len as usize;
-            let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+            // #1781: accept inline SSO short keys (≤5 bytes) — the
+            // pre-fix `is_string()` skipped them and Object.keys silently
+            // dropped them from the result.
+            let name_bytes = match crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+                Some(b) => b,
+                None => continue,
+            };
             let key_str = match std::str::from_utf8(name_bytes) {
                 Ok(s) => s,
                 Err(_) => continue,
@@ -868,16 +867,15 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         let key_count = crate::array::js_array_length(keys) as usize;
         for i in 0..key_count {
             let stored_key_val = crate::array::js_array_get(keys, i as u32);
-            if stored_key_val.is_string() {
-                let stored_key = stored_key_val.as_string_ptr();
-                if crate::string::js_string_equals(key_str, stored_key) != 0 {
-                    // Check if the field was deleted (set to undefined by delete operator)
-                    let field_val = js_object_get_field(obj_ptr, i as u32);
-                    if field_val.is_undefined() {
-                        return nanbox_false;
-                    }
-                    return nanbox_true;
+            // #1781: accept inline SSO short keys (the closure-style
+            // `key in obj` path previously dropped them too).
+            if crate::string::js_string_key_matches(stored_key_val, key_str) {
+                // Check if the field was deleted (set to undefined by delete operator)
+                let field_val = js_object_get_field(obj_ptr, i as u32);
+                if field_val.is_undefined() {
+                    return nanbox_false;
                 }
+                return nanbox_true;
             }
         }
 
@@ -2067,8 +2065,10 @@ pub extern "C" fn js_object_get_field_by_name(
             let idx = field_idx as usize;
             let cache_hit_valid = if idx < key_count {
                 let key_val = crate::array::js_array_get(keys, field_idx);
-                key_val.is_string()
-                    && crate::string::js_string_equals(key, key_val.as_string_ptr()) != 0
+                // #1781: SSO-aware match — pre-fix the `is_string()` here
+                // false-invalidated cache hits for ≤5-byte keys stored
+                // as SHORT_STRING_TAG values.
+                crate::string::js_string_key_matches(key_val, key)
             } else {
                 false
             };
@@ -2112,38 +2112,38 @@ pub extern "C" fn js_object_get_field_by_name(
 
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if key_val.is_string() {
-                let stored_key = key_val.as_string_ptr();
-                if crate::string::js_string_equals(key, stored_key) != 0 {
-                    // Cache this lookup for next time
-                    FIELD_CACHE.with(|c| {
-                        let cache = &mut *c.get();
-                        cache[cache_idx] = (keys_id, key_hash, i as u32);
-                    });
-                    // Accessor short-circuit (see fast path above).
-                    if ACCESSORS_IN_USE.with(|c| c.get()) {
-                        if let Ok(name) = std::str::from_utf8(key_bytes) {
-                            if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
-                                if acc.get != 0 {
-                                    let closure = (acc.get & crate::value::POINTER_MASK)
-                                        as *const crate::closure::ClosureHeader;
-                                    if !closure.is_null() {
-                                        let result_f64 = crate::closure::js_closure_call0(closure);
-                                        return JSValue::from_bits(result_f64.to_bits());
-                                    }
+            // #1781: accept inline SSO short keys here too — the
+            // slow-path lookup is what backs `obj[k]` for ≤5-byte
+            // keys after a field-cache miss.
+            if crate::string::js_string_key_matches(key_val, key) {
+                // Cache this lookup for next time
+                FIELD_CACHE.with(|c| {
+                    let cache = &mut *c.get();
+                    cache[cache_idx] = (keys_id, key_hash, i as u32);
+                });
+                // Accessor short-circuit (see fast path above).
+                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                            if acc.get != 0 {
+                                let closure = (acc.get & crate::value::POINTER_MASK)
+                                    as *const crate::closure::ClosureHeader;
+                                if !closure.is_null() {
+                                    let result_f64 = crate::closure::js_closure_call0(closure);
+                                    return JSValue::from_bits(result_f64.to_bits());
                                 }
-                                return JSValue::undefined();
                             }
+                            return JSValue::undefined();
                         }
                     }
-                    if i < alloc_limit {
-                        return js_object_get_field(obj, i as u32);
-                    } else {
-                        return match overflow_get(obj as usize, i) {
-                            Some(bits) => JSValue::from_bits(bits),
-                            None => JSValue::undefined(),
-                        };
-                    }
+                }
+                if i < alloc_limit {
+                    return js_object_get_field(obj, i as u32);
+                } else {
+                    return match overflow_get(obj as usize, i) {
+                        Some(bits) => JSValue::from_bits(bits),
+                        None => JSValue::undefined(),
+                    };
                 }
             }
         }
