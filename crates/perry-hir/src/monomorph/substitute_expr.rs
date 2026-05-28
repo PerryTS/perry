@@ -66,6 +66,16 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .map(|t| substitute_type(t, substitutions))
                 .collect(),
         },
+        Expr::PodLayoutSizeOf { ty } => Expr::PodLayoutSizeOf {
+            ty: substitute_type(ty, substitutions),
+        },
+        Expr::PodLayoutAlignOf { ty } => Expr::PodLayoutAlignOf {
+            ty: substitute_type(ty, substitutions),
+        },
+        Expr::PodLayoutOffsetOf { ty, field_path } => Expr::PodLayoutOffsetOf {
+            ty: substitute_type(ty, substitutions),
+            field_path: field_path.clone(),
+        },
 
         // References
         Expr::FuncRef(id) => Expr::FuncRef(*id),

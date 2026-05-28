@@ -12,6 +12,9 @@ type PerryF64 = number & { readonly __perryF64?: never };
 type PerryBufferLen = number & { readonly __perryBufferLen?: never };
 type PerryHandleId = number & { readonly __perryHandleId?: never };
 type PerryPod<T> = T & { readonly __perryPod?: never };
+declare function sizeof<T extends PerryPod<any>>(): number;
+declare function alignof<T extends PerryPod<any>>(): number;
+declare function offsetof<T extends PerryPod<any>>(field: string): number;
 interface PerryPodView<T> {
   readonly length: number;
   readonly [index: number]: T;

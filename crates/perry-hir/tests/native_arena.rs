@@ -151,6 +151,108 @@ fn native_arena_public_pod_view_lowers_with_annotation() {
 }
 
 #[test]
+fn pod_layout_constants_lower_to_compile_time_hir_nodes() {
+    let module = lower_src(
+        r#"
+        type Header = PerryPod<{ code: PerryU32; flags: PerryU32; }>;
+        type Packet = PerryPod<{ tag: PerryU32; header: Header; total: number; }>;
+        const packetSize = sizeof<Packet>();
+        const packetAlign = alignof<Packet>();
+        const totalOffset = offsetof<Packet>("total");
+        const nestedOffset = offsetof<Packet>("header.flags");
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    assert!(matches!(
+        find_let(&module, "packetSize"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutSizeOf { .. }),
+            ..
+        }
+    ));
+    assert!(matches!(
+        find_let(&module, "packetAlign"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutAlignOf { .. }),
+            ..
+        }
+    ));
+    assert!(matches!(
+        find_let(&module, "totalOffset"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutOffsetOf { field_path, .. }),
+            ..
+        } if field_path == &vec!["total".to_string()]
+    ));
+    assert!(matches!(
+        find_let(&module, "nestedOffset"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutOffsetOf { field_path, .. }),
+            ..
+        } if field_path == &vec!["header".to_string(), "flags".to_string()]
+    ));
+}
+
+#[test]
+fn pod_layout_constants_respect_shadowing() {
+    let module = lower_src(
+        r#"
+        type Packet = PerryPod<{ tag: PerryU32; }>;
+        const sizeof = <T>() => 7;
+        const value = sizeof<Packet>();
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    assert!(matches!(
+        find_let(&module, "value"),
+        Stmt::Let {
+            init: Some(Expr::Call { .. }),
+            ..
+        }
+    ));
+    assert!(!module_any(&module, |expr| matches!(
+        expr,
+        Expr::PodLayoutSizeOf { .. }
+            | Expr::PodLayoutAlignOf { .. }
+            | Expr::PodLayoutOffsetOf { .. }
+    )));
+}
+
+#[test]
+fn pod_layout_constants_reject_dynamic_offset_path() {
+    let err = lower_src(
+        r#"
+        type Packet = PerryPod<{ tag: PerryU32; }>;
+        const field = "tag";
+        const value = offsetof<Packet>(field);
+        "#,
+    )
+    .expect_err("dynamic offsetof selector should fail lowering");
+
+    assert!(
+        err.contains("offsetof<T>(field) requires a compile-time string-literal field path"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn pod_layout_constants_require_explicit_type_arg() {
+    let err = lower_src(
+        r#"
+        const value = sizeof();
+        "#,
+    )
+    .expect_err("missing type arg should fail lowering");
+
+    assert!(
+        err.contains("sizeof<T>() requires exactly one explicit PerryPod type argument"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn native_arena_public_api_respects_shadowing() {
     let module = lower_src(
         r#"

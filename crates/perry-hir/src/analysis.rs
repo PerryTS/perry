@@ -1028,6 +1028,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::GlobalGet(_)
         | Expr::FuncRef(_)
         | Expr::ExternFuncRef { .. }
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. }
         | Expr::ClassRef(_)
         | Expr::Number(_)
         | Expr::Integer(_)

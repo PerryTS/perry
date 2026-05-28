@@ -34,6 +34,9 @@ impl SH for Expr {
             Expr::Logical { op, left, right } => { tag(h, 17); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             Expr::Call { callee, args, type_args, } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::CallSpread { callee, args, type_args, } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }
+            Expr::PodLayoutAlignOf { ty } => { tag(h, 12002); ty.hash(h); }
+            Expr::PodLayoutOffsetOf { ty, field_path } => { tag(h, 12003); ty.hash(h); field_path.hash(h); }
             Expr::FuncRef(id) => { tag(h, 20); id.hash(h); }
             Expr::ExternFuncRef { name, param_types, return_type, } => { tag(h, 21); name.hash(h); param_types.hash(h); return_type.hash(h); }
             Expr::NativeModuleRef(s) => { tag(h, 22); s.hash(h); }

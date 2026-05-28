@@ -10,9 +10,11 @@
 //! through. Extracted from `expr_call/mod.rs` as a mechanical move.
 
 use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
+use crate::lower_types::extract_ts_type_with_ctx;
 
 use super::super::{is_known_namespace_static_function, lower_expr, LoweringContext};
 
@@ -304,6 +306,99 @@ pub(super) fn try_embed_wasm(ctx: &LoweringContext, call: &ast::CallExpr) -> Res
         }
     }
     Ok(None)
+}
+
+fn pod_layout_intrinsic_is_shadowed(ctx: &LoweringContext, name: &str) -> bool {
+    ctx.lookup_local(name).is_some()
+        || ctx.lookup_func(name).is_some()
+        || ctx.lookup_imported_func(name).is_some()
+}
+
+fn explicit_single_type_arg(
+    ctx: &LoweringContext,
+    call: &ast::CallExpr,
+    name: &str,
+) -> Result<Type> {
+    let Some(type_args) = call.type_args.as_ref() else {
+        crate::lower_bail!(
+            call.span,
+            "{}<T>() requires exactly one explicit PerryPod type argument",
+            name
+        );
+    };
+    if type_args.params.len() != 1 {
+        crate::lower_bail!(
+            call.span,
+            "{}<T>() requires exactly one explicit PerryPod type argument",
+            name
+        );
+    }
+    Ok(extract_ts_type_with_ctx(&type_args.params[0], Some(ctx)))
+}
+
+fn literal_offset_path(arg: &ast::Expr) -> Option<Vec<String>> {
+    let ast::Expr::Lit(ast::Lit::Str(s)) = arg else {
+        return None;
+    };
+    let raw = s.value.as_str().unwrap_or("");
+    let path: Vec<String> = raw.split('.').map(str::to_string).collect();
+    (!path.is_empty() && path.iter().all(|segment| !segment.is_empty())).then_some(path)
+}
+
+/// Public compile-time POD layout constants.
+pub(super) fn try_pod_layout_constants(
+    ctx: &LoweringContext,
+    call: &ast::CallExpr,
+    has_spread: bool,
+) -> Result<Option<Expr>> {
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    let ast::Expr::Ident(ident) = callee_expr.as_ref() else {
+        return Ok(None);
+    };
+    let name = ident.sym.as_ref();
+    if !matches!(name, "sizeof" | "alignof" | "offsetof") {
+        return Ok(None);
+    }
+    if pod_layout_intrinsic_is_shadowed(ctx, name) {
+        return Ok(None);
+    }
+    if has_spread {
+        crate::lower_bail!(call.span, "{}(...) does not accept spread arguments", name);
+    }
+
+    let ty = explicit_single_type_arg(ctx, call, name)?;
+    match name {
+        "sizeof" => {
+            if !call.args.is_empty() {
+                crate::lower_bail!(call.span, "sizeof<T>() expects no arguments");
+            }
+            Ok(Some(Expr::PodLayoutSizeOf { ty }))
+        }
+        "alignof" => {
+            if !call.args.is_empty() {
+                crate::lower_bail!(call.span, "alignof<T>() expects no arguments");
+            }
+            Ok(Some(Expr::PodLayoutAlignOf { ty }))
+        }
+        "offsetof" => {
+            if call.args.len() != 1 {
+                crate::lower_bail!(
+                    call.span,
+                    "offsetof<T>(field) expects exactly one string-literal field path"
+                );
+            }
+            let Some(field_path) = literal_offset_path(call.args[0].expr.as_ref()) else {
+                crate::lower_bail!(
+                    call.span,
+                    "offsetof<T>(field) requires a compile-time string-literal field path"
+                );
+            };
+            Ok(Some(Expr::PodLayoutOffsetOf { ty, field_path }))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn native_arena_hidden_kind_from_expr(expr: &ast::Expr) -> Option<u8> {

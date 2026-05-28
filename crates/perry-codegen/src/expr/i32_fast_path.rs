@@ -13,7 +13,10 @@ use crate::types::{DOUBLE, F32, I32, I64};
 /// for integer-arithmetic hot paths — saving 5 instructions per bitwise op.
 pub(crate) fn is_known_finite(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::Integer(_) => true,
+        Expr::Integer(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => true,
         // Number literals can be NaN or ±Infinity (e.g., `Number(NaN)`,
         // `Number(f64::INFINITY)`). Inspect the value: only true f64
         // finites can use the toint32_fast path. Without this check

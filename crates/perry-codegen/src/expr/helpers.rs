@@ -45,7 +45,13 @@ fn local_get_produces_non_pointer_bits_by_dataflow(ctx: &FnCtx<'_>, id: u32) -> 
 
 fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
-        Expr::Integer(_) | Expr::Number(_) | Expr::DateNow | Expr::NumberCoerce(_) => true,
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. }
+        | Expr::DateNow
+        | Expr::NumberCoerce(_) => true,
         Expr::LocalGet(id) => local_get_produces_non_pointer_bits_by_dataflow(ctx, *id),
         Expr::Unary { op, operand } => match op {
             UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => {

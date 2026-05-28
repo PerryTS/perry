@@ -585,7 +585,10 @@ fn infer_type_args_for_class_from_lookup(
 /// Infer expression type using the lookup table (for update phase)
 fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<Type> {
     match expr {
-        Expr::Number(_) => Some(Type::Number),
+        Expr::Number(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => Some(Type::Number),
         Expr::String(_) => Some(Type::String),
         Expr::Bool(_) => Some(Type::Boolean),
         Expr::Null => Some(Type::Null),

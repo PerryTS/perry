@@ -309,6 +309,18 @@ fn emit_native_memory_globals(out: &mut String) {
         out,
         "type PerryPod<T> = T & {{ readonly __perryPod?: never }};"
     );
+    let _ = writeln!(
+        out,
+        "declare function sizeof<T extends PerryPod<any>>(): number;"
+    );
+    let _ = writeln!(
+        out,
+        "declare function alignof<T extends PerryPod<any>>(): number;"
+    );
+    let _ = writeln!(
+        out,
+        "declare function offsetof<T extends PerryPod<any>>(field: string): number;"
+    );
     let _ = writeln!(out, "interface PerryPodView<T> {{");
     let _ = writeln!(out, "  readonly length: number;");
     let _ = writeln!(out, "  readonly [index: number]: T;");

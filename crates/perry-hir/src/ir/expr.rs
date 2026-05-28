@@ -1083,6 +1083,19 @@ pub enum Expr {
         byte_offset: Box<Expr>,
         count: Box<Expr>,
     },
+    /// Compile-time POD layout constant: `sizeof<T>()`.
+    PodLayoutSizeOf {
+        ty: Type,
+    },
+    /// Compile-time POD layout constant: `alignof<T>()`.
+    PodLayoutAlignOf {
+        ty: Type,
+    },
+    /// Compile-time POD field offset constant: `offsetof<T>("field.path")`.
+    PodLayoutOffsetOf {
+        ty: Type,
+        field_path: Vec<String>,
+    },
     /// Hidden Perry intrinsic: `__perry_native_arena_dispose(owner)`.
     NativeArenaDispose(Box<Expr>),
 

@@ -44,7 +44,11 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // because the local stays at type Any. Critical for hot loops
         // in object_create / binary_trees / fibonacci where the counter
         // is a "let i = 0" with no explicit annotation.
-        Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => Some(HirType::Number),
         Expr::Binary { op, left, right } => {
             // Numeric arithmetic produces Number when both operands are
             // statically numeric (matches `is_numeric_expr`'s rule).
@@ -637,7 +641,11 @@ fn is_fixed_width_buffer_numeric_read(method: &str) -> bool {
 
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => true,
         Expr::Uint8ArrayGet { .. }
         | Expr::BufferIndexGet { .. }
         | Expr::Uint8ArrayLength(_)

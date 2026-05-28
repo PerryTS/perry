@@ -115,6 +115,10 @@ fn compile_ir_with_opts(name: &str, body: Vec<Stmt>, opts: CompileOptions) -> St
     String::from_utf8(compile_module(&module(name, body), opts).unwrap()).unwrap()
 }
 
+fn compile_ir_for_module_with_opts(module: Module, opts: CompileOptions) -> anyhow::Result<String> {
+    Ok(String::from_utf8(compile_module(&module, opts)?)?)
+}
+
 fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
     compile_artifact_json_for_module(module(name, body))
 }
@@ -728,6 +732,90 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
                     && record["consumer"] == "pod_record_stack_alloc"
             }),
         "expected pod_record stack allocation record:\n{artifact:#}"
+    );
+}
+
+fn pod_layout_constant_opts() -> CompileOptions {
+    let header_ty = pod_type(&[
+        ("code", Type::Named("PerryU32".to_string())),
+        ("flags", Type::Named("PerryU32".to_string())),
+    ]);
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("header", header_ty),
+        ("total", Type::Number),
+        ("count", Type::Named("PerryU32".to_string())),
+    ]);
+    let mut opts = empty_opts();
+    opts.type_aliases.insert("Packet".to_string(), packet_ty);
+    opts
+}
+
+fn compile_pod_layout_constant(expr: Expr) -> anyhow::Result<String> {
+    compile_ir_for_module_with_opts(
+        module("pod_layout_constants.ts", vec![Stmt::Return(Some(expr))]),
+        pod_layout_constant_opts(),
+    )
+}
+
+fn error_chain(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn pod_layout_constants_emit_layout_numbers() {
+    let ty = Type::Named("Packet".to_string());
+
+    let size_ir = compile_pod_layout_constant(Expr::PodLayoutSizeOf { ty: ty.clone() }).unwrap();
+    assert!(
+        size_ir.contains("ret double 32.0"),
+        "sizeof<Packet>() should emit the POD size constant:\n{size_ir}"
+    );
+
+    let align_ir = compile_pod_layout_constant(Expr::PodLayoutAlignOf { ty: ty.clone() }).unwrap();
+    assert!(
+        align_ir.contains("ret double 8.0"),
+        "alignof<Packet>() should emit the POD alignment constant:\n{align_ir}"
+    );
+
+    let offset_ir = compile_pod_layout_constant(Expr::PodLayoutOffsetOf {
+        ty,
+        field_path: vec!["header".to_string(), "flags".to_string()],
+    })
+    .unwrap();
+    assert!(
+        offset_ir.contains("ret double 8.0"),
+        "offsetof<Packet>(\"header.flags\") should emit the flattened field offset:\n{offset_ir}"
+    );
+}
+
+#[test]
+fn pod_layout_constants_reject_non_pod_type() {
+    let err = compile_pod_layout_constant(Expr::PodLayoutSizeOf { ty: Type::Number })
+        .expect_err("non-POD type should fail codegen");
+    let chain = error_chain(&err);
+
+    assert!(
+        chain.contains("sizeof<T>() requires T to resolve to PerryPod<...>"),
+        "unexpected error: {chain}"
+    );
+}
+
+#[test]
+fn pod_layout_constants_reject_missing_field_path() {
+    let err = compile_pod_layout_constant(Expr::PodLayoutOffsetOf {
+        ty: Type::Named("Packet".to_string()),
+        field_path: vec!["header".to_string(), "missing".to_string()],
+    })
+    .expect_err("unknown offsetof path should fail codegen");
+    let chain = error_chain(&err);
+
+    assert!(
+        chain.contains("offsetof<T>(\"header.missing\") could not find that field path"),
+        "unexpected error: {chain}"
     );
 }
 

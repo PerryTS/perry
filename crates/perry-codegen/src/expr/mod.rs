@@ -51,6 +51,7 @@ mod index;
 mod nanbox_inline;
 mod native_record;
 mod object_literal;
+mod pod_layout_constants;
 mod pod_record;
 mod range_facts;
 mod strings;
@@ -1800,6 +1801,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::GetFunctionPrototypeMethod { .. }
         | Expr::ClassStaticSymbolSet { .. }
         | Expr::NativeModuleRef(..) => static_field_meta::lower(ctx, expr),
+        Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => pod_layout_constants::lower(ctx, expr),
         Expr::ObjectRest { .. }
         | Expr::BigInt(..)
         | Expr::BigIntCoerce(..)

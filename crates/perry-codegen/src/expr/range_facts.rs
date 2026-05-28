@@ -1,8 +1,8 @@
 use perry_hir::{BinaryOp, CompareOp, Expr, UpdateOp};
 
 use crate::native_value::{
-    AliasState, BoundsProof, BoundsState, BufferViewSlot, GuardedBufferIndex, LengthSource,
-    MaterializationReason,
+    layout_decision_for_type, AliasState, BoundsProof, BoundsState, BufferViewSlot,
+    GuardedBufferIndex, LengthSource, MaterializationReason, PodLayoutDecision,
 };
 
 use super::FnCtx;
@@ -126,6 +126,38 @@ fn checked_range_mul(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
     })
 }
 
+fn checked_range_div(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
+    if rhs.min == rhs.max && rhs.min > 0 && lhs.min % rhs.min == 0 && lhs.max % rhs.min == 0 {
+        return Some(IntRange {
+            min: lhs.min / rhs.min,
+            max: lhs.max / rhs.min,
+        });
+    }
+    None
+}
+
+fn pod_layout_constant_i64(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::PodLayoutSizeOf { ty } => match layout_decision_for_type(ctx, ty) {
+            PodLayoutDecision::Layout(layout) => Some(i64::from(layout.size)),
+            _ => None,
+        },
+        Expr::PodLayoutAlignOf { ty } => match layout_decision_for_type(ctx, ty) {
+            PodLayoutDecision::Layout(layout) => Some(i64::from(layout.alignment)),
+            _ => None,
+        },
+        Expr::PodLayoutOffsetOf { ty, field_path } => match layout_decision_for_type(ctx, ty) {
+            PodLayoutDecision::Layout(layout) => layout
+                .fields
+                .iter()
+                .find(|field| field.path == *field_path)
+                .map(|field| i64::from(field.offset)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn int_range_for_local(
     ctx: &FnCtx<'_>,
     id: u32,
@@ -162,6 +194,9 @@ fn int_range_expr_inner(
     match expr {
         Expr::Integer(n) => Some(IntRange::exact(*n)),
         Expr::Number(n) => f64_to_i64_constant(*n).map(IntRange::exact),
+        Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => pod_layout_constant_i64(ctx, expr).map(IntRange::exact),
         Expr::LocalGet(id) => int_range_for_local(ctx, *id, seen),
         Expr::Binary { op, left, right } => {
             let lhs = int_range_expr_inner(ctx, left, seen)?;
@@ -170,6 +205,7 @@ fn int_range_expr_inner(
                 BinaryOp::Add => checked_range_add(lhs, rhs),
                 BinaryOp::Sub => checked_range_sub(lhs, rhs),
                 BinaryOp::Mul => checked_range_mul(lhs, rhs),
+                BinaryOp::Div => checked_range_div(lhs, rhs),
                 BinaryOp::BitOr if rhs.min == 0 && rhs.max == 0 => {
                     if lhs.min >= i32::MIN as i64 && lhs.max <= i32::MAX as i64 {
                         Some(lhs)
@@ -215,6 +251,9 @@ fn constant_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
     match expr {
         Expr::Integer(n) => Some(*n),
         Expr::Number(n) => f64_to_i64_constant(*n),
+        Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => pod_layout_constant_i64(ctx, expr),
         Expr::LocalGet(id) => ctx
             .compile_time_constants
             .get(id)

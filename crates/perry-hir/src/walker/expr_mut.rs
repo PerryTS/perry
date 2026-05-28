@@ -22,6 +22,9 @@ where
         | Expr::FuncRef(_)
         | Expr::ExternFuncRef { .. }
         | Expr::NativeModuleRef(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. }
         | Expr::ClassRef(_)
         | Expr::This
         | Expr::SuperPropertyGet { .. }
