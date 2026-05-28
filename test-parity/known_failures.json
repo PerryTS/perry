@@ -62,18 +62,6 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). #422 closed (net.Socket connect/error events + factory). The test passes locally with an echo server running but fails on Linux CI because no echo fixture server runs. Environmental — needs a CI-side fixture, not a Perry fix."
   },
-  "test_issue_462_nullish_property_access": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "bug-stale",
-    "reason": "Behavior is correct (TypeError thrown, UNREACHABLE never prints). Only stack-trace format diverges from Node — #616 closed with framing improvements but byte-for-byte parity requires source-text retention through the runtime. Track under the parity roadmap; file a dedicated stack-format issue if/when it becomes a real blocker."
-  },
-  "test_issue_510_primitive_method_typeerror": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "bug-stale",
-    "reason": "Same root cause as test_issue_462 — see #616 (closed). Behavior correct; framing differs. Regression vector: v0.5.702 (#596) routed throw helpers through js_throw which exposed the format gap. Track under the parity roadmap until a stack-format issue is filed."
-  },
   "test_issue_561_sigv4_chain": {
     "issue": "793",
     "added": "2026-05-15",
