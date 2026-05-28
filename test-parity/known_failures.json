@@ -398,12 +398,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline for already-ended source doesn't invoke callback. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/read-no-arg": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read() with no arg should return the entire buffered chunk. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/finished/options-config": {
     "issue": "1532",
     "added": "2026-05-23",
