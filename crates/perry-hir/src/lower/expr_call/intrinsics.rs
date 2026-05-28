@@ -333,7 +333,25 @@ fn explicit_single_type_arg(
             name
         );
     }
-    Ok(extract_ts_type_with_ctx(&type_args.params[0], Some(ctx)))
+    let type_arg = &type_args.params[0];
+    if let Some(ty) = bare_type_param_type_arg(ctx, type_arg) {
+        return Ok(ty);
+    }
+    Ok(extract_ts_type_with_ctx(type_arg, Some(ctx)))
+}
+
+fn bare_type_param_type_arg(ctx: &LoweringContext, type_arg: &ast::TsType) -> Option<Type> {
+    let ast::TsType::TsTypeRef(type_ref) = type_arg else {
+        return None;
+    };
+    if type_ref.type_params.is_some() {
+        return None;
+    }
+    let ast::TsEntityName::Ident(ident) = &type_ref.type_name else {
+        return None;
+    };
+    let name = ident.sym.to_string();
+    ctx.is_type_param(&name).then_some(Type::TypeVar(name))
 }
 
 fn literal_offset_path(arg: &ast::Expr) -> Option<Vec<String>> {

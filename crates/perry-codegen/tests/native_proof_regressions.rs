@@ -1,9 +1,9 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{
-    BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
-    UpdateOp,
+    monomorphize_module, BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module,
+    ModuleInitKind, Param, Stmt, UpdateOp,
 };
-use perry_types::{ObjectType, PropertyInfo, Type};
+use perry_types::{ObjectType, PropertyInfo, Type, TypeParam};
 
 static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -759,6 +759,86 @@ fn compile_pod_layout_constant(expr: Expr) -> anyhow::Result<String> {
     )
 }
 
+fn pod_layout_specialization_opts() -> CompileOptions {
+    let tiny_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("payload", Type::Named("PerryU32".to_string())),
+    ]);
+    let wide_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("payload", Type::Number),
+    ]);
+    let mut opts = empty_opts();
+    opts.type_aliases.insert("Tiny".to_string(), tiny_ty);
+    opts.type_aliases.insert("Wide".to_string(), wide_ty);
+    opts
+}
+
+fn pod_layout_metric_expr(ty: Type) -> Expr {
+    add(
+        add(
+            add(
+                Expr::PodLayoutSizeOf { ty: ty.clone() },
+                Expr::PodLayoutAlignOf { ty: ty.clone() },
+            ),
+            Expr::PodLayoutOffsetOf {
+                ty,
+                field_path: vec!["payload".to_string()],
+            },
+        ),
+        number(0.5),
+    )
+}
+
+fn pod_layout_specialization_module() -> Module {
+    let mut module = Module::new("pod_layout_specialization.ts");
+    module.functions.push(Function {
+        id: 1,
+        name: "layout".to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: Some(Box::new(Type::Generic {
+                base: "PerryPod".to_string(),
+                type_args: vec![Type::Any],
+            })),
+            default: None,
+        }],
+        params: vec![],
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(pod_layout_metric_expr(Type::TypeVar(
+            "T".to_string(),
+        ))))],
+        is_async: false,
+        is_generator: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![],
+        type_args: vec![Type::Named("Tiny".to_string())],
+    }));
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![],
+        type_args: vec![Type::Named("Wide".to_string())],
+    }));
+    module
+}
+
+fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
+    let needle = format!("define double @{}(", symbol);
+    let start = ir
+        .find(&needle)
+        .unwrap_or_else(|| panic!("function `{}` not found in IR:\n{}", symbol, ir));
+    let rest = &ir[start..];
+    let end = rest.find("\n}\n").map(|idx| idx + 3).unwrap_or(rest.len());
+    &rest[..end]
+}
+
 fn error_chain(err: &anyhow::Error) -> String {
     err.chain()
         .map(|cause| cause.to_string())
@@ -790,6 +870,46 @@ fn pod_layout_constants_emit_layout_numbers() {
     assert!(
         offset_ir.contains("ret double 8.0"),
         "offsetof<Packet>(\"header.flags\") should emit the flattened field offset:\n{offset_ir}"
+    );
+}
+
+#[test]
+fn pod_layout_constants_specialize_generic_layout_type_params() {
+    let mut module = pod_layout_specialization_module();
+    monomorphize_module(&mut module);
+
+    assert!(
+        module.functions.iter().any(|f| f.name == "layout$Tiny"),
+        "expected Tiny specialization: {:?}",
+        module
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        module.functions.iter().any(|f| f.name == "layout$Wide"),
+        "expected Wide specialization: {:?}",
+        module
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    module.functions.retain(|func| func.type_params.is_empty());
+    module.init.clear();
+    let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
+    let tiny_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout_Tiny");
+    let wide_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout_Wide");
+
+    assert!(
+        tiny_ir.contains("8.0") && tiny_ir.contains("4.0") && !tiny_ir.contains("16.0"),
+        "Tiny specialization should use size 8, align 4, offset 4:\n{tiny_ir}"
+    );
+    assert!(
+        wide_ir.contains("16.0") && wide_ir.contains("8.0") && !wide_ir.contains("4.0"),
+        "Wide specialization should use size 16, align 8, offset 8:\n{wide_ir}"
     );
 }
 

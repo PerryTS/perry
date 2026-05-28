@@ -1,5 +1,5 @@
 use perry_diagnostics::SourceCache;
-use perry_hir::{lower_module, Expr, Module, Stmt};
+use perry_hir::{lower_module, Expr, Function, Module, Stmt};
 use perry_parser::parse_typescript_with_cache;
 use perry_types::Type;
 
@@ -24,6 +24,21 @@ fn find_let<'m>(module: &'m Module, name: &str) -> &'m Stmt {
         .iter()
         .find(|stmt| matches!(stmt, Stmt::Let { name: n, .. } if n == name))
         .unwrap_or_else(|| panic!("let `{}` not found in init: {:?}", name, module.init))
+}
+
+fn find_function<'m>(module: &'m Module, name: &str) -> &'m Function {
+    module
+        .functions
+        .iter()
+        .find(|func| func.name == name)
+        .unwrap_or_else(|| panic!("function `{}` not found: {:?}", name, module.functions))
+}
+
+fn returned_expr(func: &Function) -> &Expr {
+    match func.body.as_slice() {
+        [Stmt::Return(Some(expr))] => expr,
+        other => panic!("expected single return in `{}`: {:?}", func.name, other),
+    }
 }
 
 fn expr_any(expr: &Expr, pred: &impl Fn(&Expr) -> bool) -> bool {
@@ -229,6 +244,39 @@ fn pod_layout_constants_lower_to_compile_time_hir_nodes() {
             init: Some(Expr::PodLayoutOffsetOf { field_path, .. }),
             ..
         } if field_path == &vec!["header".to_string(), "flags".to_string()]
+    ));
+}
+
+#[test]
+fn native_arena_pod_layout_constants_preserve_generic_pod_type_param() {
+    let module = lower_src(
+        r#"
+        function sizeOfGeneric<T extends PerryPod<any>>() {
+            return sizeof<T>();
+        }
+        function alignOfGeneric<T extends PerryPod<any>>() {
+            return alignof<T>();
+        }
+        function offsetOfGeneric<T extends PerryPod<any>>() {
+            return offsetof<T>("field");
+        }
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    let type_var_t = Type::TypeVar("T".to_string());
+    assert!(matches!(
+        returned_expr(find_function(&module, "sizeOfGeneric")),
+        Expr::PodLayoutSizeOf { ty } if ty == &type_var_t
+    ));
+    assert!(matches!(
+        returned_expr(find_function(&module, "alignOfGeneric")),
+        Expr::PodLayoutAlignOf { ty } if ty == &type_var_t
+    ));
+    assert!(matches!(
+        returned_expr(find_function(&module, "offsetOfGeneric")),
+        Expr::PodLayoutOffsetOf { ty, field_path }
+            if ty == &type_var_t && field_path == &vec!["field".to_string()]
     ));
 }
 

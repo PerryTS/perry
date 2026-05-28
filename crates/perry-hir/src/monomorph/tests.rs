@@ -39,6 +39,75 @@ fn test_substitute_type() {
 }
 
 #[test]
+fn test_monomorphize_substitutes_pod_layout_type_vars() {
+    let type_var_t = Type::TypeVar("T".to_string());
+    let packet_ty = Type::Named("Packet".to_string());
+    let layout_func = Function {
+        id: 1,
+        name: "layout".to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: Some(Box::new(Type::Generic {
+                base: "PerryPod".to_string(),
+                type_args: vec![Type::Any],
+            })),
+            default: None,
+        }],
+        params: vec![],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Expr(Expr::PodLayoutSizeOf {
+                ty: type_var_t.clone(),
+            }),
+            Stmt::Expr(Expr::PodLayoutAlignOf {
+                ty: type_var_t.clone(),
+            }),
+            Stmt::Return(Some(Expr::PodLayoutOffsetOf {
+                ty: type_var_t,
+                field_path: vec!["payload".to_string()],
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+    };
+
+    let mut module = Module::new("test");
+    module.functions.push(layout_func);
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![],
+        type_args: vec![packet_ty.clone()],
+    }));
+
+    monomorphize_module(&mut module);
+
+    let specialized = module
+        .functions
+        .iter()
+        .find(|f| f.name == "layout$Packet")
+        .expect("Specialized function layout$Packet should exist");
+
+    assert!(matches!(
+        &specialized.body[0],
+        Stmt::Expr(Expr::PodLayoutSizeOf { ty }) if ty == &packet_ty
+    ));
+    assert!(matches!(
+        &specialized.body[1],
+        Stmt::Expr(Expr::PodLayoutAlignOf { ty }) if ty == &packet_ty
+    ));
+    assert!(matches!(
+        &specialized.body[2],
+        Stmt::Return(Some(Expr::PodLayoutOffsetOf { ty, field_path }))
+            if ty == &packet_ty && field_path == &vec!["payload".to_string()]
+    ));
+}
+
+#[test]
 fn test_monomorphize_generic_function() {
     // Create a generic identity function: function identity<T>(x: T): T { return x; }
     let identity_func = Function {
