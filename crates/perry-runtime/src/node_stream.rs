@@ -23,7 +23,8 @@
 //! runtime rewrite.
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
+    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field, js_object_get_field_by_name_f64,
@@ -85,6 +86,11 @@ const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
 const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
 const WRITABLE_CORKED_KEY: &[u8] = b"__perryWritableCorked";
 const WRITABLE_BUFFERED_KEY: &[u8] = b"__perryWritableBuffered";
+const WRITABLE_LENGTH_KEY: &[u8] = b"__perryWritableLength";
+const WRITABLE_NEED_DRAIN_KEY: &[u8] = b"__perryWritableNeedDrain";
+const WRITABLE_OBJECT_MODE_KEY: &[u8] = b"__perryWritableObjectMode";
+const WRITABLE_PENDING_FINISH_CALLBACK_KEY: &[u8] = b"__perryWritablePendingFinishCallback";
+const WRITABLE_WRITEV_KEY: &[u8] = b"__perryWritableWritev";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -192,6 +198,7 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
         );
         mark_writable_finished(stream);
         let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
+        mark_stream_closed(stream);
         let _ = emit_stream_event(stream, string_value(b"close"), &[]);
     }
     if is_callable_value(callback) {
@@ -248,6 +255,7 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
+    set_hidden_value(stream, hidden_key(b"readableLength"), total);
     if added > 0.0 {
         push_readable_buffered_chunk(stream, chunk);
         mark_disturbed(stream);
@@ -297,13 +305,20 @@ extern "C" fn ns_pipe1(_closure: *const ClosureHeader, dest: f64) -> f64 {
     // Node's `Readable.pipe(dest)` returns `dest` to allow `r.pipe(a).pipe(b)`.
     dest
 }
-extern "C" fn writable_write_callback_noop(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn ns_writable_write_done(closure: *const ClosureHeader, err: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let len = js_closure_get_capture_f64(closure, 1);
+    let callback = js_closure_get_capture_f64(closure, 2);
+    complete_writable_write(stream, len, callback, err);
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_write2(closure: *const ClosureHeader, chunk: f64, enc: f64) -> f64 {
+extern "C" fn ns_write3(closure: *const ClosureHeader, chunk: f64, enc: f64, cb: f64) -> f64 {
     let stream = this_value(closure);
-    write_writable_chunk(stream, chunk, enc)
+    write_writable_chunk(stream, chunk, enc, cb)
 }
 
 extern "C" fn ns_end3(closure: *const ClosureHeader, chunk: f64, encoding: f64, cb: f64) -> f64 {
@@ -320,9 +335,16 @@ extern "C" fn ns_uncork0(closure: *const ClosureHeader) -> f64 {
     uncork_stream(this_value(closure))
 }
 
-fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
+extern "C" fn writable_write_callback_noop(_closure: *const ClosureHeader) -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
     if let Some(write) = writable_hidden_write(stream) {
-        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
+        let cb = js_closure_alloc(ns_writable_write_done as *const u8, 3);
+        js_closure_set_capture_f64(cb, 0, stream);
+        js_closure_set_capture_f64(cb, 1, len);
+        js_closure_set_capture_f64(cb, 2, callback);
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
         let args = [chunk, enc, cb_value];
         let prev_this = crate::object::js_implicit_this_set(stream);
@@ -330,7 +352,30 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64) {
             let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
         }
         crate::object::js_implicit_this_set(prev_this);
+    } else {
+        complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
     }
+}
+
+fn invoke_writable_writev(stream: f64, chunks: f64) {
+    if let Some(writev) = writable_hidden_writev(stream) {
+        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
+        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+        let args = [chunks, cb_value];
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(writev, args.as_ptr(), args.len());
+        }
+        crate::object::js_implicit_this_set(prev_this);
+    }
+}
+
+fn writable_write_after_end_error() -> f64 {
+    let msg = b"write after end";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_WRITE_AFTER_END");
+    let err = crate::error::js_error_new_with_message(s);
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
 #[cold]
@@ -342,17 +387,91 @@ fn throw_writable_null_chunk() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn write_writable_chunk(stream: f64, chunk: f64, enc: f64) -> f64 {
+fn normalize_write_args(chunk: f64, enc: f64, cb: f64) -> (f64, f64, f64) {
+    let (encoding, callback) = if is_callable_value(enc) {
+        (f64::from_bits(TAG_UNDEFINED), enc)
+    } else {
+        (enc, cb)
+    };
+    let (chunk, encoding) = normalize_writable_write_chunk(chunk, encoding);
+    (chunk, encoding, callback)
+}
+
+fn normalize_writable_write_chunk(chunk: f64, encoding: f64) -> (f64, f64) {
+    let value = JSValue::from_bits(chunk.to_bits());
+    if value.is_any_string() {
+        let enc_tag = crate::buffer::js_encoding_tag_from_value(encoding);
+        let buf = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, enc_tag);
+        return (box_pointer(buf as *const u8), string_value(b"buffer"));
+    }
+    let raw = raw_ptr_from_value(chunk);
+    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+        return (chunk, string_value(b"buffer"));
+    }
+    (chunk, encoding)
+}
+
+fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
+    if stream_hidden_ended(stream) {
+        let err = writable_write_after_end_error();
+        let _ = emit_stream_event(stream, string_value(b"error"), &[err]);
+        return f64::from_bits(TAG_FALSE);
+    }
     if JSValue::from_bits(chunk.to_bits()).is_null() {
         throw_writable_null_chunk();
     }
+    let (chunk, enc, callback) = normalize_write_args(chunk, enc, cb);
+    let len = writable_chunk_len(stream, chunk);
+    add_writable_length(stream, len);
+    let ret = writable_backpressure_return(stream);
     if writable_corked_count(stream) > 0.0 {
-        buffer_writable_write(stream, chunk, enc);
-        return f64::from_bits(TAG_TRUE);
+        buffer_writable_write(stream, chunk, enc, len, callback);
+    } else {
+        invoke_writable_write(stream, chunk, enc, len, callback);
+        emit_writable_chunk(stream, chunk);
     }
-    invoke_writable_write(stream, chunk, enc);
-    emit_writable_chunk(stream, chunk);
-    f64::from_bits(TAG_TRUE)
+    ret
+}
+
+fn writable_backpressure_return(stream: f64) -> f64 {
+    let len = writable_length(stream);
+    let hwm = get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0);
+    let ok = len < hwm || len == 0.0;
+    set_writable_need_drain(stream, !ok);
+    f64::from_bits(if ok { TAG_TRUE } else { TAG_FALSE })
+}
+
+fn writable_chunk_len(stream: f64, chunk: f64) -> f64 {
+    if has_truthy_hidden(stream, hidden_writable_object_mode_key()) {
+        1.0
+    } else {
+        chunk_byte_len(chunk) as f64
+    }
+}
+
+fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
+    subtract_writable_length(stream, len);
+    if is_callable_value(callback) {
+        let arg = if err.to_bits() == TAG_UNDEFINED {
+            f64::from_bits(TAG_NULL)
+        } else {
+            err
+        };
+        let args = [arg];
+        unsafe {
+            let _ = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+        }
+    }
+    if writable_length(stream) == 0.0 {
+        let should_emit_drain = writable_need_drain_raw(stream)
+            && !stream_hidden_ended(stream)
+            && !has_truthy_hidden(stream, hidden_key(b"destroyed"));
+        set_writable_need_drain(stream, false);
+        if should_emit_drain {
+            let _ = emit_stream_event(stream, string_value(b"drain"), &[]);
+        }
+        schedule_pending_writable_finish_if_ready(stream);
+    }
 }
 
 fn emit_writable_chunk(stream: f64, chunk: f64) {
@@ -371,13 +490,17 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
     }
+    if writable_length(stream) > 0.0 {
+        set_pending_writable_finish_callback(stream, callback);
+        return;
+    }
     schedule_writable_finish(stream, callback);
 }
 
 fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
     let (chunk, encoding, callback) = normalize_end_args(chunk, encoding, cb);
     if has_end_chunk(chunk) {
-        let _ = write_writable_chunk(stream, chunk, encoding);
+        let _ = write_writable_chunk(stream, chunk, encoding, f64::from_bits(TAG_UNDEFINED));
     }
     flush_writable_buffered(stream);
     finish_stream(stream, callback);
@@ -457,6 +580,13 @@ pub extern "C" fn js_node_stream_method_readable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"readableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.readableLength` property getter on a typed instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_readable_length(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0)
+}
+
 /// `stream.readable` property getter on a typed readable-side instance.
 /// Mirrors `Readable.isReadable(stream)` for the current stub state.
 #[no_mangle]
@@ -483,10 +613,37 @@ pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 
     get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
 }
 
+/// `stream.writableLength` property getter on a typed instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_length(stream_handle: i64) -> f64 {
+    writable_length(stream_value_from_handle(stream_handle))
+}
+
+/// `stream.writableNeedDrain` property getter on a typed instance.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_writable_need_drain(stream_handle: i64) -> f64 {
+    let stream = stream_value_from_handle(stream_handle);
+    f64::from_bits(if writable_need_drain(stream) {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
+}
+
 /// `stream.readableAborted` property getter on a typed readable-side instance.
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> f64 {
     readable_aborted_value(stream_value_from_handle(stream_handle))
+}
+
+/// `stream.closed` property getter on typed stream instances.
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_closed(stream_handle: i64) -> f64 {
+    get_hidden_value(
+        stream_value_from_handle(stream_handle),
+        hidden_key(b"closed"),
+    )
+    .unwrap_or(f64::from_bits(TAG_FALSE))
 }
 
 /// `stream.writableCorked` property getter on a typed writable-side instance.
@@ -550,9 +707,24 @@ pub extern "C" fn js_node_stream_method_resume(stream_handle: i64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_method_write(stream_handle: i64, chunk: f64, enc: f64) -> f64 {
+pub extern "C" fn js_node_stream_method_write(
+    stream_handle: i64,
+    chunk: f64,
+    enc: f64,
+    cb: f64,
+) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    write_writable_chunk(stream, chunk, enc)
+    write_writable_chunk(stream, chunk, enc, cb)
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_method_write3(
+    stream_handle: i64,
+    chunk: f64,
+    enc: f64,
+    cb: f64,
+) -> f64 {
+    js_node_stream_method_write(stream_handle, chunk, enc, cb)
 }
 
 #[no_mangle]
@@ -1160,8 +1332,9 @@ fn register_stub_arities() {
     register(ns_resume0 as *const u8, 0);
     register(ns_read1 as *const u8, 1);
     register(ns_pipe1 as *const u8, 1);
+    register(ns_writable_write_done as *const u8, 1);
     register(writable_write_callback_noop as *const u8, 0);
-    register(ns_write2 as *const u8, 2);
+    register(ns_write3 as *const u8, 3);
     register(ns_end3 as *const u8, 3);
     register(ns_cork0 as *const u8, 0);
     register(ns_uncork0 as *const u8, 0);
@@ -1288,6 +1461,31 @@ fn hidden_writable_corked_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_writable_buffered_key() -> *mut crate::string::StringHeader {
     hidden_key(WRITABLE_BUFFERED_KEY)
+}
+
+#[inline]
+fn hidden_writable_length_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_LENGTH_KEY)
+}
+
+#[inline]
+fn hidden_writable_need_drain_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_NEED_DRAIN_KEY)
+}
+
+#[inline]
+fn hidden_writable_object_mode_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_OBJECT_MODE_KEY)
+}
+
+#[inline]
+fn hidden_writable_pending_finish_callback_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_PENDING_FINISH_CALLBACK_KEY)
+}
+
+#[inline]
+fn hidden_writev_key() -> *mut crate::string::StringHeader {
+    hidden_key(WRITABLE_WRITEV_KEY)
 }
 
 #[inline]
@@ -1543,6 +1741,33 @@ fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
+fn set_pending_writable_finish_callback(stream: f64, callback: Option<f64>) {
+    let value = callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+    set_hidden_value(stream, hidden_writable_pending_finish_callback_key(), value);
+}
+
+fn take_pending_writable_finish_callback(stream: f64) -> Option<f64> {
+    let value = get_hidden_value(stream, hidden_writable_pending_finish_callback_key());
+    set_hidden_value(
+        stream,
+        hidden_writable_pending_finish_callback_key(),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    value.filter(|v| is_callable_value(*v))
+}
+
+fn schedule_pending_writable_finish_if_ready(stream: f64) {
+    if !stream_hidden_ended(stream)
+        || writable_length(stream) > 0.0
+        || has_truthy_hidden(stream, hidden_finish_emitted_key())
+        || has_truthy_hidden(stream, hidden_finish_scheduled_key())
+    {
+        return;
+    }
+    let callback = take_pending_writable_finish_callback(stream);
+    schedule_writable_finish(stream, callback);
+}
+
 fn emit_readable_end_once(stream: f64) {
     if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
@@ -1698,8 +1923,62 @@ fn writable_hidden_write(value: f64) -> Option<f64> {
     get_hidden_value(value, hidden_write_key())
 }
 
+fn writable_hidden_writev(value: f64) -> Option<f64> {
+    get_hidden_value(value, hidden_writev_key())
+}
+
 fn writable_corked_count(value: f64) -> f64 {
     get_hidden_value(value, hidden_writable_corked_key()).unwrap_or(0.0)
+}
+
+fn writable_length(value: f64) -> f64 {
+    get_hidden_value(value, hidden_writable_length_key()).unwrap_or(0.0)
+}
+
+fn set_writable_length(stream: f64, len: f64) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        let len = len.max(0.0);
+        set_hidden_value(stream, hidden_writable_length_key(), len);
+        set_hidden_value(stream, hidden_key(b"writableLength"), len);
+    }
+}
+
+fn add_writable_length(stream: f64, len: f64) {
+    if len > 0.0 {
+        set_writable_length(stream, writable_length(stream) + len);
+    }
+}
+
+fn subtract_writable_length(stream: f64, len: f64) {
+    if len > 0.0 {
+        set_writable_length(stream, writable_length(stream) - len);
+    }
+}
+
+fn writable_need_drain_raw(stream: f64) -> bool {
+    has_truthy_hidden(stream, hidden_writable_need_drain_key())
+}
+
+fn writable_need_drain(stream: f64) -> bool {
+    writable_need_drain_raw(stream)
+        && !stream_hidden_ended(stream)
+        && !has_truthy_hidden(stream, hidden_key(b"destroyed"))
+}
+
+fn set_writable_need_drain(stream: f64, need_drain: bool) {
+    if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
+        let value = if need_drain { TAG_TRUE } else { TAG_FALSE };
+        set_hidden_value(
+            stream,
+            hidden_writable_need_drain_key(),
+            f64::from_bits(value),
+        );
+        set_hidden_value(
+            stream,
+            hidden_key(b"writableNeedDrain"),
+            f64::from_bits(value),
+        );
+    }
 }
 
 fn set_writable_corked_count(stream: f64, count: f64) {
@@ -1730,7 +2009,7 @@ fn buffered_writable_writes(stream: f64) -> Option<f64> {
     get_hidden_value(stream, hidden_writable_buffered_key())
 }
 
-fn buffer_writable_write(stream: f64, chunk: f64, enc: f64) {
+fn buffer_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
     let mut buffered = buffered_writable_writes(stream).unwrap_or_else(|| {
         let arr = crate::array::js_array_alloc(0);
         box_pointer(arr as *const u8)
@@ -1738,8 +2017,44 @@ fn buffer_writable_write(stream: f64, chunk: f64, enc: f64) {
     let arr = raw_ptr_from_value(buffered) as *mut crate::array::ArrayHeader;
     let arr = crate::array::js_array_push_f64(arr, chunk);
     let arr = crate::array::js_array_push_f64(arr, enc);
+    let arr = crate::array::js_array_push_f64(arr, len);
+    let arr = crate::array::js_array_push_f64(arr, callback);
     buffered = box_pointer(arr as *const u8);
     set_hidden_value(stream, hidden_writable_buffered_key(), buffered);
+}
+
+fn writev_record_chunk(chunk: f64, enc: f64) -> (f64, f64) {
+    if JSValue::from_bits(chunk.to_bits()).is_any_string() {
+        let buffer = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, 0);
+        (box_pointer(buffer as *const u8), string_value(b"buffer"))
+    } else {
+        let raw = raw_ptr_from_value(chunk);
+        if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+            (chunk, string_value(b"buffer"))
+        } else {
+            (chunk, enc)
+        }
+    }
+}
+
+fn build_writev_chunks(buffered: *const crate::array::ArrayHeader, len: u32) -> f64 {
+    let mut chunks = crate::array::js_array_alloc(0);
+    let mut i = 0;
+    while i < len {
+        let chunk = crate::array::js_array_get_f64(buffered, i);
+        let enc = if i + 1 < len {
+            crate::array::js_array_get_f64(buffered, i + 1)
+        } else {
+            f64::from_bits(TAG_UNDEFINED)
+        };
+        let (chunk, encoding) = writev_record_chunk(chunk, enc);
+        let record = crate::object::js_object_alloc(0, 2);
+        js_object_set_field_by_name(record, hidden_key(b"chunk"), chunk);
+        js_object_set_field_by_name(record, hidden_key(b"encoding"), encoding);
+        chunks = crate::array::js_array_push_f64(chunks, box_pointer(record as *const u8));
+        i += 4;
+    }
+    box_pointer(chunks as *const u8)
 }
 
 fn flush_writable_buffered(stream: f64) {
@@ -1757,6 +2072,28 @@ fn flush_writable_buffered(stream: f64) {
         hidden_writable_buffered_key(),
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
+    if len > 4 && writable_hidden_writev(stream).is_some() {
+        let chunks = build_writev_chunks(arr, len);
+        invoke_writable_writev(stream, chunks);
+        let mut i = 0;
+        while i < len {
+            let chunk = crate::array::js_array_get_f64(arr, i);
+            let write_len = if i + 2 < len {
+                crate::array::js_array_get_f64(arr, i + 2)
+            } else {
+                writable_chunk_len(stream, chunk)
+            };
+            let callback = if i + 3 < len {
+                crate::array::js_array_get_f64(arr, i + 3)
+            } else {
+                f64::from_bits(TAG_UNDEFINED)
+            };
+            emit_writable_chunk(stream, chunk);
+            complete_writable_write(stream, write_len, callback, f64::from_bits(TAG_UNDEFINED));
+            i += 4;
+        }
+        return;
+    }
     let mut i = 0;
     while i < len {
         let chunk = crate::array::js_array_get_f64(arr, i);
@@ -1765,9 +2102,19 @@ fn flush_writable_buffered(stream: f64) {
         } else {
             f64::from_bits(TAG_UNDEFINED)
         };
-        invoke_writable_write(stream, chunk, enc);
+        let write_len = if i + 2 < len {
+            crate::array::js_array_get_f64(arr, i + 2)
+        } else {
+            writable_chunk_len(stream, chunk)
+        };
+        let callback = if i + 3 < len {
+            crate::array::js_array_get_f64(arr, i + 3)
+        } else {
+            f64::from_bits(TAG_UNDEFINED)
+        };
+        invoke_writable_write(stream, chunk, enc, write_len, callback);
         emit_writable_chunk(stream, chunk);
-        i += 2;
+        i += 4;
     }
 }
 
@@ -1784,6 +2131,10 @@ fn read_callback_from_options(opts: f64) -> Option<f64> {
 
 fn write_callback_from_options(opts: f64) -> Option<f64> {
     get_hidden_value(opts, hidden_key(b"write"))
+}
+
+fn writev_callback_from_options(opts: f64) -> Option<f64> {
+    get_hidden_value(opts, hidden_key(b"writev"))
 }
 
 fn invoke_read_once(stream: f64) {
@@ -2134,7 +2485,7 @@ fn writable_methods() -> [(&'static str, StubFn); 22] {
         ("listenerCount", cast1(ns_listener_count)),
         ("listeners", cast1(ns_listeners)),
         ("rawListeners", cast1(ns_raw_listeners)),
-        ("write", cast2(ns_write2)),
+        ("write", cast3(ns_write3)),
         ("end", cast3(ns_end3)),
         ("cork", cast0(ns_cork0)),
         ("uncork", cast0(ns_uncork0)),
@@ -2171,7 +2522,7 @@ fn duplex_methods() -> [(&'static str, StubFn); 28] {
         ("resume", cast0(ns_resume0)),
         ("setEncoding", cast1(ns_chain1)),
         ("isPaused", cast0(ns_undefined0)),
-        ("write", cast2(ns_write2)),
+        ("write", cast3(ns_write3)),
         ("end", cast3(ns_end3)),
         ("cork", cast0(ns_cork0)),
         ("uncork", cast0(ns_uncork0)),
@@ -2284,6 +2635,7 @@ fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
 /// Initialize visible lifecycle flags shared by all stream sides.
 fn init_lifecycle_state(stream: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    set_visible_closed(stream, false);
 }
 
 fn init_constructor(stream: f64, name: &str) {
@@ -2347,6 +2699,15 @@ fn mark_writable_finished(stream: f64) {
     set_visible_writable_finished(stream, true);
 }
 
+fn set_visible_closed(stream: f64, closed: bool) {
+    let value = if closed { TAG_TRUE } else { TAG_FALSE };
+    set_hidden_value(stream, hidden_key(b"closed"), f64::from_bits(value));
+}
+
+pub(super) fn mark_stream_closed(stream: f64) {
+    set_visible_closed(stream, true);
+}
+
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
@@ -2359,6 +2720,7 @@ fn init_readable_state(stream: f64, opts: f64) {
         f64::from_bits(TAG_FALSE),
     );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
+    set_hidden_value(stream, hidden_key(b"readableLength"), 0.0);
     let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
@@ -2372,6 +2734,20 @@ fn init_writable_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
     let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
+    let writable_object_mode =
+        opt_bool(opts, b"writableObjectMode") || opt_bool(opts, b"objectMode");
+    set_hidden_value(
+        stream,
+        hidden_writable_object_mode_key(),
+        f64::from_bits(if writable_object_mode {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
+    set_writable_length(stream, 0.0);
+    set_writable_need_drain(stream, false);
+    set_pending_writable_finish_callback(stream, None);
     set_writable_corked_count(stream, 0.0);
     set_hidden_value(
         stream,
@@ -2418,6 +2794,13 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
             rebind_callback_this(write, writable),
         );
     }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(
+            obj,
+            hidden_writev_key(),
+            rebind_callback_this(writev, writable),
+        );
+    }
     init_lifecycle_state(writable);
     init_constructor(writable, "Writable");
     init_writable_state(writable, opts);
@@ -2432,6 +2815,13 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
+    }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(
+            obj,
+            hidden_writev_key(),
+            rebind_callback_this(writev, duplex),
+        );
     }
     init_lifecycle_state(duplex);
     init_constructor(duplex, "Duplex");

@@ -350,12 +350,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.closed flag + close event don't deliver. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/writable/closed-flag": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Writable.closed flag + close event don't deliver. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/transform/flush-callback": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -404,12 +398,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable() with no read() option should emit error on read(); error event doesn't deliver. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/backpressure/write-returns-false": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write() should return false when buffer exceeds highWaterMark. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/duplex/options-merge": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -433,12 +421,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: final() constructor option not invoked before finish. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/write/writev-batch": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: writev() constructor option not invoked when corked + multi-write. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/method-chain/setEncoding-returns-this": {
     "issue": "1531",
@@ -476,18 +458,6 @@
     "category": "bug-open",
     "reason": "node:stream: class extends Readable with _read() doesn't deliver data via push. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/write/with-encoding": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write(chunk, enc, cb) doesn't propagate encoding to _write. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/write/write-buffer": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write(Buffer) doesn't invoke _write with Buffer / finish doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/encoding/base64": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -500,12 +470,6 @@
     "category": "bug-open",
     "reason": "node:stream: setEncoding(hex) + data delivery doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/write/after-end-emits-error": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write() after end() should emit ERR_STREAM_WRITE_AFTER_END. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/async-iter/break-cleanup": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -517,18 +481,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: `readable` event (paused-mode trigger) doesn't fire. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/flags/length-counters": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readableLength / writableLength not tracked on instances. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/flags/writable-need-drain": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: writableNeedDrain flag not tracked. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/options/decode-strings-false": {
     "issue": "1532",
@@ -632,12 +584,6 @@
     "category": "bug-open",
     "reason": "node:stream: Duplex default allowHalfOpen not surfaced. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/backpressure/drain-after-overflow": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: drain event after backpressure-overflow doesn't fire. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/encoding/latin1": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -692,12 +638,6 @@
     "category": "bug-open",
     "reason": "node:stream: read() on a destroyed Readable should return null. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/write-on-errored": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write after destroy(err) should emit additional error. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/repipe-after-unpipe": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -739,12 +679,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: construct() callback receiving Error does not propagate via error event. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/write/false-then-retry": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write() return value sequence under backpressure not honored. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/iter-helpers/flat-map-async": {
     "issue": "1572",
@@ -980,23 +914,11 @@
     "category": "bug-open",
     "reason": "node:stream/web: WritableStream sink.start() hook not awaited before first write. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/write/writev-chunk-shape": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: user writev(chunks, cb) — chunks not delivered as array of {chunk, encoding} objects. Flips to PASS when #1539 lands."
-  },
   "node-suite/stream/readable/from-infinite-take": {
     "issue": "1558",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(infiniteGen).take(N) — take helper does not abort upstream early; iteration hangs or returns wrong items. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/write/three-arg-form": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: write(chunk, encoding, callback) 3-arg form — encoding not propagated to user _write(chunk, enc, cb). Flips to PASS when #1539 lands."
   },
   "node-suite/stream/web/desired-size-backpressure": {
     "issue": "1545",
@@ -1370,12 +1292,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: second getWriter() on locked WritableStream does not throw TypeError. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/writable/write-returns-false-at-hwm": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: write() does not return false when buffered bytes cross HWM. Flips to PASS when #1539 lands."
-  },
   "node-suite/stream/iter-helpers/find-returns-promise": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1519,12 +1435,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pause/resume on objectMode Readable — wrong count or first item value. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/writable/_writev-vs-write": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: cork+uncork dispatches to write() instead of writev() when writev is defined. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/readable/unshift-while-flowing": {
     "issue": "1532",
@@ -2155,12 +2065,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream/web: RS.from(bigint) — should throw TypeError. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/writable/write-encoded-buffer": {
-    "issue": "1539",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: write(Buffer) — encoding arg not 'buffer'. Flips to PASS when #1539 lands."
   },
   "node-suite/stream/readable/from-gen-with-early-return": {
     "issue": "1532",
