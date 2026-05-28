@@ -1616,12 +1616,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src,t1,t2) — output transformation order wrong. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/duplex-acts-as-writable": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex write side — received array empty / wrong order. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipeline/async-source-throws-mid": {
     "issue": "1532",
     "added": "2026-05-24",
