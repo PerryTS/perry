@@ -1496,12 +1496,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: rs.cancel() during pipeTo — should reject (locked stream); resolves or wrong err name. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/iterator/for-of-not-async": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: sync for-of on Readable — Perry does not throw (TypeError expected since Symbol.iterator absent). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/iter-helpers/take-zero": {
     "issue": "1558",
     "added": "2026-05-24",
