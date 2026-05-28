@@ -88,9 +88,22 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         // protocol. `js_get_iterator` returns the operand's
         // `Symbol.iterator()` result when iterable, or the operand
         // unchanged when it already is an iterator (perry generators).
+        //
+        // `for await` currently lowers through this same materializer.
+        // Classic Node Readables are async-iterable only, so when no
+        // sync iterator was found, prefer `[Symbol.asyncIterator]()` if
+        // present and synchronously unwrap already-settled `next()`
+        // promises. This keeps Readable iterator helpers like `take(0)`
+        // from being mis-driven as sync iterators.
         _ => {
             let iter = crate::symbol::js_get_iterator(val_f64);
-            let arr = js_iterator_to_array(iter);
+            let arr = if iter.to_bits() != val_f64.to_bits() || has_named_next(iter) {
+                js_iterator_to_array(iter)
+            } else if let Some(async_iter) = call_symbol_async_iterator(val_f64) {
+                js_async_iterator_to_array(async_iter)
+            } else {
+                js_iterator_to_array(iter)
+            };
             js_nanbox_pointer(arr as i64)
         }
     }
@@ -108,6 +121,73 @@ fn js_map_entries_for_for_of(raw_ptr: i64) -> *mut ArrayHeader {
 #[inline]
 fn js_set_to_array_for_for_of(raw_ptr: i64) -> *mut ArrayHeader {
     crate::set::js_set_to_array(raw_ptr as *const crate::set::SetHeader)
+}
+
+fn is_callable_value(value: f64) -> bool {
+    let raw = crate::value::js_nanbox_get_pointer(value);
+    raw >= 0x10000 && crate::closure::is_closure_ptr(raw as usize)
+}
+
+fn named_field(value: f64, name: &[u8]) -> f64 {
+    use crate::object::{js_object_get_field_by_name, ObjectHeader};
+    use crate::string::js_string_from_bytes;
+    use crate::value::{js_nanbox_get_pointer, TAG_UNDEFINED};
+
+    let ptr = js_nanbox_get_pointer(value);
+    if ptr == 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let field = js_object_get_field_by_name(ptr as *const ObjectHeader, key);
+    unsafe { f64::from_bits(std::mem::transmute::<_, u64>(field)) }
+}
+
+fn has_named_next(value: f64) -> bool {
+    is_callable_value(named_field(value, b"next"))
+}
+
+fn call_symbol_async_iterator(value: f64) -> Option<f64> {
+    let sym = crate::symbol::well_known_symbol("asyncIterator");
+    if sym.is_null() {
+        return None;
+    }
+    let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
+    let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
+    if !is_callable_value(method) {
+        return None;
+    }
+    let prev_this = crate::object::js_implicit_this_set(value);
+    let iterator = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
+    crate::object::js_implicit_this_set(prev_this);
+    if iterator.to_bits() == crate::value::TAG_UNDEFINED {
+        None
+    } else {
+        Some(iterator)
+    }
+}
+
+fn settled_promise_value(value: f64) -> Option<f64> {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return Some(value);
+    }
+    let promise = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
+    if promise.is_null() {
+        return None;
+    }
+    for _ in 0..10_000 {
+        if unsafe { (*promise).state } != crate::promise::PromiseState::Pending {
+            break;
+        }
+        if crate::promise::js_promise_run_microtasks() == 0 {
+            break;
+        }
+    }
+    unsafe {
+        match (*promise).state {
+            crate::promise::PromiseState::Fulfilled => Some((*promise).value),
+            crate::promise::PromiseState::Pending | crate::promise::PromiseState::Rejected => None,
+        }
+    }
 }
 
 /// Convert any iterator-protocol object (has `.next()` method) to an array.
@@ -184,6 +264,66 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         } // TAG_TRUE
 
         // Get .value and push to array
+        let val = js_object_get_field_by_name(result_obj, value_key);
+        let val_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(val)) };
+        result = js_array_push_f64(result, val_f64);
+    }
+
+    result
+}
+
+fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
+    use crate::closure;
+    use crate::object::{js_object_get_field_by_name, ObjectHeader};
+    use crate::string::js_string_from_bytes;
+    use crate::value::{js_nanbox_get_pointer, TAG_TRUE, TAG_UNDEFINED};
+
+    let arr = js_array_alloc(8);
+    let iter_ptr = js_nanbox_get_pointer(iter_f64);
+    if iter_ptr == 0 {
+        return arr;
+    }
+    let iter_obj = iter_ptr as *const ObjectHeader;
+    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
+    let next_val = js_object_get_field_by_name(iter_obj, next_key);
+    let next_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(next_val)) };
+    let next_ptr = if next_val.is_undefined() {
+        std::ptr::null::<closure::ClosureHeader>()
+    } else {
+        js_nanbox_get_pointer(next_f64) as *const closure::ClosureHeader
+    };
+    let use_method_dispatch = next_ptr.is_null();
+    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
+    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
+    let mut result = arr;
+
+    for _ in 0..100_000 {
+        let step = if use_method_dispatch {
+            unsafe {
+                crate::object::js_native_call_method(
+                    iter_f64,
+                    b"next".as_ptr() as *const i8,
+                    4,
+                    std::ptr::null(),
+                    0,
+                )
+            }
+        } else {
+            closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
+        };
+        let Some(step_result) = settled_promise_value(step) else {
+            break;
+        };
+        let result_ptr = js_nanbox_get_pointer(step_result);
+        if result_ptr == 0 {
+            break;
+        }
+        let result_obj = result_ptr as *const ObjectHeader;
+        let done_val = js_object_get_field_by_name(result_obj, done_key);
+        let done_bits = unsafe { std::mem::transmute::<_, u64>(done_val) };
+        if done_bits == TAG_TRUE {
+            break;
+        }
         let val = js_object_get_field_by_name(result_obj, value_key);
         let val_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(val)) };
         result = js_array_push_f64(result, val_f64);

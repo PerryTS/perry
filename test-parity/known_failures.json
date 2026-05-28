@@ -902,12 +902,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: rs.cancel() during pipeTo — should reject (locked stream); resolves or wrong err name. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/iter-helpers/take-zero": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: take(0) — yields non-empty result (should yield zero items). Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/web/transform-stream-with-strategies": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1243,12 +1237,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: objectMode 'readable' event — read() returns wrong object values. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/iter-helpers/drop-zero-yields-all": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: drop(0) — yields wrong items. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/web/from-async-gen-throws-mid": {
     "issue": "1545",
