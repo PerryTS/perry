@@ -114,6 +114,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // regress; thread a real id through here instead.
                 "Object" => 0xFFFF0050u32,
                 _ => ctx.class_ids.get(ty).copied().unwrap_or_else(|| {
+                    // Keep in sync with perry-runtime/src/object/instanceof.rs.
+                    let classic_stream_cid = match ty.as_str() {
+                        "Stream" => Some(0xFFFF0070u32),
+                        "Readable" => Some(0xFFFF0071u32),
+                        "Writable" => Some(0xFFFF0072u32),
+                        "Duplex" => Some(0xFFFF0073u32),
+                        "Transform" => Some(0xFFFF0074u32),
+                        "PassThrough" => Some(0xFFFF0075u32),
+                        _ => None,
+                    };
+                    if let Some(cid) = classic_stream_cid {
+                        return cid;
+                    }
                     // Issue #574: `b instanceof Lib.A` where Lib is a
                     // namespace import. The HIR captures the receiver
                     // as a dotted `ty` ("Lib.A") which `class_ids`

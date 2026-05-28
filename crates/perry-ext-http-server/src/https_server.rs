@@ -152,7 +152,8 @@ pub struct HttpsServer {
 /// `listen()` arguments; see `js_node_http_server_listen` / `parse_listen_args`
 /// for the overload resolution. Issue #2041.
 #[no_mangle]
-pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_array: i64) {
+pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64 {
+    // Returns `server_handle` for chainability (#2129).
     let parsed = crate::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 443);
@@ -172,14 +173,14 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         s.base.request_rx = Some(request_rx);
         s.tls_config.clone()
     } else {
-        return;
+        return server_handle;
     };
 
     let tls_config = match tls_config {
         Some(c) => c,
         None => {
             eprintln!("[node:https] tls config unavailable; refusing to listen");
-            return;
+            return server_handle;
         }
     };
 
@@ -264,6 +265,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
     // are drained via the unified `js_node_http_server_process_pending`
     // pump in `server.rs`, which iterates HTTP/1, HTTPS, and HTTP/2
     // handles each tick.
+    server_handle
 }
 
 async fn handle_https_request(

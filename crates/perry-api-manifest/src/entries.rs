@@ -2687,6 +2687,34 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),
     class("http", "ServerResponse"),
+    // #2129 — `new http.Agent(options?)`. Construction is unconditional;
+    // method dispatch flows through ("http", "Agent") rows below.
+    class("http", "Agent"),
+    method("http", "Agent", false, None),
+    method("http", "getName", true, Some("Agent")),
+    method("http", "destroy", true, Some("Agent")),
+    method("http", "close", true, Some("Agent")),
+    method("http", "keepSocketAlive", true, Some("Agent")),
+    method("http", "reuseSocket", true, Some("Agent")),
+    // Synthetic `__get_<name>` / `__set_<name>` accessor methods (HIR
+    // rewrites bare `agent.maxSockets` reads to `__get_maxSockets()`
+    // when the receiver is class-tagged) + their bare-name twins for
+    // sites where the rewrite doesn't fire. Keep parity with the rows
+    // in `crates/perry-codegen/src/lower_call/native_table/http.rs`
+    // (drift caught by perry-codegen/tests/manifest_consistency.rs).
+    method("http", "__get_maxSockets", true, Some("Agent")),
+    method("http", "__get_maxFreeSockets", true, Some("Agent")),
+    method("http", "__get_maxTotalSockets", true, Some("Agent")),
+    method("http", "__get_keepAliveMsecs", true, Some("Agent")),
+    method("http", "__get_keepAlive", true, Some("Agent")),
+    method("http", "__get_protocol", true, Some("Agent")),
+    method("http", "__set_protocol", true, Some("Agent")),
+    method("http", "maxSockets", true, Some("Agent")),
+    method("http", "maxFreeSockets", true, Some("Agent")),
+    method("http", "maxTotalSockets", true, Some("Agent")),
+    method("http", "keepAliveMsecs", true, Some("Agent")),
+    method("http", "keepAlive", true, Some("Agent")),
+    method("http", "protocol", true, Some("Agent")),
     method("https", "createServer", false, None),
     method("https", "request", false, None),
     method("https", "get", false, None),
@@ -2694,6 +2722,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("https", "ClientRequest"),
     class("https", "IncomingMessage"),
     class("https", "ServerResponse"),
+    // #2129 — `new https.Agent(options?)`. The instance is tagged as
+    // ("http", "Agent") in destructuring/var_decl.rs so it shares the
+    // method surface; only the constructor's default protocol differs.
+    class("https", "Agent"),
+    method("https", "Agent", false, None),
     // --- axios (perry-ext-axios) — the npm `axios` HTTP client surface.
     //     The default export is callable (`axios(config)`); both flow
     //     through perry-ext-axios's `js_axios_*` symbols. ---

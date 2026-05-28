@@ -1128,6 +1128,54 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
 
+        // #2130: captured-then-called child_process methods (`const spawn =
+        // require('child_process').spawn; spawn(...)`, Node's canonical test
+        // idiom). The bound-method closure produced by `cp.spawn` (and the
+        // other entries allowlisted in `is_native_module_callable_export`)
+        // funnels back here when invoked. The method-call form
+        // (`cp.spawn(...)`) is lowered to the same FFIs through dedicated
+        // codegen arms (`expr/child_proc.rs`); this arm mirrors them for the
+        // value-call form. `cmd` / `file` / `module` strings come in NaN-boxed
+        // (SSO-safe via `js_string_materialize_to_heap`); `args` is the array
+        // pointer (or null); `opts` is the options-object pointer (or 0 →
+        // undefined inside the impls).
+        ("child_process", "spawn") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            let args_p = ptr_addr(arg(1)) as i64;
+            let opts_p = ptr_addr(arg(2)) as i64;
+            crate::child_process::reactor::js_child_process_spawn_streams(cmd, args_p, opts_p)
+        }
+        ("child_process", "spawnSync") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0));
+            let args_p = ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
+            let opts_p = ptr_addr(arg(2)) as *const ObjectHeader;
+            let result = crate::child_process::js_child_process_spawn_sync(cmd, args_p, opts_p);
+            ptr_to_f64(result as *const u8)
+        }
+        ("child_process", "execSync") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0));
+            let opts_p = ptr_addr(arg(1)) as *const ObjectHeader;
+            crate::child_process::js_child_process_exec_sync(cmd, opts_p)
+        }
+        ("child_process", "exec") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0));
+            crate::child_process::js_child_process_exec(cmd, arg(1), arg(2))
+        }
+        ("child_process", "execFile") => {
+            let file = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            crate::child_process::js_child_process_exec_file(file, arg(1), arg(2), arg(3))
+        }
+        ("child_process", "execFileSync") => {
+            let file = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            crate::child_process::js_child_process_exec_file_sync(file, arg(1), arg(2))
+        }
+        ("child_process", "fork") => {
+            let module = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            let args_p = ptr_addr(arg(1)) as i64;
+            let opts_p = ptr_addr(arg(2)) as i64;
+            crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
+        }
+
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which
         // depends on this crate), so route through the dispatcher stdlib

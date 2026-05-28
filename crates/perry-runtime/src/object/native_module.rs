@@ -369,11 +369,20 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "WriteStream")
             // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.
             | ("child_process", "ChildProcess")
-            // #1857: exec/execFile read as functions so `typeof child_process.exec
-            // === "function"` and `util.promisify(child_process.exec)` can detect
-            // and wrap them (see the `("util","promisify")` dispatch arm).
+            // #1857 / #2130: every exported function reads as a bound-method
+            // closure so `const spawn = cp.spawn; spawn(...)` (Node's canonical
+            // test idiom — `const spawn = require('child_process').spawn`) and
+            // `util.promisify(cp.exec)` both detect/wrap them. Method-call form
+            // (`cp.spawn(...)`) already lowers through a dedicated codegen path;
+            // this just keeps the value-read form coherent so it dispatches
+            // through dispatch_native_module_method.
             | ("child_process", "exec")
             | ("child_process", "execFile")
+            | ("child_process", "execSync")
+            | ("child_process", "execFileSync")
+            | ("child_process", "spawn")
+            | ("child_process", "spawnSync")
+            | ("child_process", "fork")
             | ("events", "EventEmitter")
             | ("events", "on")
             | ("stream", "Readable")

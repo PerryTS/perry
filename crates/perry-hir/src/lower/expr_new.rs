@@ -56,6 +56,44 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            // #2129: `new http.Agent(options?)` / `new https.Agent(options?)`.
+            // Same pattern as `new net.Socket()` above — reroute to a
+            // receiver-less `NativeMethodCall` so the dispatch table's
+            // `("http"|"https", "Agent")` row runs `js_*_agent_new`.
+            // The let-stmt machinery in `lower.rs` then registers the
+            // result as an `("http", "Agent")` native instance so
+            // `agent.getName/.destroy/.maxSockets` etc. dispatch through
+            // the class-filtered Agent rows. `https` Agent instances are
+            // also tagged under `("http", "Agent")` so they share the
+            // method surface — only the constructor's default protocol
+            // differs.
+            let is_http_module =
+                obj_name == "http" || ctx.lookup_builtin_module_alias(obj_name) == Some("http");
+            let is_https_module =
+                obj_name == "https" || ctx.lookup_builtin_module_alias(obj_name) == Some("https");
+            if (is_http_module || is_https_module) && prop_ident.sym.as_ref() == "Agent" {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: if is_https_module {
+                        "https".to_string()
+                    } else {
+                        "http".to_string()
+                    },
+                    class_name: None,
+                    object: None,
+                    method: "Agent".to_string(),
+                    args,
+                });
+            }
             let module_alias = obj_ident.sym.as_ref();
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
                 let class_name = prop_ident.sym.as_ref();

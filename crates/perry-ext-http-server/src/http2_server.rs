@@ -127,7 +127,8 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
 /// carries the variadic `listen()` arguments; see `js_node_http_server_listen`
 /// / `parse_listen_args` for the overload resolution. Issue #2041.
 #[no_mangle]
-pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_array: i64) {
+pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_array: i64) -> i64 {
+    // Returns `server_handle` for chainability (#2129).
     let parsed = crate::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 443);
@@ -147,14 +148,14 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
         s.base.request_rx = Some(request_rx);
         s.tls_config.clone()
     } else {
-        return;
+        return server_handle;
     };
 
     let tls_config = match tls_config {
         Some(c) => c,
         None => {
             eprintln!("[node:http2] tls config unavailable; refusing to listen");
-            return;
+            return server_handle;
         }
     };
 
@@ -254,6 +255,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
     // Closes #604 — `listen()` is now non-blocking; the unified
     // `js_node_http_server_process_pending` pump in server.rs drains
     // HTTP/2 pending requests alongside HTTP/1 + HTTPS each tick.
+    server_handle
 }
 
 async fn handle_h2_request(

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1410 entries across 82 modules.
+Total: 1432 entries across 82 modules.
 
 ## Modules
 
@@ -743,6 +743,7 @@ Total: 1410 entries across 82 modules.
 
 ### Classes
 
+- `Agent`
 - `ClientRequest`
 - `IncomingMessage`
 - `IncomingMessage`
@@ -753,13 +754,20 @@ Total: 1410 entries across 82 modules.
 
 ### Methods
 
+- `Agent` — module
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
+- `__get_keepAlive` — instance *(class: `Agent`)*
+- `__get_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__get_maxFreeSockets` — instance *(class: `Agent`)*
+- `__get_maxSockets` — instance *(class: `Agent`)*
+- `__get_maxTotalSockets` — instance *(class: `Agent`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
+- `__get_protocol` — instance *(class: `Agent`)*
 - `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
 - `__get_statusMessage` — instance *(class: `IncomingMessage`)*
@@ -767,36 +775,48 @@ Total: 1410 entries across 82 modules.
 - `__get_url` — instance *(class: `IncomingMessage`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
+- `__set_protocol` — instance *(class: `Agent`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
 - `addTrailers` — instance *(class: `ServerResponse`)*
+- `close` — instance *(class: `Agent`)*
 - `close` — instance *(class: `HttpServer`)*
 - `closeAllConnections` — instance *(class: `HttpServer`)*
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
 - `createServer` — module
 - `createServer` — module
+- `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `end` — instance *(class: `ServerResponse`)*
 - `flushHeaders` — instance *(class: `ServerResponse`)*
 - `get` — module
 - `getHeader` — instance *(class: `ServerResponse`)*
+- `getName` — instance *(class: `Agent`)*
 - `getStatus` — instance *(class: `ServerResponse`)*
 - `hasHeader` — instance *(class: `ServerResponse`)*
 - `headers` — instance *(class: `IncomingMessage`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
+- `keepAlive` — instance *(class: `Agent`)*
+- `keepAliveMsecs` — instance *(class: `Agent`)*
+- `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
+- `maxFreeSockets` — instance *(class: `Agent`)*
+- `maxSockets` — instance *(class: `Agent`)*
+- `maxTotalSockets` — instance *(class: `Agent`)*
 - `method` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `HttpServer`)*
 - `on` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `ServerResponse`)*
 - `pause` — instance *(class: `IncomingMessage`)*
+- `protocol` — instance *(class: `Agent`)*
 - `read` — instance *(class: `IncomingMessage`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
 - `resume` — instance *(class: `IncomingMessage`)*
+- `reuseSocket` — instance *(class: `Agent`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
@@ -837,6 +857,7 @@ Total: 1410 entries across 82 modules.
 
 ### Classes
 
+- `Agent`
 - `ClientRequest`
 - `IncomingMessage`
 - `Server`
@@ -845,6 +866,7 @@ Total: 1410 entries across 82 modules.
 
 ### Methods
 
+- `Agent` — module
 - `close` — instance *(class: `HttpsServer`)*
 - `createServer` — module
 - `createServer` — module

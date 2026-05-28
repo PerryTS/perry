@@ -272,12 +272,26 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 let is_known_native_class = matches!(
                                     (module_name, class_name),
                                     ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                                        // #2129: `new http.Agent()` /
+                                        // `new https.Agent()` — both share
+                                        // the same Agent method surface;
+                                        // we normalize https → http so the
+                                        // class-filtered ("http", "Agent")
+                                        // rows in native_table/http.rs
+                                        // dispatch correctly.
+                                        | ("http", "Agent")
+                                        | ("https", "Agent")
                                 );
                                 if is_known_native_class {
+                                    let (mod_for_class, cls_for_class) = if class_name == "Agent" {
+                                        ("http", "Agent")
+                                    } else {
+                                        (module_name, class_name)
+                                    };
                                     ctx.register_native_instance(
                                         name.clone(),
-                                        module_name.to_string(),
-                                        class_name.to_string(),
+                                        mod_for_class.to_string(),
+                                        cls_for_class.to_string(),
                                     );
                                 }
                             }
