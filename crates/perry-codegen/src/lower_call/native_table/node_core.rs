@@ -166,6 +166,18 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // #2135 (Node process parity): process.loadEnvFile(path?) — HIR
+    // defaults the missing path to ".env" so this row always sees a
+    // single string argument.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "loadEnvFile",
+        class_filter: None,
+        runtime: "js_process_load_env_file",
+        args: &[NA_STR],
+        ret: NR_VOID,
+    },
     // ========== Node URL ==========
     // `new Number/String/Boolean(...)` now lowers to
     // `Expr::BoxedPrimitiveNew` (see crates/perry-hir/src/lower/expr_new.rs)
