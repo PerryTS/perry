@@ -203,6 +203,14 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         );
     }
 
+    if module_name == "util" && property_name == "promisify" {
+        crate::closure::closure_set_dynamic_prop(
+            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+            "custom",
+            crate::util_promisify::promisify_custom_symbol(),
+        );
+    }
+
     NATIVE_CALLABLE_EXPORTS.with(|c| {
         c.borrow_mut().insert(key, value.to_bits());
     });

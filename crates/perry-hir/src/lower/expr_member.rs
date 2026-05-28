@@ -473,30 +473,37 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
-    // `util.inspect.custom` / `inspect.custom` (named import from node:util)
-    // — Node exposes this as the registered symbol `Symbol.for("nodejs.util.inspect.custom")`,
-    // and object-literal keys / inspect output expect that exact description.
-    // See #1201.
+    // `util.inspect.custom` / `inspect.custom` and
+    // `util.promisify.custom` / `promisify.custom` (named imports from
+    // node:util) — Node exposes these as registered `Symbol.for(...)`
+    // values, and computed keys expect those exact descriptions.
+    // See #1201 and util.promisify.custom parity.
     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
         if prop_ident.sym.as_ref() == "custom" {
             // Case A: `inspect.custom` where `inspect` is a named import from
-            // node:util.
+            // node:util, and the analogous `promisify.custom`.
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 if let Some((module_name, Some(method_name))) =
                     ctx.lookup_native_module(obj_ident.sym.as_ref())
                 {
-                    if (module_name == "util" || module_name == "node:util")
-                        && method_name == "inspect"
-                    {
-                        return Ok(Expr::SymbolFor(Box::new(Expr::String(
-                            "nodejs.util.inspect.custom".to_string(),
-                        ))));
+                    if module_name == "util" || module_name == "node:util" {
+                        if method_name == "inspect" {
+                            return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                "nodejs.util.inspect.custom".to_string(),
+                            ))));
+                        }
+                        if method_name == "promisify" {
+                            return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                "nodejs.util.promisify.custom".to_string(),
+                            ))));
+                        }
                     }
                 }
             }
             // Case B: `util.inspect.custom` where `util` is a whole-module
             // alias (`import * as util from "node:util"` or
-            // `import util from "node:util"`).
+            // `import util from "node:util"`), and the analogous
+            // `util.promisify.custom`.
             if let ast::Expr::Member(inner) = member.obj.as_ref() {
                 if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(inner_prop)) =
                     (inner.obj.as_ref(), &inner.prop)
@@ -504,10 +511,20 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let obj_name = obj_ident.sym.to_string();
                     let is_util_module = obj_name == "util"
                         || ctx.lookup_builtin_module_alias(&obj_name) == Some("util");
-                    if is_util_module && inner_prop.sym.as_ref() == "inspect" {
-                        return Ok(Expr::SymbolFor(Box::new(Expr::String(
-                            "nodejs.util.inspect.custom".to_string(),
-                        ))));
+                    if is_util_module {
+                        match inner_prop.sym.as_ref() {
+                            "inspect" => {
+                                return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                    "nodejs.util.inspect.custom".to_string(),
+                                ))));
+                            }
+                            "promisify" => {
+                                return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                    "nodejs.util.promisify.custom".to_string(),
+                                ))));
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }

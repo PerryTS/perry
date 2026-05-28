@@ -1,5 +1,6 @@
 import { promisify } from "node:util";
 
+console.log("custom symbol:", promisify.custom === Symbol.for("nodejs.util.promisify.custom"));
 const obj = {
   value: 5,
   add(x: number, cb: Function) { cb(null, this.value + x); },
