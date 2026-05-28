@@ -614,12 +614,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/writable-multiple-writers-fails": {
-    "issue": "1545",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream/web: second getWriter() on a locked WritableStream should throw. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/dispose/await-using-disposes": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -704,12 +698,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline() does not set err.code=ERR_STREAM_PREMATURE_CLOSE on mid-chain destroy. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/get-reader-twice-throws": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: second getReader() on locked stream does not throw TypeError. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/events/finish-end-close-order": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -745,12 +733,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipe(dst, {end: false}) — destination still ended when source ends. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/web/tee-while-locked-throws": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: tee() on a locked stream does not throw TypeError. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/events/readable-event-order": {
     "issue": "1532",
@@ -871,12 +853,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipeline(src, async fn) — fn-as-sink form not yet wired (cb not called, collected is empty). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/web/pipe-to-locks-and-releases": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeTo() does not flip rs/ws.locked true during, false after. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/readable/unshift-after-end": {
     "issue": "1532",
@@ -1082,12 +1058,6 @@
     "category": "bug-open",
     "reason": "node:stream: pause() inside 'data' listener — does not stop further synchronous emits. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/get-writer-twice-throws": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: second getWriter() on locked WritableStream does not throw TypeError. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/iter-helpers/find-returns-promise": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1250,12 +1220,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipe(dst,{end:false}) then manual dst.write — output order/count wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/from-single-promise": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: RS.from(Promise) — should throw TypeError (Promise not iterable), or accept and treat as 1-value (depends on Node). Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/events/once-static-promise": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1279,18 +1243,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) — types lost or wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/web/readable-locked-after-pipe-through": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: rs.locked false after pipeThrough (should be true). Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/tee-after-getReader-throws": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: tee() on locked stream does not throw TypeError. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/readable/read-returns-buffer-default": {
     "issue": "1532",
@@ -1598,12 +1550,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline(asyncIterable, dst, cb) — async-iterable source not handled. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/tee-mid-consume-throws": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: tee() after getReader+read — should throw TypeError. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/pipe/source-immediate-error": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1765,12 +1711,6 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: map(asyncFn, {concurrency}) — toArray output wrong. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/web/from-bigint-throws": {
-    "issue": "1545",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream/web: RS.from(bigint) — should throw TypeError. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/readable/from-gen-with-early-return": {
     "issue": "1532",
