@@ -14,29 +14,17 @@
     "category": "bug-stale",
     "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS; #655 is closed. Deliberate failing repro/harness — kept as a regression canary. Canonical regression-catcher for issue #655. Flips to PASS when the underlying fix lands. Keep regardless of CI verdict — it's a deliberate failing repro."
   },
-  "test_edge_regression": {
-    "issue": "1635",
-    "added": "2026-05-15",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Broad edge-case bundle covering multiple historical regressions. Bisect needed to pin which sub-case still fails so a tracking issue can be filed against that specific behavior. Not a recent regression."
-  },
   "test_edge_type_narrowing": {
-    "issue": "1635",
+    "issue": "2277",
     "added": "2026-05-15",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Several TS type-narrowing patterns (control-flow narrowing, discriminated unions through generics, `in` operator narrowing) Perry's HIR doesn't track yet. Surfaced multiple narrow-fix candidates; split into per-pattern issues before tackling."
-  },
-  "test_gap_array_methods": {
-    "issue": "1635",
-    "added": "2026-05-15",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Array method coverage probe — small divergences (flat/flatMap/finally specific edge cases). Targeted bisect needed; not a recent regression. File a tracking issue once a specific sub-case is pinned."
+    "category": "bug-open",
+    "reason": "Bisected 2026-05-28 for #1635: single residual sub-case is `typeof === \"string\"` narrowing on a `string | number[]` union — else-branch leaves the array remainder mis-typed as string, so `.join` lowers as a string method and throws. Tracked under #2277."
   },
   "test_gap_class_advanced": {
-    "issue": "1635",
+    "issue": "2278",
     "added": "2026-05-17",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Advanced class features (static blocks, private brand checks, etc.) — bisect required to identify which sub-feature fails byte-for-byte vs Node."
+    "category": "bug-open",
+    "reason": "Bisected 2026-05-28 for #1635: single residual sub-case is a static class block assigning `true` to a declared `static initialized: boolean` field — read-back returns `0` instead of `true`. Tracked under #2278."
   },
   "test_gap_regexp_advanced": {
     "issue": null,
@@ -79,12 +67,6 @@
     "added": "2026-05-24",
     "category": "bug-stale",
     "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS; #922 is closed. Deliberate failing repro/harness — kept as a regression canary. Regression test from #922 (P0 production /api crash). Deliberate failing repro until the underlying codegen bug is fixed; #934 added a circuit breaker that converts the runaway loop into [PERRY ABORT] (so test fails by design — the abort message diverges from Node's success output)."
-  },
-  "test_jsruntime_mixed_async_ordering_matrix": {
-    "issue": "1635",
-    "added": "2026-05-17",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Mixed async ordering between native + V8-fallback promise chains. Long-tail jsruntime parity work; bisect needed to identify which interleaving shape diverges."
   },
   "test_net_min": {
     "issue": "1634",
