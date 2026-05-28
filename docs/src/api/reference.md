@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1501 entries across 82 modules.
+Total: 1505 entries across 82 modules.
 
 ## Modules
 
@@ -1997,11 +1997,15 @@ Total: 1501 entries across 82 modules.
 - `isAnyArrayBuffer` — module
 - `isArrayBuffer` — module
 - `isArrayBufferView` — module
+- `isBigInt64Array` — module
+- `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
 - `isDate` — module
 - `isFloat32Array` — module
 - `isFloat64Array` — module
+- `isGeneratorFunction` — module
+- `isGeneratorObject` — module
 - `isInt16Array` — module
 - `isInt32Array` — module
 - `isInt8Array` — module

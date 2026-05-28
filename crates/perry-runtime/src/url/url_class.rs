@@ -69,6 +69,41 @@ fn percent_encode_userinfo(raw: &str) -> String {
     out
 }
 
+fn should_strip_url_ascii_whitespace(b: u8) -> bool {
+    matches!(b, b'\t' | b'\n' | b'\r')
+}
+
+fn should_percent_encode_path_byte(b: u8) -> bool {
+    b <= 0x1F
+        || b >= 0x7F
+        || matches!(
+            b,
+            b' ' | b'"' | b'#' | b'<' | b'>' | b'?' | b'`' | b'{' | b'}'
+        )
+}
+
+fn should_percent_encode_fragment_byte(b: u8) -> bool {
+    b <= 0x1F || b >= 0x7F || matches!(b, b' ' | b'"' | b'<' | b'>' | b'`')
+}
+
+fn percent_encode_url_component(raw: &str, should_encode: impl Fn(u8) -> bool) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(raw.len());
+    for &b in raw.as_bytes() {
+        if should_strip_url_ascii_whitespace(b) {
+            continue;
+        }
+        if should_encode(b) {
+            out.push('%');
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0F) as usize] as char);
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
 fn url_can_have_credentials(url: *mut ObjectHeader) -> bool {
     let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
     let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
@@ -91,6 +126,14 @@ fn normalize_hostname_value(raw: &str) -> Option<String> {
         Ok(ascii) if !ascii.is_empty() => Some(ascii),
         _ => None,
     }
+}
+
+fn percent_encode_path(raw: &str) -> String {
+    percent_encode_url_component(raw, should_percent_encode_path_byte)
+}
+
+fn percent_encode_fragment(raw: &str) -> String {
+    percent_encode_url_component(raw, should_percent_encode_fragment_byte)
 }
 
 /// Create a new URL from a string
@@ -192,7 +235,8 @@ pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: *mut crate:
         } else {
             raw
         };
-        js_object_set_field_f64(url, URL_PATHNAME, create_string_f64(&normalized));
+        let encoded = percent_encode_path(&normalized);
+        js_object_set_field_f64(url, URL_PATHNAME, create_string_f64(&encoded));
         rebuild_url_href(url);
     }
 }
@@ -400,8 +444,9 @@ pub extern "C" fn js_url_set_hash(url: *mut ObjectHeader, value: *mut crate::Str
     } else {
         format!("#{}", raw)
     };
+    let encoded = percent_encode_fragment(&normalized);
     unsafe {
-        js_object_set_field_f64(url, URL_HASH, create_string_f64(&normalized));
+        js_object_set_field_f64(url, URL_HASH, create_string_f64(&encoded));
         rebuild_url_href(url);
     }
 }
