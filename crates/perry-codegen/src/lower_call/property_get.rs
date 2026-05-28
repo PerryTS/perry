@@ -24,6 +24,27 @@ fn is_event_target_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     matches!(receiver_class_name(ctx, e).as_deref(), Some("EventTarget"))
 }
 
+/// Methods that exist on `Array.prototype` but NOT on `String.prototype`.
+/// Used to keep the string-method dispatch from claiming a call site
+/// like `(s | T[]).join(",")` where the static type is permissive
+/// (Union with String — see `is_string_expr`'s Union arm) but the
+/// method itself isn't part of the string surface. Falling through to
+/// the runtime dispatcher (`js_native_call_method`) lets the actual
+/// runtime shape pick the right path. Refs #2277.
+fn is_array_only_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        // Mutating
+        "push" | "pop" | "shift" | "unshift" | "splice" | "sort" | "reverse" | "fill" | "copyWithin"
+        // Aggregation / iteration
+        | "join" | "every" | "some" | "filter" | "map" | "forEach" | "reduce" | "reduceRight"
+        | "find" | "findIndex" | "findLast" | "findLastIndex" | "flat" | "flatMap"
+        | "keys" | "values" | "entries"
+        // Immutable variants
+        | "toReversed" | "toSorted" | "toSpliced" | "with"
+    )
+}
+
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance method
 /// dispatch tower. Returns `Ok(None)` when the callee shape doesn't
@@ -228,7 +249,7 @@ pub fn try_lower_property_get_method_call(
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
     }
-    if is_string_expr(ctx, object) {
+    if is_string_expr(ctx, object) && !is_array_only_method_name(property) {
         return Ok(Some(lower_string_method(ctx, object, property, args)?));
     }
     // String method fallback for Any-typed receivers: when the method

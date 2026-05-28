@@ -14,12 +14,6 @@
     "category": "bug-stale",
     "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS; #655 is closed. Deliberate failing repro/harness — kept as a regression canary. Canonical regression-catcher for issue #655. Flips to PASS when the underlying fix lands. Keep regardless of CI verdict — it's a deliberate failing repro."
   },
-  "test_edge_type_narrowing": {
-    "issue": "2277",
-    "added": "2026-05-15",
-    "category": "bug-open",
-    "reason": "Bisected 2026-05-28 for #1635: single residual sub-case is `typeof === \"string\"` narrowing on a `string | number[]` union — else-branch leaves the array remainder mis-typed as string, so `.join` lowers as a string method and throws. Tracked under #2277."
-  },
   "test_gap_regexp_advanced": {
     "issue": null,
     "added": "2026-05-15",
