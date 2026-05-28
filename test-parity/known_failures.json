@@ -14,30 +14,6 @@
     "category": "bug-stale",
     "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS; #655 is closed. Deliberate failing repro/harness — kept as a regression canary. Canonical regression-catcher for issue #655. Flips to PASS when the underlying fix lands. Keep regardless of CI verdict — it's a deliberate failing repro."
   },
-  "test_edge_regression": {
-    "issue": "1635",
-    "added": "2026-05-15",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Broad edge-case bundle covering multiple historical regressions. Bisect needed to pin which sub-case still fails so a tracking issue can be filed against that specific behavior. Not a recent regression."
-  },
-  "test_edge_type_narrowing": {
-    "issue": "1635",
-    "added": "2026-05-15",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Several TS type-narrowing patterns (control-flow narrowing, discriminated unions through generics, `in` operator narrowing) Perry's HIR doesn't track yet. Surfaced multiple narrow-fix candidates; split into per-pattern issues before tackling."
-  },
-  "test_gap_array_methods": {
-    "issue": "1635",
-    "added": "2026-05-15",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Array method coverage probe — small divergences (flat/flatMap/finally specific edge cases). Targeted bisect needed; not a recent regression. File a tracking issue once a specific sub-case is pinned."
-  },
-  "test_gap_class_advanced": {
-    "issue": "1635",
-    "added": "2026-05-17",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Advanced class features (static blocks, private brand checks, etc.) — bisect required to identify which sub-feature fails byte-for-byte vs Node."
-  },
   "test_gap_regexp_advanced": {
     "issue": null,
     "added": "2026-05-15",
@@ -79,12 +55,6 @@
     "added": "2026-05-24",
     "category": "bug-stale",
     "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS; #922 is closed. Deliberate failing repro/harness — kept as a regression canary. Regression test from #922 (P0 production /api crash). Deliberate failing repro until the underlying codegen bug is fixed; #934 added a circuit breaker that converts the runaway loop into [PERRY ABORT] (so test fails by design — the abort message diverges from Node's success output)."
-  },
-  "test_jsruntime_mixed_async_ordering_matrix": {
-    "issue": "1635",
-    "added": "2026-05-17",
-    "category": "gap-bisect",
-    "reason": "Tracked in #1635 (gap-bisect backlog). Mixed async ordering between native + V8-fallback promise chains. Long-tail jsruntime parity work; bisect needed to identify which interleaving shape diverges."
   },
   "test_net_min": {
     "issue": "1634",
@@ -248,12 +218,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline() callback never fires (depends on stream event delivery). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/object-mode": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable objectMode push/data events don't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/set-encoding": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -265,18 +229,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: unshift+data chain doesn't deliver. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/writable/drain-event": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: write() return + drain event semantics not delivered. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/error/error-event": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(err) → error event chain doesn't deliver. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-async-iterable": {
     "issue": "1532",
@@ -398,12 +350,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline for already-ended source doesn't invoke callback. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/read-no-arg": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read() with no arg should return the entire buffered chunk. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/finished/options-config": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -440,12 +386,6 @@
     "category": "bug-open",
     "reason": "node:stream: read + unshift + re-read sequence doesn't deliver chunks in the right order. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/error/error-no-listener": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy(err) + error listener doesn't deliver the message to handler. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/object-mode/read-single-object": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -458,29 +398,11 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/pipe/four-stage-chain": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: four-stage pipe chain does not propagate through. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/repipe-after-unpipe": {
     "issue": "1532",
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/error/error-then-end-order": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: after error, end event should NOT fire. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/options/auto-destroy-false": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy:false option not honored. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/options/construct-cb-error": {
     "issue": "1532",
@@ -566,12 +488,6 @@
     "category": "bug-open",
     "reason": "node:stream: readable.unshift(chunk, encoding) — second-arg encoding form not honored. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/iter-helpers/map-returns-readable": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: readable.map() returns iterable but not a Readable instance — `instanceof Readable` is false. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/pipeline/premature-close-code": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -607,12 +523,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipe(dst, {end: false}) — destination still ended when source ends. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/readable-event-order": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: 'readable' event ordering relative to 'end' — extra readable before end missing or out-of-order. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/finished/with-cleanup-option": {
     "issue": "1532",
@@ -680,12 +590,6 @@
     "category": "gap-categorical",
     "reason": "#1278: console.trace / Error.stack frame format diverges from Node (Perry prints native frame addresses like `0: __mh_execute_header` instead of `at <fn> (file:///…:line:col)`). Requires source-position retention through HIR/transform + native-frame → TS-source mapping. The other two divergences in this fixture (#1276 spurious `Values` column on array-of-arrays, #1277 timer ms numbers) are not gating: #1276 was fixed in v0.5.1019+; #1277 is a misdiagnosis — Perry's `Instant::now()` is correct and the apparent 1000× gap is just AOT-vs-interpreted speedup on the trivial loop workload. Flips to PASS when #1278 lands."
   },
-  "test_issue_express_map_undefined": {
-    "issue": "912",
-    "added": "2026-05-17",
-    "category": "bug-open",
-    "reason": "Regression test from #911 (express map undefined / http.METHODS). The METHODS property is now in the manifest (PR adding it alongside this entry); the test may still diverge from Node in the exact METHODS list shape. Re-evaluate once express compiles cleanly."
-  },
   "node-suite/stream/readable/object-mode-read-returns-object": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -728,12 +632,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:'byob'}) on non-byte stream does not throw TypeError. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/iter-helpers/map-with-thisarg": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: iter-helper closure capture — outer-var reference in arrow fn yields wrong values. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/compose/instance-chain": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -745,12 +643,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: read() inside 'readable' listener — while-loop drain pattern produces wrong output. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/read-n-consumes-exactly-n": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read(N) — consumes wrong byte count from buffered stream. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/flow/sequential-reads": {
     "issue": "1532",
@@ -787,24 +679,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(POJO-with-Symbol.iterator) — does not iterate the custom iterable. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipeline/promise-form": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline() from node:stream/promises — return value not a Promise<undefined>. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/iter-helpers/spread-tarray-result": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: toArray() result not spreadable array (wrong type or shape). Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/pipe/end-true-explicit": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe(dst, {end:true}) — explicit form behaves differently from default. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/buffer-preserves": {
     "issue": "1531",
@@ -860,18 +734,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:'byob'}) on bytes-type stream fails or returns wrong shape. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/pipe/source-error-no-propagation": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe(src,dst) source-error handling — wrong error count on src or dst. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/error-event-arg-shape": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: 'error' event arg — identity / instanceof Error / message wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/pipethrough-preventclose-flag": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -883,12 +745,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: rs.cancel() during pipeTo — should reject (locked stream); resolves or wrong err name. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/iter-helpers/take-zero": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: take(0) — yields non-empty result (should yield zero items). Flips to PASS when #1558 lands."
   },
   "node-suite/stream/web/transform-stream-with-strategies": {
     "issue": "1545",
@@ -926,18 +782,6 @@
     "category": "bug-open",
     "reason": "node:stream: destroy() inside _read() — readCalls count or close-event behavior wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/promises/finished-rejects-on-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: promises.finished() — does not reject when stream errors. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/read-multibyte-boundary": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read(1) on multibyte UTF-8 chunk — fails to compile (Buffer-length access). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/writable/sink-write-rejection-becomes-error": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -955,12 +799,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(asyncGen()) — iteration wrong or fails. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/pipe/objectmode-pipe": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: objectMode pipe — raw object data not preserved through pipe. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/compose-with-passthrough": {
     "issue": "1531",
@@ -1004,12 +842,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) — types lost or wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/read-returns-buffer-default": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read() in non-encoded mode — does not return Buffer instance. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/pipe-autodestroy-default": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1045,12 +877,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(array with one Promise.reject) — error not emitted at the right point. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/r-t-w-end-to-end": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: simple R→T→W e2e pipe — received chunks wrong (transform/uppercase not applied). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/iter-helpers/every-async-rejection": {
     "issue": "1558",
@@ -1154,12 +980,6 @@
     "category": "bug-open",
     "reason": "node:stream: post-pipe-end destroyed flags wrong on source or destination. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/options-autoDestroy-explicit": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy: false — stream still destroyed after 'end' or 'close' fires when it shouldn't. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/sink-all-four-methods": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1171,12 +991,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipeline middle-stream error — does not destroy source AND sink. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/iter-helpers/take-then-filter": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: chained take(N).filter(fn) — wrong output. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/web/from-promise-iterable": {
     "issue": "1545",
@@ -1220,12 +1034,6 @@
     "category": "bug-open",
     "reason": "node:stream: objectMode 'readable' event — read() returns wrong object values. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/iter-helpers/drop-zero-yields-all": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: drop(0) — yields wrong items. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/web/from-async-gen-throws-mid": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -1250,12 +1058,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable({captureRejections}) — async listener throws not caught as 'error'. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/pipe-error-handler-on-source": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: src.on('error') during pipe — handler receives wrong error / not called. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/some-finds-match": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1268,12 +1070,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline(asyncIterable, dst, cb) — async-iterable source not handled. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/source-immediate-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() src immediate error — error not fired on src listener. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/destroyed-after-finish": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1285,12 +1081,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: encoding option in ctor — readableEncoding wrong or data not string. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/pipe-to-plain-writable": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() to plain Writable — collected wrong / empty. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/byob-reader-method-shape": {
     "issue": "1545",
@@ -1352,12 +1142,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) — chain produces wrong output. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/pipe/end-true-explicit-still-ends": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe(dst,{end:true}) — dst not ended after source ends. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipeline/sync-iterable-source": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1418,18 +1202,6 @@
     "category": "bug-open",
     "reason": "node:stream: generator with explicit return — values yielded after return statement aren't reached. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/four-stage-chain-v2": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: 4-stage pipe — wrong output. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/many-listeners-on-dst": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: multi 'data' listeners on dst — count or values wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/from-gen-return-value-ignored": {
     "issue": "1532",
     "added": "2026-05-25",
@@ -1459,11 +1231,5 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream/promises: pipeline(src, transform, asyncFnSink) — collected output wrong/empty. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/consumers/buffer-byte-exact": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream/consumers: buffer() from raw-byte Buffer chunks — byte sequence or Array.from output differs from Node. Flips to PASS when #1532 lands."
   }
 }

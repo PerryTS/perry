@@ -171,8 +171,19 @@ pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 
             return (len / 2) as i32;
         }
         if eq_ascii_lower(enc_bytes, b"base64") || eq_ascii_lower(enc_bytes, b"base64url") {
-            let decoded = base64_decode_into_buffer(bytes);
-            return (*decoded).length as i32;
+            // Node's Buffer.byteLength assumes valid base64/base64url input
+            // instead of decoding. It only discounts up to two trailing `=`
+            // padding characters, then applies the 3/4 base64 ratio.
+            let mut code_units = std::str::from_utf8(bytes)
+                .map(|s| s.encode_utf16().count())
+                .unwrap_or(len);
+            if code_units > 0 && bytes.last() == Some(&b'=') {
+                code_units -= 1;
+                if code_units > 1 && bytes.get(bytes.len().saturating_sub(2)) == Some(&b'=') {
+                    code_units -= 1;
+                }
+            }
+            return ((code_units * 3) / 4) as i32;
         }
         if eq_ascii_lower(enc_bytes, b"ascii")
             || eq_ascii_lower(enc_bytes, b"latin1")
