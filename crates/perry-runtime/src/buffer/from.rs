@@ -434,10 +434,42 @@ pub extern "C" fn js_data_view_new(value: f64) -> f64 {
     value
 }
 
+fn throw_buffer_alloc_size_out_of_range() -> ! {
+    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_RANGE_ERROR.call_once(|| {
+        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
+    });
+    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
+    unsafe {
+        let set = |key: &[u8], value: f64| {
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
+        };
+        let str_val = |s: &[u8]| -> f64 {
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
+        };
+        set(b"name", str_val(b"RangeError"));
+        set(b"code", str_val(b"ERR_OUT_OF_RANGE"));
+        set(
+            b"message",
+            str_val(b"The value of \"size\" is out of range"),
+        );
+    }
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
+fn validate_buffer_alloc_size(size: i32) -> u32 {
+    if size < 0 {
+        throw_buffer_alloc_size_out_of_range();
+    }
+    size as u32
+}
+
 /// Allocate a zero-filled buffer
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc(size: i32, fill: i32) -> *mut BufferHeader {
-    let size = size.max(0) as u32;
+    let size = validate_buffer_alloc_size(size);
     let buf = buffer_alloc(size);
     unsafe {
         (*buf).length = size;
@@ -456,7 +488,7 @@ pub extern "C" fn js_buffer_alloc_fill_value(
     fill_value: f64,
     encoding: i32,
 ) -> *mut BufferHeader {
-    let size = size.max(0) as u32;
+    let size = validate_buffer_alloc_size(size);
     let buf = buffer_alloc(size);
     unsafe {
         (*buf).length = size;
@@ -565,7 +597,7 @@ pub extern "C" fn js_buffer_fill_range(
 /// Allocate an uninitialized buffer
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader {
-    let size = size.max(0) as u32;
+    let size = validate_buffer_alloc_size(size);
     let buf = buffer_alloc(size);
     unsafe {
         (*buf).length = size;
