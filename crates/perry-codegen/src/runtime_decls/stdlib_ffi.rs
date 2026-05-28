@@ -52,7 +52,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_status_code", DOUBLE, &[I64]);
     module.declare_function("js_http_status_message", I64, &[I64]);
 
-    // ========== http.Agent / https.Agent (#2129) ==========
+    // ========== http.Agent / https.Agent (#2129 / #2154) ==========
     module.declare_function("js_http_agent_new", I64, &[DOUBLE]);
     module.declare_function("js_https_agent_new", I64, &[DOUBLE]);
     module.declare_function("js_http_agent_get_name", I64, &[I64, DOUBLE]);
@@ -64,6 +64,21 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_agent_keep_alive", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_protocol", I64, &[I64]);
     module.declare_function("js_http_agent_set_protocol", VOID, &[I64, I64]);
+    // #2154
+    module.declare_function("js_http_agent_destroy", I64, &[I64]);
+    module.declare_function("js_http_agent_destroyed", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_free_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_requests", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_set_max_sockets", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_max_free_sockets", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_max_total_sockets", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_keep_alive", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_keep_alive_msecs", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_create_connection", VOID, &[I64, I64]);
+    module.declare_function("js_http_agent_set_create_socket", VOID, &[I64, I64]);
+    module.declare_function("js_http_agent_create_connection", I64, &[I64]);
+    module.declare_function("js_http_agent_create_socket", I64, &[I64]);
 
     // ========== HTTPS ==========
     module.declare_function("js_https_get", I64, &[DOUBLE, I64]);

@@ -85,18 +85,13 @@ pub extern "C" fn js_create_native_module_namespace(
 pub(crate) unsafe fn read_native_module_name(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<String> {
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     let field = crate::object::js_object_get_field(obj_ptr, 0);
-    if !field.is_string() {
-        return None;
-    }
-    let str_ptr = (field.bits() & POINTER_MASK) as *const crate::string::StringHeader;
-    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
-        return None;
-    }
-    let len = (*str_ptr).byte_len as usize;
-    let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
+    // #1781: SSO-aware — a native-module name of ≤ 5 bytes (e.g. `"fs"`,
+    // `"os"`, `"tty"`, `"net"`, `"path"`) is stored as a SHORT_STRING_TAG
+    // value. Pre-fix `is_string()` (STRING_TAG-only) returned None and
+    // the auto-optimize sweep couldn't determine the requested module.
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = crate::string::js_string_key_bytes(field, &mut sso_buf)?;
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
@@ -361,6 +356,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "geteuid")
             | ("process", "getgid")
             | ("process", "getegid")
+            | ("process", "getgroups")
+            | ("process", "setuid")
+            | ("process", "seteuid")
+            | ("process", "setgid")
+            | ("process", "setegid")
             | ("process", "emitWarning")
             | ("process", "on")
             | ("process", "addListener")
@@ -998,14 +998,23 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'sta
         return "";
     }
     let module_field = js_object_get_field(obj as *mut _, 0);
-    if module_field.is_string() {
-        let str_ptr = module_field.as_string_ptr();
-        let len = (*str_ptr).byte_len as usize;
-        let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
-    } else {
-        ""
+    if !module_field.is_any_string() {
+        return "";
     }
+    // #1781: SSO-aware — ≤5-byte module names (fs, os, …) arrive as
+    // SHORT_STRING_TAG values; route through `js_get_string_pointer_unified`
+    // so SSO materializes onto the GC-managed heap (where its bytes
+    // share the lifetime story the STRING_TAG path already assumes
+    // for the `&'static` lie this signature carries).
+    let module_f64 = f64::from_bits(module_field.bits());
+    let str_ptr =
+        crate::value::js_get_string_pointer_unified(module_f64) as *const crate::StringHeader;
+    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+        return "";
+    }
+    let len = (*str_ptr).byte_len as usize;
+    let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
 }
 
 /// Return constant (non-method) property values for native modules.
@@ -1347,9 +1356,9 @@ pub(crate) unsafe fn get_native_module_constant(
     };
 
     // `zlib.constants` — the Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
-    // table Node exposes on `require('node:zlib').constants`. Values
-    // are taken straight from `node-internal/zlib/constants.h` (the
-    // upstream lib snapshots) so reads are byte-identical to Node.
+    // table Node exposes on `require('node:zlib').constants`. Match the
+    // JavaScript-visible table rather than blindly mirroring every zlib.h
+    // macro: modern Node exposes ZLIB_VERNUM but omits Z_TREES.
     // Required by axios for its stream wiring.
     let zlib_const = |prop: &str| -> Option<f64> {
         let v: i64 = match prop {
@@ -1364,6 +1373,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "Z_RLE" => 3,
             "Z_FIXED" => 4,
             "Z_DEFAULT_STRATEGY" => 0,
+            "ZLIB_VERNUM" => 0x1310,
             // Flush values
             "Z_NO_FLUSH" => 0,
             "Z_PARTIAL_FLUSH" => 1,
@@ -1371,7 +1381,6 @@ pub(crate) unsafe fn get_native_module_constant(
             "Z_FULL_FLUSH" => 3,
             "Z_FINISH" => 4,
             "Z_BLOCK" => 5,
-            "Z_TREES" => 6,
             // Return codes
             "Z_OK" => 0,
             "Z_STREAM_END" => 1,
@@ -1632,6 +1641,7 @@ pub(crate) unsafe fn get_native_module_constant(
             // packages feature-detect the Buffer surface without falling over.
             "kMaxLength" => Some(4294967296.0),
             "kStringMaxLength" => Some(536870888.0),
+            "INSPECT_MAX_BYTES" => Some(50.0),
             _ => None,
         },
         "buffer.constants" => match property {

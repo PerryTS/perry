@@ -2125,6 +2125,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "nextTick", false, None),
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
+    method("process", "loadEnvFile", false, None),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
     method("process", "threadCpuUsage", false, None),
@@ -2134,6 +2135,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "geteuid", false, None),
     method("process", "getgid", false, None),
     method("process", "getegid", false, None),
+    method("process", "getgroups", false, None),
+    method("process", "setuid", false, None),
+    method("process", "seteuid", false, None),
+    method("process", "setgid", false, None),
+    method("process", "setegid", false, None),
     method("process", "emitWarning", false, None),
     method("process", "on", false, None),
     method("process", "addListener", false, None),
@@ -2735,6 +2741,28 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "keepAliveMsecs", true, Some("Agent")),
     method("http", "keepAlive", true, Some("Agent")),
     method("http", "protocol", true, Some("Agent")),
+    // #2154 — sockets/freeSockets/requests accessors return `{}` for an
+    // idle agent; destroyed reflects whether `.destroy()` has been
+    // called; the `__set_*` rows enforce ERR_OUT_OF_RANGE on invalid
+    // writes (matches Node's `_http_agent.js` setter behavior);
+    // createConnection / createSocket closure pointers round-trip.
+    method("http", "__get_sockets", true, Some("Agent")),
+    method("http", "sockets", true, Some("Agent")),
+    method("http", "__get_freeSockets", true, Some("Agent")),
+    method("http", "freeSockets", true, Some("Agent")),
+    method("http", "__get_requests", true, Some("Agent")),
+    method("http", "requests", true, Some("Agent")),
+    method("http", "__get_destroyed", true, Some("Agent")),
+    method("http", "destroyed", true, Some("Agent")),
+    method("http", "__set_maxSockets", true, Some("Agent")),
+    method("http", "__set_maxFreeSockets", true, Some("Agent")),
+    method("http", "__set_maxTotalSockets", true, Some("Agent")),
+    method("http", "__set_keepAlive", true, Some("Agent")),
+    method("http", "__set_keepAliveMsecs", true, Some("Agent")),
+    method("http", "__set_createConnection", true, Some("Agent")),
+    method("http", "__set_createSocket", true, Some("Agent")),
+    method("http", "__get_createConnection", true, Some("Agent")),
+    method("http", "__get_createSocket", true, Some("Agent")),
     method("https", "createServer", false, None),
     // `https.Server(options, handler)` is Node's callable-constructor
     // alias for `createServer` (works with or without `new`). #2132.
@@ -3115,6 +3143,39 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (`js_node_http_server_address_json`) but missing from both
     // `NATIVE_MODULE_TABLE` and the manifest.
     method("http", "address", true, Some("HttpServer")),
+    // Issue #2210 — `server.<name>` timeout/socket-option accessors,
+    // plus the canonical `server.setTimeout(ms, cb)` method. Each
+    // accessor has two manifest entries (`__get_<name>` HIR-rewrite +
+    // bare-name fallback for receivers that escape the rewrite).
+    method("http", "__get_headersTimeout", true, Some("HttpServer")),
+    method("http", "__set_headersTimeout", true, Some("HttpServer")),
+    method("http", "headersTimeout", true, Some("HttpServer")),
+    method("http", "__get_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__set_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__get_requestTimeout", true, Some("HttpServer")),
+    method("http", "__set_requestTimeout", true, Some("HttpServer")),
+    method("http", "requestTimeout", true, Some("HttpServer")),
+    method("http", "__get_timeout", true, Some("HttpServer")),
+    method("http", "__set_timeout", true, Some("HttpServer")),
+    method("http", "timeout", true, Some("HttpServer")),
+    method("http", "__get_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "__set_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "maxHeadersCount", true, Some("HttpServer")),
+    method(
+        "http",
+        "__get_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method(
+        "http",
+        "__set_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method("http", "maxRequestsPerSocket", true, Some("HttpServer")),
+    method("http", "setTimeout", true, Some("HttpServer")),
     method("http", "on", true, Some("IncomingMessage")),
     method("http", "addListener", true, Some("IncomingMessage")),
     method("http", "pause", true, Some("IncomingMessage")),

@@ -637,11 +637,12 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
     let key_count = crate::array::js_array_length(keys) as usize;
     for i in 0..key_count {
         let stored = crate::array::js_array_get(keys, i as u32);
-        if stored.is_string() {
-            let stored_key = stored.as_string_ptr();
-            if crate::string::js_string_equals(key, stored_key) != 0 {
-                return; // already present
-            }
+        // #1781: SSO-aware match — pre-fix an existing inline-SSO key
+        // wasn't seen here, so `Object.defineProperty(obj, "id", ...)`
+        // on an object that already had `id` as an SSO key
+        // double-inserted instead of overwriting.
+        if crate::string::js_string_key_matches(stored, key) {
+            return; // already present
         }
     }
     // Clone shared keys array if needed, then append.
@@ -933,11 +934,10 @@ unsafe fn own_key_present(obj: *mut ObjectHeader, key: *const crate::StringHeade
     }
     for i in 0..key_count {
         let stored = crate::array::js_array_get(keys, i as u32);
-        if stored.is_string() {
-            let stored_key = stored.as_string_ptr();
-            if !stored_key.is_null() && crate::string::js_string_equals(key, stored_key) != 0 {
-                return true;
-            }
+        // #1781: SSO-aware match — `hasOwnProperty("id")` previously
+        // returned false when "id" lived as an inline SSO key.
+        if crate::string::js_string_key_matches(stored, key) {
+            return true;
         }
     }
     false
@@ -1002,25 +1002,20 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if key_val.is_string() {
-                let stored_key = key_val.as_string_ptr();
-                if !stored_key.is_null() {
-                    let stored_data =
-                        (stored_key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    let stored_len = (*stored_key).byte_len as usize;
-                    let stored_bytes = std::slice::from_raw_parts(stored_data, stored_len);
-                    if stored_bytes == key_bytes {
-                        let val = if i < alloc_limit {
-                            js_object_get_field(obj, i as u32)
-                        } else {
-                            match overflow_get(obj as usize, i) {
-                                Some(bits) => crate::JSValue::from_bits(bits),
-                                None => return f64::from_bits(TAG_UNDEF),
-                            }
-                        };
-                        return f64::from_bits(val.bits());
+            // #1781: SSO-aware match by byte slice — the
+            // own-property-or-undef path was the route through which
+            // hono's `c.req.X` dispatch decided to invoke the vtable
+            // getter, and pre-fix a SSO-stored `X` was invisible here.
+            if crate::string::js_string_key_matches_bytes(key_val, key_bytes) {
+                let val = if i < alloc_limit {
+                    js_object_get_field(obj, i as u32)
+                } else {
+                    match overflow_get(obj as usize, i) {
+                        Some(bits) => crate::JSValue::from_bits(bits),
+                        None => return f64::from_bits(TAG_UNDEF),
                     }
-                }
+                };
+                return f64::from_bits(val.bits());
             }
         }
         f64::from_bits(TAG_UNDEF)
@@ -1678,5 +1673,36 @@ mod sso_tests_1781 {
             )),
             "different content"
         );
+    }
+
+    /// #1781: an object with an inline-SSO key must answer
+    /// `hasOwnProperty("id")` truthfully. Pre-fix the
+    /// `is_string()`-gated keys-array iteration in `own_key_present`
+    /// skipped the SSO key silently and the call returned false.
+    #[test]
+    fn own_key_present_finds_sso_stored_key() {
+        unsafe {
+            let obj = super::super::alloc::js_object_alloc(0, 4);
+            // Build a keys array with a single SSO-tagged key directly
+            // (skipping `js_object_set_field_by_name`, which would
+            // intern the key to heap and bypass the SSO blind spot
+            // we're regression-testing).
+            let keys = crate::array::js_array_alloc(4);
+            let sso = JSValue::try_short_string(b"id").expect("SSO");
+            crate::array::js_array_push_f64(keys, f64::from_bits(sso.bits()));
+            super::super::set_object_keys_array(obj, keys);
+
+            let incoming = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+            assert!(
+                own_key_present(obj, incoming),
+                "SSO key 'id' should be visible to own_key_present"
+            );
+
+            let incoming_other = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+            assert!(
+                !own_key_present(obj, incoming_other),
+                "absent key 'tag' must not match"
+            );
+        }
     }
 }

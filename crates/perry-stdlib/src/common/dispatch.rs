@@ -296,14 +296,23 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     // zlib Transform streams (#1843): `zlib.createGzip()` etc. return handles
     // in the 0x60000+ range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
-    // `.close` calls lose their static type and route here. Gated on the
-    // registry AND the method vocabulary so a handle-id reused across another
-    // subsystem's registry can't misroute (handle id-spaces aren't unified —
-    // see the long comment above).
+    // `.params`/`.reset`/`.close` calls lose their static type and route here.
+    // Gated on the registry AND the method vocabulary so a handle-id reused
+    // across another subsystem's registry can't misroute (handle id-spaces
+    // aren't unified — see the long comment above).
     #[cfg(feature = "compression")]
     if matches!(
         method_name,
-        "write" | "end" | "on" | "once" | "pipe" | "flush" | "close" | "destroy"
+        "write"
+            | "end"
+            | "on"
+            | "once"
+            | "pipe"
+            | "flush"
+            | "params"
+            | "reset"
+            | "close"
+            | "destroy"
     ) && crate::zlib::is_zlib_stream_handle(handle)
     {
         // zlib streams are synchronous, so nothing else triggers the pump
@@ -321,7 +330,17 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
     if matches!(
         method_name,
-        "write" | "end" | "on" | "once" | "addListener" | "pipe" | "flush" | "close" | "destroy"
+        "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "flush"
+            | "params"
+            | "reset"
+            | "close"
+            | "destroy"
     ) {
         extern "C" {
             fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
@@ -793,10 +812,10 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
 /// Dispatch a method call on a zlib Transform-stream handle (#1843).
 ///
 /// `createGzip()` / `createDeflate()` / `createBrotliCompress()` / … return
-/// handles whose `.write`/`.end`/`.on`/`.pipe`/`.flush`/`.close` lose their
-/// static type and arrive here. Compression is synchronous and buffered in the
-/// runtime: `.write()` accumulates input, `.end()` runs the codec and queues
-/// 'data'/'end' onto the deferred-event pump.
+/// handles whose `.write`/`.end`/`.on`/`.pipe`/`.flush`/`.params`/`.reset`/
+/// `.close` lose their static type and arrive here. Compression is synchronous
+/// and buffered in the runtime: `.write()` accumulates input, `.end()` runs the
+/// codec and queues 'data'/'end' onto the deferred-event pump.
 #[cfg(feature = "compression")]
 unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64]) -> f64 {
     fn unbox_to_i64(v: f64) -> i64 {
@@ -843,6 +862,20 @@ unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64]) -> f64 {
                 .map(|a| unbox_to_i64(*a))
                 .unwrap_or(0);
             crate::zlib::zlib_stream_flush(handle, cb);
+            f64::from_bits(UNDEFINED)
+        }
+        "params" => {
+            let cb = args
+                .iter()
+                .rev()
+                .find(|a| (a.to_bits() >> 48) == 0x7FFD)
+                .map(|a| unbox_to_i64(*a))
+                .unwrap_or(0);
+            crate::zlib::zlib_stream_params(handle, cb);
+            f64::from_bits(UNDEFINED)
+        }
+        "reset" => {
+            crate::zlib::zlib_stream_reset(handle);
             f64::from_bits(UNDEFINED)
         }
         _ => f64::from_bits(UNDEFINED),
@@ -1057,6 +1090,9 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // bind a closure here so the typeof short-circuit sees "function".
     #[cfg(feature = "compression")]
     if crate::zlib::is_zlib_stream_handle(handle) {
+        if property_name == "bytesWritten" {
+            return crate::zlib::zlib_stream_bytes_written(handle);
+        }
         let method: Option<&'static [u8]> = match property_name {
             "write" => Some(b"write"),
             "end" => Some(b"end"),
@@ -1065,6 +1101,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             "emit" => Some(b"emit"),
             "pipe" => Some(b"pipe"),
             "flush" => Some(b"flush"),
+            "params" => Some(b"params"),
+            "reset" => Some(b"reset"),
             "removeListener" => Some(b"removeListener"),
             "removeAllListeners" => Some(b"removeAllListeners"),
             _ => None,

@@ -1,7 +1,16 @@
 use super::*;
 
+fn throw_invalid_buffer_from_first_arg() -> ! {
+    let message = b"The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object.";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Create a Buffer from a string
-/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary, 5 = ascii
+/// encoding: 0 = utf8 (default), 1 = hex, 2 = base64, 3 = base64url,
+/// 4 = latin1/binary, 5 = ascii, 6 = utf16le/ucs2.
 #[no_mangle]
 pub extern "C" fn js_buffer_from_string(
     str_ptr: *const StringHeader,
@@ -34,6 +43,7 @@ fn buffer_from_str_bytes(str_bytes: &[u8], encoding: i32) -> *mut BufferHeader {
             1 => hex_decode_into_buffer(str_bytes),
             2 | 3 => base64_decode_into_buffer(str_bytes),
             4 | 5 => latin1_string_to_buffer(str_bytes),
+            6 => buffer_from_vec(utf16le_string_bytes(str_bytes)),
             _ => {
                 // UTF-8 (default)
                 let len = str_bytes.len();
@@ -46,19 +56,17 @@ fn buffer_from_str_bytes(str_bytes: &[u8], encoding: i32) -> *mut BufferHeader {
     }
 }
 
-/// Encode a JS string as Node's `latin1`/`binary` Buffer input encoding.
-///
-/// Perry strings are stored as UTF-8, while Node's latin1 encoder writes the
-/// low byte of each JS code point. This keeps high-bit bytes in binary-over-
-/// string payloads from being expanded into UTF-8 multibyte sequences.
-/// `ascii` uses the same input-encoding behavior in modern Node, so it
-/// shares this path.
-fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
-    let decoded = String::from_utf8_lossy(str_bytes);
-    let mut out = Vec::with_capacity(decoded.chars().count());
-    for ch in decoded.chars() {
-        out.push((ch as u32 & 0xFF) as u8);
+pub(crate) fn buffer_string_bytes_for_encoding(str_bytes: &[u8], encoding: i32) -> Vec<u8> {
+    match encoding {
+        1 => decode_hex(str_bytes),
+        2 | 3 => decode_base64(str_bytes),
+        4 | 5 => latin1_string_bytes(str_bytes),
+        6 => utf16le_string_bytes(str_bytes),
+        _ => str_bytes.to_vec(),
     }
+}
+
+fn buffer_from_vec(out: Vec<u8>) -> *mut BufferHeader {
     unsafe {
         let buf = buffer_alloc(out.len() as u32);
         (*buf).length = out.len() as u32;
@@ -67,6 +75,35 @@ fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
         }
         buf
     }
+}
+
+/// Encode a JS string as Node's `latin1`/`binary` Buffer input encoding.
+///
+/// Perry strings are stored as UTF-8, while Node's latin1 encoder writes the
+/// low byte of each JS code point. This keeps high-bit bytes in binary-over-
+/// string payloads from being expanded into UTF-8 multibyte sequences.
+/// `ascii` uses the same input-encoding behavior in modern Node, so it
+/// shares this path.
+fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
+    buffer_from_vec(latin1_string_bytes(str_bytes))
+}
+
+fn latin1_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
+    let decoded = String::from_utf8_lossy(str_bytes);
+    let mut out = Vec::with_capacity(decoded.chars().count());
+    for ch in decoded.chars() {
+        out.push((ch as u32 & 0xFF) as u8);
+    }
+    out
+}
+
+fn utf16le_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
+    let decoded = String::from_utf8_lossy(str_bytes);
+    let mut out = Vec::with_capacity(decoded.len() * 2);
+    for unit in decoded.encode_utf16() {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out
 }
 
 /// Map a JS string value (NaN-boxed, pointer-tagged, or raw `*const StringHeader`
@@ -78,6 +115,7 @@ fn latin1_string_to_buffer(str_bytes: &[u8]) -> *mut BufferHeader {
 /// - 3 = base64url encode tag (decode uses the same permissive table)
 /// - 4 = latin1 / binary
 /// - 5 = ascii
+/// - 6 = utf16le / utf-16le / ucs2 / ucs-2
 ///
 /// Used by codegen for non-literal encoding arguments to `Buffer.from(str, enc)`
 /// and `buf.toString(enc)` where the encoding expression cannot be statically
@@ -116,6 +154,12 @@ pub extern "C" fn js_encoding_tag_from_value(value: f64) -> i32 {
             4
         } else if eq_ascii_lower(bytes, b"ascii") {
             5
+        } else if eq_ascii_lower(bytes, b"utf16le")
+            || eq_ascii_lower(bytes, b"utf-16le")
+            || eq_ascii_lower(bytes, b"ucs2")
+            || eq_ascii_lower(bytes, b"ucs-2")
+        {
+            6
         } else {
             // utf8, utf-8, and unknown fall through to UTF-8.
             // Matches the runtime's `_ =>` arm in js_buffer_from_string/js_buffer_to_string.
@@ -124,12 +168,123 @@ pub extern "C" fn js_encoding_tag_from_value(value: f64) -> i32 {
     }
 }
 
+fn buffer_byte_from_js_value(value: f64) -> u8 {
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_finite() {
+        ((number as i64) & 0xFF) as u8
+    } else {
+        0
+    }
+}
+
+unsafe fn buffer_from_object_value_of(
+    ptr: usize,
+    original_value: f64,
+    encoding: i32,
+) -> Option<*mut BufferHeader> {
+    if ptr < 0x1000 {
+        return None;
+    }
+    let gc_type = *((ptr - crate::gc::GC_HEADER_SIZE) as *const u8);
+    if gc_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+
+    let value_of_key = js_string_from_bytes(b"valueOf".as_ptr(), 7);
+    let value_of = crate::object::js_object_get_field_by_name(
+        ptr as *const crate::object::ObjectHeader,
+        value_of_key,
+    );
+    if !value_of.is_pointer() {
+        return None;
+    }
+    let closure_ptr = value_of.as_pointer::<u8>() as usize;
+    if !crate::closure::is_closure_ptr(closure_ptr) {
+        return None;
+    }
+
+    let converted = crate::object::js_native_call_method(
+        original_value,
+        b"valueOf".as_ptr() as *const i8,
+        7,
+        ptr::null(),
+        0,
+    );
+    if converted.to_bits() == original_value.to_bits() {
+        return None;
+    }
+    let converted_value = crate::JSValue::from_bits(converted.to_bits());
+    if converted_value.is_null() || converted_value.is_undefined() {
+        return None;
+    }
+    if converted_value.is_any_string() || converted_value.is_pointer() {
+        return Some(js_buffer_from_value(converted.to_bits() as i64, encoding));
+    }
+    None
+}
+
+unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader> {
+    if ptr < 0x1000 {
+        return None;
+    }
+    let gc_type = *((ptr - crate::gc::GC_HEADER_SIZE) as *const u8);
+    if gc_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+
+    let length_key = js_string_from_bytes(b"length".as_ptr(), 6);
+    let length_value = crate::object::js_object_get_field_by_name(
+        ptr as *const crate::object::ObjectHeader,
+        length_key,
+    );
+    if length_value.is_undefined() {
+        return None;
+    }
+
+    let length = if length_value.is_int32() {
+        length_value.as_int32() as f64
+    } else if length_value.is_number() {
+        length_value.as_number()
+    } else {
+        return Some(buffer_alloc(0));
+    };
+
+    if !length.is_finite() || length <= 0.0 {
+        return Some(buffer_alloc(0));
+    }
+
+    let len = length.trunc().min(u32::MAX as f64) as u32;
+    let buf = buffer_alloc(len);
+    (*buf).length = len;
+    let buf_data = buffer_data_mut(buf);
+
+    for i in 0..len {
+        let value = crate::object::js_object_get_index_polymorphic(ptr as i64, i as f64);
+        *buf_data.add(i as usize) = buffer_byte_from_js_value(value);
+    }
+
+    Some(buf)
+}
+
+unsafe fn buffer_from_object_to_primitive(value: f64, encoding: i32) -> Option<*mut BufferHeader> {
+    let primitive = crate::symbol::js_to_primitive(value, 2);
+    if primitive.to_bits() == value.to_bits() {
+        return None;
+    }
+    let primitive_value = crate::JSValue::from_bits(primitive.to_bits());
+    if primitive_value.is_any_string() {
+        return Some(js_buffer_from_value(primitive.to_bits() as i64, encoding));
+    }
+    None
+}
+
 /// Create a Buffer from a value (auto-detects string vs array vs buffer)
 /// This is used by Buffer.from() which accepts multiple input types.
 #[no_mangle]
 pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut BufferHeader {
     let bits = value as u64;
     let jsval = crate::JSValue::from_bits(bits);
+    let value_f64 = f64::from_bits(bits);
 
     // Check if it's a NaN-boxed heap string
     if jsval.is_string() {
@@ -150,6 +305,17 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
         let mut tmp = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let len = jsval.short_string_to_buf(&mut tmp);
         return buffer_from_str_bytes(&tmp[..len], encoding);
+    }
+
+    if jsval.is_undefined()
+        || jsval.is_null()
+        || jsval.is_bool()
+        || jsval.is_int32()
+        || jsval.is_number()
+        || jsval.is_bigint()
+        || unsafe { crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 }
+    {
+        throw_invalid_buffer_from_first_arg();
     }
 
     // Extract the raw pointer
@@ -196,6 +362,12 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
             }
             buf
         }
+    } else if let Some(buf) = unsafe { buffer_from_object_value_of(ptr, value_f64, encoding) } {
+        buf
+    } else if let Some(buf) = unsafe { buffer_from_array_like_object(ptr) } {
+        buf
+    } else if let Some(buf) = unsafe { buffer_from_object_to_primitive(value_f64, encoding) } {
+        buf
     } else {
         // Assume it's an array of numbers
         js_buffer_from_array(ptr as *const ArrayHeader)
@@ -225,22 +397,7 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
         let buf_data = buffer_data_mut(buf);
 
         for i in 0..len {
-            let val = *arr_data.add(i);
-            // Array elements may be NaN-boxed INT32, raw f64 numbers, or
-            // NaN-boxed pointers/strings (rare for byte literals). Decode
-            // numeric kinds; non-numeric values become 0.
-            let bits = val.to_bits();
-            let top16 = bits >> 48;
-            let byte = if top16 == 0x7FFE {
-                // INT32_TAG: lower 32 bits are an i32
-                ((bits as u32) & 0xFF) as u8
-            } else if !val.is_nan() {
-                // Raw double — convert via i64 to handle negatives correctly
-                ((val as i64) & 0xFF) as u8
-            } else {
-                0
-            };
-            *buf_data.add(i) = byte;
+            *buf_data.add(i) = buffer_byte_from_js_value(*arr_data.add(i));
         }
 
         buf
@@ -434,10 +591,42 @@ pub extern "C" fn js_data_view_new(value: f64) -> f64 {
     value
 }
 
+fn throw_buffer_alloc_size_out_of_range() -> ! {
+    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_RANGE_ERROR.call_once(|| {
+        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
+    });
+    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
+    unsafe {
+        let set = |key: &[u8], value: f64| {
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
+        };
+        let str_val = |s: &[u8]| -> f64 {
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
+        };
+        set(b"name", str_val(b"RangeError"));
+        set(b"code", str_val(b"ERR_OUT_OF_RANGE"));
+        set(
+            b"message",
+            str_val(b"The value of \"size\" is out of range"),
+        );
+    }
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
+fn validate_buffer_alloc_size(size: i32) -> u32 {
+    if size < 0 {
+        throw_buffer_alloc_size_out_of_range();
+    }
+    size as u32
+}
+
 /// Allocate a zero-filled buffer
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc(size: i32, fill: i32) -> *mut BufferHeader {
-    let size = size.max(0) as u32;
+    let size = validate_buffer_alloc_size(size);
     let buf = buffer_alloc(size);
     unsafe {
         (*buf).length = size;
@@ -456,7 +645,7 @@ pub extern "C" fn js_buffer_alloc_fill_value(
     fill_value: f64,
     encoding: i32,
 ) -> *mut BufferHeader {
-    let size = size.max(0) as u32;
+    let size = validate_buffer_alloc_size(size);
     let buf = buffer_alloc(size);
     unsafe {
         (*buf).length = size;
@@ -562,10 +751,101 @@ pub extern "C" fn js_buffer_fill_range(
     buf
 }
 
+/// Fill an existing buffer by repeating/truncating a Node-compatible fill value.
+#[no_mangle]
+pub extern "C" fn js_buffer_fill_value_range(
+    buf: *mut BufferHeader,
+    fill_value: f64,
+    start: i32,
+    end: i32,
+    encoding: i32,
+) -> *mut BufferHeader {
+    if buf.is_null() || (buf as u64) < 0x1000 {
+        return buf;
+    }
+    let buf = {
+        let bits = buf as u64;
+        let top16 = (bits >> 48) as u16;
+        if top16 >= 0x7FF8 {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as *mut BufferHeader
+        } else {
+            buf
+        }
+    };
+    unsafe {
+        let len = (*buf).length as usize;
+        let start = if start < 0 {
+            ((len as i32) + start).max(0) as usize
+        } else {
+            (start as usize).min(len)
+        };
+        let end = if end < 0 {
+            ((len as i32) + end).max(0) as usize
+        } else {
+            (end as usize).min(len)
+        };
+        if start >= end {
+            return buf;
+        }
+
+        let data = buffer_data_mut(buf);
+        let dst = data.add(start);
+        let count = end - start;
+        let bits = fill_value.to_bits();
+        let jsval = crate::JSValue::from_bits(bits);
+
+        let write_byte = |byte: u8| {
+            ptr::write_bytes(dst, byte, count);
+            super::view::propagate_written_range_from_receiver(
+                buf as usize,
+                start as u32,
+                dst,
+                count as u32,
+            );
+        };
+
+        if jsval.is_number() {
+            write_byte(fill_value as i64 as u8);
+            return buf;
+        }
+        if jsval.is_int32() {
+            write_byte(jsval.as_int32() as u8);
+            return buf;
+        }
+        if jsval.is_bool() {
+            write_byte(if jsval.as_bool() { 1 } else { 0 });
+            return buf;
+        }
+        if jsval.is_undefined() || jsval.is_null() {
+            write_byte(0);
+            return buf;
+        }
+
+        let src = js_buffer_from_value(bits as i64, encoding);
+        if src.is_null() || (*src).length == 0 {
+            write_byte(0);
+            return buf;
+        }
+
+        let src_len = (*src).length as usize;
+        let src_data = buffer_data(src);
+        for i in 0..count {
+            *dst.add(i) = *src_data.add(i % src_len);
+        }
+        super::view::propagate_written_range_from_receiver(
+            buf as usize,
+            start as u32,
+            dst,
+            count as u32,
+        );
+    }
+    buf
+}
+
 /// Allocate an uninitialized buffer
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader {
-    let size = size.max(0) as u32;
+    let size = validate_buffer_alloc_size(size);
     let buf = buffer_alloc(size);
     unsafe {
         (*buf).length = size;
