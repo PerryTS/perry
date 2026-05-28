@@ -1279,6 +1279,96 @@ fn escape_string(s: &str) -> String {
 /// When the first array element isn't a string, Node falls back to
 /// space-joining every arg through `util.inspect` — same here, going
 /// through `format_jsvalue` for parity with `console.log`.
+// `%j` must turn circular `JSON.stringify` failures into a whole-placeholder
+// `[Circular]`. Perry's exceptions longjmp through generated try frames, so
+// preflight the JSON-visible graph instead of attempting to catch here.
+unsafe fn util_format_json_arg_has_cycle(value: f64) -> bool {
+    let mut stack = Vec::new();
+    util_format_json_value_has_cycle(value, &mut stack)
+}
+
+unsafe fn util_format_json_value_has_cycle(value: f64, stack: &mut Vec<usize>) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>();
+        return util_format_json_ptr_has_cycle(ptr, stack);
+    }
+    if looks_like_raw_heap_pointer(value) {
+        return util_format_json_ptr_has_cycle(value.to_bits() as *const u8, stack);
+    }
+    false
+}
+
+unsafe fn util_format_json_ptr_has_cycle(ptr: *const u8, stack: &mut Vec<usize>) -> bool {
+    let addr = ptr as usize;
+    if addr < 0x100000
+        || crate::buffer::is_registered_buffer(addr)
+        || crate::symbol::is_registered_symbol(addr)
+    {
+        return false;
+    }
+    let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    match (*gc_header).obj_type {
+        crate::gc::GC_TYPE_ARRAY => util_format_json_array_has_cycle(ptr, stack),
+        crate::gc::GC_TYPE_OBJECT => util_format_json_object_has_cycle(ptr, stack),
+        _ => false,
+    }
+}
+
+unsafe fn util_format_json_array_has_cycle(ptr: *const u8, stack: &mut Vec<usize>) -> bool {
+    let addr = ptr as usize;
+    if stack.contains(&addr) {
+        return true;
+    }
+    stack.push(addr);
+
+    let arr = ptr as *const crate::ArrayHeader;
+    let len = (*arr).length as usize;
+    let elements = ptr.add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let found = (0..len).any(|i| {
+        let value = *elements.add(i);
+        let bits = value.to_bits();
+        bits != crate::value::TAG_UNDEFINED
+            && !crate::json::is_closure_value(bits)
+            && util_format_json_value_has_cycle(value, stack)
+    });
+
+    stack.pop();
+    found
+}
+
+unsafe fn util_format_json_object_has_cycle(ptr: *const u8, stack: &mut Vec<usize>) -> bool {
+    let addr = ptr as usize;
+    if stack.contains(&addr) {
+        return true;
+    }
+    stack.push(addr);
+
+    let obj = ptr as *const crate::ObjectHeader;
+    let keys_arr = (*obj).keys_array;
+    let found = if keys_arr.is_null() {
+        false
+    } else {
+        let keys_len = (*keys_arr).length;
+        let num_fields = (*obj).field_count;
+        let fields_ptr = ptr.add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+        let alloc_limit = std::cmp::max(num_fields, 8);
+        (0..keys_len).any(|f| {
+            let bits = if f < alloc_limit {
+                (*fields_ptr.add(f as usize)).to_bits()
+            } else {
+                crate::object::js_object_get_field(obj, f).bits()
+            };
+            bits != crate::value::TAG_UNDEFINED
+                && !crate::json::is_closure_value(bits)
+                && util_format_json_value_has_cycle(f64::from_bits(bits), stack)
+        })
+    };
+
+    stack.pop();
+    found
+}
+
 #[no_mangle]
 pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f64 {
     use crate::value::JSValue;
@@ -1459,10 +1549,15 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'j' => {
-                    // Real JSON.stringify — string-replace post-processing
-                    // of inspect output mangles strings that contain
-                    // ", ", ": ", "{ ", or " }".
                     unsafe {
+                        if util_format_json_arg_has_cycle(val) {
+                            out.push_str("[Circular]");
+                            i += 2;
+                            continue;
+                        }
+                        // Real JSON.stringify — string-replace post-processing
+                        // of inspect output mangles strings that contain
+                        // ", ", ": ", "{ ", or " }".
                         let s_ptr = crate::json::js_json_stringify(val, 0);
                         if s_ptr.is_null() {
                             out.push_str("undefined");
