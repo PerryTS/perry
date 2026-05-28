@@ -562,6 +562,97 @@ pub extern "C" fn js_buffer_fill_range(
     buf
 }
 
+/// Fill an existing buffer by repeating/truncating a Node-compatible fill value.
+#[no_mangle]
+pub extern "C" fn js_buffer_fill_value_range(
+    buf: *mut BufferHeader,
+    fill_value: f64,
+    start: i32,
+    end: i32,
+    encoding: i32,
+) -> *mut BufferHeader {
+    if buf.is_null() || (buf as u64) < 0x1000 {
+        return buf;
+    }
+    let buf = {
+        let bits = buf as u64;
+        let top16 = (bits >> 48) as u16;
+        if top16 >= 0x7FF8 {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as *mut BufferHeader
+        } else {
+            buf
+        }
+    };
+    unsafe {
+        let len = (*buf).length as usize;
+        let start = if start < 0 {
+            ((len as i32) + start).max(0) as usize
+        } else {
+            (start as usize).min(len)
+        };
+        let end = if end < 0 {
+            ((len as i32) + end).max(0) as usize
+        } else {
+            (end as usize).min(len)
+        };
+        if start >= end {
+            return buf;
+        }
+
+        let data = buffer_data_mut(buf);
+        let dst = data.add(start);
+        let count = end - start;
+        let bits = fill_value.to_bits();
+        let jsval = crate::JSValue::from_bits(bits);
+
+        let write_byte = |byte: u8| {
+            ptr::write_bytes(dst, byte, count);
+            super::view::propagate_written_range_from_receiver(
+                buf as usize,
+                start as u32,
+                dst,
+                count as u32,
+            );
+        };
+
+        if jsval.is_number() {
+            write_byte(fill_value as i64 as u8);
+            return buf;
+        }
+        if jsval.is_int32() {
+            write_byte(jsval.as_int32() as u8);
+            return buf;
+        }
+        if jsval.is_bool() {
+            write_byte(if jsval.as_bool() { 1 } else { 0 });
+            return buf;
+        }
+        if jsval.is_undefined() || jsval.is_null() {
+            write_byte(0);
+            return buf;
+        }
+
+        let src = js_buffer_from_value(bits as i64, encoding);
+        if src.is_null() || (*src).length == 0 {
+            write_byte(0);
+            return buf;
+        }
+
+        let src_len = (*src).length as usize;
+        let src_data = buffer_data(src);
+        for i in 0..count {
+            *dst.add(i) = *src_data.add(i % src_len);
+        }
+        super::view::propagate_written_range_from_receiver(
+            buf as usize,
+            start as u32,
+            dst,
+            count as u32,
+        );
+    }
+    buf
+}
+
 /// Allocate an uninitialized buffer
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader {

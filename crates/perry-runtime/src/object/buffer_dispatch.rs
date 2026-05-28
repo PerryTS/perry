@@ -398,7 +398,16 @@ pub unsafe fn dispatch_buffer_method(
             let len = (*buf_ptr).length as i32;
             let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
             let end = if args.len() >= 3 { arg_i32(2) } else { len };
-            let result = crate::buffer::js_buffer_fill_range(buf_ptr, arg_i32(0), start, end);
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+            let enc = if args.len() >= 4 {
+                crate::buffer::js_encoding_tag_from_value(args[3])
+            } else {
+                0
+            };
+            let result = crate::buffer::js_buffer_fill_value_range(buf_ptr, value, start, end, enc);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "equals" => {
