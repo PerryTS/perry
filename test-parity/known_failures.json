@@ -296,12 +296,6 @@
     "category": "bug-open",
     "reason": "node:stream: write() return + drain event semantics not delivered. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/object-mode/transform-object-mode": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Transform objectMode + data event chain doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/error/error-event": {
     "issue": "1532",
     "added": "2026-05-23",
