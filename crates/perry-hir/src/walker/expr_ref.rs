@@ -335,9 +335,16 @@ where
             f(count);
         }
 
-        Expr::UrlSearchParamsForEach { params, callback } => {
+        Expr::UrlSearchParamsForEach {
+            params,
+            callback,
+            this_arg,
+        } => {
             f(params);
             f(callback);
+            if let Some(this_arg) = this_arg {
+                f(this_arg);
+            }
         }
 
         Expr::TaggedTemplateStrings { cooked, .. } => {

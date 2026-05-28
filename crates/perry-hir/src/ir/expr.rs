@@ -1660,10 +1660,11 @@ pub enum Expr {
     UrlSearchParamsValues(Box<Expr>),
     /// params.sort() -> undefined (mutates in place)
     UrlSearchParamsSort(Box<Expr>),
-    /// params.forEach(callback) -> undefined
+    /// params.forEach(callback[, thisArg]) -> undefined
     UrlSearchParamsForEach {
         params: Box<Expr>,
         callback: Box<Expr>,
+        this_arg: Option<Box<Expr>>,
     },
 
     // Delete operator

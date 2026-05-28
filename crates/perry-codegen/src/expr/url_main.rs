@@ -414,13 +414,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
         }
 
-        Expr::UrlSearchParamsForEach { params, callback } => {
+        Expr::UrlSearchParamsForEach {
+            params,
+            callback,
+            this_arg,
+        } => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let cb_v = lower_expr(ctx, callback)?;
+            let this_v = if let Some(this_arg) = this_arg {
+                lower_expr(ctx, this_arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             ctx.block().call_void(
                 "js_url_search_params_for_each",
-                &[(I64, &p_ptr), (DOUBLE, &cb_v)],
+                &[(I64, &p_ptr), (DOUBLE, &cb_v), (DOUBLE, &this_v)],
             );
             Ok(ctx
                 .block()

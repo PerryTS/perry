@@ -790,7 +790,11 @@ pub extern "C" fn js_url_search_params_sort(params: *mut ObjectHeader) {
 }
 
 #[no_mangle]
-pub extern "C" fn js_url_search_params_for_each(params: *mut ObjectHeader, callback: f64) {
+pub extern "C" fn js_url_search_params_for_each(
+    params: *mut ObjectHeader,
+    callback: f64,
+    this_arg: f64,
+) {
     let entries = get_url_search_params_entries(params);
     let this_value = crate::value::js_nanbox_pointer(params as i64);
     for (key, value) in entries {
@@ -800,7 +804,9 @@ pub extern "C" fn js_url_search_params_for_each(params: *mut ObjectHeader, callb
             this_value,
         ];
         unsafe {
+            let prev_this = crate::object::js_implicit_this_set(this_arg);
             let _ = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+            crate::object::js_implicit_this_set(prev_this);
         }
     }
 }
