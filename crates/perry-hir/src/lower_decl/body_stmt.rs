@@ -127,7 +127,7 @@ fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     }
 }
 
-fn insert_iterator_return_before_breaks(
+fn insert_iterator_return_before_abrupts(
     stmts: &mut Vec<Stmt>,
     iter_id: LocalId,
     needs_await: bool,
@@ -139,14 +139,26 @@ fn insert_iterator_return_before_breaks(
                 rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
                 rewritten.push(Stmt::Break);
             }
+            Stmt::LabeledBreak(label) => {
+                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
+                rewritten.push(Stmt::LabeledBreak(label));
+            }
+            Stmt::Return(value) => {
+                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
+                rewritten.push(Stmt::Return(value));
+            }
+            Stmt::Throw(expr) => {
+                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
+                rewritten.push(Stmt::Throw(expr));
+            }
             Stmt::If {
                 condition,
                 mut then_branch,
                 mut else_branch,
             } => {
-                insert_iterator_return_before_breaks(&mut then_branch, iter_id, needs_await);
+                insert_iterator_return_before_abrupts(&mut then_branch, iter_id, needs_await);
                 if let Some(else_stmts) = else_branch.as_mut() {
-                    insert_iterator_return_before_breaks(else_stmts, iter_id, needs_await);
+                    insert_iterator_return_before_abrupts(else_stmts, iter_id, needs_await);
                 }
                 rewritten.push(Stmt::If {
                     condition,
@@ -169,38 +181,9 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             result.push(Stmt::Return(value));
         }
         ast::Stmt::If(if_stmt) => {
-            let condition = lower_expr(ctx, &if_stmt.test)?;
-            // Each branch introduces its own lexical scope for let/const.
-            // Skip the extra push if the branch is already a BlockStmt (which
-            // will push its own scope via lower_block_stmt_scoped), or another
-            // If (else-if chain) which handles its own scoping.
-            let then_branch = if matches!(*if_stmt.cons, ast::Stmt::Block(_)) {
-                lower_body_stmt(ctx, &if_stmt.cons)?
-            } else {
-                let mark = ctx.push_block_scope();
-                let stmts = lower_body_stmt(ctx, &if_stmt.cons)?;
-                ctx.pop_block_scope(mark);
-                stmts
-            };
-            let else_branch = if_stmt
-                .alt
-                .as_ref()
-                .map(|s| {
-                    if matches!(**s, ast::Stmt::Block(_)) || matches!(**s, ast::Stmt::If(_)) {
-                        lower_body_stmt(ctx, s)
-                    } else {
-                        let mark = ctx.push_block_scope();
-                        let stmts = lower_body_stmt(ctx, s);
-                        ctx.pop_block_scope(mark);
-                        stmts
-                    }
-                })
-                .transpose()?;
-            result.push(Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            });
+            // #2277: `typeof x === "string"` narrowing — see typeof_narrow.rs.
+            let stmt = typeof_narrow::lower_if_with_narrowing(ctx, if_stmt, lower_body_stmt)?;
+            result.push(stmt);
         }
         ast::Stmt::Block(block) => {
             // Bare block: introduce a lexical scope so let/const shadow
@@ -1164,7 +1147,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 });
                 let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
                 if is_node_readable_for_await {
-                    insert_iterator_return_before_breaks(&mut user_body, iter_id, needs_await);
+                    insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
                 }
                 body_stmts.extend(user_body);
                 body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));

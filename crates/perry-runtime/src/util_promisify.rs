@@ -38,6 +38,7 @@ use crate::promise::{js_promise_new, js_promise_reject, js_promise_resolve, Prom
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_NULL, TAG_UNDEFINED};
 
 const TAG_UNDEFINED_F64: f64 = unsafe { std::mem::transmute::<u64, f64>(TAG_UNDEFINED) };
+const PROMISIFY_CUSTOM_KEY: &[u8] = b"nodejs.util.promisify.custom";
 
 fn nanbox_pointer(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
@@ -50,6 +51,53 @@ fn nanbox_promise(p: *mut Promise) -> f64 {
 fn err_is_nullish(err: f64) -> bool {
     let bits = err.to_bits();
     bits == TAG_UNDEFINED || bits == TAG_NULL
+}
+
+pub(crate) fn promisify_custom_symbol() -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = crate::string::js_string_from_bytes(
+        PROMISIFY_CUSTOM_KEY.as_ptr(),
+        PROMISIFY_CUSTOM_KEY.len() as u32,
+    );
+    let key_handle = scope.root_string_ptr(key);
+    let key_value = f64::from_bits(
+        JSValue::string_ptr(key_handle.get_raw_const_ptr::<crate::StringHeader>() as *mut _).bits(),
+    );
+    unsafe { crate::symbol::js_symbol_for(key_value) }
+}
+
+fn is_callable_closure(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits & TAG_MASK) != POINTER_TAG {
+        return false;
+    }
+    let ptr = (bits & POINTER_MASK) as usize;
+    crate::closure::is_closure_ptr(ptr)
+}
+
+fn custom_promisified_value(fn_value: f64) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+    let custom_symbol = promisify_custom_symbol();
+    let symbol_handle = scope.root_nanbox_f64(custom_symbol);
+    let custom_value = unsafe {
+        crate::symbol::js_object_get_symbol_property(
+            fn_handle.get_nanbox_f64(),
+            symbol_handle.get_nanbox_f64(),
+        )
+    };
+    if !is_callable_closure(custom_value) {
+        return None;
+    }
+    let custom_handle = scope.root_nanbox_f64(custom_value);
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            custom_handle.get_nanbox_f64(),
+            symbol_handle.get_nanbox_f64(),
+            custom_handle.get_nanbox_f64(),
+        );
+    }
+    Some(custom_handle.get_nanbox_f64())
 }
 
 fn register_thunks_once() {
@@ -85,6 +133,10 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
     let tag = bits & TAG_MASK;
     if tag != POINTER_TAG {
         return fn_value;
+    }
+
+    if let Some(custom) = custom_promisified_value(fn_value) {
+        return custom;
     }
 
     // #1857: `child_process.exec` / `execFile` carry a Node custom-promisify

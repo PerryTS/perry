@@ -222,12 +222,12 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
             f64::from_bits(TAG_TRUE),
         );
         mark_writable_finished(stream);
+        if is_callable_value(callback) {
+            call_listener_args(stream, callback, &[]);
+        }
         let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
         mark_stream_closed(stream);
         let _ = emit_stream_event(stream, string_value(b"close"), &[]);
-    }
-    if is_callable_value(callback) {
-        call_listener_args(stream, callback, &[]);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -270,9 +270,9 @@ extern "C" fn ns_async_dispose(closure: *const ClosureHeader) -> f64 {
     resolved_promise(f64::from_bits(TAG_UNDEFINED))
 }
 
-extern "C" fn ns_read1(closure: *const ClosureHeader, _n: f64) -> f64 {
+extern "C" fn ns_read1(closure: *const ClosureHeader, n: f64) -> f64 {
     let stream = this_value(closure);
-    read_stream_default_size(stream)
+    read_stream_with_size_arg(stream, n)
 }
 
 extern "C" fn ns_set_encoding1(closure: *const ClosureHeader, encoding: f64) -> f64 {
@@ -921,10 +921,10 @@ pub extern "C" fn js_node_stream_method_allow_half_open(stream_handle: i64) -> f
 }
 
 #[no_mangle]
-pub extern "C" fn js_node_stream_method_read(stream_handle: i64, _n: f64) -> f64 {
+pub extern "C" fn js_node_stream_method_read(stream_handle: i64, n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
     mark_disturbed(stream);
-    read_stream_default_size(stream)
+    read_stream_with_size_arg(stream, n)
 }
 
 #[no_mangle]
@@ -1315,6 +1315,9 @@ extern "C" fn ns_iter_to_array(closure: *const ClosureHeader, opts: f64) -> f64 
     if !arr.is_null() {
         out = extend_with_array(out, arr);
     }
+    mark_stream_ended(this);
+    clear_readable_buffer(this);
+    destroy_stream(this, f64::from_bits(TAG_UNDEFINED));
     settle_consuming(this, opts, box_pointer(out as *const u8))
 }
 
@@ -2404,10 +2407,27 @@ fn clear_readable_buffer(stream: f64) {
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
+    set_hidden_value(stream, hidden_key(b"readableLength"), 0.0);
+}
+
+fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
+    let size_value = JSValue::from_bits(size.to_bits());
+    if size_value.is_undefined() || !size_value.is_number() {
+        return read_stream_default_size(stream);
+    }
+    let size = size_value.as_number();
+    if size.is_nan() {
+        return read_stream_default_size(stream);
+    }
+    read_stream_exact_size(stream, size.trunc())
 }
 
 fn read_stream_default_size(stream: f64) -> f64 {
     invoke_read_once(stream);
+    read_stream_available_default(stream)
+}
+
+fn read_stream_available_default(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
         if stream_hidden_ended(stream) {
             refresh_readable_aborted_flag(stream);
@@ -2434,6 +2454,69 @@ fn read_stream_default_size(stream: f64) -> f64 {
     }
     let result = crate::string::js_string_concat_chain(values.as_ptr(), values.len() as i32);
     box_pointer(crate::buffer::js_buffer_from_string(result, 0) as *const u8)
+}
+
+fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
+    invoke_read_once(stream);
+    if size <= 0.0 {
+        return f64::from_bits(TAG_NULL);
+    }
+    let requested = size as usize;
+    let available = get_hidden_value(stream, hidden_buffered_key())
+        .unwrap_or(0.0)
+        .max(0.0) as usize;
+    if available == 0 {
+        if stream_hidden_ended(stream) {
+            refresh_readable_aborted_flag(stream);
+        }
+        return f64::from_bits(TAG_NULL);
+    }
+    if requested > available && !stream_hidden_ended(stream) {
+        return f64::from_bits(TAG_NULL);
+    }
+    if requested >= available {
+        return read_stream_available_default(stream);
+    }
+
+    let mut bytes = Vec::new();
+    if let Some(chunks) = readable_hidden_chunks(stream) {
+        append_chunk_bytes(chunks, &mut bytes, 0);
+    }
+    if bytes.len() <= requested {
+        return read_stream_available_default(stream);
+    }
+    let result = buffer_value_from_bytes(&bytes[..requested]);
+    set_readable_buffer_bytes(stream, &bytes[requested..]);
+    mark_disturbed(stream);
+    result
+}
+
+fn set_readable_buffer_bytes(stream: f64, bytes: &[u8]) {
+    if bytes.is_empty() {
+        clear_readable_buffer(stream);
+        return;
+    }
+    let chunk = buffer_value_from_bytes(bytes);
+    let mut arr = crate::array::js_array_alloc(0);
+    arr = crate::array::js_array_push_f64(arr, chunk);
+    set_hidden_value(stream, hidden_chunks_key(), box_pointer(arr as *const u8));
+    let remaining = bytes.len() as f64;
+    set_hidden_value(stream, hidden_buffered_key(), remaining);
+    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
+}
+
+fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
+    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
+    if !bytes.is_empty() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                crate::buffer::buffer_data_mut(buf),
+                bytes.len(),
+            );
+        }
+    }
+    box_pointer(buf as *const u8)
 }
 
 fn string_chunk_to_buffer(value: f64) -> Option<f64> {
@@ -3884,6 +3967,10 @@ mod destroy_state;
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "node_stream_tests_extra.rs"]
+mod tests_extra;
 
 #[cfg(test)]
 #[path = "node_stream_state_tests.rs"]

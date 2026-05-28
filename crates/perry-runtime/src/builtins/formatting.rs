@@ -9,6 +9,8 @@
 use super::println;
 use super::*;
 
+mod boxed_primitives;
+
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
 /// (they compare equal with normal `==`).
@@ -170,10 +172,9 @@ pub(crate) fn format_bigint_literal(val: f64) -> String {
 
 /// Per-thread override for the depth at which nested objects/arrays
 /// collapse to `[Object]` / `[Array]`. Defaults to Node's `util.inspect`
-/// default of 2. The `%o` format specifier raises this temporarily so
-/// `console.log("%o", deep)` renders deeper than `%O` / a bare arg
-/// (Node distinguishes them: `%o` is effectively unbounded, `%O` uses
-/// the default cap of 2).
+/// default of 2. The `%o` format specifier raises this temporarily to
+/// Node's object-format depth of 4, while `%O` uses the current inspect
+/// options unchanged.
 thread_local! {
     static INSPECT_DEPTH_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(2) };
 }
@@ -423,6 +424,7 @@ impl Drop for InspectCustomInspectGuard {
 thread_local! {
     static INSPECT_GETTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_SORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INSPECT_COMPACT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 fn inspect_getters_enabled() -> bool {
@@ -431,6 +433,10 @@ fn inspect_getters_enabled() -> bool {
 
 fn inspect_sorted_enabled() -> bool {
     INSPECT_SORTED.with(|c| c.get())
+}
+
+fn inspect_compact_enabled() -> bool {
+    INSPECT_COMPACT.with(|c| c.get())
 }
 
 pub(crate) struct InspectGettersGuard(bool);
@@ -460,6 +466,21 @@ impl InspectSortedGuard {
 impl Drop for InspectSortedGuard {
     fn drop(&mut self) {
         INSPECT_SORTED.with(|c| c.set(self.0));
+    }
+}
+
+pub(crate) struct InspectCompactGuard(bool);
+
+impl InspectCompactGuard {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let prev = INSPECT_COMPACT.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectCompactGuard {
+    fn drop(&mut self) {
+        INSPECT_COMPACT.with(|c| c.set(self.0));
     }
 }
 
@@ -723,7 +744,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     }
                     let inner = parts.join(", ");
                     // Node uses multi-line when length > 6 or single-line exceeds breakLength (76)
-                    let use_multiline = length > 6 || inner.len() + 4 > 76;
+                    let use_multiline =
+                        !inspect_compact_enabled() || length > 6 || inner.len() + 4 > 76;
                     let body_str = if !use_multiline {
                         format!("[ {} ]", inner)
                     } else if all_numeric {
@@ -781,13 +803,16 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     // self-referencing case wins over the depth-2 collapse to
                     // `[Object]` (#1204). The depth cap is overridable via
                     // INSPECT_DEPTH_LIMIT for `%o` / `console.dir(v, { depth })`.
+                    let obj_ptr = ptr as *const crate::object::ObjectHeader;
+                    if let Some(label) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
+                        return format!("{label} {{}}");
+                    }
                     if let Err(id) = inspect_enter_circular(ptr as usize) {
                         return format!("[Circular *{}]", id);
                     }
                     if depth > inspect_depth_limit() {
                         return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                     }
-                    let obj_ptr = ptr as *const crate::object::ObjectHeader;
                     let keys_array = (*obj_ptr).keys_array;
 
                     // Always route through `format_object_as_json` so the
@@ -1154,7 +1179,7 @@ unsafe fn format_object_as_json(
     // indent prefix, producing a left-aligned inner body inside an indented
     // outer body.
     let any_child_multiline = parts.iter().any(|p| p.contains('\n'));
-    if !any_child_multiline && single_line.len() <= 72 {
+    if inspect_compact_enabled() && !any_child_multiline && single_line.len() <= 72 {
         return single_line;
     }
     let indent = "  ";
@@ -1326,13 +1351,16 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // depth-limit collapse to `[Object]` (#1204). The
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT
                         // for `%o` / `console.dir(v, { depth })`.
+                        let obj_ptr = ptr as *const crate::object::ObjectHeader;
+                        if let Some(label) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
+                            return format!("{label} {{}}");
+                        }
                         if let Err(id) = inspect_enter_circular(ptr as usize) {
                             return format!("[Circular *{}]", id);
                         }
                         if depth > inspect_depth_limit() {
                             return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                         }
-                        let obj_ptr = ptr as *const crate::object::ObjectHeader;
                         let keys_array = (*obj_ptr).keys_array;
                         let body_str = if !keys_array.is_null()
                             && (keys_array as usize) > 0x10000
@@ -1704,11 +1732,12 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'o' => {
-                    // Node's `%o` uses an effectively unbounded inspect
-                    // depth (showHidden + showProxy with no depth cap on
-                    // the typical fixtures used in the parity suite), so
-                    // raise the per-thread depth limit just for this call.
-                    let _guard = InspectDepthLimitGuard::new(usize::MAX);
+                    // Node's `%o` overlays util.inspect options with
+                    // showHidden/showProxy and depth: 4. Perry does not expose
+                    // showProxy yet, but showHidden and the depth budget are
+                    // observable in current parity fixtures.
+                    let _depth_guard = InspectDepthLimitGuard::new(4);
+                    let _hidden_guard = InspectShowHiddenGuard::new(true);
                     out.push_str(&format_jsvalue(val, 0));
                 }
                 b'O' => {
@@ -1752,7 +1781,35 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_format_with_options(
+    options: f64,
+    arr_ptr: *const crate::array::ArrayHeader,
+) -> f64 {
+    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
+    let show_hidden =
+        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
+    let custom_inspect =
+        unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
+    let getters =
+        unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
+    let sorted =
+        unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
+    let compact =
+        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
+    let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
+    let _getters_guard = InspectGettersGuard::new(getters);
+    let _sorted_guard = InspectSortedGuard::new(sorted);
+    let _compact_guard = InspectCompactGuard::new(compact);
+    js_util_format(arr_ptr)
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
+    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
+    let show_hidden =
+        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
     // `util.inspect` defaults to `customInspect: true`; an explicit
     // `{ customInspect: false }` opts out and surfaces the hook as a
     // symbol property. Refs #1201.
@@ -1762,9 +1819,14 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
         unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
     let sorted =
         unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
+    let compact =
+        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     let _getters_guard = InspectGettersGuard::new(getters);
     let _sorted_guard = InspectSortedGuard::new(sorted);
+    let _compact_guard = InspectCompactGuard::new(compact);
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     let out = if jv.is_any_string() {
         let s = jsvalue_string_content(value).unwrap_or_default();
@@ -1786,76 +1848,12 @@ fn looks_like_raw_heap_pointer(value: f64) -> bool {
     (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
 }
 
-const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
-const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
-const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
-
-#[inline]
-fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let ptr = jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    unsafe {
-        let class_id = (*ptr).class_id;
-        if !matches!(
-            class_id,
-            CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN
-        ) {
-            return None;
-        }
-        let payload = crate::object::js_object_get_field_f64(ptr, 0);
-        Some((class_id, payload))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_NUMBER, 1);
-    // `new Number()` (no args) is spec'd to box +0, not NaN. js_number_coerce
-    // would map undefined → NaN, so detect the missing-arg sentinel first.
-    let payload = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
-        0.0
-    } else {
-        js_number_coerce(value)
-    };
-    crate::object::js_object_set_field_f64(obj, 0, payload);
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
-#[no_mangle]
-pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_STRING, 1);
-    // `new String()` (no args) is spec'd to box "", not "undefined".
-    let ptr = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
-        crate::string::js_string_from_bytes(std::ptr::null(), 0)
-    } else {
-        js_string_coerce(value)
-    };
-    let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
-    crate::object::js_object_set_field_f64(obj, 0, boxed);
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
-#[no_mangle]
-pub extern "C" fn js_boxed_boolean_new(value: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_BOOLEAN, 1);
-    let boxed =
-        f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value) != 0).bits());
-    crate::object::js_object_set_field_f64(obj, 0, boxed);
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
 #[no_mangle]
 pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
     let left_value = crate::value::JSValue::from_bits(left.to_bits());
     let right_value = crate::value::JSValue::from_bits(right.to_bits());
-    let left_boxed = boxed_primitive_payload(left);
-    let right_boxed = boxed_primitive_payload(right);
+    let left_boxed = boxed_primitives::boxed_primitive_payload(left);
+    let right_boxed = boxed_primitives::boxed_primitive_payload(right);
     if left_boxed.is_some() || right_boxed.is_some() {
         let equal = match (left_boxed, right_boxed) {
             (Some((left_class, left_payload)), Some((right_class, right_payload)))

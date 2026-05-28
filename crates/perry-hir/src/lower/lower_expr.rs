@@ -341,10 +341,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
 
             // Handle instanceof specially - needs to extract class name
             if matches!(bin.op, ast::BinaryOp::InstanceOf) {
-                // WeakRef / FinalizationRegistry: Perry doesn't register a runtime class id,
-                // so generic InstanceOf would always return false. Pre-scan tracks bindings
-                // explicitly, so `local instanceof WeakRef|FinalizationRegistry` can be folded
-                // at lowering time when we recognise the receiver.
+                // WeakRef / FinalizationRegistry: pre-scan tracks local
+                // constructor results explicitly, so common `local instanceof
+                // WeakRef|FinalizationRegistry` checks can be folded at
+                // lowering time when we recognise the receiver.
                 if let ast::Expr::Ident(class_ident) = bin.right.as_ref() {
                     let class_name = class_ident.sym.as_ref();
                     if class_name == "WeakRef" || class_name == "FinalizationRegistry" {

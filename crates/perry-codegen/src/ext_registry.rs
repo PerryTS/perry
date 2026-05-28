@@ -159,6 +159,22 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_http_agent_keep_alive",                    OwnerKind::Stdlib { feature: Some("http-client") }),
     ("js_http_agent_protocol",                      OwnerKind::Stdlib { feature: Some("http-client") }),
     ("js_http_agent_set_protocol",                  OwnerKind::Stdlib { feature: Some("http-client") }),
+    // ── #2154: Agent argument validation + per-agent client + setter
+    // / sockets-accessor surface ─────────────────────────────────────
+    ("js_http_agent_destroy",                       OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_destroyed",                     OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_sockets",                       OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_free_sockets",                  OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_requests",                      OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_max_sockets",               OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_max_free_sockets",          OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_max_total_sockets",         OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_keep_alive",                OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_keep_alive_msecs",          OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_create_connection",         OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_create_socket",             OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_create_connection",             OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_create_socket",                 OwnerKind::Stdlib { feature: Some("http-client") }),
 
     // ── #846: node:http server ───────────────────────────────────────
     // `perry-ext-http-server` defines `js_node_http_*`. It's pulled in

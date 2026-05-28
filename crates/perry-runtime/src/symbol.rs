@@ -898,15 +898,16 @@ fn class_chain_has_method(class_id: u32, name: &str) -> bool {
 /// method. This helper returns that iterator, or `val` unchanged when `val` is
 /// already an iterator / not iterable.
 ///
-/// Arrays are intentionally returned unchanged: perry has no real array
-/// iterator object (`Array.prototype.values` yields an array, not a
-/// `.next`-bearing iterator, and for-of over arrays is special-cased), so
-/// `yield* [..]` is a separate follow-up (#1831 array sub-case) — handling it
-/// here would route through `values` and mis-drive.
+/// Arrays now route through `array_values_iter` — the runtime has a real
+/// `.next`-bearing iterator (`ARRAY_ITERATOR_CLASS_ID`) since #321's
+/// `arr.values()` dispatch landed, so `yield* [..]` and any other consumer
+/// that drives `js_get_iterator(...).next()` works on a plain array. The
+/// for-of and spread fast paths still special-case arrays earlier (in the
+/// array-memcpy / index-loop arms) so they don't reach this helper.
 #[no_mangle]
 pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     if crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE {
-        return val_f64;
+        return crate::array::array_values_iter(val_f64);
     }
     let iter_wk = well_known_symbol("iterator");
     if !iter_wk.is_null() {
