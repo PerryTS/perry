@@ -1063,6 +1063,32 @@ mod tests {
         assert!(get_object_property(boxed_ptr(ns as *const u8), b"finished").is_some());
     }
 
+    /// #2133: `fs.promises` (the parent `node:fs` module's `.promises`
+    /// property) must resolve to the populated `fs_promises` submodule
+    /// singleton — not an empty namespace stub — so destructured exports
+    /// like `const { open } = fs.promises` and the indirect form
+    /// (`const p = fs.promises; p.open(...)`) both reach real callable
+    /// closures and a returned FileHandle dispatches its methods.
+    #[test]
+    fn fs_parent_promises_property_exposes_namespace() {
+        let value = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"fs".as_ptr(),
+                "fs".len(),
+                b"promises".as_ptr(),
+                "promises".len(),
+            )
+        };
+        let ns = object_ptr_from_value(value).expect("fs.promises should be an object");
+        let ns_value = boxed_ptr(ns as *const u8);
+        // Spot-check a few exports from the fs_promises submodule.
+        assert!(get_object_property(ns_value, b"open").is_some());
+        assert!(get_object_property(ns_value, b"readFile").is_some());
+        assert!(get_object_property(ns_value, b"writeFile").is_some());
+        assert!(get_object_property(ns_value, b"chmod").is_some());
+        assert!(get_object_property(ns_value, b"stat").is_some());
+    }
+
     #[test]
     fn stream_promises_default_export_exposes_namespace() {
         let value = unsafe {
@@ -1155,6 +1181,13 @@ mod tests {
     #[test]
     fn stream_promises_finished_resolves_for_clean_stub_stream() {
         let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        let end = get_object_property(stream, b"end").expect("stream.end should exist");
+        let prev_this = crate::object::js_implicit_this_set(stream);
+        unsafe {
+            let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        }
+        crate::object::js_implicit_this_set(prev_this);
+
         let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
         let promise = promise_ptr(promise_value);
 
@@ -1173,6 +1206,26 @@ mod tests {
 
         let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
         let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+        assert_eq!(
+            crate::promise::js_promise_reason(promise).to_bits(),
+            err.to_bits()
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_rejects_later_destroy_error() {
+        let stream = crate::node_stream::js_node_stream_readable_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        let err = string_value("later-error");
+        let handle = object_ptr_from_value(stream).expect("stream object") as i64;
+        let _ = crate::node_stream::js_node_stream_method_destroy(handle, err);
+        let _ = crate::promise::js_promise_run_microtasks();
 
         assert_eq!(crate::promise::js_promise_state(promise), 2);
         assert_eq!(

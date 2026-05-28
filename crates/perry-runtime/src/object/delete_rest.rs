@@ -26,12 +26,12 @@ pub extern "C" fn js_object_delete_field(
         let mut found_idx: Option<usize> = None;
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if key_val.is_string() {
-                let stored_key = key_val.as_string_ptr();
-                if crate::string::js_string_equals(key, stored_key) != 0 {
-                    found_idx = Some(i);
-                    break;
-                }
+            // #1781: SSO-aware match — pre-fix `delete obj.id` on an
+            // object whose `id` lived as an inline SSO key reported
+            // success vacuously without actually deleting anything.
+            if crate::string::js_string_key_matches(key_val, key) {
+                found_idx = Some(i);
+                break;
             }
         }
 
@@ -186,14 +186,20 @@ pub extern "C" fn js_object_rest(
             crate::array::js_array_length(exclude_keys) as usize
         };
 
-        // Collect indices of keys to include (not in exclude list and not undefined/deleted)
+        // Collect indices of keys to include (not in exclude list and not undefined/deleted).
+        // #1781: SSO-aware — the pre-fix `is_string()` on the source
+        // key dropped ≤5-byte SSO keys from `rest`; the exclude-loop's
+        // `is_string()` similarly missed inline-SSO exclude entries,
+        // so a `{a, ...rest}` pattern silently kept `a` in `rest` when
+        // both the source key and the exclude key were SSO.
         let mut include_indices: Vec<usize> = Vec::new();
+        let mut src_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if !key_val.is_string() {
-                continue;
-            }
-            let key_str = key_val.as_string_ptr();
+            let key_bytes = match crate::string::js_string_key_bytes(key_val, &mut src_buf) {
+                Some(b) => b.to_vec(),
+                None => continue,
+            };
 
             // Check if field was deleted
             let field_val = js_object_get_field(src, i as u32);
@@ -205,12 +211,9 @@ pub extern "C" fn js_object_rest(
             let mut excluded = false;
             for j in 0..exclude_count {
                 let ex_val = crate::array::js_array_get(exclude_keys, j as u32);
-                if ex_val.is_string() {
-                    let ex_str = ex_val.as_string_ptr();
-                    if crate::string::js_string_equals(key_str, ex_str) != 0 {
-                        excluded = true;
-                        break;
-                    }
+                if crate::string::js_string_key_matches_bytes(ex_val, &key_bytes) {
+                    excluded = true;
+                    break;
                 }
             }
             if !excluded {
