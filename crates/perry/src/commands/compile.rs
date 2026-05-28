@@ -63,9 +63,10 @@ pub use library_search::find_library;
 pub(crate) use library_search::host_target_triple;
 use library_search::{
     build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
-    find_geisterhand_ui, find_harmonyos_sdk, find_lld_link, find_llvm_tool, find_msvc_lib_paths,
-    find_msvc_link_exe, find_perry_windows_sdk, find_runtime_library, find_stdlib_library,
-    find_ui_library, find_wasm_host_library, windows_pe_subsystem_flag,
+    find_geisterhand_stdlib, find_geisterhand_ui, find_harmonyos_sdk, find_lld_link,
+    find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
+    find_runtime_library, find_stdlib_library, find_ui_library, find_wasm_host_library,
+    windows_pe_subsystem_flag,
 };
 use link::build_and_run_link;
 pub use lock_scan::collect_native_archives_for_lock;
@@ -4734,6 +4735,7 @@ pub fn run_with_parse_cache(
         // step and is idempotent — that check then finds them present.
         let gh_missing = find_geisterhand_runtime(target.as_deref()).is_none()
             || find_geisterhand_library(target.as_deref()).is_none()
+            || (ctx.needs_stdlib && find_geisterhand_stdlib(target.as_deref()).is_none())
             || (ctx.needs_ui && find_geisterhand_ui(target.as_deref()).is_none());
         if gh_missing {
             build_geisterhand_libs(target.as_deref(), format)?;
@@ -4747,7 +4749,24 @@ pub fn run_with_parse_cache(
     } else {
         find_runtime_library(target.as_deref())?
     };
-    let stdlib_lib = stdlib_lib_resolved.clone();
+    // #1383 — under --enable-geisterhand, prefer the geisterhand-built stdlib
+    // over the auto-optimized one. `build_geisterhand_libs` (already run above
+    // when selecting `runtime_lib`) compiles perry-stdlib into target/geisterhand
+    // with its full default feature set (incl. `async-runtime` → the
+    // `perry_ffi_promise_*` shims) against the geisterhand-featured, hash-
+    // consistent perry-runtime. The auto-optimized stdlib (`stdlib_lib_resolved`)
+    // is rebuilt with --no-default-features and a feature set computed from the
+    // app's *TS* imports, so it omits async-runtime when the async surface comes
+    // from a native binding (@perryts/storekit/google-auth/play-billing) rather
+    // than TS — producing the `Undefined symbols: _perry_ffi_promise_new` link
+    // failure this issue describes. Linking the geisterhand stdlib also keeps the
+    // bundled perry-runtime hash-consistent with `gh_runtime`. Fall back to the
+    // auto-optimized stdlib when geisterhand is off or its stdlib isn't present.
+    let stdlib_lib = if ctx.needs_geisterhand {
+        find_geisterhand_stdlib(target.as_deref()).or_else(|| stdlib_lib_resolved.clone())
+    } else {
+        stdlib_lib_resolved.clone()
+    };
     let is_watchos = matches!(
         target.as_deref(),
         Some("watchos") | Some("watchos-simulator")

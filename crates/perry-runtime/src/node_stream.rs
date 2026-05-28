@@ -1470,9 +1470,11 @@ extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts:
             let el = crate::array::js_array_get_f64(arr, i);
             let mapped = call_settled(cb, el);
             // flatMap flattens one level: an array result is spread, a
-            // Readable result contributes its retained chunks, anything
-            // else is appended as a single chunk. (A bare async-generator
-            // mapper isn't flattened yet — tracked separately.)
+            // Readable result contributes its retained chunks, an
+            // async-iterable (e.g. an `async function*` mapper return —
+            // issue #1572) is driven through its `[Symbol.asyncIterator]()`
+            // and its yields flattened in order, anything else is
+            // appended as a single chunk.
             if is_array_like_value(mapped) {
                 out = extend_with_array(out, raw_ptr_from_value(mapped) as *const _);
             } else if let Some(inner) = readable_hidden_chunks(mapped) {
@@ -1481,6 +1483,8 @@ extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts:
                 } else {
                     out = crate::array::js_array_push_f64(out, mapped);
                 }
+            } else if let Some(flat) = flatten_async_iterable_value(mapped) {
+                out = extend_with_array(out, flat as *const _);
             } else {
                 out = crate::array::js_array_push_f64(out, mapped);
             }
@@ -1489,6 +1493,49 @@ extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts:
     let result = readable_from_chunks(out);
     propagate_stream_state(this, opts, result);
     result
+}
+
+/// Issue #1572 — drive an async-iterable value (an `async function*` mapper
+/// return, or any object exposing `[Symbol.asyncIterator]` /
+/// `[Symbol.iterator]` / a bare `.next()` method) through its iterator
+/// protocol and collect the yielded values into a flat array.
+///
+/// The order of probes matches what `Array.fromAsync` / `for await of`
+/// already does in `array/iterator.rs`:
+///   1. `[Symbol.asyncIterator]()` — the async-generator path. Each
+///      `.next()` returns a `Promise<{value, done}>`; the per-step
+///      promise is settled synchronously by pumping microtasks.
+///   2. The value is itself an iterator (bare `.next()` method) —
+///      sync-drive it. Covers caller-provided iterator objects.
+///   3. Sync iterables — `[Symbol.iterator]()`. Caught earlier by
+///      `is_array_like_value`/`readable_hidden_chunks` for the array
+///      and Readable cases; remaining sync iterables (Map/Set/Buffer
+///      iterators, custom `[Symbol.iterator]` objects) land here.
+///
+/// `None` signals "not iterable" so the caller can fall back to the
+/// "append as a single chunk" path that pre-#1572 was the only branch.
+fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    use crate::array::{
+        async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
+        has_iterator_next,
+    };
+    use crate::symbol::js_get_iterator;
+    if let Some(async_iter) = call_symbol_async_iterator_for_flat_map(value) {
+        return Some(async_iterator_to_array_for_flat_map(async_iter));
+    }
+    if has_iterator_next(value) {
+        // Async generator step values may be already-settled promises that
+        // `async_iterator_to_array_for_flat_map` unwraps; drive the same
+        // helper for a bare-iterator receiver too — `js_async_iterator_to_array`
+        // is a strict superset of `js_iterator_to_array` (it transparently
+        // returns non-promise step results unchanged).
+        return Some(async_iterator_to_array_for_flat_map(value));
+    }
+    let sync_iter = js_get_iterator(value);
+    if sync_iter.to_bits() != value.to_bits() {
+        return Some(async_iterator_to_array_for_flat_map(sync_iter));
+    }
+    None
 }
 
 extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {
