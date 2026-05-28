@@ -362,12 +362,6 @@
     "category": "bug-open",
     "reason": "node:stream: readable.wrap(oldStream) bridge doesn't deliver data events. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/options/auto-destroy": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy default behavior doesn't fire close after end. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/multiple-transforms": {
     "issue": "1539",
     "added": "2026-05-24",
@@ -434,23 +428,11 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/pipe/repipe-after-unpipe": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/error/error-then-end-order": {
     "issue": "1532",
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: after error, end event should NOT fire. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/options/auto-destroy-false": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy:false option not honored. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/options/construct-cb-error": {
     "issue": "1532",
@@ -553,12 +535,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Duplex.from({readable, writable}) — combine-form not yet wired. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/pipe-twice-same-dest": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() called twice with same destination duplicates writes (should be no-op for second call). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-with-options": {
     "issue": "1532",
@@ -727,18 +703,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw — composite does not emit 'error'. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/pipe/dest-error-propagates": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe error semantics — destination error or source close state differs from Node. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/options/auto-destroy-true-default": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy:true default — stream not destroyed after 'end', 'close' may not fire. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/custom-strategy-nan-size": {
     "issue": "1545",
@@ -962,12 +926,6 @@
     "category": "bug-open",
     "reason": "node:stream: read() in non-encoded mode — does not return Buffer instance. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/pipe-autodestroy-default": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() autoDestroy default — src or dst not destroyed after pipe. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/destroyed-during-data-flow": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1064,12 +1022,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: pipeTo with pre-aborted signal — does not reject immediately. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/pipe/pipe-adds-listener-on-dst": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() does not add 'unpipe' listener on destination. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/map-then-toarray": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1087,18 +1039,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: WritableStream({type:'bytes'}) — handling differs from Node (accept-and-ignore or throw). Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/pipe/cleanup-state-after-end": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: post-pipe-end destroyed flags wrong on source or destination. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/options-autoDestroy-explicit": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy: false — stream still destroyed after 'end' or 'close' fires when it shouldn't. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/sink-all-four-methods": {
     "issue": "1545",
@@ -1213,12 +1153,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: detached instance method called without `this` — wrong behavior (Perry should throw). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/dst-write-returns-false-pauses-src": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() src pause/resume events on backpressure — wrong order/missing. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/three-stages-order": {
     "issue": "1531",
