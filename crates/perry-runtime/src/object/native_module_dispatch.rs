@@ -877,6 +877,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
+        ("util", "parseArgs") => crate::util_parse_args::js_util_parse_args(arg(0)),
 
         ("util", "isPromise") => {
             let v = JSValue::from_bits(arg(0).to_bits());

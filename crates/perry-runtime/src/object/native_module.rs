@@ -621,6 +621,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "promisify")
             | ("util", "callbackify")
+            | ("util", "parseArgs")
             | ("util", "deprecate")
             | ("util", "inherits")
             | ("util", "isDeepStrictEqual")
