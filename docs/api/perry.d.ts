@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1435 entries across 82 modules
+// Coverage: 1437 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -734,6 +734,8 @@ declare module "http" {
   /** stdlib */
   export function Agent(...args: any[]): any;
   /** stdlib */
+  export function Server(...args: any[]): any;
+  /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
   export function get(...args: any[]): any;
@@ -769,6 +771,8 @@ declare module "https" {
   export class ServerResponse { [key: string]: any; }
   /** stdlib */
   export function Agent(...args: any[]): any;
+  /** stdlib */
+  export function Server(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */

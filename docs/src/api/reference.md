@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1435 entries across 82 modules.
+Total: 1437 entries across 82 modules.
 
 ## Modules
 
@@ -755,6 +755,7 @@ Total: 1435 entries across 82 modules.
 ### Methods
 
 - `Agent` — module
+- `Server` — module
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
@@ -869,6 +870,7 @@ Total: 1435 entries across 82 modules.
 ### Methods
 
 - `Agent` — module
+- `Server` — module
 - `address` — instance *(class: `HttpsServer`)*
 - `close` — instance *(class: `HttpsServer`)*
 - `createServer` — module

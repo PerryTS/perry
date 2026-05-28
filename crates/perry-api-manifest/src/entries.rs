@@ -2679,6 +2679,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),
+    // `http.Server(handler)` is Node's callable-constructor alias for
+    // `createServer` (works with or without `new`). #2132.
+    method("http", "Server", false, None),
     method("http", "request", false, None),
     method("http", "get", false, None),
     property("http", "METHODS"),
@@ -2716,6 +2719,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "keepAlive", true, Some("Agent")),
     method("http", "protocol", true, Some("Agent")),
     method("https", "createServer", false, None),
+    // `https.Server(options, handler)` is Node's callable-constructor
+    // alias for `createServer` (works with or without `new`). #2132.
+    method("https", "Server", false, None),
     method("https", "request", false, None),
     method("https", "get", false, None),
     class("https", "Server"),
