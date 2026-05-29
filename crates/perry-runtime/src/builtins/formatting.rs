@@ -1939,9 +1939,7 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
     if identity_equality::is_identity_only_deep_equal_value(left)
         || identity_equality::is_identity_only_deep_equal_value(right)
     {
-        return f64::from_bits(
-            crate::value::JSValue::bool(left.to_bits() == right.to_bits()).bits(),
-        );
+        return left.to_bits() == right.to_bits();
     }
     let has_tagged_heap_operand = left_value.is_pointer() || right_value.is_pointer();
     let has_raw_heap_operand =
