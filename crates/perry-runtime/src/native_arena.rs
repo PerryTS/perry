@@ -466,7 +466,7 @@ mod tests {
         }
     }
 
-    unsafe fn dispatch_random_fill_sync(view: *mut NativeTypedViewHeader) -> f64 {
+    unsafe fn dispatch_random_fill_sync<T>(view: *mut T) -> f64 {
         let module = b"crypto";
         let ns = crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
         let ns_obj = crate::value::js_nanbox_get_pointer(ns) as *const crate::object::ObjectHeader;
@@ -730,6 +730,49 @@ mod tests {
         }));
 
         crate::buffer::unregister_buffer(fake as *const crate::buffer::BufferHeader);
+    }
+
+    #[test]
+    fn random_fill_sync_rejects_typed_array_registry_forged_to_old_buffer() {
+        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
+        assert!(crate::arena::pointer_in_old_gen(buf as usize));
+        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT8);
+
+        assert!(catch_runtime_throw(|| unsafe {
+            let _ = dispatch_random_fill_sync(buf);
+        }));
+
+        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
+    }
+
+    #[test]
+    fn random_fill_sync_rejects_stale_finalized_old_arena_typed_array_registry_entry() {
+        let view = typedarray::typed_array_alloc(
+            typedarray::KIND_UINT8,
+            crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32,
+        );
+        assert!(crate::arena::pointer_in_old_gen(view as usize));
+
+        unsafe {
+            crate::gc::gc_type_finalize_unmarked_payload(
+                crate::gc::GC_TYPE_TYPED_ARRAY,
+                view as *mut u8,
+            );
+            let header =
+                (view as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            let total_size = (*header).size as usize;
+            crate::arena::unregister_old_object_pages(header as usize, total_size);
+            (*header).obj_type = 0;
+            (*header).gc_flags = 0;
+            (*header)._reserved = 0;
+        }
+        assert_eq!(typedarray::lookup_typed_array_kind(view as usize), None);
+
+        typedarray::register_typed_array(view as *const TypedArrayHeader, typedarray::KIND_UINT8);
+        assert!(catch_runtime_throw(|| unsafe {
+            let _ = dispatch_random_fill_sync(view);
+        }));
+        typedarray::unregister_typed_array(view as *const TypedArrayHeader);
     }
 
     #[test]

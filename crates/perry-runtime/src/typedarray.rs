@@ -181,10 +181,7 @@ fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
 /// helper routes through `data_ptr`, which validates disposed native views and
 /// returns the external backing pointer.
 pub unsafe fn typed_array_bytes<'a>(ta: *const TypedArrayHeader) -> Option<&'a [u8]> {
-    let ta = clean_ta_ptr(ta);
-    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
-        return None;
-    }
+    let ta = typed_array_for_byte_helper(ta)? as *const TypedArrayHeader;
     let data = data_ptr(ta);
     let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
     if len == 0 {
@@ -203,10 +200,7 @@ pub unsafe fn typed_array_bytes<'a>(ta: *const TypedArrayHeader) -> Option<&'a [
 ///
 /// See [`typed_array_bytes`] for the native-view layout invariant.
 pub unsafe fn typed_array_bytes_mut<'a>(ta: *mut TypedArrayHeader) -> Option<&'a mut [u8]> {
-    let ta = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
-    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
-        return None;
-    }
+    let ta = typed_array_for_byte_helper(ta as *const TypedArrayHeader)?;
     let data = data_ptr_mut(ta);
     let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
     if len == 0 {
@@ -219,6 +213,20 @@ pub unsafe fn typed_array_bytes_mut<'a>(ta: *mut TypedArrayHeader) -> Option<&'a
         return None;
     }
     Some(std::slice::from_raw_parts_mut(data, len))
+}
+
+unsafe fn typed_array_for_byte_helper(
+    ta: *const TypedArrayHeader,
+) -> Option<*mut TypedArrayHeader> {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+        return None;
+    }
+    Some(strict_typed_array_from_raw(
+        ta as u64,
+        None,
+        b"Expected typed array",
+    ))
 }
 
 #[cold]
