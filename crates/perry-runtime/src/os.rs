@@ -1062,67 +1062,10 @@ pub extern "C" fn js_process_next_tick(callback: *const crate::closure::ClosureH
     crate::builtins::js_queue_next_tick(callback as i64);
 }
 
-/// process.chdir(directory) — change working directory. Throws a Node-shaped
-/// `Error` (`code`/`syscall`/`path` populated) when the target can't be entered,
-/// matching `ENOENT: no such file or directory, chdir '<cwd>' -> '<target>'`.
-/// Refs #2135 (process parity, chdir error message gap).
-#[no_mangle]
-pub extern "C" fn js_process_chdir(dir_ptr: *const StringHeader) {
-    unsafe {
-        if dir_ptr.is_null() {
-            return;
-        }
-        let len = (*dir_ptr).byte_len as usize;
-        let data = (dir_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, len);
-        let Ok(target) = std::str::from_utf8(bytes) else {
-            return;
-        };
-        if let Err(err) = std::env::set_current_dir(target) {
-            throw_chdir_error(&err, target);
-        }
-    }
-}
-
-/// libuv-style POSIX `ERR_*` for an `io::Error`, scoped to the kinds
-/// `chdir(2)` can return.
-fn chdir_error_code(err: &std::io::Error) -> &'static str {
-    use std::io::ErrorKind;
-    match err.kind() {
-        ErrorKind::NotFound => "ENOENT",
-        ErrorKind::PermissionDenied => "EACCES",
-        ErrorKind::NotADirectory => "ENOTDIR",
-        _ => "EIO",
-    }
-}
-
-/// Human-readable description matching Node's libuv `chdir` error strings.
-/// Node hardcodes these in its libuv error table; `io::Error::to_string()`
-/// uses Rust's text (e.g. "entity not found"), which would diverge from
-/// Node's output byte-for-byte.
-fn chdir_error_description(code: &str) -> &'static str {
-    match code {
-        "ENOENT" => "no such file or directory",
-        "EACCES" => "permission denied",
-        "ENOTDIR" => "not a directory",
-        _ => "i/o error",
-    }
-}
-
-unsafe fn throw_chdir_error(err: &std::io::Error, target: &str) -> ! {
-    let code = chdir_error_code(err);
-    let desc = chdir_error_description(code);
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    let message = format!("{code}: {desc}, chdir '{cwd}' -> '{target}'");
-    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg_ptr, code);
-    crate::node_submodules::register_error_syscall(msg_ptr, "chdir");
-    crate::node_submodules::register_error_path(msg_ptr, target.to_string());
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
-}
+// `process.chdir()` + its Node-shaped error live in the `chdir` submodule
+// (#2135); split out to keep this file under the 2000-line gate.
+mod chdir;
+pub use chdir::js_process_chdir;
 
 /// process.kill(pid, signal?) — send signal to process. signal=0 means existence check.
 #[no_mangle]

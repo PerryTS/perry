@@ -18,7 +18,9 @@ use super::super::{
 
 pub(super) fn try_static_method_and_instance(
     ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
+    // #854: kept for the uniform `try_*` dispatch-helper signature; this arm
+    // works off `expr`, not the raw `CallExpr`.
+    _call: &ast::CallExpr,
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {

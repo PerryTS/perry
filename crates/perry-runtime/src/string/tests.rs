@@ -150,6 +150,26 @@ fn test_string_index_of() {
 }
 
 #[test]
+fn test_string_last_index_of_from() {
+    let s = js_string_from_bytes(b"abcabc".as_ptr(), 6);
+    let c = js_string_from_bytes(b"c".as_ptr(), 1);
+    // has_pos == 0 → search to the end (same as plain lastIndexOf).
+    assert_eq!(js_string_last_index_of_from(s, c, 0.0, 0), 5);
+    // Explicit position bounds the match start.
+    assert_eq!(js_string_last_index_of_from(s, c, 3.0, 1), 2);
+    assert_eq!(js_string_last_index_of_from(s, c, 0.0, 1), -1); // no 'c' at/before 0
+    assert_eq!(js_string_last_index_of_from(s, c, 100.0, 1), 5); // clamp to end
+    assert_eq!(js_string_last_index_of_from(s, c, -5.0, 1), -1); // negative → 0
+                                                                 // Not found.
+    let z = js_string_from_bytes(b"z".as_ptr(), 1);
+    assert_eq!(js_string_last_index_of_from(s, z, 100.0, 1), -1);
+    // Empty needle → min(position, length).
+    let empty = js_string_from_bytes(b"".as_ptr(), 0);
+    assert_eq!(js_string_last_index_of_from(s, empty, 2.0, 1), 2);
+    assert_eq!(js_string_last_index_of_from(s, empty, 100.0, 1), 6);
+}
+
+#[test]
 fn test_string_split() {
     use crate::array::{js_array_get_f64, js_array_length};
 

@@ -20,11 +20,16 @@
 //!   new value (with the same validation as the constructor) instead
 //!   of being silently dropped.
 //! - **`createConnection` / `createSocket` setter storage** — the
-//!   user-supplied closure is now stored and GC-rooted on the agent so
-//!   later code reading `agent.createConnection` gets back the same
-//!   function. Invoking the override on the request path (Node's full
-//!   socket-injection semantics) needs net.Socket bridging that is
-//!   deferred — tracked as a follow-up off #2154.
+//!   user-supplied closure is stored and GC-rooted on the agent so later
+//!   code reading `agent.createConnection` gets back the same function.
+//! - **`createConnection` request-path invocation** — when `http.request`
+//!   services a request whose agent defines `createConnection`, the
+//!   override is invoked (on the main thread) to produce a `net.Socket`,
+//!   and the HTTP/1.1 exchange is driven over that socket via the raw-net
+//!   bridge (`perry_ffi::raw_net`, published by perry-ext-net) instead of
+//!   reqwest. See `try_create_connection_socket` here +
+//!   `dispatch_request_over_socket` in `lib.rs`. This is Node's full
+//!   socket-injection behavior (#2154).
 //!
 //! The implementation is mirrored in `crates/perry-stdlib/src/http.rs`
 //! so the default `full` build (perry-stdlib's `http-client` feature)
@@ -886,19 +891,70 @@ pub extern "C" fn js_http_agent_create_socket(handle: Handle) -> i64 {
     agent_field(handle, 0i64, |a| a.create_socket)
 }
 
-/// Invoke a stored `createConnection` override (if any). Called from
-/// the request-path follow-up. Returns the raw return-value the closure
-/// produced; `None` when no override was set.
-#[allow(dead_code)]
-pub(crate) fn invoke_create_connection(handle: Handle, options_f64: f64) -> Option<f64> {
+/// #2154 — if this agent has a `createConnection` override, build the
+/// connection-options object Node passes it (`{ host, port, path }`),
+/// invoke the override **on the calling (main) thread** — JS closure calls
+/// must never run on a tokio worker per the arena-safety rule — and return
+/// the `net.Socket` handle id it produced. Returns `None` when no override
+/// is set or the return value isn't a usable socket handle, so the caller
+/// falls back to the default reqwest transport.
+///
+/// # Safety
+///
+/// Must be called on the main thread. `handle` must be a live AgentHandle.
+pub(crate) unsafe fn try_create_connection_socket(
+    handle: Handle,
+    host: &str,
+    port: u16,
+    path: &str,
+) -> Option<i64> {
     let cc = agent_field(handle, 0i64, |a| a.create_connection);
     if cc == 0 {
         return None;
     }
-    Some(unsafe {
-        let closure = JsClosure::from_raw(cc as *const RawClosureHeader);
-        closure.call1(options_f64)
-    })
+    let options = build_connect_options(host, port, path);
+    let closure = JsClosure::from_raw(cc as *const RawClosureHeader);
+    let ret = closure.call1(options);
+
+    // `net.connect` / `net.createConnection` return the socket id NaN-boxed
+    // with POINTER_TAG; some codegen paths hand back a bare raw pointer.
+    // Extract the 48-bit handle id either way; reject anything else.
+    let bits = ret.to_bits();
+    let upper = bits >> 48;
+    let id = if upper == 0x7FFD {
+        (bits & PTR_MASK) as i64
+    } else if upper == 0 && bits >= 0x10000 {
+        bits as i64
+    } else {
+        return None;
+    };
+    (id > 0).then_some(id)
+}
+
+/// Build the `{ host, port, path }` options object handed to a
+/// `createConnection` override. Returns a NaN-boxed object pointer as `f64`,
+/// or NaN-boxed `undefined` on allocation failure.
+unsafe fn build_connect_options(host: &str, port: u16, path: &str) -> f64 {
+    let keys = ["host", "port", "path"];
+    let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
+    let obj: *mut perry_ffi::ObjectHeader = perry_ffi::js_object_alloc_with_shape(
+        shape_id,
+        keys.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let host_s = alloc_string(host);
+    perry_ffi::js_object_set_field(obj, 0, JsValue::from_string_ptr(host_s.as_raw()));
+    // A plain f64 number is its own NaN-box; reconstruct the JsValue from its
+    // bits so the override reads `options.port` as a number.
+    perry_ffi::js_object_set_field(obj, 1, JsValue::from_bits((port as f64).to_bits()));
+    let path_s = alloc_string(path);
+    perry_ffi::js_object_set_field(obj, 2, JsValue::from_string_ptr(path_s.as_raw()));
+    let v = JsValue::from_object_ptr(obj as *mut u8);
+    f64::from_bits(v.bits())
 }
 
 // ------------------------------------------------------------------

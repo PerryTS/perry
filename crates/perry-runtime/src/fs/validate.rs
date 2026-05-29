@@ -46,7 +46,7 @@ pub(crate) fn is_path_like(value: f64) -> bool {
 /// True if `value` is a JS number (a plain IEEE double *or* an INT32-tagged
 /// small integer). `JSValue::is_number` deliberately excludes the INT32 tag,
 /// so both must be checked.
-pub(crate) fn is_numeric(jv: JSValue) -> bool {
+pub fn is_numeric(jv: JSValue) -> bool {
     jv.is_number() || jv.is_int32()
 }
 
@@ -59,7 +59,7 @@ fn numeric_to_i32(jv: JSValue) -> i32 {
 }
 
 /// Node's `Received …` clause for an `ERR_INVALID_ARG_TYPE` message.
-pub(crate) fn describe_received(value: f64) -> String {
+pub fn describe_received(value: f64) -> String {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
         return "undefined".to_string();
@@ -116,7 +116,7 @@ fn throw_ebadf(syscall: &'static str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-pub(crate) fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
+pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     let err = crate::error::js_typeerror_new(msg);
@@ -261,7 +261,7 @@ pub(crate) fn validate_function(arg_name: &str, value: f64) {
     }
 }
 
-fn throw_range_error_with_code(message: &str) -> ! {
+pub fn throw_range_error_with_code(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_OUT_OF_RANGE");
     let err = crate::error::js_rangeerror_new(msg);

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1493 entries across 82 modules
+// Coverage: 1491 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1302,6 +1302,8 @@ declare module "perry/system" {
   /** stdlib */
   export function getOSVersion(...args: any[]): any;
   /** stdlib */
+  export function getSafeAreaInsets(...args: any[]): any;
+  /** stdlib */
   export function imagePickerPick(...args: any[]): any;
   /** stdlib */
   export function isDarkMode(...args: any[]): any;
@@ -2052,6 +2054,8 @@ declare module "util" {
   /** stdlib */
   export function isDeepStrictEqual(...args: any[]): any;
   /** stdlib */
+  export function parseArgs(...args: any[]): any;
+  /** stdlib */
   export function promisify(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
@@ -2071,15 +2075,9 @@ declare module "util/types" {
   /** stdlib */
   export function isDate(...args: any[]): any;
   /** stdlib */
-  export function isFloat32Array(...args: any[]): any;
-  /** stdlib */
   export function isFloat64Array(...args: any[]): any;
   /** stdlib */
-  export function isInt16Array(...args: any[]): any;
-  /** stdlib */
   export function isInt32Array(...args: any[]): any;
-  /** stdlib */
-  export function isInt8Array(...args: any[]): any;
   /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
@@ -2105,11 +2103,7 @@ declare module "util/types" {
   /** stdlib */
   export function isUint16Array(...args: any[]): any;
   /** stdlib */
-  export function isUint32Array(...args: any[]): any;
-  /** stdlib */
   export function isUint8Array(...args: any[]): any;
-  /** stdlib */
-  export function isUint8ClampedArray(...args: any[]): any;
 }
 
 declare module "uuid" {

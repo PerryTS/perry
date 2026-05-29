@@ -50,6 +50,10 @@ pub(crate) enum BoundsProof {
     LoopGuard,
     MinLength,
     ExplicitGuard,
+    // #854: bounds-proof variant matched by uses_unsound_explicit_assume_guard
+    // but not yet constructed by any proof emitter; kept as part of the
+    // serialized BoundsProof contract.
+    #[allow(dead_code)]
     ExplicitAssume,
 }
 
@@ -83,7 +87,13 @@ pub(crate) enum AliasState {
     Unknown,
     MayAlias,
     NoAliasProven,
-    NoAliasGuarded { guard_id: String },
+    // #854: alias-state variant matched by allows_noalias but not yet
+    // constructed by any alias-guard emitter; kept as part of the serialized
+    // AliasState contract.
+    #[allow(dead_code)]
+    NoAliasGuarded {
+        guard_id: String,
+    },
 }
 
 impl AliasState {
@@ -207,6 +217,9 @@ pub(crate) struct BufferAccessProof {
     pub index: LoweredValue,
     pub access_mode: BufferAccessMode,
     pub bounds: BoundsState,
+    // #854: in-progress buffer-access fact bundle (Debug field); populated path
+    // not yet wired, no consumer reads it.
+    #[allow(dead_code)]
     pub facts: BufferAccessFacts,
     pub alias: AliasState,
     pub may_emit_inbounds: bool,
