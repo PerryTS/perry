@@ -46,6 +46,57 @@ fn string_to_js(s: &str) -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
+fn split_extension(base: &str) -> (String, String) {
+    if base.is_empty() || base == "." || base == ".." {
+        return (String::new(), base.to_string());
+    }
+    match base.rfind('.') {
+        Some(0) | None => (String::new(), base.to_string()),
+        Some(dot) => (base[dot..].to_string(), base[..dot].to_string()),
+    }
+}
+
+fn parse_posix_components(path_str: &str) -> (String, String, String, String, String) {
+    if path_str.is_empty() {
+        return (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+    }
+
+    let root = if path_str.starts_with('/') { "/" } else { "" }.to_string();
+    let root_len = root.len();
+    let bytes = path_str.as_bytes();
+    let mut end = bytes.len();
+    while end > root_len && bytes[end - 1] == b'/' {
+        end -= 1;
+    }
+    if end == root_len && root_len > 0 {
+        return (
+            root.clone(),
+            root,
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+    }
+
+    let trimmed = &path_str[..end];
+    let sep = trimmed.rfind('/');
+    let base_start = sep.map_or(0, |idx| idx + 1);
+    let base = trimmed[base_start..].to_string();
+    let dir = match sep {
+        Some(0) => "/".to_string(),
+        Some(idx) => path_str[..idx].to_string(),
+        None => String::new(),
+    };
+    let (ext, name) = split_extension(&base);
+    (root, dir, base, ext, name)
+}
+
 pub(crate) fn throw_invalid_path_arg_type() -> ! {
     let msg = b"The \"path\" argument must be of type string.";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
@@ -555,31 +606,7 @@ pub extern "C" fn js_path_parse(path_ptr: *const StringHeader) -> *mut crate::ob
     use crate::value::JSValue;
 
     let path_str = unsafe { string_from_header(path_ptr) }.unwrap_or_default();
-    let p = Path::new(&path_str);
-
-    let root = if path_str.starts_with('/') { "/" } else { "" }.to_string();
-    let dir = if !root.is_empty() && path_str.chars().all(|c| c == '/') {
-        // Node's path.parse("/") preserves the root as the dir as well:
-        // { root: "/", dir: "/", base: "", ext: "", name: "" }.
-        root.clone()
-    } else {
-        match p.parent() {
-            Some(parent) => parent.to_string_lossy().to_string(),
-            None => String::new(),
-        }
-    };
-    let base = match p.file_name() {
-        Some(b) => b.to_string_lossy().to_string(),
-        None => String::new(),
-    };
-    let ext = match p.extension() {
-        Some(e) => format!(".{}", e.to_string_lossy()),
-        None => String::new(),
-    };
-    let name = match p.file_stem() {
-        Some(n) => n.to_string_lossy().to_string(),
-        None => String::new(),
-    };
+    let (root, dir, base, ext, name) = parse_posix_components(&path_str);
 
     // Build the object via shape with packed keys
     let packed = b"root\0dir\0base\0ext\0name\0";
@@ -1297,6 +1324,87 @@ pub extern "C" fn js_path_win32_relative(
         let mut parts: Vec<&str> = std::iter::repeat_n("..", ups).collect();
         parts.extend(to_segs[common..].iter().copied());
         string_to_js(&parts.join("\\"))
+    }
+}
+
+#[cfg(test)]
+mod posix_parse_tests {
+    use super::parse_posix_components;
+
+    fn parse(path: &str) -> (String, String, String, String, String) {
+        parse_posix_components(path)
+    }
+
+    #[test]
+    fn final_dot_segments_are_literal_base_names() {
+        assert_eq!(
+            parse("/tmp/."),
+            (
+                "/".to_string(),
+                "/tmp".to_string(),
+                ".".to_string(),
+                String::new(),
+                ".".to_string()
+            )
+        );
+        assert_eq!(
+            parse("/tmp/.."),
+            (
+                "/".to_string(),
+                "/tmp".to_string(),
+                "..".to_string(),
+                String::new(),
+                "..".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn trailing_separators_are_ignored_without_normalizing() {
+        assert_eq!(
+            parse("/foo//bar//"),
+            (
+                "/".to_string(),
+                "/foo/".to_string(),
+                "bar".to_string(),
+                String::new(),
+                "bar".to_string()
+            )
+        );
+        assert_eq!(
+            parse("foo//"),
+            (
+                String::new(),
+                String::new(),
+                "foo".to_string(),
+                String::new(),
+                "foo".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn dotfile_extension_rules_match_node() {
+        assert_eq!(
+            parse("/.bashrc"),
+            (
+                "/".to_string(),
+                "/".to_string(),
+                ".bashrc".to_string(),
+                String::new(),
+                ".bashrc".to_string()
+            )
+        );
+        assert_eq!(
+            parse(".profile.js"),
+            (
+                String::new(),
+                String::new(),
+                ".profile.js".to_string(),
+                ".js".to_string(),
+                ".profile".to_string()
+            )
+        );
     }
 }
 

@@ -673,6 +673,8 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
 /// Trace array elements.
 /// Elements may be NaN-boxed JSValues OR raw I64 pointers (codegen stores raw I64 for
 /// is_pointer/is_array/is_string typed arrays via js_array_set_jsvalue).
+// #854: part of GC fallback/verification trace path (also exercised by gc/tests)
+#[allow(dead_code)]
 pub(super) unsafe fn trace_array(
     user_ptr: *mut u8,
     valid_ptrs: &ValidPointerSet,
@@ -700,6 +702,8 @@ pub(super) unsafe fn trace_array(
 /// Trace object fields and keys array.
 /// Fields may be NaN-boxed JSValues OR raw I64 pointers (codegen stores some fields as raw I64).
 /// keys_array may be a raw pointer (*mut ArrayHeader) OR NaN-boxed (codegen may NaN-box it).
+// #854: part of GC fallback/verification trace path (also exercised by gc/tests)
+#[allow(dead_code)]
 pub(super) unsafe fn trace_object(
     user_ptr: *mut u8,
     valid_ptrs: &ValidPointerSet,
@@ -712,6 +716,8 @@ pub(super) unsafe fn trace_object(
 /// Trace closure captures
 /// Captures may be NaN-boxed JSValues OR raw I64 pointers bitcast to F64.
 /// Perry's codegen stores `is_string`/`is_array`/`is_closure` captures as raw I64 in some paths.
+// #854: part of GC fallback/verification trace path (also exercised by gc/tests)
+#[allow(dead_code)]
 pub(super) unsafe fn trace_closure(
     user_ptr: *mut u8,
     valid_ptrs: &ValidPointerSet,

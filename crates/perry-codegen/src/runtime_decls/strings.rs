@@ -492,7 +492,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_promisify", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_callbackify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_deprecate", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_util_parse_args", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
@@ -560,6 +562,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_title", DOUBLE, &[]);
     module.declare_function("js_process_set_title", VOID, &[DOUBLE]);
     module.declare_function("js_process_chdir", VOID, &[I64]);
+    // #2013 — f64-taking variant that validates type before dispatch.
+    module.declare_function("js_process_chdir_jsv", VOID, &[DOUBLE]);
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_abort", VOID, &[]);
@@ -571,6 +575,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_prepend_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_prepend_once_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_emit", DOUBLE, &[I64, I64]);
+    module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_remove_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_off", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_remove_all_listeners", DOUBLE, &[I64]);
@@ -687,6 +692,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_new_from_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_indexOf_f64", I32, &[I64, DOUBLE]);
     module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_array_last_index_of_jsvalue",
+        I32,
+        &[I64, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function("js_array_includes_f64", I32, &[I64, DOUBLE]);
     module.declare_function("js_array_includes_jsvalue", I32, &[I64, DOUBLE]);
     module.declare_function("js_map_size", I32, &[I64]);
@@ -1516,6 +1526,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // body iteration that queues a chained `.then` callback and the
     // next body iteration's microtask drain.
     module.declare_function("js_microtasks_pending", I32, &[]);
+    // #2013 — validate setTimeout/setInterval/setImmediate's first arg
+    // (callback), returning the unboxed pointer for the valid case and
+    // throwing TypeError ERR_INVALID_ARG_TYPE for everything else.
+    module.declare_function("js_timer_validate_callback", I64, &[DOUBLE, I32]);
     module.declare_function("js_set_timeout_callback", I64, &[I64, DOUBLE]);
     // Refs #665: `setTimeout(fn, delay, ...args)` with trailing args. The
     // args are packed into a stack buffer of doubles at the call site and

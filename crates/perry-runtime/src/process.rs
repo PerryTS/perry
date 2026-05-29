@@ -9,6 +9,20 @@ use crate::value::JSValue;
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
+    // #2013 — `process.exit('foo')` throws TypeError ERR_INVALID_ARG_TYPE
+    // in Node (the exit code must be a number, null, or undefined). The
+    // numeric default of `1` for NaN/Infinity in the pre-fix code only
+    // matters for the inferred numeric-coerce path; keep that fallback
+    // for the (degenerate) numeric NaN/Infinity case so existing call
+    // sites that pass a parsed-out number aren't surprised.
+    let jv = JSValue::from_bits(code.to_bits());
+    if !jv.is_undefined() && !jv.is_null() && !crate::fs::validate::is_numeric(jv) {
+        let message = format!(
+            "The \"code\" argument must be of type number or null. Received {}",
+            crate::fs::validate::describe_received(code)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
     let exit_code = if code.is_nan() || code.is_infinite() {
         1 // Default to 1 for invalid codes
     } else {
@@ -487,9 +501,20 @@ pub extern "C" fn js_process_active_resources_info() -> f64 {
 /// Non-unix targets return `{ user: 0, system: 0 }`.
 #[no_mangle]
 pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
+    // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
+    // is supplied but isn't an object (e.g. `process.cpuUsage('abc')`).
+    // Undefined / null fall through to the no-prior baseline read.
+    let prior_jv = JSValue::from_bits(prior.to_bits());
+    if !prior_jv.is_undefined() && !prior_jv.is_null() && !prior_jv.is_pointer() {
+        let message = format!(
+            "The \"prevValue\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(prior)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
     let (mut user_us, mut system_us) = read_process_cpu_micros();
     let undef_bits = crate::value::TAG_UNDEFINED;
-    if prior.to_bits() != undef_bits {
+    if prior.to_bits() != undef_bits && !prior_jv.is_null() {
         let (prev_user, prev_system) = extract_cpu_pair(prior);
         user_us = (user_us - prev_user).max(0.0);
         system_us = (system_us - prev_system).max(0.0);
@@ -1095,4 +1120,45 @@ unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> 
     crate::node_submodules::register_error_path(msg_ptr, target.to_string());
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+}
+
+// Issue #2013 — process-arg-validation helpers shared by `js_process_chdir`
+// and `js_process_hrtime`. Sited here (not os.rs) so the process surface's
+// validation logic stays under the 2000-line file gate as the os.rs splits
+// progress.
+
+/// `process.chdir(value)` entry point that takes the full NaN-boxed
+/// value. Throws `TypeError [ERR_INVALID_ARG_TYPE]` for any non-string
+/// (matching Node), then re-dispatches to `js_process_chdir` with the
+/// extracted `StringHeader`. The codegen now emits this entry instead
+/// of the bare string-only one so a `process.chdir(123)` call throws
+/// the right error code instead of garbage-deref'ing to an `ENOENT`
+/// based on whatever bytes the numeric value masqueraded as.
+#[no_mangle]
+pub unsafe extern "C" fn js_process_chdir_jsv(value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        let message = format!(
+            "The \"path\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    crate::os::js_process_chdir(ptr);
+}
+
+/// True when `jv` is a heap pointer whose GC type tag marks it as an
+/// Array. Used by `process.hrtime` to reject any non-array `prior`
+/// argument before reading the `[secs, nanos]` tuple.
+pub(crate) fn is_array_value(jv: JSValue) -> bool {
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
 }

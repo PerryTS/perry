@@ -1255,6 +1255,19 @@ pub unsafe extern "C" fn js_native_call_method(
                         let r = crate::array::js_array_includes_jsvalue(arr, value);
                         return f64::from_bits(JSValue::bool(r != 0).bits());
                     }
+                    "lastIndexOf" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let value = *args_ptr;
+                        // Optional fromIndex (2nd arg); absent → has_from=0.
+                        let (from_index, has_from) = if args_len >= 2 {
+                            (*args_ptr.add(1), 1)
+                        } else {
+                            (0.0, 0)
+                        };
+                        return crate::array::js_array_last_index_of_jsvalue(
+                            arr, value, from_index, has_from,
+                        ) as f64;
+                    }
                     "at" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
                         return crate::array::js_array_at(arr, *args_ptr);

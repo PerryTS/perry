@@ -190,6 +190,34 @@ pub(crate) fn lower_let(
         ctx.local_closure_param_counts.insert(id, params.len());
     }
 
+    // #1803: hoisted `var` redeclaration. A `var x` that appears more
+    // than once in a function (the canonical shape being `if (...) { var
+    // x = a } else { var x = b }`) lowers to multiple `Stmt::Let` that
+    // share the SAME hoisted HIR id, because `var` is function-scoped.
+    // The first occurrence allocated the slot and registered `id → slot`
+    // in `ctx.locals`. Re-running the allocation paths below for a later
+    // occurrence would `alloca` a FRESH slot and overwrite that map entry,
+    // so a read after the merge point binds to whichever branch was
+    // lowered LAST. At runtime only one branch executes, so the read sees
+    // an uninitialized slot whenever the *other* branch ran — silently
+    // returning undefined. This is what makes ajv's `standalone`
+    // per-property type guards (`var valid0 = ...` redeclared per branch,
+    // then `if (valid0) ...`) accept invalid input.
+    //
+    // Reuse the existing slot: route the redeclaration through `LocalSet`,
+    // the canonical write path that maintains every shadow (boxed cell,
+    // i32 mirror, GC shadow slot, closure capture). A redeclaration with
+    // no initializer (`var x;`) keeps the prior value, matching JS.
+    if ctx.locals.contains_key(&id) {
+        if let Some(init_expr) = init {
+            crate::expr::lower_expr(
+                ctx,
+                &perry_hir::Expr::LocalSet(id, Box::new(init_expr.clone())),
+            )?;
+        }
+        return Ok(());
+    }
+
     if let Some(init_expr) = init {
         match crate::native_value::layout_decision_for_type(ctx, &refined_ty) {
             PodLayoutDecision::Layout(_)

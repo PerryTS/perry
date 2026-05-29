@@ -228,6 +228,9 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
 /// doesn't have a lazy-specific fast path (only `.length` does)
 /// should funnel through this so correctness is preserved under
 /// arbitrary JS code.
+// #854: lazy-array materialization accessor (issue #179 Phase 2); funnel point
+// for non-fast-path array accessors, retained for the lazy-array contract
+#[allow(dead_code)]
 #[inline]
 pub(crate) unsafe fn maybe_force_lazy(arr: *const ArrayHeader) -> *const ArrayHeader {
     if arr.is_null() {

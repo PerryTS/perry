@@ -448,6 +448,7 @@ pub(super) enum BarrierTraceCounter {
 pub(super) struct GcCycleTrace {
     pub(super) collection_kind: GcCollectionKind,
     pub(super) trigger_kind: GcTriggerKind,
+    pub(super) progress_kind: GcProgressKind,
     pub(super) steps_before: GcStepSnapshot,
     pub(super) pause_us: u64,
     pub(super) phase_us: BTreeMap<&'static str, u64>,
@@ -500,6 +501,7 @@ impl GcCycleTrace {
         Some(Self {
             collection_kind,
             trigger_kind: trigger.kind,
+            progress_kind: trigger.kind.progress_kind(collection_kind),
             steps_before,
             pause_us: 0,
             phase_us,
@@ -719,6 +721,15 @@ impl GcCycleTrace {
         let trigger_json = serde_json::json!({
             "kind": self.trigger_kind.as_str(),
         });
+        let progress_budget = gc_progress_contract().budget_for(self.progress_kind);
+        let progress_contract_json = serde_json::json!({
+            "kind": self.progress_kind.as_str(),
+            "budget_unit": "work_units",
+            "configured_work_budget": progress_budget.work_units,
+            "soft_pause_target_us": progress_budget.pause_us,
+            "ordinary_budgeted": self.progress_kind.is_budgeted(),
+            "class": self.progress_kind.report_class(),
+        });
         let steps_value = steps_json(self.steps_before, steps_after);
         serde_json::json!({
             "event": "gc_cycle",
@@ -745,6 +756,7 @@ impl GcCycleTrace {
             "sweep": sweep_json,
             "write_barrier": write_barrier_json,
             "trigger": trigger_json,
+            "progress_contract": progress_contract_json,
             "steps": steps_value,
         })
     }

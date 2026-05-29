@@ -1071,7 +1071,17 @@ pub fn try_lower_extern_func_call(
         "setTimeout" if args.len() == 1 => {
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #2013 — validate the callback type before unboxing the
+            // pointer. `js_timer_validate_callback` throws
+            // ERR_INVALID_ARG_TYPE for any non-callable value and
+            // returns the raw closure pointer otherwise; the second
+            // arg `0` is the type-name index for "setTimeout".
+            let zero_idx = "0";
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, zero_idx)],
+            );
             let zero = double_literal(0.0);
             let id = blk.call(
                 I64,
@@ -1084,7 +1094,12 @@ pub fn try_lower_extern_func_call(
             let cb_box = lower_expr(ctx, &args[0])?;
             let delay_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let zero_idx = "0";
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, zero_idx)],
+            );
             let id = blk.call(
                 I64,
                 "js_set_timeout_callback",
@@ -1096,7 +1111,12 @@ pub fn try_lower_extern_func_call(
             let cb_box = lower_expr(ctx, &args[0])?;
             if args.len() == 1 {
                 let blk = ctx.block();
-                let cb_handle = unbox_to_i64(blk, &cb_box);
+                let two_idx = "2";
+                let cb_handle = blk.call(
+                    I64,
+                    "js_timer_validate_callback",
+                    &[(DOUBLE, &cb_box), (I32, two_idx)],
+                );
                 let id = blk.call(I64, "js_set_immediate_callback", &[(I64, &cb_handle)]);
                 return Ok(Some(nanbox_pointer_inline(blk, &id)));
             }
@@ -1115,7 +1135,12 @@ pub fn try_lower_extern_func_call(
                 ptr_reg, n, buf
             ));
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let two_idx = "2";
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, two_idx)],
+            );
             let id = blk.call(
                 I64,
                 "js_set_immediate_callback_args",
@@ -1146,7 +1171,12 @@ pub fn try_lower_extern_func_call(
                 ptr_reg, n, buf
             ));
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let zero_idx = "0";
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, zero_idx)],
+            );
             let id = blk.call(
                 I64,
                 "js_set_timeout_callback_args",
@@ -1163,7 +1193,12 @@ pub fn try_lower_extern_func_call(
             let cb_box = lower_expr(ctx, &args[0])?;
             let delay_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let one_idx = "1";
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, one_idx)],
+            );
             let id = blk.call(
                 I64,
                 "setInterval",
@@ -1188,7 +1223,12 @@ pub fn try_lower_extern_func_call(
                 ptr_reg, n, buf
             ));
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let one_idx = "1";
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, one_idx)],
+            );
             let id = blk.call(
                 I64,
                 "js_set_interval_callback_args",

@@ -15,6 +15,9 @@ pub struct LoginArgs {
     pub server: Option<String>,
 }
 
+// #854: deserialized OAuth start response; `ok` is part of the wire shape
+// but the client only consumes `authorize_url`.
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct StartResponse {
     ok: bool,

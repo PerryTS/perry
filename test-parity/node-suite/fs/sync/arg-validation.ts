@@ -63,6 +63,50 @@ probe("writeSync({},'x')", () => fs.writeSync({} as any, "x"));
 probe("writevSync(null,[])", () => fs.writevSync(null as any, []));
 probe("writevSync(null,[Buffer.from('x')])", () => fs.writevSync(null as any, [Buffer.from("x")]));
 
+// #2013 extension — gap-fill for fd-only / path-mutator surface that
+// PR #2035 didn't reach: each new probe pins both the
+// non-numeric → ERR_INVALID_ARG_TYPE branch and the numeric-but-not-open
+// → EBADF branch where applicable. Trimmed shapes only; the upper block
+// already covers boolean-vs-object-vs-NaN-vs-Infinity for the legacy set.
+
+// closeSync(fd) — fd validation + EBADF on a closed/unknown fd.
+probe("closeSync(true)", () => fs.closeSync(true as any));
+probe("closeSync(123)", () => fs.closeSync(123 as any));
+
+// readSync(fd, buf, …) — same shape; needs a real buffer arg to clear
+// the buffer-shape check before the fd path runs.
+probe("readSync(true,buf,0,1,0)", () =>
+  fs.readSync(true as any, Buffer.alloc(1), 0, 1, 0),
+);
+probe("readSync(123,buf,0,1,0)", () =>
+  fs.readSync(123 as any, Buffer.alloc(1), 0, 1, 0),
+);
+
+// readvSync(fd, buffers) — non-empty iovec branch triggers EBADF.
+probe("readvSync(true,[buf])", () =>
+  fs.readvSync(true as any, [Buffer.alloc(1)]),
+);
+probe("readvSync(123,[buf])", () =>
+  fs.readvSync(123 as any, [Buffer.alloc(1)]),
+);
+
+// fchmodSync(fd, mode) — fd validation, plus mode out-of-range on a
+// valid (numeric) fd via the EBADF path.
+probe("fchmodSync(true,0o755)", () => fs.fchmodSync(true as any, 0o755));
+probe("fchmodSync(123,0o755)", () => fs.fchmodSync(123 as any, 0o755));
+
+// writeSync(fd, …) — numeric-but-unknown fd must flip from "no-throw,
+// returns 0" to EBADF.
+probe("writeSync(123,'x')", () => fs.writeSync(123 as any, "x"));
+probe("writeSync(123,buf)", () => fs.writeSync(123 as any, Buffer.from("x")));
+
+// chmodSync(path, mode) — path-only validation.
+probe("chmodSync(true,0o755)", () => fs.chmodSync(true as any, 0o755));
+
+// renameSync(oldPath, newPath) — both args path-validated.
+probe("renameSync(true,'/x')", () => fs.renameSync(true as any, "/x"));
+probe("renameSync('/x',42)", () => fs.renameSync("/x", 42 as any));
+
 // `existsSync` never throws on bad input (Node 22+ instead prints DEP0187
 // to stderr, which the parity runner would capture into the diff). The
 // no-throw contract is exercised by other tests in this suite.

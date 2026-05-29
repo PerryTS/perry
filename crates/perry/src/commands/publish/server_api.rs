@@ -2,6 +2,9 @@ use super::*;
 
 // --- Server API types ---
 
+// #854: deserialized server response — full wire shape kept even where a
+// field isn't consumed on the client path.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct RegisterResponse {
     pub(super) license_key: String,
@@ -9,6 +12,8 @@ pub(super) struct RegisterResponse {
     pub(super) platforms: Vec<String>,
 }
 
+// #854: deserialized server response — full wire shape kept.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct BuildResponse {
     pub(super) job_id: String,
@@ -16,6 +21,9 @@ pub(super) struct BuildResponse {
     pub(super) position: usize,
 }
 
+// #854: full server-message protocol — every variant/field is part of the
+// deserialized wire contract; some payload fields aren't consumed yet.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum ServerMessage {

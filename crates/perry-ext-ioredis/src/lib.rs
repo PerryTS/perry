@@ -22,6 +22,9 @@ use std::time::Duration;
 const DEFAULT_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) struct RedisClient {
+    // #854: connection URL is looked up via the URLS side-map at connect time;
+    // this mirrored field is retained for the client record but not read back.
+    #[allow(dead_code)]
     url: String,
 }
 
