@@ -284,6 +284,27 @@ mod tests {
     }
 
     #[test]
+    fn deprecated_constants_alias_has_manifest_entries() {
+        for name in [
+            "F_OK",
+            "SIGTERM",
+            "SIGINT",
+            "EACCES",
+            "PRIORITY_NORMAL",
+            "RTLD_DEEPBIND",
+            "RSA_PKCS1_PADDING",
+            "SSL_OP_NO_SSLv2",
+            "SSL_OP_NO_TLSv1",
+            "POINT_CONVERSION_COMPRESSED",
+            "POINT_CONVERSION_UNCOMPRESSED",
+        ] {
+            let entry = module_has_symbol("node:constants", name)
+                .expect("node:constants representative property should be in the manifest");
+            assert!(matches!(entry.kind, ApiKind::Property));
+        }
+    }
+
+    #[test]
     fn known_modules_consistent_with_manifest() {
         // Every entry's module must appear in NATIVE_MODULES.
         // Catches typos and entries on un-registered modules.
