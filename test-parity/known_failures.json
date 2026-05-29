@@ -38,12 +38,6 @@
     "category": "bug-stale",
     "reason": "#561 (Web Crypto subtle.digest/sign for HMAC-SHA-256) closed but the SigV4 chain test still regresses on Linux CI. Bisect needed for crypto/HMAC ordering on Linux; file a Linux-specific tracking issue once the divergence is identified."
   },
-  "test_issue_654_typed_array_dispatch": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "bug-stale",
-    "reason": "#654 (Float64Array typeof + .sort/.at dispatch) closed but the typed-array dispatch test still regresses on Linux CI. Linux-specific dispatch divergence; bisect needed before re-filing."
-  },
   "test_issue_685_nested_class_static_param": {
     "issue": "793",
     "added": "2026-05-15",
@@ -314,12 +308,6 @@
     "category": "bug-open",
     "reason": "node:stream: `readable` event (paused-mode trigger) doesn't fire. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/options/decode-strings-false": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: decodeStrings:false option not honored (writes still arrive as Buffer). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/wrap-old-stream": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -379,12 +367,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: read + unshift + re-read sequence doesn't deliver chunks in the right order. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/object-mode/read-single-object": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: read() on objectMode stream should return one object per call. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/with-async-fn": {
     "issue": "1539",
@@ -500,12 +482,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipe() called twice with same destination duplicates writes (should be no-op for second call). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-with-options": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(iter, options) \u2014 2nd-arg stream options (objectMode/highWaterMark) ignored. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/pipe/end-false-option": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -535,12 +511,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: writer.desiredSize w/ CountQueuingStrategy \u2014 fails to compile (CountQueuingStrategy constructor not on globalThis). Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/events/once-returns-promise": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: events.once(stream, 'end') \u2014 Promise-returning form does not resolve correctly. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/error-mid-chain": {
     "issue": "1531",
@@ -614,12 +584,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: getReader({mode:'byob'}) on non-byte stream does not throw TypeError. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/unshift-increases-length": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift() \u2014 readableLength does not grow by chunk size. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/instance-chain": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -644,12 +608,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw \u2014 composite does not emit 'error'. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/pipe/dest-error-propagates": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe error semantics \u2014 destination error or source close state differs from Node. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/options/auto-destroy-true-default": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -667,12 +625,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(POJO-with-Symbol.iterator) \u2014 does not iterate the custom iterable. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/unshift-return-value": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift() return value \u2014 not undefined. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/buffer-preserves": {
     "issue": "1531",
@@ -697,12 +649,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(stream) \u2014 single-stream form does not return Duplex wrap. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/readable/unshift-buffer": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift(Buffer) \u2014 explicit Buffer not properly added to front of buffer queue. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/desired-size-restores-after-drain": {
     "issue": "1545",
@@ -734,12 +680,6 @@
     "category": "bug-open",
     "reason": "node:stream: r.compose(t1).compose(t2) chained \u2014 output stream produces wrong chunks. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/events/emit-error-with-capture": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: captureRejections \u2014 async listener throws not caught into 'error' event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/abort-during-pipeto": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -758,12 +698,6 @@
     "category": "bug-open",
     "reason": "node:stream: destroy() inside _read() \u2014 readCalls count or close-event behavior wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/writable/sink-write-rejection-becomes-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: sink write cb(err) \u2014 does not emit 'error' event. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/empty-pure-end": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -775,12 +709,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(asyncGen()) \u2014 iteration wrong or fails. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/unshift-while-flowing": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift() during flowing mode \u2014 chunk not re-emitted in order. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/compose-with-passthrough": {
     "issue": "1531",
@@ -799,12 +727,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipe(dst,{end:false}) then manual dst.write \u2014 output order/count wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/once-static-promise": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: events.once(stream, 'end') Promise \u2014 args shape wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/pipeline/async-fn-rejection-propagates": {
     "issue": "1532",
@@ -1016,12 +938,6 @@
     "category": "bug-open",
     "reason": "node:stream: for-await break \u2014 custom iterator.return() not invoked. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/events/captureRejections-constructor": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable({captureRejections}) \u2014 async listener throws not caught as 'error'. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/iter-helpers/some-finds-match": {
     "issue": "1558",
     "added": "2026-05-24",
@@ -1082,12 +998,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(string) \u2014 does not throw TypeError. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/static-from-with-options": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(iter, opts) \u2014 objectMode/hwm 2nd-arg not applied. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/two-stage-error-stops": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -1123,12 +1033,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: reduce(fn, initial) \u2014 initial value not used or wrong sum. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/for-each-empty-stream": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: forEach() on empty \u2014 calls non-zero or result not undefined. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/readable/readable-stream-id-properties": {
     "issue": "1532",

@@ -2385,6 +2385,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method("util", "isDeepStrictEqual", false, None),
+    method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
@@ -2935,6 +2936,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- perry/system — auto-derivable from PERRY_SYSTEM_TABLE. ---
     method("perry/system", "isDarkMode", false, None),
     method("perry/system", "getDeviceIdiom", false, None),
+    method("perry/system", "getSafeAreaInsets", false, None),
     method("perry/system", "getDeviceModel", false, None),
     // Bug-report-flow utility: stable OS-version string per
     // platform (e.g. `"15.2"`, `"macOS 14.5"`, `"Android 14"`).

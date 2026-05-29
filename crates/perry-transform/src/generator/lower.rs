@@ -731,7 +731,9 @@ pub fn build_async_step_driver_direct(
     let bool_ty = Type::Boolean;
 
     let promise_global = || Expr::GlobalGet(0);
-    let promise_resolve = |arg: Expr| Expr::Call {
+    // #854: paired resolve-builder kept alongside the used promise_reject for
+    // symmetry of the async-step driver; not emitted on the current path.
+    let _promise_resolve = |arg: Expr| Expr::Call {
         callee: Box::new(Expr::PropertyGet {
             object: Box::new(promise_global()),
             property: "resolve".to_string(),

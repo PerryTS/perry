@@ -457,11 +457,15 @@ pub(crate) fn gc_type_is_movable(obj_type: u8) -> bool {
     gc_type_info(obj_type).is_some_and(|info| info.movable)
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn gc_type_external_byte_policy(obj_type: u8) -> GcExternalBytePolicy {
     gc_type_info(obj_type).map_or(GcExternalBytePolicy::None, |info| info.external_byte_policy)
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn gc_type_large_object_policy(obj_type: u8) -> GcLargeObjectPolicy {
     gc_type_info(obj_type).map_or(GcLargeObjectPolicy::NotApplicable, |info| {
@@ -469,6 +473,8 @@ pub(crate) fn gc_type_large_object_policy(obj_type: u8) -> GcLargeObjectPolicy {
     })
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn gc_type_is_pointer_free(obj_type: u8) -> bool {
     gc_type_info(obj_type).map_or(true, |info| info.pointer_free)
@@ -551,6 +557,8 @@ pub(super) fn gc_type_name(obj_type: u8) -> &'static str {
     gc_type_info(obj_type).map_or("unknown", |info| info.name)
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static str> {
     let descriptor_is_leaf = info.rewrite_descriptor_kind == GcRewriteDescriptorKind::Leaf;
     if info.pointer_free {
@@ -605,6 +613,8 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
     Ok(())
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 pub(crate) fn validate_gc_type_metadata() -> Result<(), String> {
     for info in gc_type_infos() {
         validate_gc_type_info(info)

@@ -1221,6 +1221,9 @@ pub(super) fn compile_for_wearos_tile(
 }
 
 /// Compile for web target: emit JavaScript + HTML instead of native code
+// #854: web-target compile path; currently unreferenced from the dispatch
+// but kept as the JS+HTML emission entry point for `--target web`.
+#[allow(dead_code)]
 pub(super) fn compile_for_web(
     ctx: &CompilationContext,
     args: &CompileArgs,
