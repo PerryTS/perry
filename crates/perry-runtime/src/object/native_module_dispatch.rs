@@ -910,6 +910,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
+        // #2514: libuv-style errno → name/message/map helpers.
+        ("util", "getSystemErrorName") => crate::util_syserr::js_util_get_system_error_name(arg(0)),
+        ("util", "getSystemErrorMessage") => {
+            crate::util_syserr::js_util_get_system_error_message(arg(0))
+        }
+        ("util", "getSystemErrorMap") => crate::util_syserr::js_util_get_system_error_map(),
         ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {

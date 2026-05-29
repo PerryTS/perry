@@ -144,6 +144,7 @@ mod ui_harmonyos_stubs;
 pub mod ui_text_registry;
 pub mod util_parse_args;
 pub mod util_promisify;
+pub mod util_syserr;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
 pub mod watchos_game_loop;
 pub mod weakref;

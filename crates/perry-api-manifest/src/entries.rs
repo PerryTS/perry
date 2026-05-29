@@ -2375,6 +2375,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     //     the rest are documented stubs) ---
     method("util", "inspect", false, None),
     method("util", "format", false, None),
+    // #2514: libuv-style errno helpers.
+    method("util", "getSystemErrorName", false, None),
+    method("util", "getSystemErrorMessage", false, None),
+    method("util", "getSystemErrorMap", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm

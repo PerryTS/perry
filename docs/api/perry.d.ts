@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1517 entries across 84 modules
+// Coverage: 1520 entries across 84 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2134,6 +2134,12 @@ declare module "util" {
   export function format(...args: any[]): any;
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
+  /** stdlib */
+  export function getSystemErrorMap(...args: any[]): any;
+  /** stdlib */
+  export function getSystemErrorMessage(...args: any[]): any;
+  /** stdlib */
+  export function getSystemErrorName(...args: any[]): any;
   /** stdlib */
   export function inherits(...args: any[]): any;
   /** stdlib */
