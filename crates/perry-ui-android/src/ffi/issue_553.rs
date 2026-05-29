@@ -293,3 +293,16 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
     }
     unsafe { js_string_from_bytes(std::ptr::null(), 0) as i64 }
 }
+
+/// #1475 — safe-area insets. Reports all-zero for now. A real implementation
+/// reads `decorView.getRootWindowInsets().getInsets(WindowInsets.Type.systemBars())`
+/// over JNI (top status bar, bottom navigation/gesture bar) and converts px→dp;
+/// tracked as a follow-up so the host-tested iOS path can land first. The
+/// symbol is defined here so `getSafeAreaInsets()` links on Android.
+#[no_mangle]
+pub extern "C" fn perry_system_get_safe_area_insets() -> f64 {
+    extern "C" {
+        fn perry_safe_area_insets_make(top: f64, right: f64, bottom: f64, left: f64) -> f64;
+    }
+    unsafe { perry_safe_area_insets_make(0.0, 0.0, 0.0, 0.0) }
+}

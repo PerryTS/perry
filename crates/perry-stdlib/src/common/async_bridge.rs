@@ -574,9 +574,9 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // Check for active WebSocket servers/connections
     #[cfg(feature = "websocket")]
     {
-        extern "C" {
-            fn js_ws_process_pending() -> i32;
-        }
+        // #854: removed an unused `js_ws_process_pending` extern decl here —
+        // this block only checks for active handles; the drain path with its
+        // own extra decl lives earlier in the pump.
         // If there are pending WS events, keep running
         // (we don't drain here — just check)
         let has_ws = crate::ws::js_ws_has_active_handles();

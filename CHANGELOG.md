@@ -2,6 +2,36 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1034 — Number()/unary-+ applies ToPrimitive→ToString to arrays/objects (#2378)
+
+`Number(value)` (and unary `+`) returned `NaN` for every array and object
+because `js_number_coerce`'s pointer/array branch only consulted a custom
+`[Symbol.toPrimitive]("number")` and otherwise fell straight to `NaN` — it
+never completed OrdinaryToPrimitive's ToString step.
+
+Fix: in `crates/perry-runtime/src/builtins/numbers.rs`, when no custom
+`[Symbol.toPrimitive]` is present, stringify the object via
+`js_jsvalue_to_string` (arrays → `join(",")`, objects → own/inherited
+`toString`) and re-run `js_number_coerce` on the resulting string. Because the
+result is a string, the recursive call lands in the string branch (which now
+correctly maps `""` → 0), so there's no pointer-branch recursion.
+
+Now matches Node byte-for-byte:
+
+```
+Number([])      // 0      ([] -> "" -> 0)
+Number([5])     // 5      ([5] -> "5" -> 5)
+Number(["7"])   // 7
+Number([" 3 "]) // 3
+Number([1,2])   // NaN    ("1,2" -> NaN)
+Number({})      // NaN    ("[object Object]" -> NaN)
+Number([[]])    // 0
++[]             // 0
++[42]           // 42
+```
+
+Found while fixing Number() radix-prefix parsing (#2377 / #800); pre-existing.
+
 ## v0.5.1033 — allowlist class_registry.rs for the file-size lint gate
 
 `crates/perry-runtime/src/object/class_registry.rs` crossed the 2000-line

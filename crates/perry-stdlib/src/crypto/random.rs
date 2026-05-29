@@ -1,12 +1,59 @@
 use super::*;
 
+/// Issue #2013 — Node throws on `crypto.randomBytes` for the same
+/// bad-input shapes the fs/process surface already covers: a
+/// non-number (`{}`, `'abc'`, `true`) raises `TypeError
+/// [ERR_INVALID_ARG_TYPE]`, and any number outside `[0, 2^31 - 1]`
+/// (negative, fractional, NaN/Infinity) raises `RangeError
+/// [ERR_OUT_OF_RANGE]`. The codegen passes the full NaN-boxed bits
+/// as f64, so a JS pointer-tagged `{}` arrives here as a NaN that
+/// the legacy `size as usize` silently truncated to 0 — making the
+/// call return an empty buffer instead of throwing.
+fn validate_random_bytes_size(size: f64) -> usize {
+    let jv = JSValue::from_bits(size.to_bits());
+    if !jv.is_number() && !jv.is_int32() {
+        let message = format!(
+            "The \"size\" argument must be of type number. Received {}",
+            perry_runtime::fs::validate::describe_received(size)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        size
+    };
+    // Node truncates a fractional `randomBytes(1.5)` to 1 (no throw)
+    // but rejects NaN/Infinity/negative/out-of-range with
+    // ERR_OUT_OF_RANGE — fractional integers are NOT in the reject set.
+    if !n.is_finite() || n < 0.0 || n > i32::MAX as f64 {
+        let received = if n.is_nan() {
+            "NaN".to_string()
+        } else if n.is_infinite() {
+            if n.is_sign_negative() {
+                "-Infinity".to_string()
+            } else {
+                "Infinity".to_string()
+            }
+        } else {
+            format!("{}", n)
+        };
+        let message = format!(
+            "The value of \"size\" is out of range. It must be >= 0 && <= 2147483647. Received {}",
+            received
+        );
+        perry_runtime::fs::validate::throw_range_error_with_code(&message);
+    }
+    n as usize
+}
+
 /// Generate random bytes and return as a Buffer
 /// crypto.randomBytes(size) -> Buffer
 #[no_mangle]
 pub extern "C" fn js_crypto_random_bytes_buffer(
     size: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    let size = size as usize;
+    let size = validate_random_bytes_size(size);
     if size == 0 || size > 1024 * 1024 {
         return perry_runtime::buffer::buffer_alloc(0);
     }
@@ -64,16 +111,54 @@ pub extern "C" fn js_crypto_random_uuid() -> *mut StringHeader {
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
+/// Issue #2013 — validate one of `randomInt`'s integer arguments
+/// (min/max). Non-number → ERR_INVALID_ARG_TYPE; non-finite /
+/// fractional / out-of-(-2^48, 2^48) → ERR_OUT_OF_RANGE. Mirrors
+/// `validate_random_bytes_size` but with the wider int bound Node
+/// accepts for randomInt's `min`/`max`.
+fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_number() && !jv.is_int32() {
+        let message = format!(
+            "The \"{}\" argument must be of type number. Received {}",
+            arg_name,
+            perry_runtime::fs::validate::describe_received(value)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        value
+    };
+    // Node's `validateInteger` splits the rejection by error code:
+    // non-integer (NaN, Infinity, fractional) → ERR_INVALID_ARG_TYPE;
+    // out-of-range integer (outside [-2^48, 2^48]) → ERR_OUT_OF_RANGE.
+    if !n.is_finite() || n.fract() != 0.0 {
+        let message = format!(
+            "The \"{}\" argument must be a safe integer. Received {}",
+            arg_name,
+            perry_runtime::fs::validate::describe_received(value)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let bound = (1i64 << 48) as f64;
+    if n < -bound || n > bound {
+        let message = format!(
+            "The value of \"{}\" is out of range. It must be a safe integer type number. Received {}",
+            arg_name, n
+        );
+        perry_runtime::fs::validate::throw_range_error_with_code(&message);
+    }
+    n as i64
+}
+
 /// `crypto.randomInt(max)` / `crypto.randomInt(min, max)` synchronous form.
 /// Returns a uniformly distributed integer in `[min, max)`.
 #[no_mangle]
 pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
-    let Some(min) = nanboxed_to_i64(min_bits) else {
-        return f64::NAN;
-    };
-    let Some(max) = nanboxed_to_i64(max_bits) else {
-        return f64::NAN;
-    };
+    let min = validate_random_int_arg(min_bits, "min");
+    let max = validate_random_int_arg(max_bits, "max");
     if max <= min {
         return f64::NAN;
     }

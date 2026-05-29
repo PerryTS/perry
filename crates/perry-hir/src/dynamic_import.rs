@@ -361,7 +361,7 @@ fn flatten_into<'a, F>(
     }
 }
 
-/// Issue #100 / #1725: collect every `Stmt::Let { mutable: false, init: Some(_), .. }`
+/// Issue #100 / #1725 / #1674: collect every `Stmt::Let { init: Some(_), .. }`
 /// reachable in the module into a `local_id → init_expr` map — the module-init
 /// body, every function / method / constructor body, and (descending) nested
 /// closure bodies.
@@ -383,12 +383,13 @@ fn flatten_into<'a, F>(
 /// resolves at the import site. `LocalId`s are module-unique, so a single flat
 /// id→init map across all scopes is unambiguous.
 ///
-/// Mutable bindings (`let`, `var`, reassigned-anywhere consts) are excluded —
-/// only `const x = <single_init>` shapes participate. This matches the spec's
-/// "single SSA def to a resolvable expression" constraint without a full SSA
-/// pass: TypeScript-style `const` already guarantees a single assignment, and an
-/// occasional later `LocalSet` (an erased TS reassignment that survived to HIR)
-/// invalidates the entry below so it falls back to Unresolved.
+/// Both `const` and `let`/`var` single-init bindings participate, but any
+/// binding that is *reassigned* anywhere (a later `LocalSet`) is excluded by the
+/// mutation scan below — so the effective constraint is the spec's "single SSA
+/// def to a resolvable expression" without a full SSA pass. `const` guarantees
+/// this by construction; a `let p = <init>` that is never written again is
+/// single-assignment in practice and resolves identically (#1674). A genuinely
+/// mutated binding falls back to Unresolved.
 pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap<u32, Expr> {
     use std::collections::HashMap;
     let mut consts: HashMap<u32, Expr> = HashMap::new();
@@ -471,14 +472,17 @@ pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap
 fn collect_const_locals_stmt(stmt: &Stmt, out: &mut std::collections::HashMap<u32, Expr>) {
     match stmt {
         Stmt::Let {
-            id,
-            init: Some(e),
-            mutable,
-            ..
+            id, init: Some(e), ..
         } => {
-            if !*mutable {
-                out.insert(*id, e.clone());
-            }
+            // #1674: collect both `const` and never-reassigned `let`/`var`
+            // bindings (regardless of the `mutable` flag). A `let p = <expr>`
+            // that is never written again is single-assignment in practice —
+            // `collect_module_const_locals`'s mutation scan removes any id that
+            // later receives a `LocalSet`, so a genuinely reassigned binding
+            // still falls back to Unresolved. This lets a path bound to a
+            // resolvable init resolve, e.g.
+            // `let p = cond ? './a.ts' : './b.ts'; await import(p)`.
+            out.insert(*id, e.clone());
             collect_const_locals_expr(e, out);
         }
         Stmt::Let { init: None, .. } => {}
@@ -730,6 +734,81 @@ pub fn resolve_import_path(arg: &Expr) -> Resolution {
 /// per-call cycle-breaker — a const initializer that references its
 /// own id (impossible in well-formed TS, but defensive) returns
 /// Unresolved instead of recursing infinitely.
+/// #1674 sub-part B (glob): when a template-literal specifier has a fixed,
+/// relative, directory-anchored `prefix`, a fixed `suffix`, and a
+/// non-statically-resolvable middle (`import(`./plugins/${name}.ts`)`),
+/// return `(prefix, suffix)` so the driver can glob `<prefix>*<suffix>`
+/// against the importing module's directory and enumerate the candidates.
+///
+/// Returns `None` for anything that isn't this shape — fully-resolvable
+/// templates (handled by [`resolve_import_path_with_consts`]) and patterns
+/// with no fixed, directory-bearing prefix (too broad to glob safely). The
+/// resolver itself performs no filesystem I/O; the driver owns the readdir.
+pub fn dynamic_import_glob_pattern(
+    arg: &Expr,
+    consts: &std::collections::HashMap<u32, Expr>,
+) -> Option<(String, String)> {
+    // Only template-literal concatenations (`Binary(Add, …)`) can glob.
+    if !matches!(
+        arg,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let mut parts: Vec<&Expr> = Vec::new();
+    flatten_concat(arg, &mut parts);
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // A part resolves to a single fixed string, or it doesn't (wildcard).
+    let single = |p: &Expr| -> Option<String> {
+        let mut visiting = std::collections::HashSet::new();
+        match resolve_import_path_with_consts(p, consts, &mut visiting) {
+            Resolution::Set(v) if v.len() == 1 => Some(v.into_iter().next().unwrap()),
+            _ => None,
+        }
+    };
+
+    // Leading fixed parts → prefix.
+    let mut prefix = String::new();
+    let mut i = 0;
+    while i < parts.len() {
+        match single(parts[i]) {
+            Some(s) => {
+                prefix.push_str(&s);
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    // Trailing fixed parts → suffix.
+    let mut suffix = String::new();
+    let mut j = parts.len();
+    while j > i {
+        match single(parts[j - 1]) {
+            Some(s) => {
+                suffix.insert_str(0, &s);
+                j -= 1;
+            }
+            None => break,
+        }
+    }
+    // Need at least one non-fixed (wildcard) part between prefix and suffix.
+    if i >= j {
+        return None;
+    }
+    // The prefix must be a relative specifier with a directory component so
+    // the glob is scoped to one folder (never the whole project / node_modules).
+    if !(prefix.starts_with("./") || prefix.starts_with("../")) || !prefix.contains('/') {
+        return None;
+    }
+    Some((prefix, suffix))
+}
+
 pub fn resolve_import_path_with_consts(
     arg: &Expr,
     consts: &std::collections::HashMap<u32, Expr>,
@@ -802,10 +881,11 @@ pub fn resolve_import_path_with_consts(
                 resolve_import_path_with_consts(init, consts, visiting)
             } else {
                 Resolution::Unresolved(
-                    "path argument references a binding that is not a module-level \
-                     const initialized to a literal (only string literals, ternaries, \
-                     template literals over const locals, and the module-level consts \
-                     themselves are supported)"
+                    "path argument references a binding that is not statically \
+                     resolvable to a literal (supported: string literals, ternaries, \
+                     template literals over resolvable locals, and `const`/never-\
+                     reassigned `let` bindings initialized to a resolvable value; a \
+                     binding reassigned anywhere falls back here)"
                         .to_string(),
                 )
             };
@@ -1104,6 +1184,60 @@ mod tests {
     }
 
     #[test]
+    fn collect_includes_unreassigned_let_but_drops_reassigned() {
+        // #1674: a `let` (mutable) that is never reassigned resolves like a
+        // const; a reassigned one still falls back to Unresolved.
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 1,
+            name: "stableLet".into(),
+            ty: perry_types::Type::String,
+            mutable: true,
+            init: Some(Expr::String("./a.ts".into())),
+        });
+        m.init.push(Stmt::Let {
+            id: 2,
+            name: "reassignedLet".into(),
+            ty: perry_types::Type::String,
+            mutable: true,
+            init: Some(Expr::String("./b.ts".into())),
+        });
+        m.init.push(Stmt::Expr(Expr::LocalSet(
+            2,
+            Box::new(Expr::String("./c.ts".into())),
+        )));
+        let consts = collect_module_const_locals(&m);
+        assert!(matches!(consts.get(&1), Some(Expr::String(s)) if s == "./a.ts"));
+        assert!(!consts.contains_key(&2));
+    }
+
+    #[test]
+    fn resolve_unreassigned_let_ternary_union() {
+        // The #1674 acceptance shape: `let p = cond ? './a.ts' : './b.ts'`.
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "p".into(),
+            ty: perry_types::Type::String,
+            mutable: true,
+            init: Some(Expr::Conditional {
+                condition: Box::new(Expr::Bool(true)),
+                then_expr: Box::new(Expr::String("./a.ts".into())),
+                else_expr: Box::new(Expr::String("./b.ts".into())),
+            }),
+        });
+        let consts = collect_module_const_locals(&m);
+        let mut visiting = std::collections::HashSet::new();
+        match resolve_import_path_with_consts(&Expr::LocalGet(5), &consts, &mut visiting) {
+            Resolution::Set(mut v) => {
+                v.sort();
+                assert_eq!(v, vec!["./a.ts", "./b.ts"]);
+            }
+            Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+        }
+    }
+
+    #[test]
     fn resolve_closure_local_const_specifier() {
         // #1725: `() => { const cfWorkers = "cloudflare:workers"; import(cfWorkers) }`
         // — the const lives inside a closure body (hono's getColorEnabledAsync
@@ -1302,5 +1436,56 @@ mod tests {
         m.init.push(Stmt::Expr(closure));
         detect_top_level_await(&mut m);
         assert!(!m.has_top_level_await);
+    }
+
+    // #1674 sub-B: `("./plugins/" + name) + ".ts"` where `name` is a
+    // non-resolvable local — the HIR shape of `` `./plugins/${name}.ts` ``.
+    fn glob_chain(prefix: &str, suffix: &str, wild_id: u32) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::String(prefix.into())),
+                right: Box::new(Expr::LocalGet(wild_id)),
+            }),
+            right: Box::new(Expr::String(suffix.into())),
+        }
+    }
+
+    #[test]
+    fn glob_pattern_extracts_relative_prefix_and_suffix() {
+        let consts = std::collections::HashMap::new();
+        let arg = glob_chain("./plugins/", ".ts", 1);
+        assert_eq!(
+            dynamic_import_glob_pattern(&arg, &consts),
+            Some(("./plugins/".to_string(), ".ts".to_string()))
+        );
+    }
+
+    #[test]
+    fn glob_pattern_rejects_non_relative_or_dirless_prefix() {
+        let consts = std::collections::HashMap::new();
+        // bare prefix with no directory component — too broad to glob.
+        assert_eq!(
+            dynamic_import_glob_pattern(&glob_chain("locale_", ".ts", 1), &consts),
+            None
+        );
+        // absolute / package prefix — not a relative directory glob.
+        assert_eq!(
+            dynamic_import_glob_pattern(&glob_chain("@scope/", ".ts", 1), &consts),
+            None
+        );
+    }
+
+    #[test]
+    fn glob_pattern_none_when_fully_resolvable() {
+        // No wildcard part — the normal resolver handles this, not the glob.
+        let consts = std::collections::HashMap::new();
+        let arg = Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::String("./a".into())),
+            right: Box::new(Expr::String(".ts".into())),
+        };
+        assert_eq!(dynamic_import_glob_pattern(&arg, &consts), None);
     }
 }

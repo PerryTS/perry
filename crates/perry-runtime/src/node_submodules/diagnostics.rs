@@ -613,6 +613,8 @@ pub(crate) fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
     }
 }
 
+// #854: diagnostics_channel captured-error helper retained for the subsystem
+#[allow(dead_code)]
 pub(crate) extern "C" fn throw_captured_error(closure: *const ClosureHeader) -> f64 {
     let err = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     crate::exception::js_throw(err)
@@ -1528,6 +1530,8 @@ thread_local! {
     pub(crate) static DIAG_NOOP_CLOSURE: RefCell<Option<*mut ClosureHeader>> = const { RefCell::new(None) };
 }
 
+// #854: diagnostics_channel noop-closure helper retained for the subsystem
+#[allow(dead_code)]
 pub(crate) fn ensure_diag_noop_closure() -> *mut ClosureHeader {
     DIAG_NOOP_CLOSURE.with(|slot| {
         if let Some(ptr) = *slot.borrow() {

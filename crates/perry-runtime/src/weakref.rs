@@ -28,13 +28,21 @@ const FINREG_SHAPE_ID: u32 = 0x7FFF_FE11;
 pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0029;
 pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
 
+/// The full `util.inspect` body for a weak-collection wrapper, or `None` if
+/// `obj` isn't one. Returning the complete string (not just the class name)
+/// lets WeakMap/WeakSet print Node's `{ <items unknown> }` placeholder — their
+/// contents are intentionally not enumerable — while WeakRef /
+/// FinalizationRegistry stay `{}`. Without this, WeakMap/WeakSet leaked their
+/// `__perry_wk_entries` storage field (e.g. `{ __perry_wk_entries: [] }`).
 pub(crate) fn weak_wrapper_inspect_label(obj: *const ObjectHeader) -> Option<&'static str> {
     if obj.is_null() {
         return None;
     }
     match unsafe { (*obj).class_id } {
-        CLASS_ID_WEAKREF => Some("WeakRef"),
-        CLASS_ID_FINALIZATION_REGISTRY => Some("FinalizationRegistry"),
+        CLASS_ID_WEAKREF => Some("WeakRef {}"),
+        CLASS_ID_FINALIZATION_REGISTRY => Some("FinalizationRegistry {}"),
+        CLASS_ID_WEAKMAP => Some("WeakMap { <items unknown> }"),
+        CLASS_ID_WEAKSET => Some("WeakSet { <items unknown> }"),
         _ => None,
     }
 }
@@ -417,4 +425,28 @@ pub extern "C" fn js_weak_throw_primitive() -> f64 {
     let err = crate::error::js_error_new_with_message(msg_str);
     let err_val = JSValue::pointer(err as *const u8);
     crate::exception::js_throw(f64::from_bits(err_val.bits()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weak_collections_inspect_with_items_unknown() {
+        // WeakMap/WeakSet contents aren't enumerable, so Node prints the
+        // `<items unknown>` placeholder rather than leaking storage fields.
+        let wm = js_weakmap_new();
+        assert_eq!(
+            weak_wrapper_inspect_label(wm),
+            Some("WeakMap { <items unknown> }")
+        );
+        let ws = js_weakset_new();
+        assert_eq!(
+            weak_wrapper_inspect_label(ws),
+            Some("WeakSet { <items unknown> }")
+        );
+        // WeakRef / FinalizationRegistry have no items placeholder.
+        let wr = js_weakref_new(f64::from_bits(TAG_UNDEFINED));
+        assert_eq!(weak_wrapper_inspect_label(wr), Some("WeakRef {}"));
+    }
 }

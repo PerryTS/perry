@@ -853,9 +853,53 @@ pub extern "C" fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader {
     buf
 }
 
-/// Concatenate multiple buffers
-#[no_mangle]
-pub extern "C" fn js_buffer_concat(arr_ptr: *const ArrayHeader) -> *mut BufferHeader {
+fn throw_buffer_concat_invalid_arg_type(index: usize) -> ! {
+    static REGISTER_TYPE_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_TYPE_ERROR.call_once(|| {
+        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_TYPE_ERROR);
+    });
+
+    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_TYPE_ERROR, 4);
+    unsafe {
+        let set = |key: &[u8], value: f64| {
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
+        };
+        let str_val = |s: &[u8]| -> f64 {
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
+        };
+        let message =
+            format!("The \"list[{index}]\" argument must be an instance of Buffer or Uint8Array");
+        set(b"name", str_val(b"TypeError"));
+        set(b"code", str_val(b"ERR_INVALID_ARG_TYPE"));
+        set(b"message", str_val(message.as_bytes()));
+    }
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
+fn normalize_buffer_concat_total_length(total_length: f64) -> Option<usize> {
+    let jsval = crate::JSValue::from_bits(total_length.to_bits());
+    if jsval.is_undefined() {
+        return None;
+    }
+    if jsval.is_int32() {
+        return Some((jsval.as_int32().max(0)) as usize);
+    }
+    if jsval.is_bool() {
+        return Some(if jsval.as_bool() { 1 } else { 0 });
+    }
+    if jsval.is_null() || total_length.is_nan() || !total_length.is_finite() || total_length <= 0.0
+    {
+        return Some(0);
+    }
+    Some((total_length.trunc() as usize).min(u32::MAX as usize))
+}
+
+fn js_buffer_concat_impl(
+    arr_ptr: *const ArrayHeader,
+    requested_total_length: Option<usize>,
+) -> *mut BufferHeader {
     // Strip NaN-boxing tags if present
     let arr_ptr = {
         let bits = arr_ptr as u64;
@@ -884,34 +928,55 @@ pub extern "C" fn js_buffer_concat(arr_ptr: *const ArrayHeader) -> *mut BufferHe
             }
         };
 
-        // Calculate total size
-        let mut total_size: usize = 0;
+        let mut actual_total_size: usize = 0;
         for i in 0..len {
             let raw_bits = strip_nanbox((*arr_data.add(i)).to_bits());
-            let buf_ptr = raw_bits as *const BufferHeader;
-            if !buf_ptr.is_null() && raw_bits >= 0x1000 {
-                total_size += (*buf_ptr).length as usize;
+            if raw_bits < 0x1000 || !is_registered_buffer(raw_bits as usize) {
+                throw_buffer_concat_invalid_arg_type(i);
             }
+            let buf_ptr = raw_bits as *const BufferHeader;
+            actual_total_size = actual_total_size.saturating_add((*buf_ptr).length as usize);
         }
+        let total_size = requested_total_length.unwrap_or(actual_total_size);
+        let total_size = total_size.min(u32::MAX as usize);
 
         // Allocate result buffer
         let result = buffer_alloc(total_size as u32);
         (*result).length = total_size as u32;
+        ptr::write_bytes(buffer_data_mut(result), 0, total_size);
 
         // Copy data
         let mut offset: usize = 0;
         for i in 0..len {
             let raw_bits = strip_nanbox((*arr_data.add(i)).to_bits());
             let buf_ptr = raw_bits as *const BufferHeader;
-            if !buf_ptr.is_null() && raw_bits >= 0x1000 {
-                let buf_len = (*buf_ptr).length as usize;
-                let src_data = buffer_data(buf_ptr);
-                let dst_data = buffer_data_mut(result).add(offset);
-                ptr::copy_nonoverlapping(src_data, dst_data, buf_len);
-                offset += buf_len;
+            let buf_len = (*buf_ptr).length as usize;
+            let remaining = total_size.saturating_sub(offset);
+            if remaining == 0 {
+                break;
             }
+            let copy_len = buf_len.min(remaining);
+            let src_data = buffer_data(buf_ptr);
+            let dst_data = buffer_data_mut(result).add(offset);
+            ptr::copy_nonoverlapping(src_data, dst_data, copy_len);
+            offset += copy_len;
         }
 
         result
     }
+}
+
+/// Concatenate multiple buffers.
+#[no_mangle]
+pub extern "C" fn js_buffer_concat(arr_ptr: *const ArrayHeader) -> *mut BufferHeader {
+    js_buffer_concat_impl(arr_ptr, None)
+}
+
+/// Concatenate multiple buffers using Node's optional totalLength semantics.
+#[no_mangle]
+pub extern "C" fn js_buffer_concat_with_length(
+    arr_ptr: *const ArrayHeader,
+    total_length: f64,
+) -> *mut BufferHeader {
+    js_buffer_concat_impl(arr_ptr, normalize_buffer_concat_total_length(total_length))
 }
