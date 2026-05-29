@@ -284,6 +284,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "URLSearchParams"
                     && name != "AbortController"
                     && name != "FormData"
+                    && name != "File"
                     && name != "Headers"
                     && name != "fetch"
                     && name != "crypto"

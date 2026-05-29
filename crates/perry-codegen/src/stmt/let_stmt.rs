@@ -93,7 +93,10 @@ pub(crate) fn lower_let(
         // real class instead of the empty-object placeholder.
         Some(perry_hir::Expr::PropertyGet { object, property }) => {
             if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
-                && matches!(property.as_str(), "TextEncoderStream" | "TextDecoderStream")
+                && matches!(
+                    property.as_str(),
+                    "TextEncoderStream" | "TextDecoderStream" | "File"
+                )
             {
                 ctx.local_class_aliases
                     .insert(name.to_string(), property.clone());

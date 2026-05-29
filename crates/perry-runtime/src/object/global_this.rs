@@ -142,6 +142,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "AbortSignal",
     "FormData",
     "Blob",
+    "File",
     "Headers",
     "Request",
     "Response",
@@ -686,6 +687,9 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         }
         if name == "String" {
             crate::closure::js_register_closure_arity(func_ptr, 1);
+        }
+        if name == "File" {
+            super::native_module::set_bound_native_closure_name(closure_ptr, name);
         }
         // Stash `prototype` on the closure's dynamic-prop side table.
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag

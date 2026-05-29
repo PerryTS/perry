@@ -902,6 +902,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 );
                                 ctx.uses_fetch = true;
                             }
+                            other
+                                if ctx
+                                    .resolve_class_alias(other)
+                                    .as_deref()
+                                    .is_some_and(|resolved| resolved == "File") =>
+                            {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "blob".to_string(),
+                                    "File".to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
                             // Issue #237: Web Streams API constructors.
                             "ReadableStream" => {
                                 ctx.register_native_instance(
@@ -953,6 +966,35 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     }
                                 }
                             }
+                        }
+                    } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
+                        let is_global_file = match member.obj.as_ref() {
+                            ast::Expr::Ident(obj_ident)
+                                if obj_ident.sym.as_ref() == "globalThis" =>
+                            {
+                                match &member.prop {
+                                    ast::MemberProp::Ident(prop_ident) => {
+                                        prop_ident.sym.as_ref() == "File"
+                                    }
+                                    ast::MemberProp::Computed(prop) => {
+                                        matches!(
+                                            prop.expr.as_ref(),
+                                            ast::Expr::Lit(ast::Lit::Str(s))
+                                                if s.value.as_str() == Some("File")
+                                        )
+                                    }
+                                    _ => false,
+                                }
+                            }
+                            _ => false,
+                        };
+                        if is_global_file {
+                            ctx.register_native_instance(
+                                name.clone(),
+                                "blob".to_string(),
+                                "File".to_string(),
+                            );
+                            ctx.uses_fetch = true;
                         }
                     }
                 }
@@ -1488,6 +1530,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         {
                             ctx.object_static_method_aliases.insert(id, method_name);
                         }
+                    }
+                    Expr::PropertyGet { object, property }
+                        if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "File" =>
+                    {
+                        ctx.register_let_class_alias(name.clone(), "File".to_string());
+                        ctx.uses_fetch = true;
                     }
                     // Issue #838: `var p = <ClassName>.prototype` records
                     // the alias so a later `p.<method> = <fn>` lowers to

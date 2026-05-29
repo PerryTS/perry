@@ -786,6 +786,18 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         .collect()
                 })
                 .unwrap_or_default();
+            if ctx.lookup_class(&class_name).is_none() {
+                if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
+                    if resolved == "File" {
+                        ctx.uses_fetch = true;
+                        return Ok(Expr::New {
+                            class_name: resolved,
+                            args,
+                            type_args,
+                        });
+                    }
+                }
+            }
             // Issue #838 followup (b): when `<Ident>` is NOT a real
             // class but resolves to a local binding, route through
             // `Expr::NewDynamic { callee: LocalGet(id), … }` so codegen
@@ -911,6 +923,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 })
                 .transpose()?
                 .unwrap_or_default();
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "File" {
+                    ctx.uses_fetch = true;
+                    return Ok(Expr::New {
+                        class_name: property.clone(),
+                        args,
+                        type_args: Vec::new(),
+                    });
+                }
+            }
             Ok(Expr::NewDynamic { callee, args })
         }
     }

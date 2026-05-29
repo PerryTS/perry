@@ -69,6 +69,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Uint8ClampedArray"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "File"
             | "Buffer"
             | "process"
             | "console"
