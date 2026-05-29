@@ -69,6 +69,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    // ES5 function constructors: `x instanceof Foo` where `Foo` is a plain
+    // function used with `new`. `js_new_function_construct` stamps each
+    // instance with `synthetic_class_id_for_function(Foo)`; derive the same
+    // id from the function value here and walk the candidate's class chain
+    // against it. Mirrors the construct site so the common
+    // `if (!(this instanceof Foo)) return new Foo()` guard resolves to true
+    // inside a `new`-invoked body instead of recursing forever (#838 followup).
+    let synthetic_cid = synthetic_class_id_for_function(type_ref);
+    if synthetic_cid != 0 {
+        return js_instanceof(value, synthetic_cid);
+    }
     f64::from_bits(TAG_FALSE)
 }
 

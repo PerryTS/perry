@@ -391,7 +391,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // chain depends on this. Refs #420 / #618 followup.
                 let ty_expr = if let ast::Expr::Ident(ident) = bin.right.as_ref() {
                     let name = ident.sym.as_ref();
-                    if ctx.lookup_local(name).is_some() {
+                    // A local holding a class ref (drizzle's `is(value, type)`),
+                    // OR a top-level ES5 function constructor (`function Foo(){…}`
+                    // used as `x instanceof Foo`). The latter has no class entry,
+                    // so without a dynamic value codegen resolves `ty = "Foo"` to
+                    // class_id 0 and instanceof always returns false — which makes
+                    // the ubiquitous `if (!(this instanceof Foo)) return new Foo()`
+                    // guard recurse forever. Lower the function to its value and
+                    // route through `js_instanceof_dynamic`, which derives the same
+                    // `synthetic_class_id_for_function` that `new Foo()` stamps onto
+                    // the instance (see js_new_function_construct).
+                    if ctx.lookup_local(name).is_some() || ctx.lookup_func(name).is_some() {
                         match lower_expr(ctx, &bin.right) {
                             Ok(e) => Some(Box::new(e)),
                             Err(_) => None,

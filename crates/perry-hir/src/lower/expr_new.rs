@@ -807,6 +807,25 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         args,
                     });
                 }
+                // ES5 function constructors: `function Foo(){ this.x = … }`
+                // used as `new Foo()`. A top-level `function` declaration is
+                // tracked as a func (not a local, not a class), so neither the
+                // local branch above nor the `lookup_class` path fires — it
+                // would otherwise fall through to `Expr::New { class_name }`,
+                // whose codegen finds no class named `Foo` and produces an
+                // empty placeholder object that never runs the constructor
+                // body (so `this.x = …` writes are lost and `new Foo().x` is
+                // `undefined`). Route through `NewDynamic { FuncRef }` instead,
+                // which reaches `js_new_function_construct`: it allocates the
+                // instance, binds `this` for the duration of the call, runs the
+                // body, and returns the populated object — the same helper the
+                // local-binding path above relies on.
+                if let Some(func_id) = ctx.lookup_func(&class_name) {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::FuncRef(func_id)),
+                        args,
+                    });
+                }
             }
             // Issue #212: classes nested in a function may capture
             // enclosing-scope locals. `lower_class_decl` extended the
