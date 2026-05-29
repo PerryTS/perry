@@ -1129,6 +1129,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "util/types",
         has_receiver: false,
+        method: "isNativeError",
+        class_filter: None,
+        runtime: "js_util_types_is_native_error",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
         method: "isNumberObject",
         class_filter: None,
         runtime: "js_util_types_is_number_object",

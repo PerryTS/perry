@@ -107,6 +107,7 @@ pub(crate) fn lower_native_method_call(
             "isSetIterator" => Some("js_util_types_is_set_iterator"),
             "isDate" => Some("js_util_types_is_date"),
             "isRegExp" => Some("js_util_types_is_reg_exp"),
+            "isNativeError" => Some("js_util_types_is_native_error"),
             _ => None,
         };
         if let Some(runtime) = runtime {
