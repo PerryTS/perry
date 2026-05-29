@@ -1478,31 +1478,34 @@ pub extern "C" fn js_node_stream_method_uncork(stream_handle: i64) -> f64 {
 
 // Topical sub-modules split out of this file for the 2000-line file-size
 // gate (#1987). Each child does `use super::*` for the shared constants and
-// helpers; this file re-globs their `pub(super)` items so existing call
-// sites keep resolving by bare name.
+// helpers; this file re-globs them with `pub use` so existing call sites keep
+// resolving by bare name AND the `pub extern "C"` FFI entry points stay
+// reachable at `perry_runtime::node_stream::*` for the other crates (e.g.
+// perry-stdlib). Glob re-export caps each item at its own visibility, so the
+// `pub(super)` helpers remain crate-internal.
 #[path = "node_stream_keys.rs"]
 mod keys;
-pub(crate) use keys::*;
+pub use keys::*;
 
 #[path = "node_stream_dispatch.rs"]
 mod dispatch;
-pub(crate) use dispatch::*;
+pub use dispatch::*;
 
 #[path = "node_stream_iter_helpers.rs"]
 mod iter_helpers;
-pub(crate) use iter_helpers::*;
+pub use iter_helpers::*;
 
 #[path = "node_stream_pipeline.rs"]
 mod pipeline;
-pub(crate) use pipeline::*;
+pub use pipeline::*;
 
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
-pub(crate) use readwrite::*;
+pub use readwrite::*;
 
 #[path = "node_stream_constructors.rs"]
 mod constructors;
-pub(crate) use constructors::*;
+pub use constructors::*;
 
 #[path = "node_stream_keepalive.rs"]
 mod keepalive;
