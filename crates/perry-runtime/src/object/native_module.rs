@@ -863,6 +863,20 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("zlib", "Unzip")
             | ("zlib", "BrotliCompress")
             | ("zlib", "BrotliDecompress")
+            // #2533: node:http/https/http2 server factories read as callable
+            // values so `const createServer = createServerHTTP` (and
+            // `@hono/node-server`'s `options.createServer || createServerHTTP`)
+            // produce a bound-method closure instead of undefined. The closure
+            // routes back through dispatch_native_module_method → the stdlib
+            // http dispatcher (external-http-server-pump). The method-call form
+            // already lowers through the codegen NATIVE_MODULE_TABLE.
+            | ("http", "createServer")
+            | ("http", "Server")
+            | ("https", "createServer")
+            | ("https", "Server")
+            | ("http2", "createServer")
+            | ("http2", "createSecureServer")
+            | ("http2", "Server")
     )
 }
 

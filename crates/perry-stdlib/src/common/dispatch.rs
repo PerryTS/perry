@@ -1684,6 +1684,76 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     }
 }
 
+/// #2533: route a captured / aliased `http`/`https`/`http2` `createServer`
+/// (or the `Server` / `createSecureServer` aliases) back to the
+/// perry-ext-http-server factories. Registered with the runtime via
+/// `js_set_native_http_dispatch` under `external-http-server-pump` (enabled
+/// whenever the program imports one of those modules), so we can safely
+/// `extern "C"`-reference the ext-crate symbols — they're guaranteed linked.
+///
+/// The method-call form (`http.createServer(...)`) already lowers through the
+/// codegen NATIVE_MODULE_TABLE; this only serves the value-read form, where the
+/// factory reaches the runtime as a bound-method closure (see
+/// `is_native_module_callable_export`) and lands here when invoked.
+///
+/// Node's overloads are `createServer([options][, requestListener])`, while
+/// `@hono/node-server` calls `createServer(serverOptions, requestListener)`. We
+/// classify each arg by type rather than position — the function/closure arg is
+/// the handler, the remaining object arg is the options — so both orders work.
+#[cfg(feature = "external-http-server-pump")]
+unsafe extern "C" fn js_node_http_native_dispatch(
+    module_ptr: *const u8,
+    module_len: usize,
+    _method_ptr: *const u8,
+    _method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    use perry_runtime::JSValue;
+    extern "C" {
+        fn js_node_http_create_server_with_options(handler: i64, options_f64: f64) -> i64;
+        fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
+        fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
+        fn js_value_is_closure(value_bits: i64) -> i32;
+    }
+    let undefined = f64::from_bits(JSValue::undefined().bits());
+    let module = if module_ptr.is_null() || module_len == 0 {
+        ""
+    } else {
+        std::str::from_utf8(std::slice::from_raw_parts(module_ptr, module_len)).unwrap_or("")
+    };
+    let arg = |n: usize| -> f64 {
+        if n < args_len && !args_ptr.is_null() {
+            *args_ptr.add(n)
+        } else {
+            undefined
+        }
+    };
+    // Disambiguate handler (function/closure) from options (object),
+    // independent of argument order.
+    let mut handler_ptr: i64 = 0;
+    let mut options_f64 = undefined;
+    for n in 0..args_len.min(2) {
+        let a = arg(n);
+        if js_value_is_closure(a.to_bits() as i64) != 0 {
+            handler_ptr = perry_runtime::js_nanbox_get_pointer(a);
+        } else if JSValue::from_bits(a.to_bits()).is_pointer() {
+            options_f64 = a;
+        }
+    }
+    let handle = match module {
+        "http" => js_node_http_create_server_with_options(handler_ptr, options_f64),
+        "https" => js_node_https_create_server(options_f64, handler_ptr),
+        "http2" => js_node_http2_create_secure_server(options_f64, handler_ptr),
+        _ => return undefined,
+    };
+    if handle == 0 {
+        undefined
+    } else {
+        perry_runtime::js_nanbox_pointer(handle)
+    }
+}
+
 /// Initialize the handle method and property dispatch systems.
 /// This registers our dispatch functions with perry-runtime.
 /// Must be called before any user code runs.
@@ -1725,6 +1795,13 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // `const f = zlib.gzipSync; f(buf)` reach the FFIs.
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
+
+    // #2533: route captured / aliased http/https/http2 `createServer` back to
+    // the perry-ext-http-server factories. Only registered when the http ext
+    // crate is linked (its symbols are referenced by the dispatcher), so the
+    // runtime arm stays null-and-undefined for non-http programs.
+    #[cfg(feature = "external-http-server-pump")]
+    perry_runtime::js_set_native_http_dispatch(js_node_http_native_dispatch);
 
     // #1545: register the Web Streams numeric-handle probe so method calls on
     // stream handles whose static type the codegen lost route to the stream
