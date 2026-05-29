@@ -2,6 +2,8 @@ use super::*;
 
 // --- Config types matching perry.toml ---
 
+// #854: deserialized perry.toml table; not every key is read on every path.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct PerryToml {
     pub(super) project: Option<ProjectConfig>,
@@ -21,6 +23,8 @@ pub(super) struct PerryToml {
     pub(super) release_notes: Option<std::collections::HashMap<String, String>>,
 }
 
+// #854: deserialized [project] table; not every key is read.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct ProjectConfig {
     pub(super) name: Option<String>,
@@ -33,6 +37,8 @@ pub(super) struct ProjectConfig {
     pub(super) features: Option<Vec<String>>,
 }
 
+// #854: deserialized [app] table; not every key is read.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct AppConfig {
     pub(super) name: Option<String>,
@@ -49,6 +55,8 @@ pub(super) struct IconsConfig {
     pub(super) source: Option<String>,
 }
 
+// #854: deserialized [macos] table; not every key is read.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct MacosConfig {
     pub(super) bundle_id: Option<String>,
@@ -103,6 +111,8 @@ pub(super) struct IosConfig {
     pub(super) info_plist: Option<std::collections::HashMap<String, String>>,
 }
 
+// #854: deserialized [visionos] table; not every key is read.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct VisionosConfig {
     pub(super) bundle_id: Option<String>,
@@ -134,6 +144,8 @@ pub(super) struct AndroidConfig {
     pub(super) entry: Option<String>,
 }
 
+// #854: deserialized [watchos] table; not every key is read.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct WatchosConfig {
     pub(super) bundle_id: Option<String>,
@@ -144,6 +156,8 @@ pub(super) struct WatchosConfig {
     pub(super) signing_identity: Option<String>,
 }
 
+// #854: deserialized [tvos] table; not every key is read.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct TvosConfig {
     pub(super) bundle_id: Option<String>,
@@ -173,6 +187,8 @@ pub(super) struct WindowsConfig {
     pub(super) gcloud_service_account: Option<String>,
 }
 
+// #854: deserialized [build] table; out_dir not read on this path.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(super) struct BuildConfig {
     pub(super) out_dir: Option<String>,

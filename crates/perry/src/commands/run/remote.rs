@@ -237,6 +237,8 @@ pub async fn remote_build_and_launch(
     enum ServerMsg {
         JobCreated {
             #[serde(default)]
+            // #854: part of the deserialized JobCreated wire shape; not read.
+            #[allow(dead_code)]
             job_id: Option<String>,
         },
         QueueUpdate {

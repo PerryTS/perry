@@ -35,6 +35,16 @@ pub(super) fn apply_pkg_and_toml_config(
 )> {
     let mut fp_contract_explicit = false;
 
+    // #2309: tree-shaking opt-in via env var (checked unconditionally, even
+    // with no host package.json). `perry.experiments.treeShake: true` in the
+    // package.json is OR'd in below. Default off ⇒ byte-identical to pre-#2309.
+    if let Ok(v) = std::env::var("PERRY_TREE_SHAKE") {
+        let v = v.trim().to_ascii_lowercase();
+        if !matches!(v.as_str(), "" | "0" | "off" | "false" | "no") {
+            ctx.tree_shake = true;
+        }
+    }
+
     // Read perry.packageAliases from the project's package.json (if present)
     // This allows mapping npm package imports to native Perry packages at compile time.
     // Example: { "@parse/node-apn": "perry-push", "@prisma/client": "perry-prisma" }
@@ -168,6 +178,32 @@ pub(super) fn apply_pkg_and_toml_config(
                     .and_then(|v| v.as_bool())
                 {
                     ctx.fast_math = fm;
+                }
+                // #2309: perry.experiments.treeShake — host opt-in to
+                // tree-shaking / dead-code elimination (OR'd with the
+                // PERRY_TREE_SHAKE env var checked above).
+                if let Some(true) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("experiments"))
+                    .and_then(|e| e.get("treeShake"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.tree_shake = true;
+                }
+                // #2309 (Stage 2): perry.define — esbuild-style build-time
+                // substitutions. Only `process.env.<NAME>` keys are honored;
+                // values are JSON literals (string/bool/number/null). Host
+                // package.json only (same trust boundary as compilePackages).
+                if let Some(defines) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("define"))
+                    .and_then(|d| d.as_object())
+                {
+                    for (key, val) in defines {
+                        if let Some(dv) = json_to_define_value(val) {
+                            ctx.define.insert(key.clone(), dv);
+                        }
+                    }
                 }
                 // perry.fpContract: explicit contraction mode, separated
                 // from broad fast-math reassociation.
@@ -677,4 +713,17 @@ fn parse_fp_contract_mode(value: &str, source: &str) -> Result<FpContractMode> {
             value
         )
     })
+}
+
+/// #2309 (Stage 2): convert a `perry.define` JSON value into a [`DefineValue`].
+/// Strings/bools/numbers/null are honored; arrays/objects are rejected
+/// (returns `None` — too complex to inline-fold safely).
+fn json_to_define_value(val: &serde_json::Value) -> Option<super::DefineValue> {
+    match val {
+        serde_json::Value::String(s) => Some(super::DefineValue::Str(s.clone())),
+        serde_json::Value::Bool(b) => Some(super::DefineValue::Bool(*b)),
+        serde_json::Value::Number(n) => n.as_f64().map(super::DefineValue::Number),
+        serde_json::Value::Null => Some(super::DefineValue::Null),
+        _ => None,
+    }
 }

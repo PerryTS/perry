@@ -211,6 +211,12 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
             // and Box-leaked symbols, which have no GcHeader).
             if crate::symbol::is_registered_symbol(ptr as usize) {
                 get_cached(&TYPEOF_SYMBOL, "symbol")
+            } else if crate::date::is_date_cell_addr(ptr as usize) {
+                // Date is a NaN-boxed pointer to an 8-byte `DateCell` (#2089).
+                // `typeof aDate === "object"`. Check this BEFORE reading the
+                // `type_tag` at offset 12 below — the cell is only 8 bytes, so
+                // that read would fall off the end of the allocation.
+                get_cached(&TYPEOF_OBJECT, "object")
             } else {
                 // ClosureHeader has type_tag at offset 12 (after func_ptr:8 + capture_count:4)
                 let type_tag = unsafe { *(ptr.add(12) as *const u32) };
@@ -260,14 +266,9 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
                 return get_cached(&TYPEOF_OBJECT, "object");
             }
         }
-        // Date — stored as a raw f64 millisecond timestamp, registered
-        // in `DATE_REGISTRY` because the value carries no tag of its
-        // own. `typeof new Date()` must be "object" per ECMA-262 — any
-        // duck-type test (`typeof v === "object" && v instanceof Date`)
-        // gates Date handling on this returning the right thing.
-        if crate::date::is_registered_date_bits(bits) {
-            return get_cached(&TYPEOF_OBJECT, "object");
-        }
+        // Date is now a NaN-boxed `DateCell` pointer (#2089), handled in the
+        // `is_pointer()` arm above — it no longer reaches this numeric
+        // fallthrough.
         // #1650: Web Streams handles (ReadableStream / WritableStream /
         // reader / writer) are returned as a raw `id as f64` whole number in
         // a high id range (#1545), so they reach this fallthrough and would

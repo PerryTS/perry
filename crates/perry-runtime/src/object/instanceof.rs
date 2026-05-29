@@ -5,6 +5,9 @@
 
 use super::*;
 
+// Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
+const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
 /// type is a runtime value (function arg holding a class ref). Extracts
 /// the class_id from the INT32 NaN-tag (top16=0x7FFE) and dispatches to
@@ -43,15 +46,52 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
-        if module == "events"
-            && method == "EventEmitter"
-            && (crate::node_stream::is_classic_stream_instance_value(value)
-                || is_stream_event_emitter_prototype_value(value))
+        if module == "events" && method == "EventEmitter" && is_event_emitter_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "perf_hooks" {
+            let class_id = match method.as_str() {
+                "PerformanceEntry" => crate::perf_hooks::CLASS_ID_PERFORMANCE_ENTRY,
+                "PerformanceMark" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MARK,
+                "PerformanceMeasure" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MEASURE,
+                _ => 0,
+            };
+            if class_id != 0 {
+                return js_instanceof(value, class_id);
+            }
+        }
+    }
+    if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
+        return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
     }
     f64::from_bits(TAG_FALSE)
+}
+
+fn is_event_emitter_instance_value(value: f64) -> bool {
+    if crate::node_stream::is_classic_stream_instance_value(value)
+        || is_stream_event_emitter_prototype_value(value)
+    {
+        return true;
+    }
+
+    let bits = value.to_bits();
+    let jsval = crate::JSValue::from_bits(bits);
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let handle = (bits & crate::value::POINTER_MASK) as i64;
+    if handle <= 0 || handle >= 0x100000 {
+        return false;
+    }
+    if let Some(probe) = crate::object::event_emitter_handle_probe() {
+        return unsafe { probe(handle) };
+    }
+    false
 }
 
 /// Check if a value is an instance of a class with the given class_id
@@ -80,6 +120,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     };
     if let Some(name) = classic_stream_name {
         return if crate::node_stream::is_classic_stream_instance_of(value, name) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_EVENT_EMITTER {
+        return if is_event_emitter_instance_value(value) {
             true_val
         } else {
             false_val
@@ -192,22 +239,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     const CLASS_ID_MAP: u32 = 0xFFFF0022;
     const CLASS_ID_SET: u32 = 0xFFFF0023;
     if class_id == CLASS_ID_DATE {
-        // A Perry Date is a raw f64 timestamp (no NaN-box tag, real f64).
-        // Distinguishing it from a regular number requires a side-channel:
-        // `js_date_new(...)` registers the f64 bits in DATE_REGISTRY, and
-        // here we consult that registry. Without the registry, every finite
-        // number would match (the prior "approximate" rule), which made
-        // `100 instanceof Date` true and broke the BSON encoder's typed
-        // dispatch (`if (value instanceof Date) … else if (typeof v === 'number') …`).
-        //
-        // The Invalid-Date sentinel is itself a NaN, so it must be matched
-        // *before* the `!is_nan()` guard — `new Date(NaN) instanceof Date`
-        // is `true` per ECMA-262 even though its time value is NaN.
-        if value.to_bits() == crate::date::DATE_NAN_BITS
-            || (!value.is_nan()
-                && value.is_finite()
-                && crate::date::is_registered_date_bits(value.to_bits()))
-        {
+        // A Perry Date is a NaN-boxed pointer to a `DateCell` (#2089). Its
+        // identity is the cell's `GcHeader` type, so `new Date(NaN)` (an
+        // Invalid Date — a cell whose time value is NaN) matches just like
+        // any other Date, and a plain number never matches.
+        if crate::date::is_date_value(value) {
             return true_val;
         }
         return false_val;
@@ -249,14 +285,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
     if class_id == CLASS_ID_OBJECT {
         if jsval.is_pointer() {
-            return true_val;
-        }
-        // Invalid Date is still an Object (NaN time value, but a Date).
-        if value.to_bits() == crate::date::DATE_NAN_BITS
-            || (!value.is_nan()
-                && value.is_finite()
-                && crate::date::is_registered_date_bits(value.to_bits()))
-        {
+            // Covers every heap object, including a Date (now a NaN-boxed
+            // `DateCell` pointer — #2089) and an Invalid Date.
             return true_val;
         }
         let top16 = (bits >> 48) as u16;
@@ -396,6 +426,14 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 }
                 _ => false_val,
             };
+        }
+
+        if gc_type == crate::gc::GC_TYPE_OBJECT {
+            if let Some(matches) =
+                crate::perf_hooks::is_perf_entry_object_instance_of(obj_ptr, class_id)
+            {
+                return if matches { true_val } else { false_val };
+            }
         }
 
         // For user-defined classes that extend Error: `myErr instanceof Error` should be true.
