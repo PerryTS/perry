@@ -662,12 +662,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: writer.write() Promise resolution timing \u2014 resolves before sink processes chunk. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/iter-helpers/compose-then-toarray": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose(transform).toArray() \u2014 chain produces wrong result. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/destroy/_destroy-user-impl": {
     "issue": "1532",
     "added": "2026-05-24",
