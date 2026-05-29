@@ -1360,3 +1360,124 @@ mod module_spec_tests {
         assert!(split_module_spec("esbuild-darwin-arm64").is_none());
     }
 }
+
+#[cfg(test)]
+mod declaration_sidecar_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    fn write_typed_js_package(root: &Path, package_name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let package_dir = root.join("node_modules").join(package_name);
+        std::fs::create_dir_all(package_dir.join("dist")).expect("mkdir package dist");
+        let implementation = package_dir.join("dist/index.js");
+        let declaration = package_dir.join("dist/index.d.ts");
+        std::fs::write(&implementation, "export class Codex {}\n").expect("write js");
+        std::fs::write(&declaration, "export declare class Codex {}\n").expect("write dts");
+        std::fs::write(
+            package_dir.join("package.json"),
+            serde_json::json!({
+                "name": package_name,
+                "type": "module",
+                "module": "./dist/index.js",
+                "types": "./dist/index.d.ts",
+                "exports": {
+                    ".": {
+                        "types": "./dist/index.d.ts",
+                        "import": "./dist/index.js"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write package.json");
+        (package_dir, implementation, declaration)
+    }
+
+    #[test]
+    fn package_exports_types_resolve_as_declaration_sidecar() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (package_dir, implementation, declaration) =
+            write_typed_js_package(dir.path(), "typed-js");
+
+        let found = resolve_package_declaration_entry(&package_dir, None, Some(&implementation))
+            .expect("declaration sidecar");
+
+        assert_eq!(
+            found,
+            declaration.canonicalize().expect("canonical declaration")
+        );
+    }
+
+    #[test]
+    fn typed_node_modules_js_stays_interpreted_without_compile_package_opt_in() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let (_package_dir, implementation, declaration) = write_typed_js_package(root, "typed-js");
+        let src_dir = root.join("src");
+        std::fs::create_dir_all(&src_dir).expect("mkdir src");
+        let importer = src_dir.join("main.ts");
+        std::fs::write(&importer, "import { Codex } from 'typed-js';\n").expect("write importer");
+
+        let resolved = resolve_import(
+            "typed-js",
+            &importer,
+            root,
+            &HashSet::new(),
+            &HashMap::new(),
+        )
+        .expect("resolve typed-js");
+
+        assert_eq!(resolved.1, ModuleKind::Interpreted);
+        assert_eq!(
+            resolved.0,
+            implementation
+                .canonicalize()
+                .expect("canonical implementation")
+        );
+        assert_eq!(
+            declaration_sidecar_for_resolved_import("typed-js", &resolved.0).expect("sidecar"),
+            declaration.canonicalize().expect("canonical declaration")
+        );
+    }
+
+    #[test]
+    fn typed_node_modules_js_becomes_native_with_compile_package_opt_in() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let (_package_dir, implementation, declaration) = write_typed_js_package(root, "typed-js");
+        let src_dir = root.join("src");
+        std::fs::create_dir_all(&src_dir).expect("mkdir src");
+        let importer = src_dir.join("main.ts");
+        std::fs::write(&importer, "import { Codex } from 'typed-js';\n").expect("write importer");
+
+        let compile_packages = HashSet::from(["typed-js".to_string()]);
+        let resolved = resolve_import(
+            "typed-js",
+            &importer,
+            root,
+            &compile_packages,
+            &HashMap::new(),
+        )
+        .expect("resolve typed-js");
+
+        assert_eq!(resolved.1, ModuleKind::NativeCompiled);
+        assert_eq!(
+            resolved.0,
+            implementation
+                .canonicalize()
+                .expect("canonical implementation")
+        );
+        assert_eq!(
+            declaration_sidecar_for_resolved_import("typed-js", &resolved.0).expect("sidecar"),
+            declaration.canonicalize().expect("canonical declaration")
+        );
+    }
+
+    #[test]
+    fn declaration_file_detection_includes_mts_and_cts_sidecars() {
+        assert!(is_declaration_file(Path::new("index.d.ts")));
+        assert!(is_declaration_file(Path::new("index.d.mts")));
+        assert!(is_declaration_file(Path::new("index.d.cts")));
+        assert!(!is_declaration_file(Path::new("index.ts")));
+    }
+}

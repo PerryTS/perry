@@ -85,10 +85,10 @@ use post_link::{
 pub use resolve::find_perry_workspace_root;
 pub(crate) use resolve::validate_native_library_manifest_value;
 use resolve::{
-    cached_resolve_import, compute_module_prefix, extract_compile_package_dir,
-    has_perry_native_library, is_declaration_file, is_in_compile_package,
-    is_in_perry_native_package, is_js_file, parse_native_library_manifest, parse_package_specifier,
-    resolve_import,
+    cached_resolve_import, compute_module_prefix, declaration_sidecar_for_resolved_import,
+    extract_compile_package_dir, has_perry_native_library, is_declaration_file,
+    is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
+    parse_package_specifier, resolve_import,
 };
 use strip_dedup::strip_duplicate_objects_from_lib;
 use targets::{

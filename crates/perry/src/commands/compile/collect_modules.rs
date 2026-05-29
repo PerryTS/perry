@@ -23,10 +23,10 @@ use std::path::PathBuf;
 use crate::OutputFormat;
 
 use super::{
-    cached_resolve_import, extract_compile_package_dir, has_perry_native_library,
-    is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
-    parse_cached, parse_native_library_manifest, parse_package_specifier, CompilationContext,
-    JsModule, ParseCache,
+    cached_resolve_import, declaration_sidecar_for_resolved_import, extract_compile_package_dir,
+    has_perry_native_library, is_declaration_file, is_in_compile_package,
+    is_in_perry_native_package, is_js_file, parse_cached, parse_native_library_manifest,
+    parse_package_specifier, CompilationContext, JsModule, ParseCache,
 };
 
 /// Issue #818: scan a JS module's source for static ESM imports /
@@ -342,7 +342,7 @@ pub(super) fn collect_modules(
             JsModule {
                 path: canonical.clone(),
                 source,
-                specifier,
+                specifier: specifier.clone(),
             },
         );
         // Record the file that reached a runtime-JS module so the
@@ -351,6 +351,9 @@ pub(super) fn collect_modules(
         // canonical path — many edges may resolve to the same JS file.
         if !ctx.js_runtime_importers.iter().any(|p| p == &canonical) {
             ctx.js_runtime_importers.push(canonical.clone());
+        }
+        if let Some(sidecar) = declaration_sidecar_for_resolved_import(&specifier, &canonical) {
+            ctx.declaration_sidecars.insert(canonical.clone(), sidecar);
         }
 
         // Recurse into each resolved sibling. We re-enter
@@ -843,6 +846,12 @@ pub(super) fn collect_modules(
         {
             import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
             import.module_kind = kind;
+            if let Some(sidecar) =
+                declaration_sidecar_for_resolved_import(&import.source, &resolved_path)
+            {
+                ctx.declaration_sidecars
+                    .insert(resolved_path.clone(), sidecar);
+            }
 
             match kind {
                 ModuleKind::NativeCompiled => {
@@ -1144,6 +1153,12 @@ pub(super) fn collect_modules(
             if let Some((resolved_path, kind)) =
                 cached_resolve_import(src.as_str(), &canonical, ctx)
             {
+                if let Some(sidecar) =
+                    declaration_sidecar_for_resolved_import(src.as_str(), &resolved_path)
+                {
+                    ctx.declaration_sidecars
+                        .insert(resolved_path.clone(), sidecar);
+                }
                 // #1110: a re-export from a `perry.nativeLibrary` package
                 // (`export { foo } from "@perryts/storekit"`) is the only
                 // path through which storekit's manifest reaches the
