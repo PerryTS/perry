@@ -136,3 +136,127 @@ pub extern "C" fn js_net_validate_create_server_options(value: f64) {
     );
     throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
+
+fn pointer_addr(value: f64) -> Option<usize> {
+    let bits = value.to_bits();
+    let jv = JSValue::from_bits(bits);
+    if jv.is_pointer() {
+        Some(jv.as_pointer::<u8>() as usize)
+    } else if (bits >> 48) == 0 {
+        Some(bits as usize)
+    } else {
+        None
+    }
+}
+
+unsafe fn array_from_value(value: f64) -> *const crate::array::ArrayHeader {
+    let Some(addr) = pointer_addr(value) else {
+        return std::ptr::null();
+    };
+    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return std::ptr::null();
+    }
+    let gc_header =
+        ((addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return std::ptr::null();
+    }
+    addr as *const crate::array::ArrayHeader
+}
+
+fn is_function_value(value: f64) -> bool {
+    pointer_addr(value)
+        .map(crate::closure::is_closure_ptr)
+        .unwrap_or(false)
+}
+
+fn boxed_object(ptr: *mut crate::object::ObjectHeader) -> f64 {
+    f64::from_bits(JSValue::pointer(ptr as *mut u8).bits())
+}
+
+unsafe fn object_from_shape(
+    shape_id: u32,
+    packed_keys: &'static [u8],
+    values: &[f64],
+) -> *mut crate::object::ObjectHeader {
+    let obj = crate::object::js_object_alloc_with_shape(
+        shape_id,
+        values.len() as u32,
+        packed_keys.as_ptr(),
+        packed_keys.len() as u32,
+    );
+    for (index, value) in values.iter().enumerate() {
+        crate::object::js_object_set_field(obj, index as u32, JSValue::from_bits(value.to_bits()));
+    }
+    obj
+}
+
+/// Node's legacy `net._normalizeArgs(args)` helper. It accepts the raw
+/// overload argument array and returns `[options, callback]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_normalize_args(args_value: f64) -> f64 {
+    let args = array_from_value(args_value);
+    let len = if args.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(args)
+    };
+    let arg = |index: u32| -> f64 {
+        if !args.is_null() && index < len {
+            crate::array::js_array_get_f64(args, index)
+        } else {
+            f64::from_bits(JSValue::undefined().bits())
+        }
+    };
+
+    let first = arg(0);
+    let first_value = JSValue::from_bits(first.to_bits());
+    let first_is_string = first_value.is_string() || first_value.is_short_string();
+    let first_is_object_options = first_value.is_pointer() && !is_function_value(first);
+
+    let options = if len == 0 {
+        boxed_object(object_from_shape(0x4E45_5400, b"", &[]))
+    } else if first_is_object_options {
+        first
+    } else if first_is_string {
+        boxed_object(object_from_shape(0x4E45_5401, b"path\0", &[first]))
+    } else {
+        let second = arg(1);
+        let second_value = JSValue::from_bits(second.to_bits());
+        if second_value.is_string() || second_value.is_short_string() {
+            boxed_object(object_from_shape(
+                0x4E45_5402,
+                b"port\0host\0",
+                &[first, second],
+            ))
+        } else {
+            boxed_object(object_from_shape(0x4E45_5403, b"port\0", &[first]))
+        }
+    };
+
+    let callback = if is_function_value(arg(2)) {
+        arg(2)
+    } else if is_function_value(arg(1)) {
+        arg(1)
+    } else {
+        f64::from_bits(JSValue::null().bits())
+    };
+
+    let mut result = crate::array::js_array_alloc(2);
+    result = crate::array::js_array_push_f64(result, options);
+    result = crate::array::js_array_push_f64(result, callback);
+    f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+}
+
+/// Function-shaped placeholder for Node's internal helper. Full handle
+/// creation is covered by the public `createServer`/`Server` paths.
+#[no_mangle]
+pub extern "C" fn js_net_create_server_handle_stub(
+    _address: f64,
+    _port: f64,
+    _address_type: f64,
+    _fd: f64,
+    _flags: f64,
+) -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}

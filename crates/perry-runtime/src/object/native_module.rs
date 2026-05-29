@@ -123,6 +123,22 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        "net" => Some(&[
+            b"_createServerHandle",
+            b"_normalizeArgs",
+            b"connect",
+            b"createConnection",
+            b"createServer",
+            b"isIP",
+            b"isIPv4",
+            b"isIPv6",
+            b"Server",
+            b"Socket",
+            b"getDefaultAutoSelectFamily",
+            b"setDefaultAutoSelectFamily",
+            b"getDefaultAutoSelectFamilyAttemptTimeout",
+            b"setDefaultAutoSelectFamilyAttemptTimeout",
+        ]),
         _ => None,
     }
 }
@@ -239,6 +255,7 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
     set_bound_native_closure_name(closure, property_name);
     let value = crate::value::js_nanbox_pointer(closure as i64);
+    let closure_addr = closure as usize;
 
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
@@ -253,24 +270,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     // `typeof PerformanceObserver === "function"` while the static read works.
     if module_name == "perf_hooks" && property_name == "PerformanceObserver" {
         let arr = crate::perf_hooks::js_perf_supported_entry_types();
-        crate::closure::closure_set_dynamic_prop(
-            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
-            "supportedEntryTypes",
-            arr,
-        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
     }
 
     if module_name == "events" && property_name == "EventEmitter" {
-        crate::closure::closure_set_dynamic_prop(
-            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
-            "defaultMaxListeners",
-            10.0,
-        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
     }
 
     if module_name == "util" && property_name == "promisify" {
         crate::closure::closure_set_dynamic_prop(
-            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+            closure_addr,
             "custom",
             crate::util_promisify::promisify_custom_symbol(),
         );
@@ -280,6 +289,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         c.borrow_mut().insert(key, value.to_bits());
     });
     value
+}
+
+fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
+    match (module, prop) {
+        ("net", "createServer" | "Server") => Some(2),
+        ("net", "Socket") => Some(1),
+        ("net", "_normalizeArgs") => Some(1),
+        ("net", "_createServerHandle") => Some(5),
+        _ => None,
+    }
 }
 
 extern "C" fn buffer_constructor_thunk(
@@ -531,7 +550,7 @@ pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32
     let (module, method) = bound_native_callable_module_and_method(value)?;
     match (module.as_str(), method.as_str()) {
         ("console", "Console") => Some(1),
-        _ => None,
+        _ => native_callable_export_arity(module.as_str(), method.as_str()),
     }
 }
 
@@ -621,6 +640,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
+            | ("net", "createServer")
+            | ("net", "Server")
+            | ("net", "Socket")
+            | ("net", "_normalizeArgs")
+            | ("net", "_createServerHandle")
             // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.
             | ("child_process", "ChildProcess")
             // #1857 / #2130: every exported function reads as a bound-method
