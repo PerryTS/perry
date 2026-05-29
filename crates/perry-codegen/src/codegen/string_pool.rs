@@ -52,6 +52,10 @@ pub(super) fn emit_string_pool(
     // `user_fn_wrapper_rest` are skipped (those go through the rest
     // registry which already pins arity).
     user_fn_wrapper_arity: &[(String, u32)],
+    // Wrapper/closure symbols whose original source form was a generator
+    // function. Registered so util.types.isGeneratorFunction can distinguish
+    // lowered generator state-machine closures from ordinary functions.
+    user_fn_wrapper_generator: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
     // JS name. Each entry produces one `js_register_function_name` call
@@ -761,6 +765,17 @@ pub(super) fn emit_string_pool(
         blk.call_void(
             "js_register_closure_arity",
             &[(PTR, &func_ref), (I32, &arity.to_string())],
+        );
+    }
+
+    let mut sorted_generator_wrappers: Vec<String> =
+        user_fn_wrapper_generator.iter().cloned().collect();
+    sorted_generator_wrappers.sort();
+    for wrap_sym in sorted_generator_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_generator_function",
+            &[(PTR, &func_ref)],
         );
     }
 

@@ -676,10 +676,14 @@ fn ensure_export_singleton(
     }
     let thunk_ptr = export.thunk.as_ptr();
     let allocated = js_closure_alloc(thunk_ptr, 0);
-    // Arity is encoded in the ExportThunk variant, so the closure dispatch
-    // pads missing args with undefined for variadic-friendly thunks. This
-    // replaces the per-submodule arity tables in earlier revisions.
-    crate::closure::js_register_closure_arity(thunk_ptr, export.thunk.arity());
+    if submod.key == "stream_promises" && export.name == "pipeline" {
+        crate::closure::js_register_closure_rest(thunk_ptr, 2);
+    } else {
+        // Arity is encoded in the ExportThunk variant, so the closure dispatch
+        // pads missing args with undefined for variadic-friendly thunks. This
+        // replaces the per-submodule arity tables in earlier revisions.
+        crate::closure::js_register_closure_arity(thunk_ptr, export.thunk.arity());
+    }
     if submod.key == "timers_promises" && export.name == "scheduler" {
         let wait = js_closure_alloc(timers_promises_scheduler_wait as *const u8, 0);
         crate::closure::js_register_closure_arity(timers_promises_scheduler_wait as *const u8, 2);
@@ -702,6 +706,22 @@ fn ensure_export_singleton(
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated
+}
+
+pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return false;
+    }
+    let ptr = js_value.as_pointer::<ClosureHeader>() as *mut ClosureHeader;
+    let Some(submod) = find_submodule("diagnostics_channel") else {
+        return false;
+    };
+    let Some(export) = find_export(submod, "Channel") else {
+        return false;
+    };
+    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
+    EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
 }
 
 fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHeader {

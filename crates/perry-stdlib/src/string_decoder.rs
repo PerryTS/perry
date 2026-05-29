@@ -104,7 +104,7 @@ impl StringDecoderHandle {
 fn parse_encoding(name: &str) -> Option<DecodingMode> {
     let lower = name.to_ascii_lowercase();
     Some(match lower.as_str() {
-        "utf8" | "utf-8" => DecodingMode::Utf8,
+        "" | "utf8" | "utf-8" => DecodingMode::Utf8,
         "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => DecodingMode::Utf16Le,
         "base64" => DecodingMode::Base64,
         "base64url" => DecodingMode::Base64Url,
@@ -139,7 +139,10 @@ unsafe fn encoding_name_from_bits(bits: i64) -> Option<String> {
     // remaining 48 bits, length in bits 44..47 of the top 16.
     if top16 == 0x7FFA {
         let len = ((u >> 44) & 0xF) as usize;
-        if len == 0 || len > 6 {
+        if len == 0 {
+            return Some(String::new());
+        }
+        if len > 6 {
             return None;
         }
         let mut bytes = [0u8; 6];
@@ -156,7 +159,10 @@ unsafe fn encoding_name_from_bits(bits: i64) -> Option<String> {
     }
     let hdr = addr as *const StringHeader;
     let len = (*hdr).byte_len as usize;
-    if len == 0 || len > 32 {
+    if len == 0 {
+        return Some(String::new());
+    }
+    if len > 32 {
         return None;
     }
     let data = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
