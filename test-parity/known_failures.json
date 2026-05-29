@@ -518,12 +518,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() \u2014 error in middle transform does not propagate to composite 'error' event. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/iter-helpers/to-array-erroring": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: toArray() on an erroring stream does not reject its Promise with the error. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/readable/read-after-end": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -547,18 +541,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: objectMode Readable.read() does not return single object per call. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/iter-helpers/map-async-rejection": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: readable.map(asyncFn) \u2014 rejection in fn does not abort iteration / propagate as throw. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/reduce-no-initial": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: reduce(fn) without initial \u2014 first item not used as accumulator. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/pipeline/async-fn-sink": {
     "issue": "1532",
@@ -662,12 +644,6 @@
     "category": "bug-open",
     "reason": "node:stream: pause() inside 'data' listener \u2014 does not stop further synchronous emits. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/iter-helpers/find-returns-promise": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: find() \u2014 return value is not a Promise<value|undefined>. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/web/transform-stream-with-strategies": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -734,12 +710,6 @@
     "category": "bug-open",
     "reason": "node:stream: pipeline async-fn throwing \u2014 cb does not receive the error. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/iter-helpers/filter-then-toarray": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: filter(fn).toArray() \u2014 chain produces wrong result. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/readable/from-async-iter-mixed-values": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -776,18 +746,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(array with one Promise.reject) \u2014 error not emitted at the right point. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/iter-helpers/every-async-rejection": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: every(asyncFn) \u2014 fn rejection does not propagate as Promise reject. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/iter-helpers/find-async-fn": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: find(asyncFn) \u2014 returns wrong value. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/readable/from-gen-yield-order": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -811,12 +769,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(iter that throws on next) \u2014 'error' event not emitted. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/iter-helpers/some-async-rejection": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: some(asyncFn) \u2014 rejection in fn does not propagate. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/web/transform-readable-cancel-propagates": {
     "issue": "1545",
@@ -847,12 +799,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: pipe() does not add 'unpipe' listener on destination. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/iter-helpers/map-then-toarray": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: map(fn).toArray() \u2014 chain returns non-Array or wrong values. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/readable/readable-mode-only": {
     "issue": "1532",
@@ -938,12 +884,6 @@
     "category": "bug-open",
     "reason": "node:stream: for-await break \u2014 custom iterator.return() not invoked. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/iter-helpers/some-finds-match": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: some() \u2014 does not short-circuit at first match (calls > N). Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/pipeline/async-iter-source": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -1027,12 +967,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: TransformStream instance \u2014 fails instanceof checks vs RS/WS for readable/writable sides. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/iter-helpers/reduce-with-initial": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: reduce(fn, initial) \u2014 initial value not used or wrong sum. Flips to PASS when #1558 lands."
   },
   "node-suite/stream/readable/readable-stream-id-properties": {
     "issue": "1532",

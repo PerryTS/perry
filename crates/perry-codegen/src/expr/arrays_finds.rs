@@ -546,19 +546,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //   - `new Uint8Array(N)` where N is a number → zero-filled buffer of length N
             //   - `new Uint8Array([1, 2, 3])` → buffer initialized from array
             // The codegen detects the literal-number case at compile time and routes
-            // it to `js_buffer_alloc` so we don't read garbage from a number-as-array.
-            // Other shapes flow through `js_uint8array_from_array` which reads
-            // from the array storage region.
+            // it to `js_uint8array_alloc` so we don't read garbage from a
+            // number-as-array while still preserving Uint8Array identity.
+            // Other shapes flow through `js_uint8array_new`, which dispatches
+            // between numeric lengths and source arrays at runtime.
             match arg.as_deref() {
                 None => {
                     let blk = ctx.block();
-                    let h = blk.call(I64, "js_buffer_alloc", &[(I32, "0"), (I32, "0")]);
+                    let h = blk.call(I64, "js_uint8array_alloc", &[(I32, "0")]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
                 Some(Expr::Integer(n)) => {
                     let size_str = (*n as i32).to_string();
                     let blk = ctx.block();
-                    let h = blk.call(I64, "js_buffer_alloc", &[(I32, &size_str), (I32, "0")]);
+                    let h = blk.call(I64, "js_uint8array_alloc", &[(I32, &size_str)]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
                 Some(Expr::Number(n))
@@ -566,7 +567,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let size_str = (*n as i32).to_string();
                     let blk = ctx.block();
-                    let h = blk.call(I64, "js_buffer_alloc", &[(I32, &size_str), (I32, "0")]);
+                    let h = blk.call(I64, "js_uint8array_alloc", &[(I32, &size_str)]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
                 Some(e) => {

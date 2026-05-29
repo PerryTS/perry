@@ -147,6 +147,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let h = blk.call(I64, "js_decode_uri_component", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &h))
         }
+        Expr::DateToString(o) => {
+            let v = lower_expr(ctx, o)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_date_to_string", &[(DOUBLE, &v)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
         Expr::DateToDateString(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();
