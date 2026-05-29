@@ -503,6 +503,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     //   js_url_search_params_get_all(*mut ObjectHeader, *mut StringHeader)
     //                                                          -> f64 (NaN-boxed array)
     module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_get_hash", DOUBLE, &[I64]);
     module.declare_function("js_url_get_host", DOUBLE, &[I64]);
     module.declare_function("js_url_get_hostname", DOUBLE, &[I64]);

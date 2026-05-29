@@ -2708,6 +2708,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("buffer", "kStringMaxLength"),
     // --- url (additional helpers) ---
     method("url", "fileURLToPath", false, None),
+    method("url", "fileURLToPathBuffer", false, None),
     method("url", "pathToFileURL", false, None),
     method("url", "domainToASCII", false, None),
     method("url", "domainToUnicode", false, None),

@@ -23,8 +23,9 @@ pub use self::abort::{
     js_abort_signal_is_aborted, js_abort_signal_remove_listener, js_abort_signal_timeout,
 };
 pub use self::node_compat::{
-    js_url_domain_to_ascii, js_url_domain_to_unicode, js_url_file_url_to_path, js_url_format,
-    js_url_legacy_parse, js_url_legacy_resolve, js_url_path_to_file_url, js_url_to_http_options,
+    js_url_domain_to_ascii, js_url_domain_to_unicode, js_url_file_url_to_path,
+    js_url_file_url_to_path_buffer, js_url_format, js_url_legacy_parse, js_url_legacy_resolve,
+    js_url_path_to_file_url, js_url_to_http_options,
 };
 pub use self::search_params::{
     js_url_search_params_append, js_url_search_params_delete, js_url_search_params_delete2,

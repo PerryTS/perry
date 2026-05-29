@@ -628,6 +628,16 @@ fn install_proto_method(
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
+    // Built-in prototype methods are `{ writable: true, enumerable: false,
+    // configurable: true }` per spec. Record that descriptor (reflection-only,
+    // no hot-path gate flip) so `Object.getOwnPropertyDescriptor`, `Object.keys`
+    // and `for-in` all observe them as non-enumerable — Test262's `verifyProperty`
+    // checks every built-in method this way. See `set_builtin_property_attrs`.
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 /// Install a list of `(method_name, arity)` pairs on a prototype object,

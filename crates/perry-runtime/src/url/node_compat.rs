@@ -59,7 +59,10 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
-fn decode_file_url_pathname(pathname: &str) -> String {
+/// Percent-decode a file-URL pathname to its raw byte sequence. Bytes are
+/// returned verbatim (no UTF-8 validation) so `fileURLToPathBuffer` can
+/// preserve paths whose decoded bytes are not valid UTF-8.
+fn decode_file_url_pathname_bytes(pathname: &str) -> Vec<u8> {
     let bytes = pathname.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -80,14 +83,17 @@ fn decode_file_url_pathname(pathname: &str) -> String {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
-/// Convert a file:// URL to a filesystem path
-/// Strips the "file://" prefix and percent-decodes the result
-/// js_url_file_url_to_path(url_f64: f64) -> f64 (NaN-boxed string)
-#[no_mangle]
-pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
+fn decode_file_url_pathname(pathname: &str) -> String {
+    String::from_utf8_lossy(&decode_file_url_pathname_bytes(pathname)).into_owned()
+}
+
+/// Shared `file:` URL → path parsing for both `fileURLToPath` (UTF-8 string)
+/// and `fileURLToPathBuffer` (raw bytes). Returns the decoded path bytes,
+/// throwing the same scheme/host/encoded-slash errors as Node.
+fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
     let url_string = object_from_f64(url_f64)
         .map(|obj| object_prop_string(obj, "href"))
         .unwrap_or_else(|| {
@@ -116,9 +122,39 @@ pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
         after_scheme
     };
     let pathname = pathname.split(['?', '#']).next().unwrap_or_default();
+    decode_file_url_pathname_bytes(pathname)
+}
 
-    let decoded = decode_file_url_pathname(pathname);
+/// Convert a file:// URL to a filesystem path
+/// Strips the "file://" prefix and percent-decodes the result
+/// js_url_file_url_to_path(url_f64: f64) -> f64 (NaN-boxed string)
+#[no_mangle]
+pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
+    let decoded = String::from_utf8_lossy(&file_url_to_path_bytes(url_f64)).into_owned();
     create_string_f64(&decoded)
+}
+
+/// `url.fileURLToPathBuffer(url[, options])` (#2541) — the Buffer-returning
+/// counterpart to `fileURLToPath`. Returns the decoded path's raw bytes as a
+/// `Buffer`, preserving percent-encoded sequences that are not valid UTF-8
+/// (where the string form would lossily substitute U+FFFD). Same scheme/host
+/// validation as `fileURLToPath`.
+/// js_url_file_url_to_path_buffer(url_f64: f64) -> f64 (NaN-boxed Buffer ptr)
+#[no_mangle]
+pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64) -> f64 {
+    let bytes = file_url_to_path_bytes(url_f64);
+    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
+    unsafe {
+        (*buf).length = bytes.len() as u32;
+        if !bytes.is_empty() {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                crate::buffer::buffer_data_mut(buf),
+                bytes.len(),
+            );
+        }
+    }
+    crate::value::js_nanbox_pointer(buf as i64)
 }
 
 #[no_mangle]

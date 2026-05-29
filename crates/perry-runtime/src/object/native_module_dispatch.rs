@@ -1145,6 +1145,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         // ── url module (module-level functions return NaN-boxed JS values) ──
         ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
+        ("url", "fileURLToPathBuffer") => crate::url::js_url_file_url_to_path_buffer(arg(0)),
         ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
@@ -1333,6 +1334,48 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
                     std::mem::transmute(ptr);
                 dispatch(qualified.as_ptr(), qualified.len(), args_ptr, args_len)
+            }
+        }
+
+        // #2533: captured / aliased server factories
+        // (`const createServer = options.createServer || createServerHTTP;
+        // createServer(opts, handler)` — `@hono/node-server`'s `serve()`). The
+        // method-call form (`http.createServer(...)`) already lowers through a
+        // dedicated codegen NATIVE_MODULE_TABLE path; the value-read form yields
+        // a bound-method closure (see `is_native_module_callable_export`) that
+        // lands here when invoked. The impls live in perry-ext-http-server, so
+        // route through the dispatcher perry-stdlib registers at startup under
+        // `external-http-server-pump` (enabled whenever http/https/http2 is
+        // imported). Null when the http ext crate isn't linked → undefined. The
+        // dispatcher takes the module name so one callback serves all three.
+        ("http", "createServer")
+        | ("http", "Server")
+        | ("https", "createServer")
+        | ("https", "Server")
+        | ("http2", "createServer")
+        | ("http2", "createSecureServer")
+        | ("http2", "Server") => {
+            let ptr =
+                crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(
+                    *const u8,
+                    usize,
+                    *const u8,
+                    usize,
+                    *const f64,
+                    usize,
+                ) -> f64 = std::mem::transmute(ptr);
+                dispatch(
+                    module_name.as_ptr(),
+                    module_name.len(),
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args_ptr,
+                    args_len,
+                )
             }
         }
 
