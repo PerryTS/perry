@@ -1575,7 +1575,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `urlPattern.test(input[, baseURL])`
 - `url.domainToASCII(domain)`
 - `url.domainToUnicode(domain)`
-- `url.fileURLToPathBuffer(url[, options])`
 - `url.urlToHttpOptions(url)`
 - `url.resolve(from, to)`
 

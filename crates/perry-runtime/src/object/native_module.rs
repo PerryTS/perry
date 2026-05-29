@@ -733,6 +733,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("url", "URL")
             | ("url", "URLSearchParams")
             | ("url", "fileURLToPath")
+            | ("url", "fileURLToPathBuffer")
             | ("url", "pathToFileURL")
             | ("url", "domainToASCII")
             | ("url", "domainToUnicode")

@@ -264,6 +264,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "url",
         has_receiver: false,
+        method: "fileURLToPathBuffer",
+        class_filter: None,
+        runtime: "js_url_file_url_to_path_buffer",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "url",
+        has_receiver: false,
         method: "pathToFileURL",
         class_filter: None,
         runtime: "js_url_path_to_file_url",

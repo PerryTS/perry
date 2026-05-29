@@ -1145,6 +1145,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         // ── url module (module-level functions return NaN-boxed JS values) ──
         ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
+        ("url", "fileURLToPathBuffer") => crate::url::js_url_file_url_to_path_buffer(arg(0)),
         ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
