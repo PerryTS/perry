@@ -309,6 +309,20 @@ pub(crate) fn channel_key(name: f64) -> Option<DiagChannelKey> {
     None
 }
 
+pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return false;
+    }
+    let ptr = js_value.as_pointer::<ObjectHeader>();
+    DIAG_CHANNELS.with(|channels| {
+        channels
+            .borrow()
+            .values()
+            .any(|channel| std::ptr::eq(channel.obj, ptr))
+    })
+}
+
 thread_local! {
     /// Side table keyed on an ErrorHeader's `message` string pointer (which
     /// is allocated fresh per throw via `js_string_from_bytes`). The

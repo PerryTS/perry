@@ -67,6 +67,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(DOUBLE, &v), (DOUBLE, &ty_v)],
                 ));
             }
+            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(ty) {
+                if submod_key == "diagnostics_channel" && exported_name == "Channel" {
+                    let submod_label = emit_string_literal_global(ctx, submod_key);
+                    let name_label = emit_string_literal_global(ctx, exported_name);
+                    let submod_len = submod_key.len();
+                    let name_len = exported_name.len();
+                    let blk = ctx.block();
+                    let ty_v = blk.call(
+                        DOUBLE,
+                        "js_node_submodule_export_as_function",
+                        &[
+                            (PTR, &submod_label),
+                            (I32, &submod_len.to_string()),
+                            (PTR, &name_label),
+                            (I32, &name_len.to_string()),
+                        ],
+                    );
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_instanceof_dynamic",
+                        &[(DOUBLE, &v), (DOUBLE, &ty_v)],
+                    ));
+                }
+            }
             // Built-in Error subclasses have reserved CLASS_ID_* constants
             // in the runtime (see crates/perry-runtime/src/error.rs). Map
             // them by name here so `e instanceof TypeError` works even

@@ -51,6 +51,13 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
     }
+    if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
+        return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
     f64::from_bits(TAG_FALSE)
 }
 
