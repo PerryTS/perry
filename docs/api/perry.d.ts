@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1520 entries across 84 modules
+// Coverage: 1521 entries across 84 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1845,6 +1845,8 @@ declare module "process" {
   export function exit(...args: any[]): any;
   /** stdlib */
   export function getActiveResourcesInfo(...args: any[]): any;
+  /** stdlib */
+  export function getBuiltinModule(...args: any[]): any;
   /** stdlib */
   export function getMaxListeners(...args: any[]): any;
   /** stdlib */

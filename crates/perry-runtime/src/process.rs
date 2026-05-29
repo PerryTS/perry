@@ -61,6 +61,41 @@ pub extern "C" fn js_process_abort() {
     std::process::abort();
 }
 
+fn supported_builtin_module_name(name: &str) -> Option<&str> {
+    match name {
+        "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
+        | "console" | "crypto" | "events" | "fs" | "http" | "http2" | "https" | "net" | "os"
+        | "path" | "perf_hooks" | "process" | "punycode" | "querystring" | "readline"
+        | "stream" | "stream/promises" | "string_decoder" | "sys" | "timers"
+        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => {
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+/// process.getBuiltinModule(id) -> module namespace | undefined
+#[no_mangle]
+pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
+    let value = JSValue::from_bits(id.to_bits());
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(bytes) = (unsafe { crate::string::js_string_key_bytes(value, &mut sso_buf) }) else {
+        let message = format!(
+            "The \"id\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(id)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    };
+    let Ok(specifier) = std::str::from_utf8(bytes) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let name = specifier.strip_prefix("node:").unwrap_or(specifier);
+    let Some(module_name) = supported_builtin_module_name(name) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    crate::object::js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
+}
+
 /// Thread-local cell holding the process title set via `process.title = X`
 /// (#1401). `None` means "not assigned yet, fall back to argv[0]". The
 /// setter records the value here; on Linux it also calls `prctl(PR_SET_NAME)`

@@ -2127,6 +2127,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "nextTick", false, None),
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
+    method("process", "getBuiltinModule", false, None),
     method("process", "loadEnvFile", false, None),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
