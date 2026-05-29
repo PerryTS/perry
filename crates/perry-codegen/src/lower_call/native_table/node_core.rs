@@ -635,6 +635,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         ret: NR_F64,
     },
     NativeModSig {
+        module: "assert/strict",
+        has_receiver: false,
+        method: "strict",
+        class_filter: None,
+        runtime: "js_assert_ok",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
         module: "assert",
         has_receiver: false,
         method: "ok",
