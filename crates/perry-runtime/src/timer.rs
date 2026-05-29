@@ -383,14 +383,16 @@ pub extern "C" fn js_timer_refresh(timer_id: i64) {
     }
 }
 
-/// Issue #2013 — validate the first argument of `setTimeout`/`setInterval`
-/// /`setImmediate` so a non-callable value throws Node's
+/// Issue #2013 / #2658 — validate the first argument of `setTimeout`,
+/// `setInterval`, `setImmediate`, and `queueMicrotask` so a non-callable
+/// value throws Node's
 /// `TypeError [ERR_INVALID_ARG_TYPE]` shape instead of segfaulting on
 /// the downstream pointer-deref of the unboxed handle. `value` is the
 /// caller's NaN-boxed JS value (codegen passes the full f64 before the
 /// `unbox_to_i64` that the existing FFIs require). `fn_name` is the
 /// JS function name reported in the error message
-/// (`"setTimeout"` / `"setInterval"` / `"setImmediate"`).
+/// (`"setTimeout"` / `"setInterval"` / `"setImmediate"` /
+/// `"queueMicrotask"`).
 ///
 /// Returns the raw closure pointer (extracted via `unbox_to_i64`) for
 /// the callable case so the codegen can pass it straight to the
@@ -415,12 +417,14 @@ pub unsafe extern "C" fn js_timer_validate_callback(value: f64, fn_name_idx: i32
     if let Some(ptr) = raw_closure_pointer(bits) {
         return ptr as i64;
     }
-    // 0 = setTimeout, 1 = setInterval, 2 = setImmediate, anything
+    // 0 = setTimeout, 1 = setInterval, 2 = setImmediate, 3 = queueMicrotask,
+    // anything
     // else falls back to the generic "callback" wording.
     let fn_name: &str = match fn_name_idx {
         0 => "setTimeout",
         1 => "setInterval",
         2 => "setImmediate",
+        3 => "queueMicrotask",
         _ => "timer",
     };
     let message = format!(

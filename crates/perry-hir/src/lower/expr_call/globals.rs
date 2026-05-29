@@ -173,7 +173,7 @@ pub(super) fn try_global_builtins(
                 if !args.is_empty() {
                     return Ok(Ok(Expr::QueueMicrotask(Box::new(args.remove(0)))));
                 } else {
-                    return Err(anyhow!("queueMicrotask requires one argument"));
+                    return Ok(Ok(Expr::QueueMicrotask(Box::new(Expr::Undefined))));
                 }
             }
             "Symbol" => {
