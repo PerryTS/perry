@@ -728,6 +728,26 @@ pub(super) fn add_finished_error_false_close_listener(stream: f64, callback: f64
     );
 }
 
+pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callback: f64) {
+    let listener = js_closure_alloc(ns_finished_signal_abort as *const u8, 4);
+    js_closure_set_capture_f64(listener, 0, stream);
+    js_closure_set_capture_f64(listener, 1, callback);
+    js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
+    js_closure_set_capture_f64(listener, 3, signal);
+    if signal_is_aborted(signal) {
+        crate::builtins::js_queue_microtask(listener as i64);
+        return;
+    }
+    let Some(signal_obj) = object_ptr_from_value(signal) else {
+        return;
+    };
+    crate::url::js_abort_signal_add_listener(
+        signal_obj,
+        string_value(b"abort"),
+        box_pointer(listener as *const u8),
+    );
+}
+
 /// `stream.finished(stream, [options], cb)` callback form. This slice covers
 /// Node's `{ error: false }` path: there is no dedicated `error` listener, but
 /// `close` still observes the stream's stored error and calls the callback.
@@ -749,6 +769,9 @@ pub extern "C" fn js_node_stream_finished(args: *const crate::array::ArrayHeader
     }
     if get_hidden_value(options, hidden_key(b"error")).is_some_and(|v| v.to_bits() == TAG_FALSE) {
         add_finished_error_false_close_listener(stream, callback);
+    }
+    if let Some(signal) = options_signal(options) {
+        add_finished_signal_abort_listener(stream, signal, callback);
     }
     f64::from_bits(TAG_UNDEFINED)
 }

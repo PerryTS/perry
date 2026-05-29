@@ -3,6 +3,6 @@ import { PassThrough, finished } from "node:stream";
 const p = new PassThrough();
 const ctrl = new AbortController();
 finished(p, { signal: ctrl.signal }, (err) => {
-  console.log("aborted err exists:", err !== null && err !== undefined);
+  console.log("aborted err:", `${err?.name}:${(err as any)?.code}`);
 });
 ctrl.abort();

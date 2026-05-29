@@ -239,6 +239,28 @@ extern "C" fn ns_finished_error_false_close(closure: *const ClosureHeader) -> f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn ns_finished_signal_abort(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    if js_closure_get_capture_f64(closure, 2).to_bits() == TAG_TRUE {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    js_closure_set_capture_f64(closure as *mut ClosureHeader, 2, f64::from_bits(TAG_TRUE));
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let callback = js_closure_get_capture_f64(closure, 1);
+    let signal = js_closure_get_capture_f64(closure, 3);
+    if let Some(signal_obj) = object_ptr_from_value(signal) {
+        crate::url::js_abort_signal_remove_listener(
+            signal_obj,
+            string_value(b"abort"),
+            box_pointer(closure as *const u8),
+        );
+    }
+    call_listener_args(stream, callback, &[crate::url::js_abort_error_value()]);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
