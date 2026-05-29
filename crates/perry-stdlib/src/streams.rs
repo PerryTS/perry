@@ -19,7 +19,7 @@
 //! fetch path eagerly buffers the whole response anyway, so the user-
 //! visible contract is identical for the consumers we expose here.
 //!
-//! Stubs: BYOB readers, custom `QueuingStrategy` size functions, and
+//! Stubs: BYOB readers, full custom `QueuingStrategy` size accounting, and
 //! `ReadableStream.from(asyncIterable)` throw via
 //! `js_streams_throw_not_implemented` — see the inline comment on each
 //! site.
@@ -67,6 +67,7 @@ struct ReadableStreamData {
     start_cb: i64,
     pull_cb: i64,
     cancel_cb: i64,
+    strategy_size_cb: i64,
     high_water_mark: f64,
     is_byte_stream: bool,
     pulling: bool,
@@ -185,6 +186,7 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             visitor.visit_i64_slot(&mut s.start_cb);
             visitor.visit_i64_slot(&mut s.pull_cb);
             visitor.visit_i64_slot(&mut s.cancel_cb);
+            visitor.visit_i64_slot(&mut s.strategy_size_cb);
             for c in s.chunks.iter_mut() {
                 visit_stream_value_slot(visitor, c);
             }
@@ -307,16 +309,21 @@ unsafe fn make_type_error_with_message(msg: &str) -> u64 {
     JSValue::pointer(err as *const u8).bits()
 }
 
+unsafe fn make_range_error_with_code(message: &str, code: &'static str) -> u64 {
+    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(s, code);
+    let err = perry_runtime::error::js_rangeerror_new(s);
+    JSValue::pointer(err as *const u8).bits()
+}
+
 unsafe fn throw_type_error(message: &str) -> ! {
     let err = make_type_error_with_message(message);
     perry_runtime::exception::js_throw(f64::from_bits(err))
 }
 
 unsafe fn throw_range_error_with_code(message: &str, code: &'static str) -> ! {
-    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    perry_runtime::node_submodules::register_error_code_pub(s, code);
-    let err = perry_runtime::error::js_rangeerror_new(s);
-    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    let err = make_range_error_with_code(message, code);
+    perry_runtime::exception::js_throw(f64::from_bits(err))
 }
 
 unsafe fn reject_type_error(promise: *mut Promise, message: &str) {
@@ -342,6 +349,17 @@ fn alloc_readable_with_type(
     hwm: f64,
     is_byte_stream: bool,
 ) -> usize {
+    alloc_readable_with_strategy(start_cb, pull_cb, cancel_cb, hwm, is_byte_stream, 0)
+}
+
+fn alloc_readable_with_strategy(
+    start_cb: i64,
+    pull_cb: i64,
+    cancel_cb: i64,
+    hwm: f64,
+    is_byte_stream: bool,
+    strategy_size_cb: i64,
+) -> usize {
     let id = next_id(&NEXT_STREAM_ID);
     READABLE_STREAMS.lock().unwrap().insert(
         id,
@@ -352,6 +370,7 @@ fn alloc_readable_with_type(
             start_cb,
             pull_cb,
             cancel_cb,
+            strategy_size_cb,
             high_water_mark: if hwm.is_nan() || hwm <= 0.0 { 1.0 } else { hwm },
             is_byte_stream,
             pulling: false,
@@ -501,6 +520,34 @@ pub unsafe extern "C" fn js_readable_stream_new_with_source_type(
     id as f64
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_new_with_strategy_and_source_type(
+    start_bits: f64,
+    pull_bits: f64,
+    cancel_bits: f64,
+    strategy: f64,
+    source_type: f64,
+) -> f64 {
+    ensure_gc_registered();
+    let is_byte_stream = value_string_equals(source_type, b"bytes");
+    let size_cb = if is_byte_stream {
+        0
+    } else {
+        read_queuing_strategy_size(strategy)
+    };
+    let id = alloc_readable_with_strategy(
+        closure_from_bits(start_bits.to_bits()),
+        closure_from_bits(pull_bits.to_bits()),
+        closure_from_bits(cancel_bits.to_bits()),
+        f64::from_bits(read_high_water_mark(strategy)),
+        is_byte_stream,
+        size_cb,
+    );
+    invoke_start(id);
+    maybe_pull(id);
+    id as f64
+}
+
 // ── #1545: node:stream/web QueuingStrategy classes ──────────────────────
 //
 // `new CountQueuingStrategy({ highWaterMark })` and
@@ -552,6 +599,11 @@ unsafe fn build_queuing_strategy(
 /// object; undefined when absent (matches `new CountQueuingStrategy({})`).
 unsafe fn read_high_water_mark(opts: f64) -> u64 {
     perry_runtime::value::js_get_property(opts, b"highWaterMark".as_ptr() as i64, 13).to_bits()
+}
+
+unsafe fn read_queuing_strategy_size(strategy: f64) -> i64 {
+    let size = perry_runtime::value::js_get_property(strategy, b"size".as_ptr() as i64, 4);
+    closure_from_bits(size.to_bits())
 }
 
 /// `new CountQueuingStrategy({ highWaterMark })`.
@@ -833,6 +885,52 @@ pub unsafe extern "C" fn js_jsx_render_stream_from_value(html_value: f64) -> f64
     js_readable_stream_from_iterable(arr_f64)
 }
 
+fn invalid_size_message(size: f64) -> String {
+    let received = if size.is_nan() {
+        "NaN".to_string()
+    } else if size == f64::INFINITY {
+        "Infinity".to_string()
+    } else if size == f64::NEG_INFINITY {
+        "-Infinity".to_string()
+    } else {
+        format!("{}", size)
+    };
+    format!("The argument 'size' is invalid. Received {}", received)
+}
+
+unsafe fn readable_strategy_size_to_number(value: f64) -> f64 {
+    JSValue::from_bits(value.to_bits()).to_number()
+}
+
+unsafe fn error_readable_stream(stream_id: usize, reason_bits: u64) {
+    let reader_id = {
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        match g.get_mut(&stream_id) {
+            Some(s) => {
+                s.state = ReadableState::Errored;
+                s.error_value = reason_bits;
+                s.chunks.clear();
+                s.reader_handle
+            }
+            None => return,
+        }
+    };
+    error_pending(stream_id, reason_bits);
+    if let Some(rid) = reader_id {
+        let p = READERS.lock().unwrap().get(&rid).map(|r| r.closed_promise);
+        if let Some(p) = p {
+            js_promise_reject(p, f64::from_bits(reason_bits));
+        }
+    }
+}
+
+unsafe fn throw_invalid_readable_strategy_size(stream_id: usize, size: f64) -> ! {
+    let message = invalid_size_message(size);
+    let err = make_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+    error_readable_stream(stream_id, err);
+    perry_runtime::exception::js_throw(f64::from_bits(err))
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ReadableStreamDefaultController FFI (controller is the stream handle)
 // ─────────────────────────────────────────────────────────────────────
@@ -844,15 +942,14 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
 ) -> f64 {
     let id = stream_handle as usize;
     let chunk_bits = chunk.to_bits();
-    let popped = {
+    let (popped, strategy_size_cb) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
             Some(s) if s.state == ReadableState::Readable => {
                 if let Some(p) = s.pending_reads.pop_front() {
-                    Some(p)
+                    (Some(p), 0)
                 } else {
-                    s.chunks.push_back(chunk_bits);
-                    None
+                    (None, s.strategy_size_cb)
                 }
             }
             _ => return f64::from_bits(TAG_UNDEFINED),
@@ -861,6 +958,22 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
     if let Some(p) = popped {
         let result = build_iter_result(chunk_bits, false);
         js_promise_resolve(p, f64::from_bits(result));
+    } else {
+        if strategy_size_cb != 0 {
+            let size = readable_strategy_size_to_number(js_closure_call1(
+                strategy_size_cb as *const ClosureHeader,
+                chunk,
+            ));
+            if size.is_nan() || size < 0.0 || size.is_infinite() {
+                throw_invalid_readable_strategy_size(id, size);
+            }
+        }
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        if let Some(s) = g.get_mut(&id) {
+            if s.state == ReadableState::Readable {
+                s.chunks.push_back(chunk_bits);
+            }
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -902,26 +1015,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
     reason: f64,
 ) -> f64 {
     let id = stream_handle as usize;
-    let reason_bits = reason.to_bits();
-    let reader_id = {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&id) {
-            Some(s) => {
-                s.state = ReadableState::Errored;
-                s.error_value = reason_bits;
-                s.chunks.clear();
-                s.reader_handle
-            }
-            None => return f64::from_bits(TAG_UNDEFINED),
-        }
-    };
-    error_pending(id, reason_bits);
-    if let Some(rid) = reader_id {
-        let p = READERS.lock().unwrap().get(&rid).map(|r| r.closed_promise);
-        if let Some(p) = p {
-            js_promise_reject(p, reason);
-        }
-    }
+    error_readable_stream(id, reason.to_bits());
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -1177,6 +1271,7 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
                     start_cb: 0,
                     pull_cb: 0,
                     cancel_cb: 0,
+                    strategy_size_cb: 0,
                     high_water_mark: 1.0,
                     is_byte_stream,
                     pulling: false,

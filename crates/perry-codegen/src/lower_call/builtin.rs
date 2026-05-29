@@ -758,7 +758,7 @@ pub(super) fn lower_builtin_new(
             let mut pull = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut cancel = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut source_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut hwm = double_literal(1.0);
+            let mut strategy = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -785,22 +785,16 @@ pub(super) fn lower_builtin_new(
                 }
             }
             if args.len() >= 2 {
-                if let Some(qprops) = extract_options_fields(ctx, &args[1]) {
-                    for (k, vexpr) in &qprops {
-                        if k == "highWaterMark" {
-                            hwm = lower_expr(ctx, vexpr)?;
-                        }
-                    }
-                }
+                strategy = lower_expr(ctx, &args[1])?;
             }
             let h = ctx.block().call(
                 DOUBLE,
-                "js_readable_stream_new_with_source_type",
+                "js_readable_stream_new_with_strategy_and_source_type",
                 &[
                     (DOUBLE, &start),
                     (DOUBLE, &pull),
                     (DOUBLE, &cancel),
-                    (DOUBLE, &hwm),
+                    (DOUBLE, &strategy),
                     (DOUBLE, &source_type),
                 ],
             );

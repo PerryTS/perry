@@ -416,12 +416,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw \u2014 composite does not emit 'error'. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/web/custom-strategy-nan-size": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: custom strategy size() returning NaN does not throw on enqueue. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/readable/from-iterable-object": {
     "issue": "1532",
     "added": "2026-05-24",

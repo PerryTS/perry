@@ -1774,6 +1774,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_readable_stream_new_with_strategy_and_source_type",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_readable_stream_get_reader", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_readable_stream_get_reader_with_options",
