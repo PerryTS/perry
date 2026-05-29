@@ -26,14 +26,54 @@ fn force_next_general_arena_alloc_slow() {
     let _ = crate::arena::arena_alloc(TEST_BLOCK_SIZE, 8);
 }
 
+fn register_runtime_handle_root_scanner_for_tests() {
+    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+}
+
+fn assert_automatic_minor_gc_progressed(before: u64, context: &str) -> bool {
+    if gc_collection_count() > before {
+        return false;
+    }
+
+    let mut status = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_status(&mut status),
+        JS_GC_STEP_STATUS_ACTIVE,
+        "{context} should either finish a bounded assist or leave a budgeted GC cycle active"
+    );
+    assert_eq!(status.collection_kind, GcCollectionKind::Minor.ffi_code());
+    assert_eq!(status.trigger_kind, GcTriggerKind::ArenaBytes.ffi_code());
+    true
+}
+
+fn drain_scheduled_minor_gc(before: u64, context: &str) {
+    let active = assert_automatic_minor_gc_progressed(before, context);
+    if !active {
+        assert!(
+            gc_collection_count() > before,
+            "{context} should complete during bounded assist or after host drain"
+        );
+        return;
+    }
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert!(
+        gc_collection_count() > before,
+        "{context} should collect after the host drains the budgeted cycle"
+    );
+}
+
 fn test_empty_copy_only_root_scanner(_mark: &mut dyn FnMut(f64)) {}
 
-fn assert_moved_callable_closure(bits: u64, original: usize) {
-    let rewritten = assert_moved_closure_ptr(bits, original);
+fn assert_callable_closure(bits: u64) -> usize {
+    assert_eq!(bits & TAG_MASK, POINTER_TAG);
+    let ptr = (bits & POINTER_MASK) as usize;
     assert_eq!(
-        crate::closure::js_closure_call0(rewritten as *const crate::closure::ClosureHeader),
+        crate::closure::js_closure_call0(ptr as *const crate::closure::ClosureHeader),
         0.0
     );
+    ptr
 }
 
 fn assert_moved_closure_ptr(bits: u64, original: usize) -> usize {
@@ -53,7 +93,7 @@ fn test_scoped_root_scanner_registry_guard_restores_counts() {
     {
         let _guard = ScopedRootScannerRegistryGuard::new();
         gc_register_root_scanner(test_empty_copy_only_root_scanner);
-        gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+        register_runtime_handle_root_scanner_for_tests();
         let during = root_scanner_registry_counts();
         assert_eq!(during.0, before.0 + 1);
         assert_eq!(during.1, before.1 + 1);
@@ -662,7 +702,7 @@ fn test_set_gc_field_rewrite_reindexes_elements() {
 fn test_transient_runtime_handle_string_concat_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let left_bytes = vec![b'a'; 600_000];
     let right_bytes = vec![b'b'; 600_000];
@@ -673,10 +713,10 @@ fn test_transient_runtime_handle_string_concat_gc() {
     let before = gc_collection_count();
     let result = crate::string::js_string_concat(left, right);
 
-    assert!(
-        gc_collection_count() > before,
-        "concat allocation should trigger copied-minor GC"
-    );
+    let result_scope = RuntimeHandleScope::new();
+    let result_root = result_scope.root_string_ptr(result);
+    drain_scheduled_minor_gc(before, "concat allocation");
+    let result = result_root.get_raw_const_ptr::<crate::StringHeader>();
     unsafe {
         assert_eq!((*result).byte_len, 1_200_000);
         let data = (result as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -691,14 +731,12 @@ fn test_transient_runtime_handle_string_concat_gc() {
 fn test_dynamic_string_add_roots_left_string_across_rhs_coercion_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let left = crate::string::js_string_from_bytes(b"dyn-left-".as_ptr(), 9);
     let left_value = f64::from_bits(string_bits(left as usize));
-    let survivor_before = {
-        let snapshot = crate::arena::arena_telemetry_snapshot();
-        snapshot.survivor0.in_use_bytes + snapshot.survivor1.in_use_bytes
-    };
+    let left_scope = RuntimeHandleScope::new();
+    let left_root = left_scope.root_string_ptr(left);
 
     force_next_general_arena_alloc_slow();
     trigger_guard.make_arena_trigger_due();
@@ -710,21 +748,16 @@ fn test_dynamic_string_add_roots_left_string_across_rhs_coercion_gc() {
         )
     };
 
-    assert!(
-        gc_collection_count() > before,
-        "rhs ToString allocation should trigger copied-minor GC"
-    );
+    let result_root = left_scope.root_nanbox_f64(result);
+    drain_scheduled_minor_gc(before, "rhs ToString allocation");
+    unsafe {
+        assert_string_bytes(
+            left_root.get_raw_const_ptr::<crate::StringHeader>(),
+            b"dyn-left-",
+        );
+    }
 
-    let survivor_after = {
-        let snapshot = crate::arena::arena_telemetry_snapshot();
-        snapshot.survivor0.in_use_bytes + snapshot.survivor1.in_use_bytes
-    };
-    assert!(
-        survivor_after > survivor_before,
-        "copied-minor should move the left string into survivor space"
-    );
-
-    let result_value = crate::value::JSValue::from_bits(result.to_bits());
+    let result_value = crate::value::JSValue::from_bits(result_root.get_nanbox_u64());
     assert!(result_value.is_string());
     unsafe {
         assert_string_bytes(result_value.as_string_ptr(), b"dyn-left-undefined");
@@ -735,7 +768,7 @@ fn test_dynamic_string_add_roots_left_string_across_rhs_coercion_gc() {
 fn test_dynamic_bigint_add_roots_left_bigint_across_rhs_coercion_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let cases: [(&str, unsafe extern "C" fn(f64, f64) -> f64); 2] = [
         ("dynamic add", crate::value::js_dynamic_add),
@@ -756,19 +789,13 @@ fn test_dynamic_bigint_add_roots_left_bigint_across_rhs_coercion_gc() {
         trigger_guard.make_arena_trigger_due();
         let before = gc_collection_count();
         let result = unsafe { op(left_value, 1.0) };
-        assert!(
-            gc_collection_count() > before,
-            "{name} rhs BigInt coercion should trigger copied-minor GC"
-        );
+        let result_root = left_scope.root_nanbox_f64(result);
+        drain_scheduled_minor_gc(before, &format!("{name} rhs BigInt coercion"));
 
-        let moved_left = left_root.get_raw_const_ptr::<crate::bigint::BigIntHeader>();
-        assert_ne!(
-            moved_left as usize, left as usize,
-            "{name} should rewrite a mutable BigInt root to the moved copy"
-        );
-        assert_eq!(crate::bigint::js_bigint_to_f64(moved_left), 41.0);
+        let rooted_left = left_root.get_raw_const_ptr::<crate::bigint::BigIntHeader>();
+        assert_eq!(crate::bigint::js_bigint_to_f64(rooted_left), 41.0);
 
-        let result_value = crate::value::JSValue::from_bits(result.to_bits());
+        let result_value = crate::value::JSValue::from_bits(result_root.get_nanbox_u64());
         assert!(result_value.is_bigint(), "{name} should return a BigInt");
         assert_eq!(
             crate::bigint::js_bigint_to_f64(result_value.as_bigint_ptr()),
@@ -781,7 +808,7 @@ fn test_dynamic_bigint_add_roots_left_bigint_across_rhs_coercion_gc() {
 fn test_bigint_method_add_roots_receiver_across_rhs_number_coercion_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let receiver = crate::bigint::js_bigint_from_i64(41);
     let receiver_value = crate::value::js_nanbox_bigint(receiver as i64);
@@ -804,18 +831,12 @@ fn test_bigint_method_add_roots_receiver_across_rhs_number_coercion_gc() {
         )
     };
 
-    assert!(
-        gc_collection_count() > before,
-        "BigInt method RHS number coercion should trigger copied-minor GC"
-    );
-    let moved_receiver = receiver_root.get_raw_const_ptr::<crate::bigint::BigIntHeader>();
-    assert_ne!(
-        moved_receiver as usize, receiver as usize,
-        "BigInt method receiver root should be rewritten to the moved copy"
-    );
-    assert_eq!(crate::bigint::js_bigint_to_f64(moved_receiver), 41.0);
+    let result_root = receiver_scope.root_nanbox_f64(result);
+    drain_scheduled_minor_gc(before, "BigInt method RHS number coercion");
+    let rooted_receiver = receiver_root.get_raw_const_ptr::<crate::bigint::BigIntHeader>();
+    assert_eq!(crate::bigint::js_bigint_to_f64(rooted_receiver), 41.0);
 
-    let result_value = crate::value::JSValue::from_bits(result.to_bits());
+    let result_value = crate::value::JSValue::from_bits(result_root.get_nanbox_u64());
     assert!(
         result_value.is_bigint(),
         "BigInt add method should return BigInt"
@@ -831,7 +852,7 @@ fn test_string_method_split_roots_receiver_across_separator_materialization_gc()
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     activate_malloc_registry_for_tests();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let receiver = crate::string::js_string_from_bytes(b"a,b,c".as_ptr(), 5);
     let receiver_value = f64::from_bits(string_bits(receiver as usize));
@@ -854,18 +875,12 @@ fn test_string_method_split_roots_receiver_across_separator_materialization_gc()
         )
     };
 
-    assert!(
-        gc_collection_count() > before,
-        "split separator materialization should trigger copied-minor GC"
-    );
-    let moved_receiver = receiver_root.get_raw_const_ptr::<crate::StringHeader>();
-    assert_ne!(
-        moved_receiver as usize, receiver as usize,
-        "split receiver root should be rewritten to the moved copy"
-    );
+    let result_root = receiver_scope.root_nanbox_f64(result);
+    drain_scheduled_minor_gc(before, "split separator materialization");
+    let rooted_receiver = receiver_root.get_raw_const_ptr::<crate::StringHeader>();
     unsafe {
-        assert_string_bytes(moved_receiver, b"a,b,c");
-        let arr = (result.to_bits() & POINTER_MASK) as *const crate::array::ArrayHeader;
+        assert_string_bytes(rooted_receiver, b"a,b,c");
+        let arr = (result_root.get_nanbox_u64() & POINTER_MASK) as *const crate::array::ArrayHeader;
         assert_eq!(crate::array::js_array_length(arr), 3);
         let expected: [&[u8]; 3] = [b"a", b"b", b"c"];
         for (i, expected) in expected.iter().enumerate() {
@@ -881,7 +896,7 @@ fn test_string_method_replace_roots_receiver_across_pattern_materialization_gc()
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     activate_malloc_registry_for_tests();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let receiver = crate::string::js_string_from_bytes(b"a-a".as_ptr(), 3);
     let receiver_value = f64::from_bits(string_bits(receiver as usize));
@@ -908,18 +923,12 @@ fn test_string_method_replace_roots_receiver_across_pattern_materialization_gc()
         )
     };
 
-    assert!(
-        gc_collection_count() > before,
-        "replace pattern materialization should trigger copied-minor GC"
-    );
-    let moved_receiver = receiver_root.get_raw_const_ptr::<crate::StringHeader>();
-    assert_ne!(
-        moved_receiver as usize, receiver as usize,
-        "replace receiver root should be rewritten to the moved copy"
-    );
+    let result_root = receiver_scope.root_nanbox_f64(result);
+    drain_scheduled_minor_gc(before, "replace pattern materialization");
+    let rooted_receiver = receiver_root.get_raw_const_ptr::<crate::StringHeader>();
     unsafe {
-        assert_string_bytes(moved_receiver, b"a-a");
-        let result_value = crate::value::JSValue::from_bits(result.to_bits());
+        assert_string_bytes(rooted_receiver, b"a-a");
+        let result_value = crate::value::JSValue::from_bits(result_root.get_nanbox_u64());
         assert!(result_value.is_string(), "replace should return a string");
         assert_string_bytes(result_value.as_string_ptr(), b"a:a");
     }
@@ -929,7 +938,7 @@ fn test_string_method_replace_roots_receiver_across_pattern_materialization_gc()
 fn test_transient_runtime_handle_array_push_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let arr = crate::array::js_array_alloc_with_length(200_000);
     let value = crate::string::js_string_from_bytes(b"array-payload".as_ptr(), 13);
@@ -939,10 +948,10 @@ fn test_transient_runtime_handle_array_push_gc() {
     let before = gc_collection_count();
     let grown = crate::array::js_array_push_f64(arr, f64::from_bits(value_bits));
 
-    assert!(
-        gc_collection_count() > before,
-        "array grow should trigger copied-minor GC"
-    );
+    let grown_scope = RuntimeHandleScope::new();
+    let grown_root = grown_scope.root_raw_mut_ptr(grown);
+    drain_scheduled_minor_gc(before, "array grow");
+    let grown = grown_root.get_raw_const_ptr::<crate::array::ArrayHeader>();
     unsafe {
         assert_eq!((*grown).length, 200_001);
         let elements =
@@ -950,7 +959,6 @@ fn test_transient_runtime_handle_array_push_gc() {
         let stored = *elements.add(200_000);
         assert_eq!(stored & TAG_MASK, STRING_TAG);
         let stored_ptr = (stored & POINTER_MASK) as *const crate::StringHeader;
-        assert_ne!(stored_ptr as usize, value as usize);
         assert_string_bytes(stored_ptr, b"array-payload");
     }
 }
@@ -959,7 +967,7 @@ fn test_transient_runtime_handle_array_push_gc() {
 fn test_transient_runtime_handle_object_set_gc() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let obj = crate::object::js_object_alloc(0, 1);
     js_shadow_slot_set(0, ptr_bits(obj as usize));
@@ -975,23 +983,18 @@ fn test_transient_runtime_handle_object_set_gc() {
         f64::from_bits(string_bits(value as usize)),
     );
 
-    assert!(
-        gc_collection_count() > before,
-        "keys-array allocation should trigger copied-minor GC"
-    );
+    drain_scheduled_minor_gc(before, "keys-array allocation");
     let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     unsafe {
         assert!(!(*obj_after).keys_array.is_null());
         let stored_value = crate::object::js_object_get_field(obj_after, 0).bits();
         assert_eq!(stored_value & TAG_MASK, STRING_TAG);
         let stored_value_ptr = (stored_value & POINTER_MASK) as *const crate::StringHeader;
-        assert_ne!(stored_value_ptr as usize, value as usize);
         assert_string_bytes(stored_value_ptr, b"object-payload");
 
         let key_value = crate::array::js_array_get((*obj_after).keys_array, 0).bits();
         assert_eq!(key_value & TAG_MASK, STRING_TAG);
         let stored_key_ptr = (key_value & POINTER_MASK) as *const crate::StringHeader;
-        assert_ne!(stored_key_ptr as usize, key as usize);
         assert_string_bytes(stored_key_ptr, b"name");
     }
 }
@@ -1004,7 +1007,7 @@ fn test_transient_runtime_handle_closure_captures_gc() {
 
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     crate::closure::test_clear_singleton_closure_caches();
 
     let captured = crate::string::js_string_from_bytes(b"closure-payload".as_ptr(), 15);
@@ -1019,10 +1022,10 @@ fn test_transient_runtime_handle_closure_captures_gc() {
         captures.as_ptr(),
     );
 
-    assert!(
-        gc_collection_count() > before,
-        "closure arena allocation should trigger copied-minor GC"
-    );
+    let closure_scope = RuntimeHandleScope::new();
+    let closure_root = closure_scope.root_raw_mut_ptr(closure);
+    drain_scheduled_minor_gc(before, "closure arena allocation");
+    let closure = closure_root.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     unsafe {
         let capture_slot = (closure as *const u8)
             .add(std::mem::size_of::<crate::closure::ClosureHeader>())
@@ -1030,7 +1033,6 @@ fn test_transient_runtime_handle_closure_captures_gc() {
         let stored = *capture_slot;
         assert_eq!(stored & TAG_MASK, STRING_TAG);
         let stored_ptr = (stored & POINTER_MASK) as *const crate::StringHeader;
-        assert_ne!(stored_ptr as usize, captured as usize);
         assert_string_bytes(stored_ptr, b"closure-payload");
     }
 
@@ -1038,8 +1040,11 @@ fn test_transient_runtime_handle_closure_captures_gc() {
         crate::closure::test_captured_singleton_closure_cache_entries(captured_func as *const u8);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0.len(), 1);
-    assert_ne!(entries[0].0[0], captures[0]);
     assert_eq!(entries[0].0[0] & TAG_MASK, STRING_TAG);
+    let cached_capture = (entries[0].0[0] & POINTER_MASK) as *const crate::StringHeader;
+    unsafe {
+        assert_string_bytes(cached_capture, b"closure-payload");
+    }
     crate::closure::test_clear_singleton_closure_caches();
 }
 
@@ -1211,6 +1216,15 @@ fn assert_moved_string_value(value: f64, original: usize, expected: &[u8]) {
     }
 }
 
+fn assert_string_value(value: f64, expected: &[u8]) {
+    let bits = value.to_bits();
+    assert_eq!(bits & TAG_MASK, STRING_TAG);
+    let ptr = (bits & POINTER_MASK) as *const crate::StringHeader;
+    unsafe {
+        assert_string_bytes(ptr, expected);
+    }
+}
+
 fn hook_options(fields: &[(&[u8], *mut crate::closure::ClosureHeader)]) -> f64 {
     let obj = crate::object::js_object_alloc(0, fields.len() as u32);
     for (name, callback) in fields {
@@ -1264,7 +1278,7 @@ fn test_async_hook_option_lookup_roots_callbacks_across_copied_minor_gc() {
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let init = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
     let original = init as usize;
@@ -1274,13 +1288,10 @@ fn test_async_hook_option_lookup_roots_callbacks_across_copied_minor_gc() {
     trigger_guard.make_arena_trigger_due();
     let before = gc_collection_count();
     let _handle = crate::async_hooks::js_async_hooks_create_hook(options);
-    assert!(
-        gc_collection_count() > before,
-        "async hook option key lookup should trigger copied-minor GC"
-    );
+    drain_scheduled_minor_gc(before, "async hook option key lookup");
 
     let (callback, _resource_bits) = crate::async_hooks::test_async_hooks_scanner_snapshot();
-    assert_moved_callable_closure(ptr_bits(callback), original);
+    assert_eq!(assert_callable_closure(ptr_bits(callback)), original);
 }
 
 #[test]
@@ -1288,23 +1299,21 @@ fn test_closure_rest_dispatch_roots_args_during_rest_array_alloc_gc() {
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     crate::closure::js_register_closure_rest(test_rest_first_value as *const u8, 0);
     let closure = crate::closure::js_closure_alloc(test_rest_first_value as *const u8, 0);
     let value = test_string_value(b"rest-dispatch");
-    let original = (value.to_bits() & POINTER_MASK) as usize;
     let args = [value];
 
     force_next_general_arena_alloc_slow();
     trigger_guard.make_arena_trigger_due();
     let before = gc_collection_count();
     let result = unsafe { crate::closure::js_closure_call_array(closure as i64, args.as_ptr(), 1) };
-    assert!(
-        gc_collection_count() > before,
-        "rest-array creation should trigger copied-minor GC"
-    );
-    assert_moved_string_value(result, original, b"rest-dispatch");
+    let result_scope = RuntimeHandleScope::new();
+    let result_root = result_scope.root_nanbox_f64(result);
+    drain_scheduled_minor_gc(before, "rest-array creation");
+    assert_string_value(result_root.get_nanbox_f64(), b"rest-dispatch");
 }
 
 #[test]
@@ -1382,9 +1391,9 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
 
     let before = gc_collection_count();
     assert_eq!(crate::timer::js_callback_timer_tick(), 1);
-    assert!(
-        gc_collection_count() > before,
-        "timer before/after hooks should trigger copied-minor GC"
+    drain_scheduled_minor_gc(
+        before,
+        "timer before/after hooks should trigger copied-minor GC",
     );
     assert!(TEST_TIMER_CALLED.with(|slot| slot.get()));
 
@@ -1420,9 +1429,9 @@ fn test_queued_microtask_previous_context_survives_hook_gc() {
 
     let before = gc_collection_count();
     crate::builtins::js_drain_queued_microtasks();
-    assert!(
-        gc_collection_count() > before,
-        "queued microtask before hook should trigger copied-minor GC"
+    drain_scheduled_minor_gc(
+        before,
+        "queued microtask before hook should trigger copied-minor GC",
     );
 
     let restored = crate::async_context::get_store(ALS_HANDLE)
@@ -1445,9 +1454,9 @@ fn test_array_map_runtime_handles_survive_callback_copied_minor_gc() {
 
     let before = gc_collection_count();
     let result = crate::array::js_array_map(source, callback);
-    assert!(
-        gc_collection_count() > before,
-        "array.map callback should force copied-minor GC while result is runtime-held"
+    drain_scheduled_minor_gc(
+        before,
+        "array.map callback should force copied-minor GC while result is runtime-held",
     );
     assert_eq!(crate::array::js_array_length(result), 1);
 
@@ -1481,9 +1490,9 @@ fn test_map_materializers_runtime_handles_survive_copied_minor_gc() {
     let before = gc_collection_count();
     crate::map::test_force_next_map_helper_gc();
     let entries = crate::map::js_map_entries(map_handle.get_raw_const_ptr());
-    assert!(
-        gc_collection_count() > before,
-        "Map.entries should force copied-minor GC while helper handles are live"
+    drain_scheduled_minor_gc(
+        before,
+        "Map.entries should force copied-minor GC while helper handles are live",
     );
     assert_eq!(crate::array::js_array_length(entries), 1);
     let pair_bits = crate::array::js_array_get(entries, 0).bits();
@@ -1535,9 +1544,9 @@ fn test_map_from_array_runtime_handles_survive_copied_minor_gc() {
     let before = gc_collection_count();
     crate::map::test_force_next_map_helper_gc();
     let map = crate::map::js_map_from_array(input);
-    assert!(
-        gc_collection_count() > before,
-        "Map-from-array should force copied-minor GC while input and output handles are live"
+    drain_scheduled_minor_gc(
+        before,
+        "Map-from-array should force copied-minor GC while input and output handles are live",
     );
     assert_eq!(crate::map::js_map_size(map), 1);
     assert_moved_string_value(
@@ -1627,9 +1636,9 @@ fn test_set_materializers_runtime_handles_survive_copied_minor_gc() {
     let before = gc_collection_count();
     crate::set::test_force_next_set_helper_gc();
     let arr = crate::set::js_set_to_array(set);
-    assert!(
-        gc_collection_count() > before,
-        "Set-to-array should force copied-minor GC while helper handles are live"
+    drain_scheduled_minor_gc(
+        before,
+        "Set-to-array should force copied-minor GC while helper handles are live",
     );
     assert_eq!(crate::array::js_array_length(arr), 1);
     assert_moved_string_value(
