@@ -6,8 +6,8 @@ use super::{
     WRITABLE_STREAMS,
 };
 use perry_runtime::{
-    js_closure_call0, js_closure_call1, js_promise_new, js_promise_reject, js_promise_resolve,
-    ClosureHeader, Promise,
+    js_closure_call0, js_closure_call1, js_nanbox_get_pointer, js_promise_new, js_promise_reject,
+    js_promise_resolve, ClosureHeader, JSValue, ObjectHeader, Promise,
 };
 
 #[derive(Clone, Copy)]
@@ -188,6 +188,10 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     let r_id = readable_handle as usize;
     let w_id = writable_handle as usize;
     let prevent_close = pipe_option_truthy(options, b"preventClose");
+    if pipe_signal_is_aborted(options) {
+        js_promise_reject(promise, perry_runtime::url::js_abort_error_value());
+        return promise;
+    }
 
     let locks = match acquire_pipe_locks(r_id, w_id) {
         Ok(locks) => locks,
@@ -230,8 +234,24 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     promise
 }
 
+unsafe fn pipe_signal_is_aborted(options: f64) -> bool {
+    let signal = pipe_option_value(options, b"signal");
+    let jsval = JSValue::from_bits(signal.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let signal_ptr = js_nanbox_get_pointer(signal) as *mut ObjectHeader;
+    if signal_ptr.is_null() {
+        return false;
+    }
+    perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0
+}
+
 unsafe fn pipe_option_truthy(options: f64, name: &[u8]) -> bool {
-    let value =
-        perry_runtime::value::js_get_property(options, name.as_ptr() as i64, name.len() as i64);
+    let value = pipe_option_value(options, name);
     perry_runtime::value::js_is_truthy(value) != 0
+}
+
+unsafe fn pipe_option_value(options: f64, name: &[u8]) -> f64 {
+    perry_runtime::value::js_get_property(options, name.as_ptr() as i64, name.len() as i64)
 }

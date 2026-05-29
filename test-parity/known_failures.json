@@ -554,12 +554,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncIter with awaits) \u2014 wrong collected output. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/pipe-to-with-pre-aborted-signal": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeTo with pre-aborted signal \u2014 does not reject immediately. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/readable/readable-mode-only": {
     "issue": "1532",
     "added": "2026-05-24",
