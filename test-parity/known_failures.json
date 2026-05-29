@@ -272,12 +272,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.prototype.compose(stream) instance method \u2014 not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/events/finish-end-close-order": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex with finish/end/close event ordering \u2014 fails to compile (this/method context inside arrow callback). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/duplex/from-object-form": {
     "issue": "1532",
     "added": "2026-05-24",
