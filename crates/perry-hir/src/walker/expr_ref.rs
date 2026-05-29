@@ -254,6 +254,7 @@ where
         | Expr::DateGetUtcSeconds(v)
         | Expr::DateGetUtcMilliseconds(v)
         | Expr::DateValueOf(v)
+        | Expr::DateToString(v)
         | Expr::DateToDateString(v)
         | Expr::DateToTimeString(v)
         | Expr::DateToLocaleDateString(v)
@@ -308,8 +309,17 @@ where
         | Expr::TemplateRaw(v) => {
             f(v);
         }
+        Expr::BufferConcatWithLength { list, total_length } => {
+            f(list);
+            f(total_length);
+        }
 
         Expr::UrlCanParseWithBase { input, base } => {
+            f(input);
+            f(base);
+        }
+
+        Expr::UrlParseWithBase { input, base } => {
             f(input);
             f(base);
         }
@@ -335,9 +345,16 @@ where
             f(count);
         }
 
-        Expr::UrlSearchParamsForEach { params, callback } => {
+        Expr::UrlSearchParamsForEach {
+            params,
+            callback,
+            this_arg,
+        } => {
             f(params);
             f(callback);
+            if let Some(this_arg) = this_arg {
+                f(this_arg);
+            }
         }
 
         Expr::TaggedTemplateStrings { cooked, .. } => {
@@ -898,7 +915,8 @@ where
         | Expr::UrlSetHostname { url, value }
         | Expr::UrlSetPort { url, value }
         | Expr::UrlSetUsername { url, value }
-        | Expr::UrlSetPassword { url, value } => {
+        | Expr::UrlSetPassword { url, value }
+        | Expr::UrlSetHref { url, value } => {
             f(url);
             f(value);
         }

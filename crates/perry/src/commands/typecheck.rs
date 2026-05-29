@@ -80,6 +80,9 @@ mod msgpack {
     }
 
     /// Encode nil
+    // #854: msgpack codec primitive; paired with the encode_*/decode helpers
+    // even though no caller emits nil yet.
+    #[allow(dead_code)]
     pub fn encode_nil(buf: &mut Vec<u8>) {
         buf.push(0xc0);
     }
@@ -477,6 +480,9 @@ impl TsGoClient {
     }
 
     /// Get type at a single position
+    // #854: tsgo client RPC method; single-position counterpart to the batch
+    // positions query, kept as part of the client API surface.
+    #[allow(dead_code)]
     pub fn get_type_at_position(&mut self, file: &str, position: u32) -> Result<Option<TypeInfo>> {
         let params = serde_json::json!({
             "file": file,

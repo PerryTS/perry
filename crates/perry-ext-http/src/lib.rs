@@ -45,6 +45,9 @@
 #[allow(unused_imports)]
 extern crate perry_ext_http_server as _server_link;
 
+mod agent;
+pub use agent::*;
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -97,15 +100,16 @@ lazy_static! {
 
 static HTTP_GC_REGISTERED: Once = Once::new();
 
-fn ensure_gc_scanner_registered() {
+pub(crate) fn ensure_gc_scanner_registered() {
     HTTP_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
     });
 }
 
 /// GC root scanner: walks every ClientRequestHandle (response_callback
-/// + listeners) and IncomingMessageHandle (listeners). Closures stored
-/// as raw i64 pointers are handed to the runtime as mutable slots.
+/// + listeners), IncomingMessageHandle (listeners), and AgentHandle
+/// (createConnection / createSocket overrides). Closures stored as raw
+/// i64 pointers are handed to the runtime as mutable slots.
 fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
         visitor.visit_i64_slot(&mut req.response_callback);
@@ -123,6 +127,9 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
             }
         }
     });
+
+    // #2154: stored `agent.createConnection` / `.createSocket` closures.
+    agent::scan_agent_roots(visitor);
 }
 
 fn push_event(ev: PendingHttpEvent) {
@@ -248,8 +255,42 @@ async fn dispatch_plain_http_request(
         Err(e) => return Some(Err(e.to_string())),
     };
 
+    match parse_http_response(&raw) {
+        Ok(parsed) => {
+            push_event(PendingHttpEvent::Response {
+                request_handle,
+                status: parsed.status,
+                status_message: parsed.status_message,
+                headers: parsed.headers,
+                trailers: parsed.trailers,
+                body: parsed.body,
+            });
+            Some(Ok(()))
+        }
+        Err(e) => Some(Err(e)),
+    }
+}
+
+/// A parsed HTTP/1.1 response message (status line + headers + decoded body
+/// + trailers). Produced by [`parse_http_response`].
+struct ParsedHttpResponse {
+    status: u16,
+    status_message: String,
+    headers: Vec<(String, String)>,
+    trailers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// Parse a raw HTTP/1.1 response (the bytes read off a socket) into status /
+/// headers / decoded body / trailers. Decodes `Transfer-Encoding: chunked`
+/// (including a trailer block) and honors `Content-Length`; with neither it
+/// treats the remainder as the body (read-until-EOF transports). Shared by
+/// the trailer-aware reqwest-bypass path ([`dispatch_plain_http_request`])
+/// and the #2154 `agent.createConnection` socket path
+/// ([`dispatch_request_over_socket`]).
+fn parse_http_response(raw: &[u8]) -> Result<ParsedHttpResponse, String> {
     let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
-        return Some(Err("invalid HTTP response".to_string()));
+        return Err("invalid HTTP response".to_string());
     };
     let head = String::from_utf8_lossy(&raw[..header_end]);
     let mut lines = head.split("\r\n");
@@ -320,15 +361,13 @@ async fn dispatch_plain_http_request(
         decoded.extend_from_slice(payload);
     }
 
-    push_event(PendingHttpEvent::Response {
-        request_handle,
+    Ok(ParsedHttpResponse {
         status,
         status_message,
         headers: hdrs,
         trailers,
         body: decoded,
-    });
-    Some(Ok(()))
+    })
 }
 
 // ------------------------------------------------------------------
@@ -345,6 +384,13 @@ pub struct ClientRequestHandle {
     listeners: HashMap<String, Vec<i64>>,
     timeout_ms: Option<u64>,
     ended: bool,
+    /// `options.agent` handle id when the caller supplied an Agent
+    /// (#2154). `0` = use the global `HTTP_CLIENT` (no pooling
+    /// distinction). When set, `dispatch_request` calls
+    /// `agent::client_for_agent` so requests share a per-Agent
+    /// connection pool whose `keepAlive` / `maxFreeSockets` /
+    /// `keepAliveMsecs` come from the Agent's stored options.
+    agent_handle: Handle,
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -399,7 +445,7 @@ fn is_string_value(val: f64) -> bool {
 
 /// Parse a NaN-boxed JS object via `json_stringify` → `serde_json::Value`.
 /// Returns `None` on null pointer or stringify failure.
-unsafe fn parse_options_object(val_f64: f64) -> Option<serde_json::Value> {
+pub(crate) unsafe fn parse_options_object(val_f64: f64) -> Option<serde_json::Value> {
     let v = JsValue::from_bits(val_f64.to_bits());
     if v.is_undefined() || v.is_null() {
         return None;
@@ -489,6 +535,7 @@ fn make_request_handle(
     headers: HashMap<String, String>,
     timeout_ms: Option<u64>,
     callback: i64,
+    agent_handle: Handle,
 ) -> Handle {
     register_handle(ClientRequestHandle {
         method,
@@ -499,6 +546,7 @@ fn make_request_handle(
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        agent_handle,
     })
 }
 
@@ -517,7 +565,18 @@ fn dispatch_request(
     headers: HashMap<String, String>,
     body: Vec<u8>,
     timeout_ms: Option<u64>,
+    agent_handle: Handle,
 ) {
+    // #2154: pick the per-Agent reqwest client when one was supplied, so
+    // the request honors the Agent's keepAlive/maxFreeSockets/keepAliveMsecs
+    // pool config rather than always using the global HTTP_CLIENT. The
+    // global is still the fallback for `http.request(opts)` without an
+    // `agent` field.
+    let client: reqwest::Client = if agent_handle != 0 {
+        agent::client_for_agent(agent_handle)
+    } else {
+        HTTP_CLIENT.clone()
+    };
     spawn_blocking(move || {
         // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
         // workaround perry-ext-net needs (see spawn_socket_runner).
@@ -552,13 +611,13 @@ fn dispatch_request(
             }
 
             let mut req = match method.as_str() {
-                "POST" => HTTP_CLIENT.post(&url),
-                "PUT" => HTTP_CLIENT.put(&url),
-                "DELETE" => HTTP_CLIENT.delete(&url),
-                "PATCH" => HTTP_CLIENT.patch(&url),
-                "HEAD" => HTTP_CLIENT.head(&url),
-                "OPTIONS" => HTTP_CLIENT.request(reqwest::Method::OPTIONS, &url),
-                _ => HTTP_CLIENT.get(&url),
+                "POST" => client.post(&url),
+                "PUT" => client.put(&url),
+                "DELETE" => client.delete(&url),
+                "PATCH" => client.patch(&url),
+                "HEAD" => client.head(&url),
+                "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
+                _ => client.get(&url),
             };
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
@@ -612,6 +671,165 @@ fn dispatch_request(
     });
 }
 
+/// Serialize an HTTP/1.1 request (request line + headers + body) into the
+/// bytes to write onto a socket. Forces `Connection: close` (the raw socket
+/// path reads until EOF), drops any caller-supplied `Connection`/`Host`
+/// header (we set `Host` from the URL), and adds `Content-Length` when a
+/// body is present and the caller didn't.
+fn serialize_http_request(
+    method: &str,
+    path: &str,
+    host_header: &str,
+    headers: &HashMap<String, String>,
+    body: &[u8],
+) -> Vec<u8> {
+    let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, host_header);
+    let mut has_content_length = false;
+    for (k, v) in headers {
+        if k.eq_ignore_ascii_case("content-length") {
+            has_content_length = true;
+        }
+        if k.eq_ignore_ascii_case("connection") || k.eq_ignore_ascii_case("host") {
+            continue;
+        }
+        req.push_str(k);
+        req.push_str(": ");
+        req.push_str(v);
+        req.push_str("\r\n");
+    }
+    req.push_str("Connection: close\r\n");
+    if !body.is_empty() && !has_content_length {
+        req.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    req.push_str("\r\n");
+    let mut out = req.into_bytes();
+    out.extend_from_slice(body);
+    out
+}
+
+/// #2154 — run an HTTP exchange over a socket that the agent's
+/// `createConnection` override produced (`socket_id`), instead of through
+/// reqwest. Writes the serialized request, reads the response until the peer
+/// closes (we force `Connection: close`), parses it with
+/// [`parse_http_response`], and pushes the same `Response` / `Error` event
+/// the reqwest path produces — so the IncomingMessage surface is identical.
+///
+/// The socket I/O goes through perry-ffi's raw-net vtable (published by
+/// perry-ext-net), so this crate needs no link edge to perry-ext-net. If no
+/// net backend is linked the request errors out (the override couldn't have
+/// produced a socket without `net`, so this is a defensive guard).
+fn dispatch_request_over_socket(
+    request_handle: Handle,
+    method: String,
+    url: String,
+    headers: HashMap<String, String>,
+    body: Vec<u8>,
+    timeout_ms: Option<u64>,
+    socket_id: i64,
+) {
+    let parsed = match reqwest::Url::parse(&url) {
+        Ok(u) => u,
+        Err(e) => {
+            push_event(PendingHttpEvent::Error {
+                request_handle,
+                error_message: e.to_string(),
+            });
+            return;
+        }
+    };
+    let host = parsed.host_str().unwrap_or("localhost").to_string();
+    let host_header = match parsed.port() {
+        Some(p) => format!("{}:{}", host, p),
+        None => host,
+    };
+    let mut path = parsed.path().to_string();
+    if path.is_empty() {
+        path.push('/');
+    }
+    if let Some(q) = parsed.query() {
+        path.push('?');
+        path.push_str(q);
+    }
+    let req_bytes = serialize_http_request(&method, &path, &host_header, &headers, &body);
+    let deadline = std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000));
+
+    spawn_blocking(move || {
+        let try_h = tokio::runtime::Handle::try_current();
+        std::hint::black_box(&try_h);
+        if try_h.is_err() {
+            eprintln!(
+                "[perry-ext-http] BUG: dispatch_request_over_socket Handle::try_current returned \
+                 Err — LTO has likely dead-stripped tokio's CONTEXT statics."
+            );
+            return;
+        }
+        let handle = tokio::runtime::Handle::current();
+        let jh = handle.spawn(async move {
+            let vtable = match perry_ffi::raw_net() {
+                Some(v) => v,
+                None => {
+                    push_event(PendingHttpEvent::Error {
+                        request_handle,
+                        error_message: "agent.createConnection requires node:net (not linked)"
+                            .to_string(),
+                    });
+                    return;
+                }
+            };
+            // Attach is idempotent — the request path also attaches on the
+            // main thread before this task runs, to close any data race.
+            (vtable.attach)(socket_id);
+            if (vtable.write)(socket_id, req_bytes.as_ptr(), req_bytes.len()) == 0 {
+                push_event(PendingHttpEvent::Error {
+                    request_handle,
+                    error_message: "failed to write request to agent socket".to_string(),
+                });
+                return;
+            }
+
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 16 * 1024];
+            let start = tokio::time::Instant::now();
+            loop {
+                let n = (vtable.poll_read)(socket_id, chunk.as_mut_ptr(), chunk.len());
+                if n > 0 {
+                    raw.extend_from_slice(&chunk[..n as usize]);
+                } else if n == 0 {
+                    break; // clean EOF — peer closed after the response
+                } else {
+                    if start.elapsed() >= deadline {
+                        (vtable.close)(socket_id);
+                        push_event(PendingHttpEvent::Error {
+                            request_handle,
+                            error_message: "request timed out".to_string(),
+                        });
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            }
+            (vtable.close)(socket_id);
+
+            match parse_http_response(&raw) {
+                Ok(parsed) => push_event(PendingHttpEvent::Response {
+                    request_handle,
+                    status: parsed.status,
+                    status_message: parsed.status_message,
+                    headers: parsed.headers,
+                    trailers: parsed.trailers,
+                    body: parsed.body,
+                }),
+                Err(error_message) => push_event(PendingHttpEvent::Error {
+                    request_handle,
+                    error_message,
+                }),
+            }
+        });
+        std::hint::black_box(&jh);
+        std::mem::forget(jh);
+    });
+}
+
 // ------------------------------------------------------------------
 // FFI: http.request / https.request / http.get / https.get
 // ------------------------------------------------------------------
@@ -621,7 +839,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     // Issue #769 — accept either a URL string or an options object. Mirrors
     // the dispatch in `get_common` so `http.request("http://…", cb)` works
     // the same as `http.request({ host, port, path }, cb)`.
-    let (method, url, headers, timeout) = if is_string_value(arg_f64) {
+    let (method, url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
@@ -630,16 +848,20 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         } else {
             String::new()
         };
-        ("GET".to_string(), url, HashMap::new(), None)
+        ("GET".to_string(), url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
         let method = method_from_options(&opts);
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
         let timeout = timeout_from_options(&opts);
-        (method, url, headers, timeout)
+        // #2154: `options.agent` doesn't survive the JSON round-trip
+        // (pointer-tagged values get dropped) — read the field straight
+        // off the NaN-boxed object instead.
+        let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
+        (method, url, headers, timeout, agent_handle)
     };
-    make_request_handle(method, url, headers, timeout, callback)
+    make_request_handle(method, url, headers, timeout, callback, agent_handle)
 }
 
 #[no_mangle]
@@ -654,7 +876,7 @@ pub unsafe extern "C" fn js_https_request(opts_f64: f64, callback_i64: i64) -> H
 
 unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Handle {
     ensure_gc_scanner_registered();
-    let (url, headers, timeout) = if is_string_value(arg_f64) {
+    let (url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
@@ -663,16 +885,24 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         } else {
             String::new()
         };
-        (url, HashMap::new(), None)
+        (url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
         let timeout = timeout_from_options(&opts);
-        (url, headers, timeout)
+        let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
+        (url, headers, timeout, agent_handle)
     };
 
-    let handle = make_request_handle("GET".to_string(), url, headers, timeout, callback);
+    let handle = make_request_handle(
+        "GET".to_string(),
+        url,
+        headers,
+        timeout,
+        callback,
+        agent_handle,
+    );
     // GET auto-`end()`s, kicking off the request.
     js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
     handle
@@ -687,6 +917,8 @@ pub unsafe extern "C" fn js_http_get(arg_f64: f64, callback_i64: i64) -> Handle 
 pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle {
     get_common(arg_f64, callback_i64, "https")
 }
+
+// http.Agent / https.Agent (#2129 / #2154) lives in `agent.rs`.
 
 // ------------------------------------------------------------------
 // FFI: ClientRequest accessors
@@ -725,6 +957,7 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
             req.headers.clone(),
             req.body.clone(),
             req.timeout_ms,
+            req.agent_handle,
         ))
     });
 
@@ -733,9 +966,51 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
         None => return handle,
     };
 
-    let (method, url, headers, body, timeout_ms) = snapshot;
-    dispatch_request(handle, method, url, headers, body, timeout_ms);
+    let (method, url, headers, body, timeout_ms, agent_handle) = snapshot;
+
+    // #2154 — if the agent supplied a `createConnection` override, invoke it
+    // here on the main thread (JS closure calls must not run on a tokio
+    // worker) and run the HTTP exchange over the socket it returns instead of
+    // through reqwest. Falls back to the reqwest path when there's no override
+    // or it didn't yield a usable socket.
+    if agent_handle != 0 {
+        if let Some((host, port, path)) = socket_connect_target(&url) {
+            if let Some(socket_id) =
+                agent::try_create_connection_socket(agent_handle, &host, port, &path)
+            {
+                // Attach raw mode now (main thread) so no inbound byte can be
+                // dispatched as a JS 'data' event before the task takes over.
+                if let Some(vt) = perry_ffi::raw_net() {
+                    (vt.attach)(socket_id);
+                }
+                dispatch_request_over_socket(
+                    handle, method, url, headers, body, timeout_ms, socket_id,
+                );
+                return handle;
+            }
+        }
+    }
+
+    dispatch_request(handle, method, url, headers, body, timeout_ms, agent_handle);
     handle
+}
+
+/// Parse a request URL into the `(host, port, path)` an
+/// `agent.createConnection` override expects in its options object. Returns
+/// `None` if the URL doesn't parse or has no host.
+fn socket_connect_target(url: &str) -> Option<(String, u16, String)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_string();
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let mut path = parsed.path().to_string();
+    if path.is_empty() {
+        path.push('/');
+    }
+    if let Some(q) = parsed.query() {
+        path.push('?');
+        path.push_str(q);
+    }
+    Some((host, port, path))
 }
 
 /// `req.on(event, cb)` / `res.on(event, cb)` — register an event
@@ -1081,6 +1356,7 @@ mod tests {
             listeners: request_listeners,
             timeout_ms: None,
             ended: false,
+            agent_handle: 0,
         });
 
         let mut incoming_listeners = HashMap::new();

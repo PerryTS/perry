@@ -9,6 +9,20 @@ use crate::value::JSValue;
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
+    // #2013 — `process.exit('foo')` throws TypeError ERR_INVALID_ARG_TYPE
+    // in Node (the exit code must be a number, null, or undefined). The
+    // numeric default of `1` for NaN/Infinity in the pre-fix code only
+    // matters for the inferred numeric-coerce path; keep that fallback
+    // for the (degenerate) numeric NaN/Infinity case so existing call
+    // sites that pass a parsed-out number aren't surprised.
+    let jv = JSValue::from_bits(code.to_bits());
+    if !jv.is_undefined() && !jv.is_null() && !crate::fs::validate::is_numeric(jv) {
+        let message = format!(
+            "The \"code\" argument must be of type number or null. Received {}",
+            crate::fs::validate::describe_received(code)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
     let exit_code = if code.is_nan() || code.is_infinite() {
         1 // Default to 1 for invalid codes
     } else {
@@ -183,6 +197,199 @@ pub extern "C" fn js_process_getegid() -> f64 {
     }
 }
 
+/// POSIX credential setters (#2135). Each wraps the matching `libc::set*id`
+/// call; non-numeric arguments and errors are silently dropped (the call
+/// returns undefined), matching the "no-op stub" shape Perry uses for the
+/// other unimplemented privileged process methods. On non-unix targets the
+/// setters are unconditional no-ops. The runtime ignores ID-by-username
+/// forms (Node accepts `process.setuid("alice")` and resolves via NSS);
+/// passing a string here is a no-op — supporting the username form needs
+/// `getpwnam_r` plumbing that's out of scope for the surface-level fix.
+fn unix_id_arg(value: f64) -> Option<u32> {
+    let v = value;
+    if v.is_finite() {
+        let n = v as i64;
+        if n >= 0 && n <= u32::MAX as i64 {
+            return Some(n as u32);
+        }
+    }
+    None
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_setuid(uid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(uid) {
+            unsafe {
+                libc::setuid(id as libc::uid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = uid;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_seteuid(uid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(uid) {
+            unsafe {
+                libc::seteuid(id as libc::uid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = uid;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_setgid(gid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(gid) {
+            unsafe {
+                libc::setgid(id as libc::gid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = gid;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_setegid(gid: f64) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = unix_id_arg(gid) {
+            unsafe {
+                libc::setegid(id as libc::gid_t);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = gid;
+    }
+}
+
+/// `process.setgroups(groups)` — replace the calling process's
+/// supplementary GID list with the IDs from a JS number array. Each non-
+/// finite / out-of-range / non-numeric entry is silently skipped. On
+/// non-unix targets this is a no-op (#2135).
+#[no_mangle]
+pub extern "C" fn js_process_setgroups(groups: f64) {
+    let arr_jsval = JSValue::from_bits(groups.to_bits());
+    if !arr_jsval.is_pointer() {
+        return;
+    }
+    let arr_ptr = arr_jsval.as_pointer::<crate::array::ArrayHeader>();
+    if arr_ptr.is_null() {
+        return;
+    }
+    let len = unsafe { crate::array::js_array_length(arr_ptr) } as u32;
+    #[cfg(unix)]
+    {
+        let mut gids: Vec<libc::gid_t> = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            let v = unsafe { crate::array::js_array_get_f64(arr_ptr, i) };
+            if let Some(id) = unix_id_arg(v) {
+                gids.push(id as libc::gid_t);
+            }
+        }
+        if !gids.is_empty() {
+            unsafe {
+                libc::setgroups(gids.len() as _, gids.as_ptr());
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = len;
+    }
+}
+
+/// `process.initgroups(user, extra_gid)` — initialize the supplementary
+/// group access list using `getgrouplist(3)`-style semantics. The first
+/// argument is a username string (or numeric UID); the second is an
+/// extra group ID to include. Perry today only accepts the username-as-
+/// string + numeric extra_gid form via `libc::initgroups`; numeric user
+/// or non-string first argument silently no-ops. Non-unix targets no-op
+/// entirely (#2135).
+#[no_mangle]
+pub extern "C" fn js_process_initgroups(user: f64, extra_gid: f64) {
+    #[cfg(unix)]
+    {
+        let user_jsval = JSValue::from_bits(user.to_bits());
+        if !user_jsval.is_any_string() {
+            return;
+        }
+        let user_ptr = crate::value::js_get_string_pointer_unified(user);
+        if user_ptr == 0 {
+            return;
+        }
+        let user_str_ptr = user_ptr as *const StringHeader;
+        let len = unsafe { (*user_str_ptr).byte_len } as usize;
+        let data = unsafe { (user_str_ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
+        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+        let Ok(name) = std::str::from_utf8(bytes) else {
+            return;
+        };
+        let Some(extra) = unix_id_arg(extra_gid) else {
+            return;
+        };
+        let Ok(cname) = std::ffi::CString::new(name) else {
+            return;
+        };
+        unsafe {
+            libc::initgroups(cname.as_ptr(), extra as _);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (user, extra_gid);
+    }
+}
+
+/// `process.getgroups()` — supplementary group IDs the process is a member
+/// of, as a JS array of numbers. Wraps `libc::getgroups(2)`; on non-unix
+/// targets returns an empty array (Node throws there, but Perry's existing
+/// `getuid`/etc. family already returns `0` rather than throwing on
+/// Windows, so matching that shape keeps the surface consistent). #2135.
+#[no_mangle]
+pub extern "C" fn js_process_getgroups() -> f64 {
+    #[cfg(unix)]
+    let gids: Vec<u32> = unsafe {
+        let count = libc::getgroups(0, std::ptr::null_mut());
+        if count <= 0 {
+            Vec::new()
+        } else {
+            let mut buf: Vec<libc::gid_t> = vec![0; count as usize];
+            let got = libc::getgroups(count, buf.as_mut_ptr());
+            if got <= 0 {
+                Vec::new()
+            } else {
+                buf.truncate(got as usize);
+                buf.into_iter().map(|g| g as u32).collect()
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let gids: Vec<u32> = Vec::new();
+    let arr = crate::array::js_array_alloc(gids.len() as u32);
+    for g in gids {
+        crate::array::js_array_push_f64(arr, g as f64);
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
 /// process.resourceUsage() -> object with getrusage(RUSAGE_SELF)
 /// counters matching Node's shape (#1376). Linux's `ru_maxrss` is in
 /// kilobytes; macOS/BSD's is in bytes — Node normalizes Linux to bytes,
@@ -294,9 +501,20 @@ pub extern "C" fn js_process_active_resources_info() -> f64 {
 /// Non-unix targets return `{ user: 0, system: 0 }`.
 #[no_mangle]
 pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
+    // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
+    // is supplied but isn't an object (e.g. `process.cpuUsage('abc')`).
+    // Undefined / null fall through to the no-prior baseline read.
+    let prior_jv = JSValue::from_bits(prior.to_bits());
+    if !prior_jv.is_undefined() && !prior_jv.is_null() && !prior_jv.is_pointer() {
+        let message = format!(
+            "The \"prevValue\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(prior)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
     let (mut user_us, mut system_us) = read_process_cpu_micros();
     let undef_bits = crate::value::TAG_UNDEFINED;
-    if prior.to_bits() != undef_bits {
+    if prior.to_bits() != undef_bits && !prior_jv.is_null() {
         let (prev_user, prev_system) = extract_cpu_pair(prior);
         user_us = (user_us - prev_user).max(0.0);
         system_us = (system_us - prev_system).max(0.0);
@@ -817,4 +1035,130 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
 
     // Return as NaN-boxed pointer (convert bits to f64)
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// process.loadEnvFile(path?) — read a `.env`-formatted file from disk and
+/// merge its `KEY=value` entries into `process.env`. Node 20.12+. With no
+/// path, the default is `.env` in the current working directory. Throws a
+/// Node-shaped `Error` (`code: "ENOENT"`, `syscall: "open"`) when the file
+/// can't be opened. #2135 (#1399 follow-through): previously a no-op that
+/// returned undefined so probe-and-call sites didn't crash; with
+/// `process.env.X = v` now persisting via std::env (#1344), eager loading
+/// is meaningful.
+#[no_mangle]
+pub extern "C" fn js_process_load_env_file(path_ptr: *const StringHeader) {
+    let target = unsafe {
+        if path_ptr.is_null() {
+            ".env".to_string()
+        } else {
+            let len = (*path_ptr).byte_len as usize;
+            let data = (path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            let bytes = std::slice::from_raw_parts(data, len);
+            match std::str::from_utf8(bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => return,
+            }
+        }
+    };
+    let contents = match std::fs::read_to_string(&target) {
+        Ok(s) => s,
+        Err(err) => unsafe {
+            throw_load_env_file_open_error(&err, &target);
+        },
+    };
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        // Comments and blank lines.
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let key = raw_key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        // Strip a matched surrounding quote pair on the trimmed value;
+        // otherwise keep the trimmed text verbatim (so unquoted spaces
+        // around `=` are dropped but inner `=` survives — see Node's
+        // built-in `.env` parser).
+        let value_trimmed = raw_value.trim();
+        let value = strip_matched_quotes(value_trimmed);
+        std::env::set_var(key, value);
+    }
+}
+
+fn strip_matched_quotes(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' || first == b'\'') && first == last {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
+}
+
+unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> ! {
+    use std::io::ErrorKind;
+    let code: &'static str = match err.kind() {
+        ErrorKind::NotFound => "ENOENT",
+        ErrorKind::PermissionDenied => "EACCES",
+        _ => "EIO",
+    };
+    let desc = match code {
+        "ENOENT" => "no such file or directory",
+        "EACCES" => "permission denied",
+        _ => "i/o error",
+    };
+    let message = format!("{code}: {desc}, open '{target}'");
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_syscall(msg_ptr, "open");
+    crate::node_submodules::register_error_path(msg_ptr, target.to_string());
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+}
+
+// Issue #2013 — process-arg-validation helpers shared by `js_process_chdir`
+// and `js_process_hrtime`. Sited here (not os.rs) so the process surface's
+// validation logic stays under the 2000-line file gate as the os.rs splits
+// progress.
+
+/// `process.chdir(value)` entry point that takes the full NaN-boxed
+/// value. Throws `TypeError [ERR_INVALID_ARG_TYPE]` for any non-string
+/// (matching Node), then re-dispatches to `js_process_chdir` with the
+/// extracted `StringHeader`. The codegen now emits this entry instead
+/// of the bare string-only one so a `process.chdir(123)` call throws
+/// the right error code instead of garbage-deref'ing to an `ENOENT`
+/// based on whatever bytes the numeric value masqueraded as.
+#[no_mangle]
+pub unsafe extern "C" fn js_process_chdir_jsv(value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        let message = format!(
+            "The \"path\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    crate::os::js_process_chdir(ptr);
+}
+
+/// True when `jv` is a heap pointer whose GC type tag marks it as an
+/// Array. Used by `process.hrtime` to reject any non-array `prior`
+/// argument before reading the `[secs, nanos]` tuple.
+pub(crate) fn is_array_value(jv: JSValue) -> bool {
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
 }

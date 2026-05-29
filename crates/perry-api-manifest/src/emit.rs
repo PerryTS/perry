@@ -114,7 +114,7 @@ pub fn emit_markdown(_perry_version: &str) -> String {
         }
     }
 
-    out
+    trim_trailing_blank_line(out)
 }
 
 /// Render the manifest as a TypeScript declaration file (`.d.ts`).
@@ -241,12 +241,19 @@ pub fn emit_dts(_perry_version: &str) -> String {
         let _ = writeln!(out);
     }
 
-    out
+    trim_trailing_blank_line(out)
 }
 
 // -----------------------------------------------------------------------------
 // helpers
 // -----------------------------------------------------------------------------
+
+fn trim_trailing_blank_line(mut out: String) -> String {
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    out
+}
 
 fn group_by_module() -> BTreeMap<&'static str, Vec<&'static ApiEntry>> {
     let mut by_module: BTreeMap<&'static str, Vec<&'static ApiEntry>> = BTreeMap::new();
@@ -484,6 +491,20 @@ mod tests {
                 dts.contains(&format!("declare module \"{}\"", m)),
                 "module declaration missing: {}",
                 m
+            );
+        }
+    }
+
+    #[test]
+    fn emitters_end_with_one_newline() {
+        for output in [emit_markdown("test"), emit_dts("test")] {
+            assert!(
+                output.ends_with('\n'),
+                "generated docs should end with newline"
+            );
+            assert!(
+                !output.ends_with("\n\n"),
+                "generated docs should not end with a trailing blank line"
             );
         }
     }

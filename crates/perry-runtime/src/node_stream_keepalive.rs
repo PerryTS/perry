@@ -19,6 +19,9 @@ static KEEP_NS_METHOD_READ: extern "C" fn(i64, f64) -> f64 = super::js_node_stre
 #[used]
 static KEEP_NS_METHOD_PUSH: extern "C" fn(i64, f64) -> f64 = super::js_node_stream_method_push;
 #[used]
+static KEEP_NS_METHOD_UNSHIFT: extern "C" fn(i64, f64) -> f64 =
+    super::js_node_stream_method_unshift;
+#[used]
 static KEEP_NS_READABLE_HWM: extern "C" fn(i64) -> f64 = super::js_node_stream_method_readable_hwm;
 #[used]
 static KEEP_NS_READABLE_LENGTH: extern "C" fn(i64) -> f64 =
@@ -142,6 +145,9 @@ static KEEP_NS_PASSTHROUGH_NEW: extern "C" fn(f64) -> f64 = super::js_node_strea
 #[used]
 static KEEP_NS_READABLE_FROM: extern "C" fn(f64) -> f64 = super::js_node_stream_readable_from;
 #[used]
+static KEEP_NS_READABLE_FROM_OPTIONS: extern "C" fn(f64, f64) -> f64 =
+    super::js_node_stream_readable_from_options;
+#[used]
 static KEEP_NS_IS_DISTURBED: extern "C" fn(f64) -> f64 = super::js_node_stream_is_disturbed;
 #[used]
 static KEEP_NS_IS_ERRORED: extern "C" fn(f64) -> f64 = super::js_node_stream_is_errored;
@@ -159,6 +165,9 @@ static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 =
     super::js_node_stream_add_abort_signal;
 #[used]
 static KEEP_NS_COMPOSE: extern "C" fn(f64) -> f64 = super::js_node_stream_compose;
+#[used]
+static KEEP_NS_PIPELINE: extern "C" fn(*const crate::array::ArrayHeader) -> f64 =
+    super::js_node_stream_pipeline;
 #[used]
 static KEEP_NS_DUPLEX_PAIR: extern "C" fn(f64) -> f64 = super::js_node_stream_duplex_pair;
 #[used]

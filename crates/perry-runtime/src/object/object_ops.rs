@@ -311,6 +311,93 @@ unsafe fn gc_header_for(obj: *const ObjectHeader) -> *mut crate::gc::GcHeader {
     (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
 }
 
+/// #2159 helper: install a `target_cid.method` entry from an
+/// `Object.defineProperty(C.prototype, name, descriptor)` call.
+///
+/// The descriptor's `value` came in two main shapes in practice:
+///
+/// 1. A `BOUND_METHOD_FUNC_PTR` closure returned by `getOwnPropertyDescriptor`
+///    on a sibling class (drizzle's `applyMixins(Base, [Mixin])`: the
+///    `getOwnPropertyDescriptor(Mixin.prototype, name)` value reads as
+///    `js_class_method_bind(Mixin_class_ref, name)`). Dispatching that bound
+///    closure would re-enter `js_native_call_method` against the class-ref —
+///    a class object reaches the *static* dispatch arm, not the instance
+///    method, so calling it would return the wrong thing. Instead we look up
+///    the raw vtable entry on the source class and copy it onto the target
+///    class's vtable directly, so future `inst.method(args)` dispatches via
+///    the regular chain walk with `this = inst`.
+///
+/// 2. A user-supplied closure (e.g. `Object.defineProperty(C.prototype, "m",
+///    { value: function () { … } })`). Route through the same per-class
+///    prototype-method side table that `js_register_prototype_method` (#838)
+///    uses, so the `inst.m` / `inst.m()` lookup paths in
+///    `field_get_set.rs` / `native_call_method.rs` find it after the regular
+///    vtable miss.
+unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits: u64) {
+    use crate::closure::{ClosureHeader, BOUND_METHOD_FUNC_PTR, CLOSURE_MAGIC};
+    use crate::object::class_registry::{ClassVTable, VTableMethodEntry, CLASS_VTABLE_REGISTRY};
+
+    // Reject undefined / null / numeric values up front — those aren't
+    // methods and shouldn't make it onto the prototype side tables.
+    let value = f64::from_bits(value_bits);
+    let jsv = crate::JSValue::from_bits(value_bits);
+    if !jsv.is_pointer() {
+        return;
+    }
+    let ptr = jsv.as_pointer::<u8>() as usize;
+    if ptr < 0x1000 {
+        return;
+    }
+
+    // Shape (1): BOUND_METHOD closure. Extract source class-ref + method
+    // name from the captures (see `js_class_method_bind`), then copy the
+    // source class's vtable entry (or any inherited entry up the parent
+    // chain) onto `target_cid`.
+    if crate::closure::is_closure_ptr(ptr) {
+        let closure = ptr as *const ClosureHeader;
+        if (*closure).type_tag == CLOSURE_MAGIC && (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
+            let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
+            if let Some(source_cid) = super::class_ref_id(recv) {
+                if let Some((func_ptr, param_count)) =
+                    super::lookup_class_method_in_chain(source_cid, name)
+                {
+                    let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();
+                    if guard.is_none() {
+                        *guard = Some(std::collections::HashMap::new());
+                    }
+                    let reg = guard.as_mut().unwrap();
+                    let vtable = reg.entry(target_cid).or_insert_with(|| ClassVTable {
+                        methods: std::collections::HashMap::new(),
+                        getters: std::collections::HashMap::new(),
+                        setters: std::collections::HashMap::new(),
+                    });
+                    vtable.methods.insert(
+                        name.to_string(),
+                        VTableMethodEntry {
+                            func_ptr,
+                            param_count,
+                        },
+                    );
+                    drop(guard);
+                    super::class_registry::js_register_class_id(target_cid);
+                    crate::typed_feedback::invalidate_method_change(target_cid);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Shape (2): any other callable value (user closure, regular function).
+    // Mirror the `Class.prototype.method = fn` direct-assignment path so the
+    // existing `lookup_prototype_method` walks find it.
+    super::class_registry::js_register_prototype_method(
+        target_cid,
+        name.as_ptr(),
+        name.len(),
+        value,
+    );
+}
+
 /// Object.defineProperty(obj, key, descriptor) — set the value AND record the
 /// `writable` / `enumerable` / `configurable` attribute flags in the side table.
 /// Returns the object (NaN-boxed pointer).
@@ -325,6 +412,33 @@ pub extern "C" fn js_object_define_property(
     descriptor_value: f64,
 ) -> f64 {
     unsafe {
+        // #2159: when the receiver is a class-ref (`Class.prototype` evaluates
+        // back to the class itself in Perry — see `class_ref_id` /
+        // `js_object_get_own_property_descriptor`'s class-ref arm), route the
+        // descriptor through the class-vtable / prototype-method side tables
+        // so instance lookups (`new C().method`) see the new entry. Drizzle's
+        // `applyMixins(Base, [Mixin])` copies methods between class
+        // prototypes via `Object.defineProperty(Base.prototype, name,
+        // Object.getOwnPropertyDescriptor(Mixin.prototype, name))` — pre-fix
+        // the call hit `extract_obj_ptr → null` (a class-ref isn't a pointer)
+        // and silently dropped the descriptor, so `await
+        // db.select().from(x)` saw `instance.then === undefined` and `await`
+        // unwrapped the builder unchanged.
+        if let Some(target_cid) = super::class_ref_id(obj_value) {
+            if let Some(name) = super::metadata_key_to_string(key_value) {
+                let desc_ptr = extract_obj_ptr(descriptor_value);
+                if !desc_ptr.is_null() {
+                    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+                    let value_field =
+                        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
+                    if !value_field.is_undefined() {
+                        define_class_prototype_method(target_cid, &name, value_field.bits());
+                    }
+                }
+            }
+            return obj_value;
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
             return obj_value;
@@ -523,11 +637,12 @@ unsafe fn ensure_key_in_keys_array(obj: *mut ObjectHeader, key: *const crate::St
     let key_count = crate::array::js_array_length(keys) as usize;
     for i in 0..key_count {
         let stored = crate::array::js_array_get(keys, i as u32);
-        if stored.is_string() {
-            let stored_key = stored.as_string_ptr();
-            if crate::string::js_string_equals(key, stored_key) != 0 {
-                return; // already present
-            }
+        // #1781: SSO-aware match — pre-fix an existing inline-SSO key
+        // wasn't seen here, so `Object.defineProperty(obj, "id", ...)`
+        // on an object that already had `id` as an SSO key
+        // double-inserted instead of overwriting.
+        if crate::string::js_string_key_matches(stored, key) {
+            return; // already present
         }
     }
     // Clone shared keys array if needed, then append.
@@ -819,11 +934,10 @@ unsafe fn own_key_present(obj: *mut ObjectHeader, key: *const crate::StringHeade
     }
     for i in 0..key_count {
         let stored = crate::array::js_array_get(keys, i as u32);
-        if stored.is_string() {
-            let stored_key = stored.as_string_ptr();
-            if !stored_key.is_null() && crate::string::js_string_equals(key, stored_key) != 0 {
-                return true;
-            }
+        // #1781: SSO-aware match — `hasOwnProperty("id")` previously
+        // returned false when "id" lived as an inline SSO key.
+        if crate::string::js_string_key_matches(stored, key) {
+            return true;
         }
     }
     false
@@ -888,25 +1002,20 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if key_val.is_string() {
-                let stored_key = key_val.as_string_ptr();
-                if !stored_key.is_null() {
-                    let stored_data =
-                        (stored_key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    let stored_len = (*stored_key).byte_len as usize;
-                    let stored_bytes = std::slice::from_raw_parts(stored_data, stored_len);
-                    if stored_bytes == key_bytes {
-                        let val = if i < alloc_limit {
-                            js_object_get_field(obj, i as u32)
-                        } else {
-                            match overflow_get(obj as usize, i) {
-                                Some(bits) => crate::JSValue::from_bits(bits),
-                                None => return f64::from_bits(TAG_UNDEF),
-                            }
-                        };
-                        return f64::from_bits(val.bits());
+            // #1781: SSO-aware match by byte slice — the
+            // own-property-or-undef path was the route through which
+            // hono's `c.req.X` dispatch decided to invoke the vtable
+            // getter, and pre-fix a SSO-stored `X` was invisible here.
+            if crate::string::js_string_key_matches_bytes(key_val, key_bytes) {
+                let val = if i < alloc_limit {
+                    js_object_get_field(obj, i as u32)
+                } else {
+                    match overflow_get(obj as usize, i) {
+                        Some(bits) => crate::JSValue::from_bits(bits),
+                        None => return f64::from_bits(TAG_UNDEF),
                     }
-                }
+                };
+                return f64::from_bits(val.bits());
             }
         }
         f64::from_bits(TAG_UNDEF)
@@ -1071,6 +1180,21 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                     write.as_mut().unwrap().insert(cid, proto_ptr as usize);
                 }
                 unsafe { js_register_class_id(cid) };
+                // #1805: link the synthetic class_id into the original class's
+                // inheritance chain. `Object.getPrototypeOf(instance)` returns
+                // the instance pointer itself in Perry's model (see
+                // `js_object_get_prototype_of`), so `proto_ptr` here is a real
+                // class instance whose `class_id` field IS the user class's
+                // id. Registering it as the synthetic cid's parent lets
+                // `js_instanceof`'s `get_parent_class_id` walk reach the
+                // original class and match — without this, the chain stopped
+                // at the unregistered synthetic id and `Object.create(proto)
+                // instanceof C` was always false even though property /
+                // getter dispatch through the chain worked correctly.
+                let parent_class_id = unsafe { (*proto_ptr).class_id };
+                if parent_class_id != 0 && parent_class_id != cid {
+                    register_class(cid, parent_class_id);
+                }
                 class_id = cid;
             }
         }
@@ -1254,18 +1378,33 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                     return f64::from_bits(TAG_NULL);
                 }
-                // #489: a function/constructor receiver has no walkable
-                // [[Prototype]] in Perry's model. This is reached when a
-                // prototype-chain walk hits a built-in constructor — e.g.
-                // drizzle's `is(value, type)` does
-                // `cls = Object.getPrototypeOf(arr).constructor` (the global
-                // `Array` closure) then loops `cls = Object.getPrototypeOf(cls)`
-                // until it hits null. Returning the closure itself here makes
-                // `getPrototypeOf(cls) === cls`, an infinite self-cycle that
-                // hangs the walk. JS terminates it at null (Function.prototype
-                // → Object.prototype → null); Perry doesn't model those, so
-                // return null directly to break the cycle.
+                // #2145: per-kind typed-array `.prototype` objects share a
+                // single `%TypedArray%.prototype` parent. Resolved off the
+                // cached intrinsic pointer (also a GC root) so the chain holds
+                // through copying GC.
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+                    let p = crate::object::typed_array_intrinsic_proto_ptr();
+                    if !p.is_null() {
+                        return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
+                    }
+                }
+                // #489 / #2145: a function/constructor receiver has no
+                // walkable [[Prototype]] in Perry's model UNLESS its
+                // closure-static-prototype side-table has been set
+                // (`Object.setPrototypeOf(closure, parent)` — effect's
+                // TagClass and Perry's `%TypedArray%`-chain typed-array
+                // constructors use this). Returning the recorded parent
+                // satisfies drizzle's `cls = getPrototypeOf(cls)` walk
+                // (which terminates when the parent has no further
+                // recorded proto) and the test262 `__proto__` chain. When
+                // no static prototype is recorded, return null to break
+                // the would-be `getPrototypeOf(cls) === cls` self-cycle.
                 if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                    if let Some(proto_bits) =
+                        crate::closure::closure_static_prototype(raw_addr as usize)
+                    {
+                        return f64::from_bits(proto_bits);
+                    }
                     return f64::from_bits(TAG_NULL);
                 }
             }
@@ -1280,9 +1419,22 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                     return f64::from_bits(TAG_NULL);
                 }
-                // #489: function/constructor receiver — see the 0x7FFD branch
-                // above. Break the prototype-chain self-cycle with null.
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+                    let p = crate::object::typed_array_intrinsic_proto_ptr();
+                    if !p.is_null() {
+                        return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
+                    }
+                }
+                // #489 / #2145: function/constructor receiver — see the
+                // 0x7FFD branch above. Return the recorded static
+                // prototype if any, else null to break the chain-walk
+                // self-cycle.
                 if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                    if let Some(proto_bits) =
+                        crate::closure::closure_static_prototype(bits as usize)
+                    {
+                        return f64::from_bits(proto_bits);
+                    }
                     return f64::from_bits(TAG_NULL);
                 }
             }
@@ -1521,5 +1673,36 @@ mod sso_tests_1781 {
             )),
             "different content"
         );
+    }
+
+    /// #1781: an object with an inline-SSO key must answer
+    /// `hasOwnProperty("id")` truthfully. Pre-fix the
+    /// `is_string()`-gated keys-array iteration in `own_key_present`
+    /// skipped the SSO key silently and the call returned false.
+    #[test]
+    fn own_key_present_finds_sso_stored_key() {
+        unsafe {
+            let obj = super::super::alloc::js_object_alloc(0, 4);
+            // Build a keys array with a single SSO-tagged key directly
+            // (skipping `js_object_set_field_by_name`, which would
+            // intern the key to heap and bypass the SSO blind spot
+            // we're regression-testing).
+            let keys = crate::array::js_array_alloc(4);
+            let sso = JSValue::try_short_string(b"id").expect("SSO");
+            crate::array::js_array_push_f64(keys, f64::from_bits(sso.bits()));
+            super::super::set_object_keys_array(obj, keys);
+
+            let incoming = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+            assert!(
+                own_key_present(obj, incoming),
+                "SSO key 'id' should be visible to own_key_present"
+            );
+
+            let incoming_other = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+            assert!(
+                !own_key_present(obj, incoming_other),
+                "absent key 'tag' must not match"
+            );
+        }
     }
 }

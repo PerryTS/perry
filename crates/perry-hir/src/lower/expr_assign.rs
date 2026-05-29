@@ -515,6 +515,34 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             let setter_method = match (class_name.as_str(), prop.as_str()) {
                                 ("ServerResponse", "statusCode") => Some("__set_statusCode"),
                                 ("ServerResponse", "statusMessage") => Some("__set_statusMessage"),
+                                // Issue #2210 — `server.headersTimeout = N` etc.
+                                // route to the `__set_<name>` FFI variants. Phase
+                                // 1 just stores; Phase 2 wires hyper deadlines.
+                                ("HttpServer", "headersTimeout") => Some("__set_headersTimeout"),
+                                ("HttpServer", "keepAliveTimeout") => {
+                                    Some("__set_keepAliveTimeout")
+                                }
+                                ("HttpServer", "requestTimeout") => Some("__set_requestTimeout"),
+                                ("HttpServer", "timeout") => Some("__set_timeout"),
+                                ("HttpServer", "maxHeadersCount") => Some("__set_maxHeadersCount"),
+                                ("HttpServer", "maxRequestsPerSocket") => {
+                                    Some("__set_maxRequestsPerSocket")
+                                }
+                                // #2154 — `http.Agent` / `https.Agent` tunable
+                                // properties + the `createConnection` /
+                                // `createSocket` overrides. PR #2264 added the
+                                // FFI setters + native-table entries but never
+                                // wired the assignment path, so `agent.<prop> =
+                                // x` silently no-op'd. Route them to the
+                                // `__set_<name>` NativeMethodCall here.
+                                ("Agent", "protocol") => Some("__set_protocol"),
+                                ("Agent", "maxSockets") => Some("__set_maxSockets"),
+                                ("Agent", "maxFreeSockets") => Some("__set_maxFreeSockets"),
+                                ("Agent", "maxTotalSockets") => Some("__set_maxTotalSockets"),
+                                ("Agent", "keepAlive") => Some("__set_keepAlive"),
+                                ("Agent", "keepAliveMsecs") => Some("__set_keepAliveMsecs"),
+                                ("Agent", "createConnection") => Some("__set_createConnection"),
+                                ("Agent", "createSocket") => Some("__set_createSocket"),
                                 _ => None,
                             };
                             if let Some(method) = setter_method {
@@ -550,6 +578,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         | "port"
                         | "username"
                         | "password"
+                        | "href"
                 );
                 if url_setter {
                     let is_url_recv = match member.obj.as_ref() {
@@ -595,6 +624,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 value,
                             },
                             "password" => Expr::UrlSetPassword {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "href" => Expr::UrlSetHref {
                                 url: Box::new(url_expr),
                                 value,
                             },

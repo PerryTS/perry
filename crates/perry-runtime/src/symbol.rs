@@ -134,7 +134,13 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
     // `Symbol.toString()` / `is_symbol` can transiently return wrong
     // results. Lock order matches `js_symbol_for` below: cache → side
     // tables, never the reverse.
-    record_registered_symbol_description(sym_ptr as usize, short_name);
+    // Spec: a well-known symbol's `[[Description]]` is the qualified name
+    // `"Symbol.iterator"`, not the bare `"iterator"`. This is what
+    // `Symbol.iterator.description`, `.toString()`, `String(sym)`, and
+    // `console.log` all report. The cache key stays the short name so callers
+    // (`well_known_symbol("iterator")`) and pointer-identity property lookups
+    // are unaffected.
+    record_registered_symbol_description(sym_ptr as usize, &format!("Symbol.{short_name}"));
     register_symbol_pointer(sym_ptr as usize);
     cache.insert(short_name.to_string(), sym_ptr as usize);
     drop(guard);
@@ -498,26 +504,45 @@ unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
     ptr as usize
 }
 
-/// `obj[sym] = value` where `sym` is a Symbol. Stores into the side table.
-/// Returns the value (NaN-boxed) for chained assignment semantics.
-#[no_mangle]
-pub unsafe extern "C" fn js_object_set_symbol_property(
-    obj_f64: f64,
-    sym_f64: f64,
-    value_f64: f64,
-) -> f64 {
+unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
+    let val_tag = val_bits & 0xFFFF_0000_0000_0000;
+    if val_tag != POINTER_TAG {
+        return;
+    }
+    let val_ptr = (val_bits & POINTER_MASK) as *const u8;
+    if val_ptr.is_null() || (val_ptr as usize) <= 0x10000 {
+        return;
+    }
+    let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
+        return;
+    }
+    let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
+    let func_ptr = (*closure_ptr).func_ptr;
+    if func_ptr.is_null() {
+        return;
+    }
+    let sym_ptr = sym_key as *const SymbolHeader;
+    let desc = registered_symbol_description(sym_ptr as usize)
+        .map(|s| s.as_ref().to_string())
+        .unwrap_or_else(|| str_from_header((*sym_ptr).description).unwrap_or_default());
+    let inferred = format!("[{}]", desc);
+    crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
+}
+
+unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    let val_bits = value_f64.to_bits();
     let mut guard = SYMBOL_PROPERTIES.lock().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
     let map = guard.as_mut().unwrap();
     let entries = map.entry(obj_key).or_default();
-    let val_bits = value_f64.to_bits();
     // Update existing entry if the symbol is already present.
     for entry in entries.iter_mut() {
         if entry.0 == sym_key {
@@ -526,34 +551,43 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
         }
     }
     entries.push((sym_key, val_bits));
-    drop(guard);
+    value_f64
+}
 
-    // Node-style name inference: `{ [sym]: fn }` makes `fn.name === "[<desc>]"`,
-    // which surfaces in `console.log(fn)` as `[Function: [<desc>]]`. We only
-    // tag anonymous closures here — closures created from `function f(){}` /
-    // method shorthand already have a name registered. Refs #1201.
-    let val_tag = val_bits & 0xFFFF_0000_0000_0000;
-    if val_tag == POINTER_TAG {
-        let val_ptr = (val_bits & POINTER_MASK) as *const u8;
-        if !val_ptr.is_null() && (val_ptr as usize) > 0x10000 {
-            let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE {
-                let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
-                let func_ptr = (*closure_ptr).func_ptr;
-                if !func_ptr.is_null() {
-                    let sym_ptr = sym_key as *const SymbolHeader;
-                    let desc = registered_symbol_description(sym_ptr as usize)
-                        .map(|s| s.as_ref().to_string())
-                        .unwrap_or_else(|| {
-                            str_from_header((*sym_ptr).description).unwrap_or_default()
-                        });
-                    let inferred = format!("[{}]", desc);
-                    crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
-                }
-            }
-        }
+/// `obj[sym] = value` where `sym` is a Symbol. Stores into the side table.
+/// Returns the value (NaN-boxed) for chained assignment semantics.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_set_symbol_property(
+    obj_f64: f64,
+    sym_f64: f64,
+    value_f64: f64,
+) -> f64 {
+    set_symbol_property(obj_f64, sym_f64, value_f64)
+}
+
+/// Computed-key object literal function-name inference. Storage stays on the
+/// normal IndexSet path, but object literals get Node's `[symbol.description]`
+/// name for anonymous functions assigned under symbol keys.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_literal_infer_computed_function_name(
+    key_f64: f64,
+    value_f64: f64,
+) -> f64 {
+    let sym_key = sym_key_from_f64(key_f64);
+    if sym_key != 0 {
+        infer_symbol_function_name(sym_key, value_f64.to_bits());
     }
     value_f64
+}
+
+unsafe fn js_object_set_symbol_property_infer_name(
+    obj_f64: f64,
+    sym_f64: f64,
+    value_f64: f64,
+) -> f64 {
+    let stored = set_symbol_property(obj_f64, sym_f64, value_f64);
+    js_object_literal_infer_computed_function_name(sym_f64, value_f64);
+    stored
 }
 
 /// Class-id-keyed side table for static Symbol-keyed properties.
@@ -717,6 +751,22 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
+    // Buffer extends Uint8Array in Node, so Buffer values must expose
+    // @@iterator as values(). Perry's direct Buffer.from() paths often
+    // materialize through array-clone fast paths, but runtime-produced
+    // Buffers can reach generic iterator lookup first.
+    let raw_ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
+    if raw_ptr >= 0x10000 && crate::buffer::is_registered_buffer(raw_ptr) {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let mname = b"values";
+                return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
     // #36 / #321: the receiver is a closure whose OWN symbol props miss — walk
     // its static prototype chain (`Object.setPrototypeOf(closure, protoObj)`).
     // effect's `TagClass[TagTypeId]` / `isTag(TagClass)` read symbols off
@@ -781,6 +831,26 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                         );
                     }
                 }
+            }
+        }
+    }
+    // Buffers inherit TypedArray iteration semantics in Node: the default
+    // iterator is `values()`, yielding numeric bytes.
+    let raw_addr = if (bits >> 48) >= 0x7FF8 {
+        (bits & POINTER_MASK) as usize
+    } else {
+        bits as usize
+    };
+    if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(raw_addr as i64).to_bits());
+                let mname = b"values";
+                return crate::object::js_class_method_bind(this_f64, mname.as_ptr(), mname.len());
             }
         }
     }
@@ -898,15 +968,16 @@ fn class_chain_has_method(class_id: u32, name: &str) -> bool {
 /// method. This helper returns that iterator, or `val` unchanged when `val` is
 /// already an iterator / not iterable.
 ///
-/// Arrays are intentionally returned unchanged: perry has no real array
-/// iterator object (`Array.prototype.values` yields an array, not a
-/// `.next`-bearing iterator, and for-of over arrays is special-cased), so
-/// `yield* [..]` is a separate follow-up (#1831 array sub-case) — handling it
-/// here would route through `values` and mis-drive.
+/// Arrays now route through `array_values_iter` — the runtime has a real
+/// `.next`-bearing iterator (`ARRAY_ITERATOR_CLASS_ID`) since #321's
+/// `arr.values()` dispatch landed, so `yield* [..]` and any other consumer
+/// that drives `js_get_iterator(...).next()` works on a plain array. The
+/// for-of and spread fast paths still special-case arrays earlier (in the
+/// array-memcpy / index-loop arms) so they don't reach this helper.
 #[no_mangle]
 pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     if crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE {
-        return val_f64;
+        return crate::array::array_values_iter(val_f64);
     }
     let iter_wk = well_known_symbol("iterator");
     if !iter_wk.is_null() {
@@ -1003,7 +1074,7 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
             }
         }
     }
-    js_object_set_symbol_property(obj_f64, sym_f64, closure_f64)
+    js_object_set_symbol_property_infer_name(obj_f64, sym_f64, closure_f64)
 }
 
 /// #809: string-key analog of [`js_object_set_symbol_method`]. Sets
@@ -1154,5 +1225,25 @@ pub unsafe extern "C" fn js_symbol_equals(a: f64, b: f64) -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod wellknown_desc_tests {
+    use super::*;
+
+    #[test]
+    fn well_known_symbols_use_qualified_description() {
+        // Spec: `Symbol.iterator.description === "Symbol.iterator"` (qualified),
+        // which is also what `console.log` / `String(sym)` report.
+        for short in ["iterator", "asyncIterator", "hasInstance", "toPrimitive"] {
+            let ptr = well_known_symbol(short) as usize;
+            let desc = registered_symbol_description(ptr);
+            assert_eq!(
+                desc.as_deref(),
+                Some(format!("Symbol.{short}").as_str()),
+                "well-known symbol {short} should have qualified description"
+            );
+        }
     }
 }

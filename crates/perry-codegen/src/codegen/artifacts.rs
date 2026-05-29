@@ -39,6 +39,27 @@ struct OptsView<'a> {
 }
 use super::string_pool::emit_string_pool;
 
+fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
+    let has_gen_state = body
+        .iter()
+        .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "__gen_state"));
+    if !has_gen_state {
+        return false;
+    }
+    body.iter().any(|stmt| match stmt {
+        perry_hir::Stmt::Return(Some(perry_hir::Expr::Object(props))) => {
+            props.len() == 3
+                && props[0].0 == "next"
+                && props[1].0 == "return"
+                && props[2].0 == "throw"
+                && props
+                    .iter()
+                    .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. }))
+        }
+        _ => false,
+    })
+}
+
 /// All the data computed by the prelude of `compile_module` that the
 /// tail half (this file) needs. Bundled so the call from
 /// `compile_module` stays a single line; field names mirror the
@@ -1185,6 +1206,36 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         })
         .collect();
 
+    let user_fn_wrapper_async: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter(|f| f.is_async || f.was_plain_async)
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| format!("__perry_wrap_{}", name))
+        })
+        .collect();
+
+    let mut user_fn_wrapper_generator: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter(|f| !f.was_plain_async && function_body_returns_generator_object(&f.body))
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| format!("__perry_wrap_{}", name))
+        })
+        .collect();
+    for (func_id, expr) in closures {
+        if let perry_hir::Expr::Closure { body, is_async, .. } = expr {
+            if !*is_async && function_body_returns_generator_object(body) {
+                user_fn_wrapper_generator
+                    .insert(format!("perry_closure_{}__{}", module_prefix, func_id));
+            }
+        }
+    }
+
     // Display names so `console.log` / `util.inspect` print `[Function:
     // <name>]` instead of `[Function (anonymous)]` (#1202). Two kinds:
     //   (a) Top-level `function name() {}` declarations — keyed against
@@ -1200,28 +1251,64 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     //       nested closures keep the anonymous label, matching Node
     //       (Node uses `inferred-name` only for direct assignments,
     //       which are exactly these top-level lets).
+    // (a) Top-level user functions — keyed against the singleton-wrapper
+    // address (`__perry_wrap_<sym>`). #2076: prefer the HIR display-name
+    // override (set by lower_fn_expr / lower_method_prop) so synthetic
+    // names like `__obj_method_method_42` register as `"method"`.
     let mut user_fn_display_names: Vec<(String, String)> = hir
         .functions
         .iter()
         .filter_map(|f| {
-            if f.name.is_empty() || f.name.starts_with('_') {
-                return None;
-            }
+            let display = hir.closure_display_names.get(&f.id).cloned().or_else(|| {
+                if f.name.is_empty() || f.name.starts_with('_') {
+                    None
+                } else {
+                    Some(f.name.clone())
+                }
+            })?;
             func_names
                 .get(&f.id)
-                .map(|sym| (format!("__perry_wrap_{}", sym), f.name.clone()))
+                .map(|sym| (format!("__perry_wrap_{}", sym), display))
         })
         .collect();
+    // (b) Closures bound to a top-level `let`/`const`. #2076: a named
+    // function expression's own name takes precedence over the binding
+    // name (`const bar = function namedBar(){}` ⇒ `"namedBar"`).
+    let mut named_inline_closure_ids: std::collections::HashSet<perry_types::FuncId> =
+        std::collections::HashSet::new();
     for stmt in &hir.init {
         if let perry_hir::Stmt::Let { name, init, .. } = stmt {
             if name.is_empty() || name.starts_with('_') {
                 continue;
             }
             if let Some(perry_hir::Expr::Closure { func_id, .. }) = init {
+                let display = hir
+                    .closure_display_names
+                    .get(func_id)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
                 let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
-                user_fn_display_names.push((sym, name.clone()));
+                user_fn_display_names.push((sym, display));
+                named_inline_closure_ids.insert(*func_id);
             }
         }
+    }
+    // (c) Inline closures with a HIR display name that weren't picked up
+    // by (a) or (b) — e.g. an object-literal shorthand method that
+    // captured locals or used `this` and lowered to an inline Closure
+    // instead of a FuncRef. Skip ids already covered above and any id
+    // that hir.functions already produced a wrapper entry for.
+    let registered_fn_ids: std::collections::HashSet<perry_types::FuncId> =
+        hir.functions.iter().map(|f| f.id).collect();
+    for (func_id, display) in &hir.closure_display_names {
+        if display.is_empty() || named_inline_closure_ids.contains(func_id) {
+            continue;
+        }
+        if registered_fn_ids.contains(func_id) {
+            continue;
+        }
+        let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
+        user_fn_display_names.push((sym, display.clone()));
     }
 
     emit_string_pool(
@@ -1237,6 +1324,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
         &user_fn_wrapper_arity,
+        &user_fn_wrapper_async,
+        &user_fn_wrapper_generator,
         &user_fn_display_names,
     );
 

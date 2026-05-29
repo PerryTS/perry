@@ -1,5 +1,6 @@
 //! TypedArray support: Int8Array, Uint8Array, Int16Array, Uint16Array,
-//! Int32Array, Uint32Array, Float32Array, Float64Array.
+//! Int32Array, Uint32Array, Float32Array, Float64Array, BigInt64Array,
+//! BigUint64Array.
 //!
 //! Each TypedArrayHeader stores its element kind + size and a contiguous
 //! data region. Element-level read/write goes through `js_typed_array_get`
@@ -29,6 +30,8 @@ pub const KIND_FLOAT64: u8 = 7;
 // Uint8ClampedArray: same element size as Uint8, but stores clamp to [0,255]
 // using ToUint8Clamp (round-half-to-even) instead of truncate-wrap.
 pub const KIND_UINT8_CLAMPED: u8 = 8;
+pub const KIND_BIGINT64: u8 = 9;
+pub const KIND_BIGUINT64: u8 = 10;
 
 // Reserved class IDs for instanceof. Stay in the 0xFFFF00xx reserved range.
 pub const CLASS_ID_INT8_ARRAY: u32 = 0xFFFF0030;
@@ -40,6 +43,8 @@ pub const CLASS_ID_UINT32_ARRAY: u32 = 0xFFFF0035;
 pub const CLASS_ID_FLOAT32_ARRAY: u32 = 0xFFFF0036;
 pub const CLASS_ID_FLOAT64_ARRAY: u32 = 0xFFFF0037;
 pub const CLASS_ID_UINT8_CLAMPED_ARRAY: u32 = 0xFFFF0038;
+pub const CLASS_ID_BIGINT64_ARRAY: u32 = 0xFFFF0039;
+pub const CLASS_ID_BIGUINT64_ARRAY: u32 = 0xFFFF003A;
 
 #[inline]
 pub fn elem_size_for_kind(kind: u8) -> usize {
@@ -47,7 +52,7 @@ pub fn elem_size_for_kind(kind: u8) -> usize {
         KIND_INT8 | KIND_UINT8 | KIND_UINT8_CLAMPED => 1,
         KIND_INT16 | KIND_UINT16 => 2,
         KIND_INT32 | KIND_UINT32 | KIND_FLOAT32 => 4,
-        KIND_FLOAT64 => 8,
+        KIND_FLOAT64 | KIND_BIGINT64 | KIND_BIGUINT64 => 8,
         _ => 8,
     }
 }
@@ -64,6 +69,8 @@ pub fn class_id_for_kind(kind: u8) -> u32 {
         KIND_FLOAT32 => CLASS_ID_FLOAT32_ARRAY,
         KIND_FLOAT64 => CLASS_ID_FLOAT64_ARRAY,
         KIND_UINT8_CLAMPED => CLASS_ID_UINT8_CLAMPED_ARRAY,
+        KIND_BIGINT64 => CLASS_ID_BIGINT64_ARRAY,
+        KIND_BIGUINT64 => CLASS_ID_BIGUINT64_ARRAY,
         _ => 0,
     }
 }
@@ -80,6 +87,8 @@ pub fn name_for_kind(kind: u8) -> &'static str {
         KIND_FLOAT32 => "Float32Array",
         KIND_FLOAT64 => "Float64Array",
         KIND_UINT8_CLAMPED => "Uint8ClampedArray",
+        KIND_BIGINT64 => "BigInt64Array",
+        KIND_BIGUINT64 => "BigUint64Array",
         _ => "TypedArray",
     }
 }
@@ -387,6 +396,12 @@ unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
         KIND_FLOAT64 => {
             *(base.add(off) as *mut f64) = value;
         }
+        KIND_BIGINT64 => {
+            *(base.add(off) as *mut i64) = value as i64;
+        }
+        KIND_BIGUINT64 => {
+            *(base.add(off) as *mut u64) = value as u64;
+        }
         _ => {}
     }
 }
@@ -406,6 +421,8 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
         KIND_UINT32 => *(base.add(off) as *const u32) as f64,
         KIND_FLOAT32 => *(base.add(off) as *const f32) as f64,
         KIND_FLOAT64 => *(base.add(off) as *const f64),
+        KIND_BIGINT64 => *(base.add(off) as *const i64) as f64,
+        KIND_BIGUINT64 => *(base.add(off) as *const u64) as f64,
         _ => 0.0,
     }
 }

@@ -43,6 +43,23 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     if raw_ptr < 0x10000 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // Issue #63 / #321 (Effect.runSync→fork SIGBUS): the raw-I64 fallback
+    // above accepts arbitrary in-range bits — including denormal f64
+    // payloads from non-pointer dataflow (e.g. effect's fiberRefs.ts loop
+    // produced `bits ≈ 0x8_0000_0000` which passed every gate but is just
+    // a number value, not a real I64 pointer). The unchecked
+    // `(*gc_hdr).obj_type` read at the bottom of this fn then crossed
+    // the macOS user/kernel boundary at `[raw_ptr - 8]` → SIGBUS.
+    //
+    // The platform-aware heap range used by `crate::object::is_valid_obj_ptr`
+    // covers exactly the address space mimalloc / system malloc actually
+    // hand out (macOS host: `[0x200_0000_0000, 0x8000_0000_0000)`; Linux /
+    // iOS / Android: `[0x1000, 0x8000_0000_0000)`). Any value with
+    // POINTER_TAG that codegen put there is trusted (it asked for a
+    // pointer), so this gate only applies to the heuristic fallback.
+    if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     // Issue #957: if the index itself is a string, route through the
     // by-name object getter. Pre-fix, `obj["foo"]` lowered through
     // `IndexUpdate` re-entered this helper with a NaN-boxed string index
@@ -159,6 +176,11 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         return value;
     };
     if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return value;
+    }
+    // Mirror the #63/#321 guard on the get side: heuristic-derived
+    // pseudo-pointers from non-pointer dataflow must not be dereferenced.
+    if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
         return value;
     }
     let is_array = unsafe {

@@ -760,4 +760,59 @@ module.exports = inner;
             wrapped
         );
     }
+
+    /// Issue #2310 — when a top-level class body references a let/const
+    /// declared at the IIFE's top level (the ws/lib/sender.js shape:
+    /// `let randomPoolPointer; class Sender { static frame(){ … r++ } }`),
+    /// hoisting the class out of the IIFE would sever the closure over
+    /// `randomPoolPointer` and the compile hard-errors with
+    /// `Undefined variable in update expression`. Verify the class stays
+    /// inside the IIFE body and is NOT in the hoisted-class block.
+    #[test]
+    fn issue_2310_class_referencing_iife_let_is_not_hoisted() {
+        let src = "'use strict';\n\
+                   const POOL_SIZE = 8;\n\
+                   let pointer = 0;\n\
+                   class Sender {\n\
+                     static next() { return pointer++; }\n\
+                   }\n\
+                   module.exports = Sender;\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/sender.js"));
+        // The IIFE body must still contain the class — i.e. the wrap must
+        // not lift it above the `const _cjs = (function() { ... })()` line.
+        let iife_open = wrapped
+            .find("const _cjs = (function()")
+            .expect("wrap must produce the IIFE wrapper");
+        let class_pos = wrapped
+            .find("class Sender")
+            .expect("wrap must keep `class Sender` somewhere");
+        assert!(
+            class_pos > iife_open,
+            "expected `class Sender` to stay inside the IIFE for #2310; got:\n{}",
+            wrapped
+        );
+    }
+
+    /// Issue #2310 — control case: a class that doesn't reference any
+    /// IIFE-local binding STILL gets hoisted (the v0.5.x #652 behavior).
+    /// Regression guard so the #2310 helper doesn't over-fire.
+    #[test]
+    fn issue_2310_self_contained_class_still_hoists() {
+        let src = "class Pure {\n\
+                     static greet() { return 'hi'; }\n\
+                   }\n\
+                   module.exports = Pure;\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pure.js"));
+        let iife_open = wrapped
+            .find("const _cjs = (function()")
+            .expect("wrap must produce the IIFE wrapper");
+        let class_pos = wrapped
+            .find("class Pure")
+            .expect("wrap must keep `class Pure` somewhere");
+        assert!(
+            class_pos < iife_open,
+            "self-contained class must still hoist above the IIFE; got:\n{}",
+            wrapped
+        );
+    }
 }

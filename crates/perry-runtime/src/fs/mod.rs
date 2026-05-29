@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::closure::ClosureHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
-use crate::value::POINTER_MASK;
+use crate::value::{POINTER_MASK, POINTER_TAG};
 
 mod callbacks;
 pub use callbacks::*;
@@ -30,7 +30,7 @@ mod stats;
 pub use stats::*;
 mod dirent;
 pub use dirent::*;
-pub(crate) mod validate;
+pub mod validate;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
@@ -50,6 +50,18 @@ thread_local! {
 /// numeric fd (#2013).
 pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
+}
+
+pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) != POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    if addr < 0x1000 {
+        return None;
+    }
+    FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().get(&addr).copied())
 }
 
 struct DirState {
@@ -80,6 +92,9 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
     if value.is_finite() && value >= 0.0 && value <= i32::MAX as f64 {
         Some(value as i32)
     } else {
+        if let Some(fd) = filehandle_object_fd(value) {
+            return Some(fd);
+        }
         unsafe {
             let bits = value.to_bits();
             let addr = if (bits >> 48) >= 0x7FF8 {
@@ -87,9 +102,6 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
             } else {
                 bits as usize
             };
-            if let Some(fd) = FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().get(&addr).copied()) {
-                return Some(fd);
-            }
             if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1
                 || !extract_string_ptr(value).is_null()
             {
@@ -118,7 +130,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
 ) -> *mut StringHeader {
     validate::validate_path_or_fd("path", path_value, "read");
     unsafe {
-        let path_str_for_log = decode_path_value(path_value).unwrap_or_default();
+        let _path_str_for_log = decode_path_value(path_value).unwrap_or_default();
 
         // Debug: log path on Android
         #[cfg(target_os = "android")]
@@ -543,6 +555,11 @@ pub extern "C" fn js_fs_unlink_sync(path_value: f64) -> i32 {
 /// Returns 1 on success, 0 on error. No-op + success on Windows where POSIX modes don't apply.
 #[no_mangle]
 pub extern "C" fn js_fs_chmod_sync(path_value: f64, mode: f64) -> i32 {
+    // #2013: path-only validation. Mode coercion goes through Node's
+    // `parseFileMode` which throws ERR_INVALID_ARG_VALUE (not the
+    // ERR_INVALID_ARG_TYPE / ERR_OUT_OF_RANGE shape `validate_int32`
+    // emits) — left as a follow-up to keep the diff small.
+    crate::fs::validate::validate_path("path", path_value);
     unsafe {
         let path_str = match decode_path_value(path_value) {
             Some(s) => s,
@@ -663,6 +680,9 @@ pub extern "C" fn js_fs_chown_sync(path_value: f64, uid_value: f64, gid_value: f
 /// `fs.lchownSync(path, uid, gid)`.
 #[no_mangle]
 pub extern "C" fn js_fs_lchown_sync(path_value: f64, uid_value: f64, gid_value: f64) -> i32 {
+    crate::fs::validate::validate_path("path", path_value);
+    crate::fs::validate::validate_int32(uid_value, "uid", -1, u32::MAX as i64);
+    crate::fs::validate::validate_int32(gid_value, "gid", -1, u32::MAX as i64);
     chown_path_value(path_value, uid_value, gid_value, false)
 }
 
@@ -672,6 +692,12 @@ pub extern "C" fn js_fs_lchown_sync(path_value: f64, uid_value: f64, gid_value: 
 /// ENOSYS-equivalent. No-op success on non-unix.
 #[no_mangle]
 pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
+    // Mode range validation is deliberately not done here: Node opens the
+    // path first, so a bad-path call surfaces ENOENT before mode validation
+    // would fire. Validating mode here would deviate from Node ordering on
+    // paths that don't exist. The mode-validation gap on existing paths is
+    // a separate follow-up.
+    crate::fs::validate::validate_path("path", path_value);
     #[cfg(all(
         unix,
         any(
@@ -877,6 +903,8 @@ fn open_file_for_write_flag(path: &str, flag: &str) -> std::io::Result<fs::File>
 /// `fs.renameSync(from, to)` — returns 1 on success, 0 on failure.
 #[no_mangle]
 pub extern "C" fn js_fs_rename_sync(from_value: f64, to_value: f64) -> i32 {
+    crate::fs::validate::validate_path("oldPath", from_value);
+    crate::fs::validate::validate_path("newPath", to_value);
     unsafe {
         let from = match decode_path_value(from_value) {
             Some(s) => s,
@@ -909,6 +937,12 @@ pub extern "C" fn js_fs_copy_file_sync_flags(
     to_value: f64,
     flags_value: f64,
 ) -> i32 {
+    crate::fs::validate::validate_path("src", from_value);
+    crate::fs::validate::validate_path("dest", to_value);
+    let flags_jv = crate::value::JSValue::from_bits(flags_value.to_bits());
+    if !flags_jv.is_undefined() {
+        crate::fs::validate::validate_int32(flags_value, "mode", 0, 7);
+    }
     unsafe {
         let from = match decode_path_value(from_value) {
             Some(s) => s,
@@ -1202,7 +1236,14 @@ pub extern "C" fn js_fs_ftruncate_sync(fd_value: f64, len_value: f64) -> i32 {
 /// `fs.fsyncSync(fd)` — flush an open registry fd.
 #[no_mangle]
 pub extern "C" fn js_fs_fsync_sync(fd_value: f64) -> i32 {
-    let fd = fd_value as i32;
+    crate::fs::validate::validate_fd_open(fd_value, "fsync");
+    fsync_sync_inner(fd_value as i32)
+}
+
+/// Internal fsync without validation — for the FileHandle wrappers, which
+/// may legitimately hold a `-1` sentinel from a failed open and rely on
+/// the silent no-op behavior.
+pub(crate) fn fsync_sync_inner(fd: i32) -> i32 {
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
@@ -1220,7 +1261,11 @@ pub extern "C" fn js_fs_fsync_sync(fd_value: f64) -> i32 {
 /// Perry maps this to `sync_data`, falling back to fsync-like semantics.
 #[no_mangle]
 pub extern "C" fn js_fs_fdatasync_sync(fd_value: f64) -> i32 {
-    let fd = fd_value as i32;
+    crate::fs::validate::validate_fd_open(fd_value, "fdatasync");
+    fdatasync_sync_inner(fd_value as i32)
+}
+
+pub(crate) fn fdatasync_sync_inner(fd: i32) -> i32 {
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
@@ -1237,6 +1282,12 @@ pub extern "C" fn js_fs_fdatasync_sync(fd_value: f64) -> i32 {
 /// `fs.fchmodSync(fd, mode)`.
 #[no_mangle]
 pub extern "C" fn js_fs_fchmod_sync(fd_value: f64, mode: f64) -> i32 {
+    // #2013: fd validation (type + range) + EBADF on missing fd. Mode
+    // validation deliberately omitted — Node uses `parseFileMode`,
+    // which throws `ERR_INVALID_ARG_VALUE`, before the fd check; adding
+    // the same shape here is a separate follow-up tracked alongside the
+    // mode-on-existing-path gap in `lchmodSync`.
+    crate::fs::validate::validate_fd_open(fd_value, "fchmod");
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
@@ -1263,7 +1314,21 @@ pub extern "C" fn js_fs_fchmod_sync(fd_value: f64, mode: f64) -> i32 {
 /// `fs.fchownSync(fd, uid, gid)`.
 #[no_mangle]
 pub extern "C" fn js_fs_fchown_sync(fd_value: f64, uid_value: f64, gid_value: f64) -> i32 {
-    let fd = fd_value as i32;
+    // #2013 order: validate fd type, uid type+range, gid type+range,
+    // THEN bounce on EBADF. Node's `validateInteger(uid)` fires before
+    // the syscall, so `fchownSync(1, "", 0)` throws ERR_INVALID_ARG_TYPE
+    // for `uid`, not EBADF for `fd` — preserve that order even though
+    // the missing-fd case still needs EBADF after all args check out.
+    crate::fs::validate::validate_fd(fd_value);
+    crate::fs::validate::validate_int32(uid_value, "uid", -1, u32::MAX as i64);
+    crate::fs::validate::validate_int32(gid_value, "gid", -1, u32::MAX as i64);
+    if !crate::fs::fd_is_registered(fd_value as i32) {
+        crate::fs::validate::throw_ebadf_pub("fchown");
+    }
+    fchown_sync_inner(fd_value as i32, uid_value, gid_value)
+}
+
+pub(crate) fn fchown_sync_inner(fd: i32, uid_value: f64, gid_value: f64) -> i32 {
     #[cfg(unix)]
     {
         FD_REGISTRY.with(|r| {

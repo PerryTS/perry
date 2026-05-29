@@ -568,6 +568,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "unref", true, Some("Socket")),
     method("net", "cork", true, Some("Socket")),
     method("net", "uncork", true, Some("Socket")),
+    // Issue #2131 — lifecycle + EventEmitter surface beyond `.on`.
+    // `address()` resolves to a real `{ port, family, address }` object;
+    // the rest match the Node EventEmitter shape so any-typed
+    // receivers (the accepted-socket arg of
+    // `server.on('connection', s => …)` is the dominant case) keep
+    // dispatching instead of throwing "not a function".
+    method("net", "address", true, Some("Socket")),
+    method("net", "once", true, Some("Socket")),
+    method("net", "addListener", true, Some("Socket")),
+    method("net", "off", true, Some("Socket")),
+    method("net", "removeListener", true, Some("Socket")),
+    method("net", "removeAllListeners", true, Some("Socket")),
+    method("net", "listenerCount", true, Some("Socket")),
+    method("net", "eventNames", true, Some("Socket")),
+    // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`.
+    // Returns a real JS array of registered callbacks; the introspection
+    // methods `test-http-agent-*` exercises after `request.on('socket', ...)`.
+    method("net", "listeners", true, Some("Socket")),
+    method("net", "rawListeners", true, Some("Socket")),
+    method("net", "resetAndDestroy", true, Some("Socket")),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
     // shape of the http-server rows at entries.rs:2298. The
@@ -580,6 +600,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "close", true, Some("Server")),
     method("net", "address", true, Some("Server")),
     method("net", "addListener", true, Some("Server")),
+    // Issue #2131 — `net.Server` EventEmitter surface (twin of the
+    // Socket entries above). Same handle namespace, same listener +
+    // once-flag storage.
+    method("net", "once", true, Some("Server")),
+    method("net", "off", true, Some("Server")),
+    method("net", "removeListener", true, Some("Server")),
+    method("net", "removeAllListeners", true, Some("Server")),
+    method("net", "listenerCount", true, Some("Server")),
+    method("net", "eventNames", true, Some("Server")),
+    // Issue #2211 — `server.listeners(event)` / `server.rawListeners(event)`,
+    // twin of the Socket entries above (shared handle/listener namespace).
+    method("net", "listeners", true, Some("Server")),
+    method("net", "rawListeners", true, Some("Server")),
     // Issue #811 — IP classification helpers + Happy-Eyeballs default
     // accessors. Pure string/global-flag functions.
     method("net", "isIP", false, None),
@@ -1867,6 +1900,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method("worker_threads", "postMessage", true, None),
+    // node:worker_threads — value-shaped exports (#2135). Perry doesn't
+    // spawn JS workers, so the main thread is the only thread: isMainThread
+    // is always true, threadId is 0, resourceLimits is an empty object.
+    // The values themselves are returned by `js_native_module_property_by_name`
+    // (see `crates/perry-runtime/src/object/native_module.rs`).
+    property("worker_threads", "isMainThread"),
+    property("worker_threads", "threadId"),
+    property("worker_threads", "resourceLimits"),
     method_sig(
         "ethers",
         "getAddress",
@@ -2084,6 +2125,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "nextTick", false, None),
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
+    method("process", "loadEnvFile", false, None),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
     method("process", "threadCpuUsage", false, None),
@@ -2093,6 +2135,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "geteuid", false, None),
     method("process", "getgid", false, None),
     method("process", "getegid", false, None),
+    method("process", "getgroups", false, None),
+    method("process", "setuid", false, None),
+    method("process", "seteuid", false, None),
+    method("process", "setgid", false, None),
+    method("process", "setegid", false, None),
+    method("process", "setgroups", false, None),
+    method("process", "initgroups", false, None),
     method("process", "emitWarning", false, None),
     method("process", "on", false, None),
     method("process", "addListener", false, None),
@@ -2336,6 +2385,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method("util", "isDeepStrictEqual", false, None),
+    method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
@@ -2353,13 +2403,27 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isArrayBufferView", false, None),
     method("util/types", "isTypedArray", false, None),
     method("util/types", "isUint8Array", false, None),
+    method("util/types", "isInt8Array", false, None),
+    method("util/types", "isInt16Array", false, None),
     method("util/types", "isUint16Array", false, None),
     method("util/types", "isInt32Array", false, None),
+    method("util/types", "isUint32Array", false, None),
+    method("util/types", "isFloat32Array", false, None),
     method("util/types", "isFloat64Array", false, None),
+    method("util/types", "isUint8ClampedArray", false, None),
+    method("util/types", "isBigInt64Array", false, None),
+    method("util/types", "isBigUint64Array", false, None),
     method("util/types", "isMap", false, None),
+    method("util/types", "isMapIterator", false, None),
+    method("util/types", "isProxy", false, None),
     method("util/types", "isSet", false, None),
+    method("util/types", "isSetIterator", false, None),
     method("util/types", "isDate", false, None),
     method("util/types", "isRegExp", false, None),
+    method("util/types", "isAsyncFunction", false, None),
+    method("util/types", "isGeneratorFunction", false, None),
+    method("util/types", "isGeneratorObject", false, None),
+    method("util/types", "isNativeError", false, None),
     // Boxed primitive introspection (PR #1257). The `util/types` import form
     // and the `util.types` namespace-access form both lower to this canonical
     // module key.
@@ -2377,6 +2441,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert", "deepEqual", false, None),
     method("assert", "notDeepEqual", false, None),
     method("assert", "deepStrictEqual", false, None),
+    method("assert", "partialDeepStrictEqual", false, None),
     method("assert", "notDeepStrictEqual", false, None),
     method("assert", "match", false, None),
     method("assert", "doesNotMatch", false, None),
@@ -2398,6 +2463,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert/strict", "deepEqual", false, None),
     method("assert/strict", "notDeepEqual", false, None),
     method("assert/strict", "deepStrictEqual", false, None),
+    method("assert/strict", "partialDeepStrictEqual", false, None),
     method("assert/strict", "notDeepStrictEqual", false, None),
     method("assert/strict", "match", false, None),
     method("assert/strict", "doesNotMatch", false, None),
@@ -2518,6 +2584,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1539: push() backpressure return + readable/writableHighWaterMark
     // property getters on typed stream instances.
     method("stream", "push", true, None),
+    method("stream", "unshift", true, None),
     method("stream", "readableFlowing", true, None),
     method("stream", "readableHighWaterMark", true, None),
     method("stream", "readableLength", true, None),
@@ -2621,6 +2688,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),
+    // Issue #800: WHATWG base64 aliases exposed from node:buffer.
+    method("buffer", "atob", false, None),
+    method("buffer", "btoa", false, None),
     // Buffer module-level encoding probes added in PR #1257.
     method("buffer", "isAscii", false, None),
     method("buffer", "isUtf8", false, None),
@@ -2652,6 +2722,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),
+    // `http.Server(handler)` is Node's callable-constructor alias for
+    // `createServer` (works with or without `new`). #2132.
+    method("http", "Server", false, None),
     method("http", "request", false, None),
     method("http", "get", false, None),
     property("http", "METHODS"),
@@ -2660,13 +2733,71 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),
     class("http", "ServerResponse"),
+    // #2129 — `new http.Agent(options?)`. Construction is unconditional;
+    // method dispatch flows through ("http", "Agent") rows below.
+    class("http", "Agent"),
+    method("http", "Agent", false, None),
+    method("http", "getName", true, Some("Agent")),
+    method("http", "destroy", true, Some("Agent")),
+    method("http", "close", true, Some("Agent")),
+    method("http", "keepSocketAlive", true, Some("Agent")),
+    method("http", "reuseSocket", true, Some("Agent")),
+    // Synthetic `__get_<name>` / `__set_<name>` accessor methods (HIR
+    // rewrites bare `agent.maxSockets` reads to `__get_maxSockets()`
+    // when the receiver is class-tagged) + their bare-name twins for
+    // sites where the rewrite doesn't fire. Keep parity with the rows
+    // in `crates/perry-codegen/src/lower_call/native_table/http.rs`
+    // (drift caught by perry-codegen/tests/manifest_consistency.rs).
+    method("http", "__get_maxSockets", true, Some("Agent")),
+    method("http", "__get_maxFreeSockets", true, Some("Agent")),
+    method("http", "__get_maxTotalSockets", true, Some("Agent")),
+    method("http", "__get_keepAliveMsecs", true, Some("Agent")),
+    method("http", "__get_keepAlive", true, Some("Agent")),
+    method("http", "__get_protocol", true, Some("Agent")),
+    method("http", "__set_protocol", true, Some("Agent")),
+    method("http", "maxSockets", true, Some("Agent")),
+    method("http", "maxFreeSockets", true, Some("Agent")),
+    method("http", "maxTotalSockets", true, Some("Agent")),
+    method("http", "keepAliveMsecs", true, Some("Agent")),
+    method("http", "keepAlive", true, Some("Agent")),
+    method("http", "protocol", true, Some("Agent")),
+    // #2154 — sockets/freeSockets/requests accessors return `{}` for an
+    // idle agent; destroyed reflects whether `.destroy()` has been
+    // called; the `__set_*` rows enforce ERR_OUT_OF_RANGE on invalid
+    // writes (matches Node's `_http_agent.js` setter behavior);
+    // createConnection / createSocket closure pointers round-trip.
+    method("http", "__get_sockets", true, Some("Agent")),
+    method("http", "sockets", true, Some("Agent")),
+    method("http", "__get_freeSockets", true, Some("Agent")),
+    method("http", "freeSockets", true, Some("Agent")),
+    method("http", "__get_requests", true, Some("Agent")),
+    method("http", "requests", true, Some("Agent")),
+    method("http", "__get_destroyed", true, Some("Agent")),
+    method("http", "destroyed", true, Some("Agent")),
+    method("http", "__set_maxSockets", true, Some("Agent")),
+    method("http", "__set_maxFreeSockets", true, Some("Agent")),
+    method("http", "__set_maxTotalSockets", true, Some("Agent")),
+    method("http", "__set_keepAlive", true, Some("Agent")),
+    method("http", "__set_keepAliveMsecs", true, Some("Agent")),
+    method("http", "__set_createConnection", true, Some("Agent")),
+    method("http", "__set_createSocket", true, Some("Agent")),
+    method("http", "__get_createConnection", true, Some("Agent")),
+    method("http", "__get_createSocket", true, Some("Agent")),
     method("https", "createServer", false, None),
+    // `https.Server(options, handler)` is Node's callable-constructor
+    // alias for `createServer` (works with or without `new`). #2132.
+    method("https", "Server", false, None),
     method("https", "request", false, None),
     method("https", "get", false, None),
     class("https", "Server"),
     class("https", "ClientRequest"),
     class("https", "IncomingMessage"),
     class("https", "ServerResponse"),
+    // #2129 — `new https.Agent(options?)`. The instance is tagged as
+    // ("http", "Agent") in destructuring/var_decl.rs so it shares the
+    // method surface; only the constructor's default protocol differs.
+    class("https", "Agent"),
+    method("https", "Agent", false, None),
     // --- axios (perry-ext-axios) — the npm `axios` HTTP client surface.
     //     The default export is callable (`axios(config)`); both flow
     //     through perry-ext-axios's `js_axios_*` symbols. ---
@@ -2820,6 +2951,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- perry/system — auto-derivable from PERRY_SYSTEM_TABLE. ---
     method("perry/system", "isDarkMode", false, None),
     method("perry/system", "getDeviceIdiom", false, None),
+    method("perry/system", "getSafeAreaInsets", false, None),
     method("perry/system", "getDeviceModel", false, None),
     // Bug-report-flow utility: stable OS-version string per
     // platform (e.g. `"15.2"`, `"macOS 14.5"`, `"Android 14"`).
@@ -3028,6 +3160,43 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "closeIdleConnections", true, Some("HttpServer")),
     method("http", "on", true, Some("HttpServer")),
     method("http", "addListener", true, Some("HttpServer")),
+    // #2153 — `.address()` was stubbed in the runtime
+    // (`js_node_http_server_address_json`) but missing from both
+    // `NATIVE_MODULE_TABLE` and the manifest.
+    method("http", "address", true, Some("HttpServer")),
+    // Issue #2210 — `server.<name>` timeout/socket-option accessors,
+    // plus the canonical `server.setTimeout(ms, cb)` method. Each
+    // accessor has two manifest entries (`__get_<name>` HIR-rewrite +
+    // bare-name fallback for receivers that escape the rewrite).
+    method("http", "__get_headersTimeout", true, Some("HttpServer")),
+    method("http", "__set_headersTimeout", true, Some("HttpServer")),
+    method("http", "headersTimeout", true, Some("HttpServer")),
+    method("http", "__get_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__set_keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "keepAliveTimeout", true, Some("HttpServer")),
+    method("http", "__get_requestTimeout", true, Some("HttpServer")),
+    method("http", "__set_requestTimeout", true, Some("HttpServer")),
+    method("http", "requestTimeout", true, Some("HttpServer")),
+    method("http", "__get_timeout", true, Some("HttpServer")),
+    method("http", "__set_timeout", true, Some("HttpServer")),
+    method("http", "timeout", true, Some("HttpServer")),
+    method("http", "__get_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "__set_maxHeadersCount", true, Some("HttpServer")),
+    method("http", "maxHeadersCount", true, Some("HttpServer")),
+    method(
+        "http",
+        "__get_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method(
+        "http",
+        "__set_maxRequestsPerSocket",
+        true,
+        Some("HttpServer"),
+    ),
+    method("http", "maxRequestsPerSocket", true, Some("HttpServer")),
+    method("http", "setTimeout", true, Some("HttpServer")),
     method("http", "on", true, Some("IncomingMessage")),
     method("http", "addListener", true, Some("IncomingMessage")),
     method("http", "pause", true, Some("IncomingMessage")),
@@ -3090,12 +3259,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("https", "listen", true, Some("HttpsServer")),
     method("https", "close", true, Some("HttpsServer")),
     method("https", "on", true, Some("HttpsServer")),
+    method("https", "address", true, Some("HttpsServer")),
     class("https", "Server"),
     // --- node:http2 server (issue #577 Phase 3) ---
     method("http2", "createSecureServer", false, None),
     method("http2", "listen", true, Some("Http2SecureServer")),
     method("http2", "close", true, Some("Http2SecureServer")),
     method("http2", "on", true, Some("Http2SecureServer")),
+    method("http2", "address", true, Some("Http2SecureServer")),
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

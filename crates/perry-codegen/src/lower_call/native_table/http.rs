@@ -95,15 +95,391 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_PTR,
     },
+    // ========== http.Agent / https.Agent (issue #2129) ==========
+    // `new http.Agent(options?)` / `new https.Agent(options?)` — registered
+    // via the Member-callee path in lower/expr_new.rs (mirrors the
+    // `new net.Socket()` route). Both classes share the same instance
+    // surface; only the constructor differs (default protocol).
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "Agent",
+        class_filter: None,
+        runtime: "js_http_agent_new",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: false,
+        method: "Agent",
+        class_filter: None,
+        runtime: "js_https_agent_new",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    // Agent instance methods. Most are chainable no-ops today — Perry
+    // doesn't pool sockets, but Node's test suite asserts the methods
+    // exist and don't throw. `getName(options)` is the one method whose
+    // exact output the tests check.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "getName",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_get_name",
+        args: &[NA_F64],
+        ret: NR_STR,
+    },
+    // #2154: real `destroy()` flips the `destroyed` flag (no-op
+    // pre-#2154 — the agent had nothing to destroy because it owned no
+    // sockets). Still chainable: returns the receiver handle.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "destroy",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_destroy",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "close",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "keepSocketAlive",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "reuseSocket",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_noop_self",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // Property accessors as `__get_<name>` synthetic methods. The HIR
+    // rewrites bare `agent.maxSockets` reads to `agent.__get_maxSockets()`
+    // when the receiver is tagged as ("http"|"https", "Agent").
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_maxSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_max_sockets",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_maxFreeSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_max_free_sockets",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_maxTotalSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_max_total_sockets",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_keepAliveMsecs",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_keep_alive_msecs",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_keepAlive",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_keep_alive",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_protocol",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_protocol",
+        args: &[],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_protocol",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_protocol",
+        args: &[NA_STR],
+        ret: NR_VOID,
+    },
+    // Bare-name dispatch for the same property reads. Mirrors the
+    // belt-and-braces approach used by IncomingMessage's `statusCode` /
+    // `headers` rows below — covers sites where the HIR rewrite to
+    // `__get_<prop>` doesn't fire (e.g. an agent assigned through a
+    // local before the property read).
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "maxSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_max_sockets",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "maxFreeSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_max_free_sockets",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "maxTotalSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_max_total_sockets",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "keepAliveMsecs",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_keep_alive_msecs",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "keepAlive",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_keep_alive",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "protocol",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_protocol",
+        args: &[],
+        ret: NR_STR,
+    },
+    // ========== http.Agent / https.Agent (issue #2154) ==========
+    // Extra surface the #2129 first PR didn't cover: sockets /
+    // freeSockets / requests accessors (return empty objects),
+    // destroyed getter + destroy(), tunable property setters with
+    // RangeError-throwing validation, and createConnection /
+    // createSocket override storage.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_sockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_sockets",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "sockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_sockets",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_freeSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_free_sockets",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "freeSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_free_sockets",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_requests",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_requests",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "requests",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_requests",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_destroyed",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_destroyed",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "destroyed",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_destroyed",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_maxSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_max_sockets",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_maxFreeSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_max_free_sockets",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_maxTotalSockets",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_max_total_sockets",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_keepAlive",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_keep_alive",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_keepAliveMsecs",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_keep_alive_msecs",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_createConnection",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_create_connection",
+        args: &[NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_createSocket",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_set_create_socket",
+        args: &[NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_createConnection",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_create_connection",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_createSocket",
+        class_filter: Some("Agent"),
+        runtime: "js_http_agent_create_socket",
+        args: &[],
+        ret: NR_PTR,
+    },
     // ========== node:http server (issue #577) ==========
     // Module-level: `import { createServer } from "node:http"; createServer(handler)`
+    // Issue #2210 — accepts an optional 2nd `options` arg (Node 18.4+):
+    //   `createServer(handler, { headersTimeout, keepAliveTimeout, ... })`
+    // The runtime distinguishes the no-args / handler-only / handler+opts
+    // cases by the JsValue tag on the second arg (UNDEFINED vs pointer);
+    // a 0-arg call leaves both NA_PTR / NA_JSV slots as `undefined`.
     NativeModSig {
         module: "http",
         has_receiver: false,
         method: "createServer",
         class_filter: None,
-        runtime: "js_node_http_create_server",
-        args: &[NA_PTR],
+        runtime: "js_node_http_create_server_with_options",
+        args: &[NA_PTR, NA_JSV],
+        ret: NR_PTR,
+    },
+    // `http.Server(handler)` is Node's callable-constructor alias for
+    // `http.createServer` (works with or without `new`). #2132.
+    // Same `(handler, options?)` shape as `createServer` above (#2210).
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "Server",
+        class_filter: None,
+        runtime: "js_node_http_create_server_with_options",
+        args: &[NA_PTR, NA_JSV],
         ret: NR_PTR,
     },
     // HttpServer instance methods (class_filter: HttpServer)
@@ -120,8 +496,13 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         // by value type (string→host, function→callback). Pre-#2041 the fixed
         // `[NA_F64, NA_PTR]` mis-routed a host string into the callback slot and
         // dropped the real callback. Issue #2041.
+        //
+        // #2129: returns the server handle (NR_PTR) so
+        // `createServer(...).listen(...).on(...)` chains correctly. Pre-fix
+        // this was NR_VOID and chained sites broke at runtime with
+        // `undefined.on is not a function`.
         args: &[NA_VARARGS],
-        ret: NR_VOID,
+        ret: NR_PTR,
     },
     NativeModSig {
         module: "http",
@@ -167,6 +548,203 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         runtime: "js_node_http_server_on",
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
+    },
+    // `server.address()` — returns `{ port, address, family }` (or `null`
+    // before listen completes). Runtime serializes to JSON; codegen
+    // parses via `NR_OBJ_FROM_JSON_STR`. Without this row, `server.address()`
+    // fell through to typed-feedback dispatch and returned NaN.
+    // (#2153 followup to #2129.)
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_address_json",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
+    // Issue #2210 — `server.<name>` timeout / socket-option accessors.
+    // The HIR rewrites `server.headersTimeout` reads / writes to
+    // `__get_headersTimeout` / `__set_headersTimeout` synthetic methods
+    // when the receiver is tagged as `("http", "HttpServer")`; bare-name
+    // fallback rows also wired so receivers that escape the HIR-rewrite
+    // (e.g. assigned through a local before the property access) still
+    // hit the FFI.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_headersTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_headers_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_headersTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_headers_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_keepAliveTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_keep_alive_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_keepAliveTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_keep_alive_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_requestTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_request_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_requestTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_request_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_timeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_idle_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_timeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_idle_timeout",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_maxHeadersCount",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_headers_count",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_maxHeadersCount",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_max_headers_count",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_maxRequestsPerSocket",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_requests_per_socket",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__set_maxRequestsPerSocket",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_max_requests_per_socket",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // Bare-name dispatch — same FFI, covers receivers that escape the
+    // `__get_<name>` HIR rewrite (e.g. assigned through a local).
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "headersTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_headers_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "keepAliveTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_keep_alive_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "requestTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_request_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "timeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_idle_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "maxHeadersCount",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_headers_count",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "maxRequestsPerSocket",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_max_requests_per_socket",
+        args: &[],
+        ret: NR_F64,
+    },
+    // `server.setTimeout(msecs, [callback])` — the canonical
+    // EventEmitter-style setter mirrors `socket.setTimeout`. The
+    // callback (if supplied) is registered as a `'timeout'` listener.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "setTimeout",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_set_timeout_method",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
     },
     // IncomingMessage instance methods
     NativeModSig {
@@ -266,7 +844,13 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "writeHead",
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_write_head",
-        args: &[NA_F64, NA_STR, NA_STR],
+        // #2132: arg2/arg3 are raw JSValues so the runtime can disambiguate
+        // the `writeHead(status, headers)` vs `writeHead(status, statusMessage,
+        // headers)` overloads (string ⇒ statusMessage, object ⇒ headers) and
+        // serialize the headers object. Previously typed `NA_STR`, which
+        // coerced a headers *object* to `"[object Object]"` and silently
+        // dropped every header passed via `writeHead`.
+        args: &[NA_F64, NA_JSV, NA_JSV],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -595,6 +1179,17 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_PTR],
         ret: NR_PTR,
     },
+    // `https.Server(options, handler)` is Node's callable-constructor
+    // alias for `https.createServer` (works with or without `new`). #2132.
+    NativeModSig {
+        module: "https",
+        has_receiver: false,
+        method: "Server",
+        class_filter: None,
+        runtime: "js_node_https_create_server",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
     NativeModSig {
         module: "https",
         has_receiver: true,
@@ -602,8 +1197,9 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         class_filter: Some("HttpsServer"),
         runtime: "js_node_https_server_listen",
         // Variadic listen() overloads — see the http `listen` row. Issue #2041.
+        // Returns the server handle for chainability (#2129).
         args: &[NA_VARARGS],
-        ret: NR_VOID,
+        ret: NR_PTR,
     },
     NativeModSig {
         module: "https",
@@ -623,6 +1219,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_address_json",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
     // ========== node:http2 server (issue #577 Phase 3) ==========
     NativeModSig {
         module: "http2",
@@ -640,8 +1245,9 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         class_filter: Some("Http2SecureServer"),
         runtime: "js_node_http2_server_listen",
         // Variadic listen() overloads — see the http `listen` row. Issue #2041.
+        // Returns the server handle for chainability (#2129).
         args: &[NA_VARARGS],
-        ret: NR_VOID,
+        ret: NR_PTR,
     },
     NativeModSig {
         module: "http2",
@@ -660,6 +1266,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         runtime: "js_node_http2_server_on",
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http2",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("Http2SecureServer"),
+        runtime: "js_node_http2_server_address_json",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
     },
     // `@perryts/google-auth` is no longer bundled in perry-stdlib —
     // since v0.5.1015 the package is published as a standalone npm

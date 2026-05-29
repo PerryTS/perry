@@ -15,6 +15,9 @@ pub struct LoweringContext {
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
     /// Counter for generating unique global IDs
+    // #854: initialized in `new` but not yet read by the lowerer (globals are
+    // allocated through a different path today). Kept for the ID-counter set.
+    #[allow(dead_code)]
     pub(crate) next_global_id: GlobalId,
     /// Counter for generating unique function IDs
     pub(crate) next_func_id: FuncId,
@@ -29,6 +32,9 @@ pub struct LoweringContext {
     /// Current scope's local variables: name -> (id, type)
     pub(crate) locals: Vec<(String, LocalId, Type)>,
     /// Global variables: name -> (id, type)
+    // #854: initialized in `new` but currently unread (globals tracked
+    // elsewhere). Retained alongside `next_global_id` for the global table.
+    #[allow(dead_code)]
     pub(crate) globals: Vec<(String, GlobalId, Type)>,
     /// Functions: name -> id
     pub(crate) functions: Vec<(String, FuncId)>,
@@ -154,10 +160,17 @@ pub struct LoweringContext {
     pub(crate) source_file_path: String,
     /// Variables that hold closures or other values needing cross-module export globals
     /// (arrow functions, object literals, call expressions, arrays, new expressions)
+    // #854: initialized in `new` but not yet read on this lowering path.
+    #[allow(dead_code)]
     pub(crate) exportable_object_vars: HashSet<String>,
     /// Functions created during expression lowering (e.g., object literal methods)
     /// These are flushed to the module after the enclosing statement is lowered.
     pub(crate) pending_functions: Vec<Function>,
+    /// Issue #2076: display-name overrides keyed by FuncId. Populated for
+    /// named function expressions (own ident) and object-literal methods
+    /// (static property key); flushed into `Module.closure_display_names`
+    /// alongside `pending_functions`.
+    pub(crate) closure_display_names: HashMap<FuncId, String>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))
@@ -316,6 +329,10 @@ pub struct LoweringContext {
     /// a stable hash and is deferred.
     pub(crate) anon_shape_classes: HashMap<String, String>,
     /// Counter for generating anon-class names (`__AnonShape_N`).
+    // #854: initialized in `new` but unread — anon-shape classes are now named
+    // by content-addressed FNV hash (see `synthesize_anon_shape_class`), not by
+    // this counter. Kept for the struct's field set.
+    #[allow(dead_code)]
     pub(crate) next_anon_shape_id: u32,
     /// Phase 4.1: method return types registry keyed by (class_name,
     /// method_name). Populated as methods are lowered so call-site inference

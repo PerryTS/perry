@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1392 entries across 82 modules
+// Coverage: 1506 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -58,6 +58,8 @@ declare module "assert" {
   /** stdlib */
   export function ok(...args: any[]): any;
   /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
   export function strict(...args: any[]): any;
@@ -100,6 +102,8 @@ declare module "assert/strict" {
   export function notStrictEqual(...args: any[]): any;
   /** stdlib */
   export function ok(...args: any[]): any;
+  /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
   /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
@@ -183,6 +187,10 @@ declare module "buffer" {
   export function allocUnsafe(...args: any[]): any;
   /** stdlib */
   export function allocUnsafeSlow(...args: any[]): any;
+  /** stdlib */
+  export function atob(...args: any[]): any;
+  /** stdlib */
+  export function btoa(...args: any[]): any;
   /** stdlib */
   export function byteLength(...args: any[]): any;
   /** stdlib */
@@ -712,6 +720,8 @@ declare module "fs" {
 
 declare module "http" {
   /** stdlib */
+  export class Agent { [key: string]: any; }
+  /** stdlib */
   export class ClientRequest { [key: string]: any; }
   /** stdlib */
   export class IncomingMessage { [key: string]: any; }
@@ -729,6 +739,10 @@ declare module "http" {
   export const METHODS: any;
   /** stdlib */
   export const STATUS_CODES: any;
+  /** stdlib */
+  export function Agent(...args: any[]): any;
+  /** stdlib */
+  export function Server(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
@@ -752,6 +766,8 @@ declare module "http2" {
 
 declare module "https" {
   /** stdlib */
+  export class Agent { [key: string]: any; }
+  /** stdlib */
   export class ClientRequest { [key: string]: any; }
   /** stdlib */
   export class IncomingMessage { [key: string]: any; }
@@ -761,6 +777,10 @@ declare module "https" {
   export class Server { [key: string]: any; }
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
+  /** stdlib */
+  export function Agent(...args: any[]): any;
+  /** stdlib */
+  export function Server(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
@@ -1290,6 +1310,8 @@ declare module "perry/system" {
   /** stdlib */
   export function getOSVersion(...args: any[]): any;
   /** stdlib */
+  export function getSafeAreaInsets(...args: any[]): any;
+  /** stdlib */
   export function imagePickerPick(...args: any[]): any;
   /** stdlib */
   export function isDarkMode(...args: any[]): any;
@@ -1777,15 +1799,21 @@ declare module "process" {
   /** stdlib */
   export function getgid(...args: any[]): any;
   /** stdlib */
+  export function getgroups(...args: any[]): any;
+  /** stdlib */
   export function getuid(...args: any[]): any;
   /** stdlib */
   export function hrtime(...args: any[]): any;
+  /** stdlib */
+  export function initgroups(...args: any[]): any;
   /** stdlib */
   export function kill(...args: any[]): any;
   /** stdlib */
   export function listenerCount(...args: any[]): any;
   /** stdlib */
   export function listeners(...args: any[]): any;
+  /** stdlib */
+  export function loadEnvFile(...args: any[]): any;
   /** stdlib */
   export function memoryUsage(...args: any[]): any;
   /** stdlib */
@@ -1810,6 +1838,16 @@ declare module "process" {
   export function resourceUsage(...args: any[]): any;
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
+  /** stdlib */
+  export function setegid(...args: any[]): any;
+  /** stdlib */
+  export function seteuid(...args: any[]): any;
+  /** stdlib */
+  export function setgid(...args: any[]): any;
+  /** stdlib */
+  export function setgroups(...args: any[]): any;
+  /** stdlib */
+  export function setuid(...args: any[]): any;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
@@ -2024,6 +2062,8 @@ declare module "util" {
   /** stdlib */
   export function isDeepStrictEqual(...args: any[]): any;
   /** stdlib */
+  export function parseArgs(...args: any[]): any;
+  /** stdlib */
   export function promisify(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
@@ -2037,25 +2077,49 @@ declare module "util/types" {
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
   /** stdlib */
+  export function isAsyncFunction(...args: any[]): any;
+  /** stdlib */
+  export function isBigInt64Array(...args: any[]): any;
+  /** stdlib */
+  export function isBigUint64Array(...args: any[]): any;
+  /** stdlib */
   export function isBooleanObject(...args: any[]): any;
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
   /** stdlib */
   export function isDate(...args: any[]): any;
   /** stdlib */
+  export function isFloat32Array(...args: any[]): any;
+  /** stdlib */
   export function isFloat64Array(...args: any[]): any;
+  /** stdlib */
+  export function isGeneratorFunction(...args: any[]): any;
+  /** stdlib */
+  export function isGeneratorObject(...args: any[]): any;
+  /** stdlib */
+  export function isInt16Array(...args: any[]): any;
   /** stdlib */
   export function isInt32Array(...args: any[]): any;
   /** stdlib */
+  export function isInt8Array(...args: any[]): any;
+  /** stdlib */
   export function isMap(...args: any[]): any;
+  /** stdlib */
+  export function isMapIterator(...args: any[]): any;
+  /** stdlib */
+  export function isNativeError(...args: any[]): any;
   /** stdlib */
   export function isNumberObject(...args: any[]): any;
   /** stdlib */
   export function isPromise(...args: any[]): any;
   /** stdlib */
+  export function isProxy(...args: any[]): any;
+  /** stdlib */
   export function isRegExp(...args: any[]): any;
   /** stdlib */
   export function isSet(...args: any[]): any;
+  /** stdlib */
+  export function isSetIterator(...args: any[]): any;
   /** stdlib */
   export function isSharedArrayBuffer(...args: any[]): any;
   /** stdlib */
@@ -2065,7 +2129,11 @@ declare module "util/types" {
   /** stdlib */
   export function isUint16Array(...args: any[]): any;
   /** stdlib */
+  export function isUint32Array(...args: any[]): any;
+  /** stdlib */
   export function isUint8Array(...args: any[]): any;
+  /** stdlib */
+  export function isUint8ClampedArray(...args: any[]): any;
 }
 
 declare module "uuid" {
@@ -2093,6 +2161,12 @@ declare module "validator" {
 }
 
 declare module "worker_threads" {
+  /** stdlib */
+  export const isMainThread: any;
+  /** stdlib */
+  export const resourceLimits: any;
+  /** stdlib */
+  export const threadId: any;
   /** stdlib */
   export function getEnvironmentData(p0: any): any;
   /** stdlib */
@@ -2226,4 +2300,3 @@ declare module "zlib" {
   /** stdlib */
   export function unzipSync(p0: string): any;
 }
-

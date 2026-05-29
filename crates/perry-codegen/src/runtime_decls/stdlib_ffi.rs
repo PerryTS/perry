@@ -52,6 +52,34 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_status_code", DOUBLE, &[I64]);
     module.declare_function("js_http_status_message", I64, &[I64]);
 
+    // ========== http.Agent / https.Agent (#2129 / #2154) ==========
+    module.declare_function("js_http_agent_new", I64, &[DOUBLE]);
+    module.declare_function("js_https_agent_new", I64, &[DOUBLE]);
+    module.declare_function("js_http_agent_get_name", I64, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_noop_self", I64, &[I64]);
+    module.declare_function("js_http_agent_max_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_max_free_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_max_total_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_keep_alive_msecs", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_keep_alive", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_protocol", I64, &[I64]);
+    module.declare_function("js_http_agent_set_protocol", VOID, &[I64, I64]);
+    // #2154
+    module.declare_function("js_http_agent_destroy", I64, &[I64]);
+    module.declare_function("js_http_agent_destroyed", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_free_sockets", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_requests", DOUBLE, &[I64]);
+    module.declare_function("js_http_agent_set_max_sockets", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_max_free_sockets", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_max_total_sockets", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_keep_alive", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_keep_alive_msecs", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_http_agent_set_create_connection", VOID, &[I64, I64]);
+    module.declare_function("js_http_agent_set_create_socket", VOID, &[I64, I64]);
+    module.declare_function("js_http_agent_create_connection", I64, &[I64]);
+    module.declare_function("js_http_agent_create_socket", I64, &[I64]);
+
     // ========== HTTPS ==========
     module.declare_function("js_https_get", I64, &[DOUBLE, I64]);
     module.declare_function("js_https_request", I64, &[DOUBLE, I64]);
@@ -63,7 +91,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // entries in well_known_bindings.toml route imports here.
     // Server / lifecycle:
     module.declare_function("js_node_http_create_server", I64, &[I64]);
-    module.declare_function("js_node_http_server_listen", VOID, &[I64, DOUBLE, I64]);
+    // Returns the server handle so chains like
+    // `createServer(...).listen(...).on(...)` resolve correctly (#2129).
+    module.declare_function("js_node_http_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_http_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http_server_close_all_connections", VOID, &[I64]);
     module.declare_function("js_node_http_server_close_idle_connections", VOID, &[I64]);
@@ -113,13 +143,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_res_on", DOUBLE, &[I64, I64, I64]);
     // node:https server (TLS via rustls):
     module.declare_function("js_node_https_create_server", I64, &[DOUBLE, I64]);
-    module.declare_function("js_node_https_server_listen", VOID, &[I64, DOUBLE, I64]);
+    module.declare_function("js_node_https_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_https_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
     // node:http2 secure server (HTTP/2 with ALPN):
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
-    module.declare_function("js_node_http2_server_listen", VOID, &[I64, DOUBLE, I64]);
+    module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http2_server_on", DOUBLE, &[I64, I64, I64]);
@@ -376,6 +406,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_buffer_byte_length", I32, &[I64]);
     module.declare_function("js_buffer_byte_length_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_buffer_concat", I64, &[I64]);
+    module.declare_function("js_buffer_concat_with_length", I64, &[I64, DOUBLE]);
     module.declare_function("js_buffer_copy", I32, &[I64, I64, I32, I32, I32]);
     module.declare_function("js_buffer_equals", I32, &[I64, I64]);
     module.declare_function("js_buffer_fill", I64, &[I64, I32]);
@@ -485,6 +516,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_can_parse", I32, &[I64]);
     module.declare_function("js_url_can_parse_with_base", I32, &[I64, I64]);
     module.declare_function("js_url_parse", I64, &[I64]);
+    module.declare_function("js_url_parse_with_base", I64, &[I64, I64]);
     // Issue #650: URL setters — mutate field + re-derive href.
     module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
     module.declare_function("js_url_set_search", VOID, &[I64, I64]);
@@ -494,6 +526,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_set_port", VOID, &[I64, I64]);
     module.declare_function("js_url_set_username", VOID, &[I64, I64]);
     module.declare_function("js_url_set_password", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_href", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
@@ -516,13 +549,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_search_params_keys_arr", DOUBLE, &[I64]);
     module.declare_function("js_url_search_params_values_arr", DOUBLE, &[I64]);
     module.declare_function("js_url_search_params_sort", VOID, &[I64]);
-    module.declare_function("js_url_search_params_for_each", VOID, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_url_search_params_for_each",
+        VOID,
+        &[I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========
@@ -854,6 +891,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_transform_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_readable_from_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // #1534: static introspection helpers reflecting tracked stream state.
     module.declare_function("js_node_stream_is_disturbed", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);
@@ -866,6 +908,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_add_abort_signal", DOUBLE, &[DOUBLE, DOUBLE]);
     // #1539: compose(...streams) -> new Duplex; duplexPair(opts) -> [Duplex, Duplex].
     module.declare_function("js_node_stream_compose", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_pipeline", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_duplex_pair", DOUBLE, &[DOUBLE]);
     // #1540: Readable/Writable .toWeb / .fromWeb — return fresh Duplex stubs.
     module.declare_function("js_node_stream_to_web", DOUBLE, &[DOUBLE]);
@@ -881,7 +924,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_readable_length", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_readable_flowing", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_readable_ended", DOUBLE, &[I64]);
-    module.declare_function("js_node_stream_method_pipe", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_node_stream_method_readable_object_mode", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_method_pipe", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_node_stream_method_unpipe", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_node_stream_method_pause", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_is_paused", DOUBLE, &[I64]);
@@ -897,6 +941,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_writable_finished", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_allow_half_open", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_set_encoding", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_node_stream_method_writable_object_mode", DOUBLE, &[I64]);
 
     // ========== Event emitter ==========
     module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);
@@ -1166,6 +1211,24 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_net_server_close", VOID, &[I64, I64]);
     module.declare_function("js_net_server_address", I64, &[I64]);
     module.declare_function("js_net_server_on", VOID, &[I64, I64, I64]);
+    // Issue #2131 — net.Socket / net.Server lifecycle + EventEmitter
+    // surface (lifecycle.rs in perry-ext-net). Listener-mutating
+    // entry points all return the handle for chaining (Node's
+    // semantics): the codegen NaN-boxes the I64 with POINTER_TAG via
+    // NR_PTR. `address` / `eventNames` return raw StringHeader
+    // pointers consumed by the NR_OBJ_FROM_JSON_STR pipeline.
+    module.declare_function("js_net_socket_address", I64, &[I64]);
+    module.declare_function("js_net_socket_once", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_socket_remove_listener", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_socket_remove_all_listeners", I64, &[I64, I64]);
+    module.declare_function("js_net_socket_listener_count", DOUBLE, &[I64, I64]);
+    module.declare_function("js_net_socket_event_names", I64, &[I64]);
+    module.declare_function("js_net_socket_reset_and_destroy", I64, &[I64]);
+    module.declare_function("js_net_server_once", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_server_remove_listener", I64, &[I64, I64, I64]);
+    module.declare_function("js_net_server_remove_all_listeners", I64, &[I64, I64]);
+    module.declare_function("js_net_server_listener_count", DOUBLE, &[I64, I64]);
+    module.declare_function("js_net_server_event_names", I64, &[I64]);
 
     // ========== Performance ==========
     module.declare_function("js_performance_now", DOUBLE, &[]);

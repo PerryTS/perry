@@ -208,3 +208,93 @@ pub(crate) fn is_known_array_prototype_method(name: &str) -> bool {
         | "toSpliced"
     )
 }
+
+/// Names of `Promise.<name>` static methods recognised by Perry's codegen
+/// (`crates/perry-codegen/src/lower_call/console_promise.rs`).
+pub(crate) fn is_known_promise_static_method(name: &str) -> bool {
+    matches!(
+        name,
+        "resolve" | "reject" | "all" | "race" | "allSettled" | "any" | "withResolvers" | "try"
+    )
+}
+
+/// Names of `Math.<name>` static functions Perry's runtime implements.
+pub(crate) fn is_known_math_static_method(name: &str) -> bool {
+    matches!(
+        name,
+        "abs"
+            | "acos"
+            | "acosh"
+            | "asin"
+            | "asinh"
+            | "atan"
+            | "atan2"
+            | "atanh"
+            | "cbrt"
+            | "ceil"
+            | "clz32"
+            | "cos"
+            | "cosh"
+            | "exp"
+            | "expm1"
+            | "floor"
+            | "fround"
+            | "hypot"
+            | "imul"
+            | "log"
+            | "log10"
+            | "log1p"
+            | "log2"
+            | "max"
+            | "min"
+            | "pow"
+            | "random"
+            | "round"
+            | "sign"
+            | "sin"
+            | "sinh"
+            | "sqrt"
+            | "tan"
+            | "tanh"
+            | "trunc"
+    )
+}
+
+/// Names of `JSON.<name>` static functions Perry's runtime implements.
+pub(crate) fn is_known_json_static_method(name: &str) -> bool {
+    matches!(name, "parse" | "stringify")
+}
+
+/// Names of `Number.<name>` static functions Perry's runtime implements.
+pub(crate) fn is_known_number_static_method(name: &str) -> bool {
+    matches!(
+        name,
+        "isFinite" | "isInteger" | "isNaN" | "isSafeInteger" | "parseFloat" | "parseInt"
+    )
+}
+
+/// Names of `String.<name>` static functions Perry's runtime implements.
+pub(crate) fn is_known_string_static_method(name: &str) -> bool {
+    matches!(name, "fromCharCode" | "fromCodePoint" | "raw")
+}
+
+/// True when `<obj_name>.<prop_name>` names a built-in function value
+/// (a static method on a known namespace). Used by the `typeof
+/// <NS>.<static>` and `typeof <NS>.<static>.<bind|call|apply>` AST folds
+/// (#2143). Direct calls to these statics (`Promise.resolve(x)`,
+/// `Math.min(1,2)`) are special-cased in codegen; this fold makes the
+/// value-read agree with Node's "function" typeof so feature-detection
+/// idioms (and Test262's `propertyHelper.js` family) see callable
+/// methods.
+pub(crate) fn is_known_namespace_static_function(obj_name: &str, prop_name: &str) -> bool {
+    match obj_name {
+        "Object" => is_known_object_static_method(prop_name),
+        "Array" => is_known_array_static_method(prop_name),
+        "Promise" => is_known_promise_static_method(prop_name),
+        "Math" => is_known_math_static_method(prop_name),
+        "JSON" => is_known_json_static_method(prop_name),
+        "Number" => is_known_number_static_method(prop_name),
+        "String" => is_known_string_static_method(prop_name),
+        _ => false,
+    }
+}

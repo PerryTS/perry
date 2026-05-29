@@ -863,6 +863,27 @@ pub(crate) fn lower_stmt(
                             }
                         }
                     }
+                    // Static blocks — `class { static { ... } }`. Per ES
+                    // spec, these run as part of class evaluation in
+                    // source order, right AFTER the class's static-field
+                    // initializers. HIR lifts each block to a synthetic
+                    // static method `__perry_static_init_N`; emit an
+                    // inline `StaticMethodCall` here at the class-decl
+                    // position so each block fires at the right point.
+                    // The codegen-side fallback in `init_static_fields_late`
+                    // is kept for class expressions that bypass this
+                    // declaration path; it skips blocks already invoked
+                    // via this inline call. Closes the `test_gap_class_advanced`
+                    // "static block initialized" diff (#2278).
+                    for sm in &class.static_methods {
+                        if sm.name.starts_with("__perry_static_init_") {
+                            module.init.push(Stmt::Expr(Expr::StaticMethodCall {
+                                class_name: class.name.clone(),
+                                method_name: sm.name.clone(),
+                                args: Vec::new(),
+                            }));
+                        }
+                    }
                     append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
                     push_class_dedup(module, class);
                 }
@@ -1000,6 +1021,21 @@ pub(crate) fn lower_stmt(
         }
         ast::Stmt::Labeled(labeled_stmt) => {
             let label = labeled_stmt.label.sym.to_string();
+            // #2383: a labeled *block* — `a: { ... break a; ... }` — exits the
+            // block via `break a`. Desugar to a labeled run-once do-while so the
+            // existing loop-based labeled-break codegen has an exit block to
+            // target. See the matching comment in lower_decl/body_stmt.rs.
+            if let ast::Stmt::Block(block) = &*labeled_stmt.body {
+                let body = lower_block_stmt_scoped(ctx, block)?;
+                module.init.push(Stmt::Labeled {
+                    label,
+                    body: Box::new(Stmt::DoWhile {
+                        body,
+                        condition: Expr::Bool(false),
+                    }),
+                });
+                return Ok(());
+            }
             let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
             if inner.len() == 1 {
                 let body = inner.into_iter().next().unwrap();
@@ -1017,6 +1053,22 @@ pub(crate) fn lower_stmt(
                     label,
                     body: Box::new(last),
                 });
+            }
+        }
+        ast::Stmt::Break(break_stmt) => {
+            if let Some(ref label) = break_stmt.label {
+                module.init.push(Stmt::LabeledBreak(label.sym.to_string()));
+            } else {
+                module.init.push(Stmt::Break);
+            }
+        }
+        ast::Stmt::Continue(continue_stmt) => {
+            if let Some(ref label) = continue_stmt.label {
+                module
+                    .init
+                    .push(Stmt::LabeledContinue(label.sym.to_string()));
+            } else {
+                module.init.push(Stmt::Continue);
             }
         }
         ast::Stmt::For(for_stmt) => {

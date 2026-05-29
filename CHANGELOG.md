@@ -2,6 +2,89 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1036 — node:http/https: emit default `Connection` / `Keep-Alive` response headers (#2132)
+
+Perry's `node:http` / `node:https` server serializes responses through hyper,
+which omits `Connection` and `Keep-Alive` headers on HTTP/1.1 (where keep-alive
+is implicit on the wire). Node, by contrast, surfaces them explicitly:
+`Connection: keep-alive` + `Keep-Alive: timeout=<keepAliveTimeout/1000>` on a
+kept-alive connection, and `Connection: close` when the connection is closing.
+Clients reading `res.headers.connection` / `res.headers['keep-alive']` (the
+`test-http-agent-keep-alive-*` family in #2132's diff bucket) therefore saw
+them missing.
+
+Fix: a new `HyperResponseShape::apply_default_connection_headers` (in
+`crates/perry-ext-http-server/src/response.rs`) injects the Node-compatible
+defaults just before the shape is handed to hyper, applied from both the http
+(`server.rs`) and https (`https_server.rs`) dispatch sites. Behavior mirrors
+Node:
+
+- HTTP/1.1 defaults to keep-alive unless the client sent `Connection: close`;
+  HTTP/1.0 keep-alives only when the client explicitly requested it.
+- When keep-alive is active and `server.keepAliveTimeout > 0`, append
+  `Connection: keep-alive` and `Keep-Alive: timeout=<secs>`; otherwise append
+  `Connection: close` with no `Keep-Alive`.
+- A handler-set `Connection` header is respected and never overridden.
+- HTTP/2 manages connection reuse at the protocol level and gets neither
+  header.
+
+Regression test: `test-parity/node-suite/http/server/default-connection-headers.ts`
+(byte-identical to Node across the default, client-`close`, and explicit-close
+paths).
+
+Out of scope (separate hyper-serialization clusters, follow-up): hyper emits
+lowercase header names and places its auto-`Date` last, so full raw-byte
+parity (header casing + ordering) still differs from Node; this change fixes
+the semantic header *presence* that the parsed-`res.headers` assertions check.
+
+## v0.5.1035 — regression test: console.log(new Date(NaN)) → `Invalid Date` (#2371)
+
+Adds `test-files/test_gap_2371_console_invalid_date.ts`, locking in correct
+output for `console.log(new Date(NaN))` (`Invalid Date`, not `NaN`) across
+top-level inline/variable forms, invalid-via-string, nested array/object,
+a genuine numeric `NaN` (must still print `NaN`), and valid dates. Output is
+byte-identical to `node --experimental-strip-types`.
+
+`#2371` was the last symptom of the old f64-timestamp Date model: the
+Invalid-Date sentinel was a quiet NaN (`0x7FF8_0000_0000_0DA7`) whose payload
+got canonicalized to `f64::NAN` when `console.log` bundled its argument into a
+fresh `RawF64`-numeric array (`js_array_push_f64` → `canonical_raw_f64`),
+leaving the formatter unable to tell a Date-NaN from a bare numeric NaN. The
+reference-type Date rework in `#2089` (Date is now a NaN-boxed pointer to a
+`GC_TYPE_DATE_CELL`, never a raw numeric slot) removed that path and fixed the
+behavior; this commit adds the regression coverage so it can't silently
+return.
+
+## v0.5.1034 — Number()/unary-+ applies ToPrimitive→ToString to arrays/objects (#2378)
+
+`Number(value)` (and unary `+`) returned `NaN` for every array and object
+because `js_number_coerce`'s pointer/array branch only consulted a custom
+`[Symbol.toPrimitive]("number")` and otherwise fell straight to `NaN` — it
+never completed OrdinaryToPrimitive's ToString step.
+
+Fix: in `crates/perry-runtime/src/builtins/numbers.rs`, when no custom
+`[Symbol.toPrimitive]` is present, stringify the object via
+`js_jsvalue_to_string` (arrays → `join(",")`, objects → own/inherited
+`toString`) and re-run `js_number_coerce` on the resulting string. Because the
+result is a string, the recursive call lands in the string branch (which now
+correctly maps `""` → 0), so there's no pointer-branch recursion.
+
+Now matches Node byte-for-byte:
+
+```
+Number([])      // 0      ([] -> "" -> 0)
+Number([5])     // 5      ([5] -> "5" -> 5)
+Number(["7"])   // 7
+Number([" 3 "]) // 3
+Number([1,2])   // NaN    ("1,2" -> NaN)
+Number({})      // NaN    ("[object Object]" -> NaN)
+Number([[]])    // 0
++[]             // 0
++[42]           // 42
+```
+
+Found while fixing Number() radix-prefix parsing (#2377 / #800); pre-existing.
+
 ## v0.5.1033 — allowlist class_registry.rs for the file-size lint gate
 
 `crates/perry-runtime/src/object/class_registry.rs` crossed the 2000-line

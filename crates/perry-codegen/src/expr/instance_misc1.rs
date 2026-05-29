@@ -67,6 +67,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(DOUBLE, &v), (DOUBLE, &ty_v)],
                 ));
             }
+            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(ty) {
+                if submod_key == "diagnostics_channel" && exported_name == "Channel" {
+                    let submod_label = emit_string_literal_global(ctx, submod_key);
+                    let name_label = emit_string_literal_global(ctx, exported_name);
+                    let submod_len = submod_key.len();
+                    let name_len = exported_name.len();
+                    let blk = ctx.block();
+                    let ty_v = blk.call(
+                        DOUBLE,
+                        "js_node_submodule_export_as_function",
+                        &[
+                            (PTR, &submod_label),
+                            (I32, &submod_len.to_string()),
+                            (PTR, &name_label),
+                            (I32, &name_len.to_string()),
+                        ],
+                    );
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_instanceof_dynamic",
+                        &[(DOUBLE, &v), (DOUBLE, &ty_v)],
+                    ));
+                }
+            }
             // Built-in Error subclasses have reserved CLASS_ID_* constants
             // in the runtime (see crates/perry-runtime/src/error.rs). Map
             // them by name here so `e instanceof TypeError` works even
@@ -105,6 +129,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `rs.pipeThrough(ts) instanceof ReadableStream`, …).
                 "ReadableStream" => 0xFFFF0060u32,
                 "WritableStream" => 0xFFFF0061u32,
+                // node:perf_hooks entry classes. Runtime classifies the
+                // shaped entry objects returned by performance.mark/measure.
+                "PerformanceEntry" => 0xFFFF0080u32,
+                "PerformanceMark" => 0xFFFF0081u32,
+                "PerformanceMeasure" => 0xFFFF0082u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
@@ -114,6 +143,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // regress; thread a real id through here instead.
                 "Object" => 0xFFFF0050u32,
                 _ => ctx.class_ids.get(ty).copied().unwrap_or_else(|| {
+                    // Keep in sync with perry-runtime/src/object/instanceof.rs.
+                    let classic_stream_cid = match ty.as_str() {
+                        "Stream" => Some(0xFFFF0070u32),
+                        "Readable" => Some(0xFFFF0071u32),
+                        "Writable" => Some(0xFFFF0072u32),
+                        "Duplex" => Some(0xFFFF0073u32),
+                        "Transform" => Some(0xFFFF0074u32),
+                        "PassThrough" => Some(0xFFFF0075u32),
+                        _ => None,
+                    };
+                    if let Some(cid) = classic_stream_cid {
+                        return cid;
+                    }
+                    let native_event_cid = match ty.as_str() {
+                        // Keep in sync with perry-runtime/src/object/instanceof.rs.
+                        "EventEmitter" => Some(0xFFFF0076u32),
+                        _ => None,
+                    };
+                    if let Some(cid) = native_event_cid {
+                        return cid;
+                    }
                     // Issue #574: `b instanceof Lib.A` where Lib is a
                     // namespace import. The HIR captures the receiver
                     // as a dotted `ty` ("Lib.A") which `class_ids`

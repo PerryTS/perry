@@ -97,6 +97,23 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, runtime, &[(I32, &size_i32)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "Uint8Array" if args.len() >= 2 => {
+            let source = lower_expr(ctx, &args[0])?;
+            let offset = lower_expr(ctx, &args[1])?;
+            let offset_i32 = ctx.block().fptosi(DOUBLE, &offset, I32);
+            let length_i32 = if args.len() >= 3 {
+                let length = lower_expr(ctx, &args[2])?;
+                ctx.block().fptosi(DOUBLE, &length, I32)
+            } else {
+                "-1".to_string()
+            };
+            let handle = ctx.block().call(
+                I64,
+                "js_uint8array_view",
+                &[(DOUBLE, &source), (I32, &offset_i32), (I32, &length_i32)],
+            );
+            Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
+        }
         // Minimal DataView support for BufferSource consumers such as
         // StringDecoder: Perry models ArrayBuffer/Uint8Array storage as a
         // BufferHeader, so `new DataView(buffer)` can alias the same backing
@@ -110,7 +127,11 @@ pub(super) fn lower_builtin_new(
             for a in args.iter().skip(1) {
                 let _ = lower_expr(ctx, a)?;
             }
-            Ok(Some(view_box))
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_data_view_new",
+                &[(DOUBLE, &view_box)],
+            )))
         }
         "RegExp" => {
             let pattern_box = if !args.is_empty() {
@@ -172,6 +193,21 @@ pub(super) fn lower_builtin_new(
             let blk = ctx.block();
             let handle = blk.call(I64, "js_event_target_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "Console" => {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_console_new",
+                &[(DOUBLE, &opts)],
+            )))
         }
         // node:perf_hooks — `new PerformanceObserver(cb)` registers the
         // observer and returns its `perf_observer` namespace object (already
@@ -928,26 +964,41 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &p)))
         }
         "WeakMap" => {
-            // Lower init iterable args for side effects; the runtime's
-            // js_weakmap_new takes no args and the HIR lowering of
-            // `.set(k,v)` calls dispatch on the resulting handle.
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let lowered_args = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
             let handle = ctx.block().call(I64, "js_weakmap_new", &[]);
             // js_weakmap_new returns a raw `*mut ObjectHeader` — NaN-box
             // with POINTER_TAG so subsequent `js_weakmap_*` calls can
             // `js_nanbox_get_pointer` on the f64.
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            Ok(Some(boxed))
+            if let Some(iterable) = lowered_args.first() {
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_weakmap_init_iterable",
+                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
+                )))
+            } else {
+                Ok(Some(boxed))
+            }
         }
         "WeakSet" => {
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let lowered_args = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
             let handle = ctx.block().call(I64, "js_weakset_new", &[]);
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            Ok(Some(boxed))
+            if let Some(iterable) = lowered_args.first() {
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_weakset_init_iterable",
+                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
+                )))
+            } else {
+                Ok(Some(boxed))
+            }
         }
         "AbortController" => {
             // Lower any incidental args for side effects (shouldn't have any).

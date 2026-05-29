@@ -38,35 +38,30 @@ use crate::request::{
 };
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest, HttpServer};
-use crate::tls::{build_server_config, parse_cert_chain, parse_private_key};
+use crate::tls::{
+    build_server_config, json_value_to_pem_bytes, parse_cert_chain, parse_private_key,
+};
 
 /// Decode `{ key, cert }` from a NaN-boxed JsValue object. Mirrors
-/// the helper in `https_server.rs` but omits the alpnProtocols flag
-/// since http2 server always advertises `[h2, http/1.1]`.
-unsafe fn parse_h2_opts(opts_f64: f64) -> (String, String) {
+/// the helper in `https_server.rs` (including Buffer-typed PEM
+/// support, #2132) but omits the alpnProtocols flag since http2
+/// server always advertises `[h2, http/1.1]`.
+unsafe fn parse_h2_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>) {
     use perry_ffi::JsValue;
     let v = JsValue::from_bits(opts_f64.to_bits());
     if !v.is_pointer() {
-        return (String::new(), String::new());
+        return (Vec::new(), Vec::new());
     }
     let json = match perry_ffi::json_stringify(v) {
         Some(j) => j,
-        None => return (String::new(), String::new()),
+        None => return (Vec::new(), Vec::new()),
     };
     let parsed: serde_json::Value = match serde_json::from_str(&json) {
         Ok(p) => p,
-        Err(_) => return (String::new(), String::new()),
+        Err(_) => return (Vec::new(), Vec::new()),
     };
-    let key_pem = parsed
-        .get("key")
-        .and_then(|k| k.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let cert_pem = parsed
-        .get("cert")
-        .and_then(|c| c.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let key_pem = json_value_to_pem_bytes(parsed.get("key"));
+    let cert_pem = json_value_to_pem_bytes(parsed.get("cert"));
     (key_pem, cert_pem)
 }
 use crate::types::{
@@ -90,8 +85,8 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
     ensure_gc_scanner_registered();
 
     let (key_pem, cert_pem) = parse_h2_opts(opts_f64);
-    let cert_chain = parse_cert_chain(cert_pem.as_bytes());
-    let private_key = parse_private_key(key_pem.as_bytes());
+    let cert_chain = parse_cert_chain(&cert_pem);
+    let private_key = parse_private_key(&key_pem);
 
     let tls_config = match private_key {
         Some(k) => match build_server_config(cert_chain, k, true) {
@@ -110,16 +105,7 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
     register_handle(Http2SecureServer {
         handler,
         tls_config,
-        base: HttpServer {
-            handler,
-            listeners: HashMap::new(),
-            bound_port: 0,
-            bound_host: String::new(),
-            listening: false,
-            shutdown_tx: None,
-            request_rx: None,
-            upgrade_rx: None,
-        },
+        base: HttpServer::with_handler(handler),
     })
 }
 
@@ -127,7 +113,8 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
 /// carries the variadic `listen()` arguments; see `js_node_http_server_listen`
 /// / `parse_listen_args` for the overload resolution. Issue #2041.
 #[no_mangle]
-pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_array: i64) {
+pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_array: i64) -> i64 {
+    // Returns `server_handle` for chainability (#2129).
     let parsed = crate::types::parse_listen_args(args_array);
     let opts_f64 = parsed.opts;
     let port = extract_port(opts_f64, 443);
@@ -139,22 +126,43 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
     let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
+    // #2132 — synchronous bind so `server.address().port` is correct
+    // before the `listen(port, cb)` callback fires. See
+    // `server::js_node_http_server_listen` for the rationale.
+    let bind_str = format!("{}:{}", host, port);
+    let addr: SocketAddr = match bind_str.parse() {
+        Ok(a) => a,
+        Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
+    };
+    let std_listener = match std::net::TcpListener::bind(addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[node:http2] bind {}:{} failed: {}", host, port, e);
+            return server_handle;
+        }
+    };
+    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
+    if let Err(e) = std_listener.set_nonblocking(true) {
+        eprintln!("[node:http2] set_nonblocking failed: {}", e);
+        return server_handle;
+    }
+
     let tls_config = if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
-        s.base.bound_port = port;
+        s.base.bound_port = actual_port;
         s.base.bound_host = host.clone();
         s.base.listening = true;
         s.base.shutdown_tx = Some(shutdown_tx);
         s.base.request_rx = Some(request_rx);
         s.tls_config.clone()
     } else {
-        return;
+        return server_handle;
     };
 
     let tls_config = match tls_config {
         Some(c) => c,
         None => {
             eprintln!("[node:http2] tls config unavailable; refusing to listen");
-            return;
+            return server_handle;
         }
     };
 
@@ -163,7 +171,6 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
 
     let request_tx = Arc::new(request_tx);
     let request_tx_for_spawn = request_tx.clone();
-    let host_for_spawn = host.clone();
     let acceptor = TlsAcceptor::from(tls_config);
 
     // Issue #577 Phase 3 — `tokio::spawn` from inside
@@ -185,18 +192,10 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
             .build()
             .expect("Failed to create http2 accept-loop runtime");
         handle.block_on(async move {
-            let bind_str = format!("{}:{}", host_for_spawn, port);
-            let addr: SocketAddr = match bind_str.parse() {
-                Ok(a) => a,
-                Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
-            };
-            let listener = match TcpListener::bind(addr).await {
+            let listener = match TcpListener::from_std(std_listener) {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!(
-                        "[node:http2] bind {}:{} failed: {}",
-                        host_for_spawn, port, e
-                    );
+                    eprintln!("[node:http2] tokio adopt failed: {}", e);
                     return;
                 }
             };
@@ -254,6 +253,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
     // Closes #604 — `listen()` is now non-blocking; the unified
     // `js_node_http_server_process_pending` pump in server.rs drains
     // HTTP/2 pending requests alongside HTTP/1 + HTTPS each tick.
+    server_handle
 }
 
 async fn handle_h2_request(

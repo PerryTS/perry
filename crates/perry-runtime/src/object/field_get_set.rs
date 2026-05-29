@@ -95,8 +95,10 @@ unsafe fn own_data_field_by_name(
     let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
-        if key_val.is_string() && crate::string::js_string_equals(key, key_val.as_string_ptr()) != 0
-        {
+        // #1781: accept inline SSO short keys — `is_string()` is
+        // STRING_TAG-only, so the pre-fix shape silently skipped any
+        // ≤5-byte key stored as a `SHORT_STRING_TAG` value.
+        if crate::string::js_string_key_matches(key_val, key) {
             if i < alloc_limit {
                 return Some(js_object_get_field(obj, i as u32));
             }
@@ -556,19 +558,16 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         }
         // Slow path: filter out non-enumerable keys.
         let filtered = crate::array::js_array_alloc(len as u32);
+        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if !key_val.is_string() {
-                continue;
-            }
-            let stored_key = key_val.as_string_ptr();
-            if stored_key.is_null() {
-                continue;
-            }
-            let name_ptr =
-                (stored_key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let name_len = (*stored_key).byte_len as usize;
-            let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+            // #1781: accept inline SSO short keys (≤5 bytes) — the
+            // pre-fix `is_string()` skipped them and Object.keys silently
+            // dropped them from the result.
+            let name_bytes = match crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+                Some(b) => b,
+                None => continue,
+            };
             let key_str = match std::str::from_utf8(name_bytes) {
                 Ok(s) => s,
                 Err(_) => continue,
@@ -868,16 +867,15 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         let key_count = crate::array::js_array_length(keys) as usize;
         for i in 0..key_count {
             let stored_key_val = crate::array::js_array_get(keys, i as u32);
-            if stored_key_val.is_string() {
-                let stored_key = stored_key_val.as_string_ptr();
-                if crate::string::js_string_equals(key_str, stored_key) != 0 {
-                    // Check if the field was deleted (set to undefined by delete operator)
-                    let field_val = js_object_get_field(obj_ptr, i as u32);
-                    if field_val.is_undefined() {
-                        return nanbox_false;
-                    }
-                    return nanbox_true;
+            // #1781: accept inline SSO short keys (the closure-style
+            // `key in obj` path previously dropped them too).
+            if crate::string::js_string_key_matches(stored_key_val, key_str) {
+                // Check if the field was deleted (set to undefined by delete operator)
+                let field_val = js_object_get_field(obj_ptr, i as u32);
+                if field_val.is_undefined() {
+                    return nanbox_false;
                 }
+                return nanbox_true;
             }
         }
 
@@ -924,7 +922,69 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16) {
+        // Two shapes of primitive-number receiver reach this generic slow
+        // path: (a) a finite double whose top16 is neither a NaN-box tag
+        // nor zero — most numbers (1.0 has top16 0x3FF0, -3.14 has
+        // 0xC008...), and (b) the f64 +0.0 whose full bit pattern is
+        // `0` — distinguishable from a raw heap pointer because real
+        // ObjectHeader allocations live above 0x10000 and from null /
+        // undefined because both are NaN-boxed with top16 == 0x7FFC.
+        let is_primitive_number =
+            (top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16)) || (top16 == 0 && bits == 0);
+        if is_primitive_number {
+            // #2138: auto-box the primitive number for the inherited
+            // `.constructor` read so `n.constructor === Number` (and the
+            // duck-type `value.constructor.name === "Number"` lodash/date-fns
+            // use to discriminate primitives). Route through the same
+            // `js_get_global_this_builtin_value` helper that backs bare-`Number`
+            // identifier resolution so identity comparison holds. Other unknown
+            // keys still return undefined per #2128 (was SIGSEGV pre-#2128).
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if key_bytes == b"constructor" {
+                        let v = js_get_global_this_builtin_value(b"Number".as_ptr(), 6);
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. A
+    // generic property read on it (`date.constructor`, `date[k]`, a method
+    // read as a value) must NOT fall through to the object-deref path below —
+    // the cell is far smaller than an `ObjectHeader`, so reading its
+    // `keys_array`/field slots would deref unmapped memory. Resolve the few
+    // meaningful reads here and return `undefined` for everything else
+    // (matching property reads on the old value-type Date). `obj` may arrive
+    // NaN-boxed (top16 == 0x7FFD) or as a raw-I64 pointer (top16 == 0).
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::date::is_date_cell_addr(addr) {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if key_bytes == b"constructor" {
+                        let v = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
             return JSValue::undefined();
         }
     }
@@ -1159,14 +1219,10 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         let bits = obj as u64;
         let f = f64::from_bits(bits);
-        // Registered Date timestamps are also raw finite f64 — leave them to
-        // the existing Date handling (the `_f64` wrapper above already routed
-        // `date.constructor`), so this branch never changes Date behavior.
-        if !key.is_null()
-            && f.is_finite()
-            && (bits >> 48) != 0
-            && !crate::date::is_registered_date_bits(bits)
-        {
+        // A Date is now a NaN-boxed `DateCell` pointer (non-finite bit
+        // pattern), intercepted earlier in this function, so it never reaches
+        // this finite-number branch.
+        if !key.is_null() && f.is_finite() && (bits >> 48) != 0 {
             unsafe {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
@@ -1480,6 +1536,26 @@ pub extern "C" fn js_object_get_field_by_name(
                     let arity =
                         crate::closure::closure_arity(obj as *const crate::closure::ClosureHeader);
                     return JSValue::number(arity.unwrap_or(0) as f64);
+                }
+                // #2145: `fn.__proto__` is the closure's [[Prototype]]
+                // — `Int8Array.__proto__ === %TypedArray%` after
+                // `populate_global_this_builtins` wired the static-proto
+                // side-table. Spec models `__proto__` as a
+                // `Object.prototype` accessor that returns
+                // `[[GetPrototypeOf]](this)`; for closures Perry resolves
+                // that off the same side-table `Object.setPrototypeOf`
+                // writes to. Walking `closure_get_dynamic_prop` would
+                // instead look for a `__proto__` own-prop on the parent,
+                // which is the wrong thing — the proto IS the answer.
+                // Returns undefined (not null) when no proto is recorded,
+                // matching the closure-receiver `getPrototypeOf` arm
+                // semantics for non-wired closures.
+                if name_bytes == b"__proto__" {
+                    if let Some(proto_bits) = crate::closure::closure_static_prototype(obj as usize)
+                    {
+                        return JSValue::from_bits(proto_bits);
+                    }
+                    return JSValue::undefined();
                 }
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
                     // User-attached own property (`fn.x = 1`) takes precedence.
@@ -2019,8 +2095,10 @@ pub extern "C" fn js_object_get_field_by_name(
             let idx = field_idx as usize;
             let cache_hit_valid = if idx < key_count {
                 let key_val = crate::array::js_array_get(keys, field_idx);
-                key_val.is_string()
-                    && crate::string::js_string_equals(key, key_val.as_string_ptr()) != 0
+                // #1781: SSO-aware match — pre-fix the `is_string()` here
+                // false-invalidated cache hits for ≤5-byte keys stored
+                // as SHORT_STRING_TAG values.
+                crate::string::js_string_key_matches(key_val, key)
             } else {
                 false
             };
@@ -2064,38 +2142,38 @@ pub extern "C" fn js_object_get_field_by_name(
 
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            if key_val.is_string() {
-                let stored_key = key_val.as_string_ptr();
-                if crate::string::js_string_equals(key, stored_key) != 0 {
-                    // Cache this lookup for next time
-                    FIELD_CACHE.with(|c| {
-                        let cache = &mut *c.get();
-                        cache[cache_idx] = (keys_id, key_hash, i as u32);
-                    });
-                    // Accessor short-circuit (see fast path above).
-                    if ACCESSORS_IN_USE.with(|c| c.get()) {
-                        if let Ok(name) = std::str::from_utf8(key_bytes) {
-                            if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
-                                if acc.get != 0 {
-                                    let closure = (acc.get & crate::value::POINTER_MASK)
-                                        as *const crate::closure::ClosureHeader;
-                                    if !closure.is_null() {
-                                        let result_f64 = crate::closure::js_closure_call0(closure);
-                                        return JSValue::from_bits(result_f64.to_bits());
-                                    }
+            // #1781: accept inline SSO short keys here too — the
+            // slow-path lookup is what backs `obj[k]` for ≤5-byte
+            // keys after a field-cache miss.
+            if crate::string::js_string_key_matches(key_val, key) {
+                // Cache this lookup for next time
+                FIELD_CACHE.with(|c| {
+                    let cache = &mut *c.get();
+                    cache[cache_idx] = (keys_id, key_hash, i as u32);
+                });
+                // Accessor short-circuit (see fast path above).
+                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                            if acc.get != 0 {
+                                let closure = (acc.get & crate::value::POINTER_MASK)
+                                    as *const crate::closure::ClosureHeader;
+                                if !closure.is_null() {
+                                    let result_f64 = crate::closure::js_closure_call0(closure);
+                                    return JSValue::from_bits(result_f64.to_bits());
                                 }
-                                return JSValue::undefined();
                             }
+                            return JSValue::undefined();
                         }
                     }
-                    if i < alloc_limit {
-                        return js_object_get_field(obj, i as u32);
-                    } else {
-                        return match overflow_get(obj as usize, i) {
-                            Some(bits) => JSValue::from_bits(bits),
-                            None => JSValue::undefined(),
-                        };
-                    }
+                }
+                if i < alloc_limit {
+                    return js_object_get_field(obj, i as u32);
+                } else {
+                    return match overflow_get(obj as usize, i) {
+                        Some(bits) => JSValue::from_bits(bits),
+                        None => JSValue::undefined(),
+                    };
                 }
             }
         }
@@ -2214,26 +2292,10 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
-    // date-fns `constructFrom`: the parameter is statically Any so the
-    // codegen Date intercept doesn't fire here. Detect Date instances
-    // by their registered f64 bit pattern and route `.constructor` to
-    // the global Date constructor closure — same value the bare `Date`
-    // identifier produces, so `date instanceof Date` followed by `new
-    // date.constructor(value)` lands on the right factory inside
-    // `js_new_function_construct`.
-    if !key.is_null() {
-        let obj_bits = obj as u64;
-        if crate::date::is_registered_date_bits(obj_bits) {
-            unsafe {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if key_bytes == b"constructor" {
-                    return js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-                }
-            }
-        }
-    }
+    // date-fns `constructFrom`: `new date.constructor(value)`. A Date is a
+    // NaN-boxed `DateCell` pointer (#2089); `js_object_get_field_by_name`
+    // routes `.constructor` to the global Date constructor closure and every
+    // other key to `undefined` without derefing the small cell as an object.
     let value = js_object_get_field_by_name(obj, key);
     f64::from_bits(value.bits())
 }

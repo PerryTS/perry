@@ -1,0 +1,17 @@
+{
+  "name": "perry-release-fixture-drizzle-mysql",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-3 fixture: drizzle-orm via @perryts/mysql against a real MySQL on 127.0.0.1:3306. Exercises schema + insert/select/update/delete + leftJoin end-to-end (the #489 acceptance).",
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "@perryts/mysql": "github:PerryTS/mysql"
+  },
+  "perry": {
+    "compilePackages": ["drizzle-orm", "@perryts/mysql"],
+    "allow": {
+      "compilePackages": ["drizzle-orm", "@perryts/mysql"]
+    }
+  }
+}

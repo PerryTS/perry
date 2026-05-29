@@ -43,6 +43,9 @@ pub struct JsEmitter {
     /// Set of variable names already used (to avoid collisions)
     used_names: BTreeSet<String>,
     /// Module name (for cross-module references)
+    // #854: captured at construction for future cross-module reference
+    // emission; not read back on the current single-module emit path.
+    #[allow(dead_code)]
     module_name: String,
     /// Exported names from this module
     exported_names: BTreeSet<String>,

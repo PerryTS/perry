@@ -179,15 +179,29 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "loadEnvFile" => {
-                            // #1399: process.loadEnvFile(path?) (Node 20.12+)
-                            // reads a `.env` file from disk and adds its
-                            // KEY=value entries to process.env. Perry today
-                            // doesn't persist `process.env.X = v` writes
-                            // (#1344) so eagerly loading would be moot;
-                            // returning undefined is the closest no-op for
-                            // call sites that probe-and-call. Real `.env`
-                            // loading is tracked separately.
-                            return Ok(Ok(Expr::Undefined));
+                            // #1399 / #2135: process.loadEnvFile(path?)
+                            // (Node 20.12+) reads a `.env` file from disk and
+                            // merges its KEY=value entries into `process.env`.
+                            // Previously a no-op because `process.env.X = v`
+                            // didn't persist; #1344 has since wired writes
+                            // through `std::env::set_var`, so we lower to a
+                            // runtime call that actually reads the file.
+                            // Default the optional path to `.env` (Node's
+                            // default) so the dispatch-table row's single
+                            // NA_STR arg stays satisfied for the no-arg call
+                            // form.
+                            let call_args = if args.is_empty() {
+                                vec![Expr::String(".env".to_string())]
+                            } else {
+                                args
+                            };
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "loadEnvFile".to_string(),
+                                args: call_args,
+                            }));
                         }
                         "exit" => {
                             // process.exit() / process.exit(code) — never
@@ -259,6 +273,50 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ProcessPosixCredential(
                                 crate::ir::PosixCredentialKind::Egid,
                             )));
+                        }
+                        "getgroups" => {
+                            // #2135: process.getgroups() — supplementary
+                            // group IDs as a number array. Dispatch through
+                            // the generic NativeMethodCall path; the
+                            // node_core table row routes to
+                            // `js_process_getgroups`.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "getgroups".to_string(),
+                                args,
+                            }));
+                        }
+                        // #2135: POSIX credential setters — single numeric
+                        // ID arg, return undefined. Implemented as libc
+                        // wrappers in the runtime (string-username form is
+                        // a no-op today; see js_process_setuid for the
+                        // out-of-scope note).
+                        "setuid" | "seteuid" | "setgid" | "setegid" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
+                        // #2135: process.setgroups(groups[]) takes an
+                        // array of numeric GIDs; process.initgroups(user,
+                        // extra_gid) takes a username string + numeric
+                        // GID. The runtime decodes the JSValues itself, so
+                        // both pass through the generic NativeMethodCall.
+                        "setgroups" | "initgroups" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
                         }
                         "emitWarning" => {
                             // process.emitWarning(warning[, type, code, ctor])
@@ -419,6 +477,12 @@ pub(super) fn try_native_module_methods(
                         }
                         "concat" => {
                             let list = args.first().cloned().unwrap_or(Expr::Array(vec![]));
+                            if let Some(total_length) = args.get(1).cloned() {
+                                return Ok(Ok(Expr::BufferConcatWithLength {
+                                    list: Box::new(list),
+                                    total_length: Box::new(total_length),
+                                }));
+                            }
                             return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                         }
                         "of" => {
@@ -725,6 +789,46 @@ pub(super) fn try_native_module_methods(
                             )));
                         }
                         "getOwnPropertyDescriptor" => {
+                            // #2144: built-in function `.name` descriptor.
+                            //
+                            // `Object.getOwnPropertyDescriptor(<BuiltinCtor>,
+                            // "name")` and `…(<BuiltinNs>.<staticFn>, "name")`
+                            // — the runtime path returns `undefined` because
+                            // the bare ctor/static-fn lowers to a
+                            // `PropertyGet { GlobalGet(0), … }` whose value
+                            // is the 0 sentinel (no closure to read the
+                            // built-in `name` slot off of). Per spec the
+                            // descriptor is a non-writable, non-enumerable,
+                            // configurable data property whose value is the
+                            // function's name. Fold to an inline object
+                            // literal when we can statically recognize the
+                            // shape — same gating logic as the `.name` fold
+                            // in `expr_member.rs`.
+                            if call.args.len() >= 2 && args.len() >= 2 {
+                                let key_is_name = matches!(
+                                    call.args[1].expr.as_ref(),
+                                    ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("name")
+                                );
+                                if key_is_name {
+                                    let lowered_obj_is_global_intrinsic = match &args[0] {
+                                        Expr::GlobalGet(0) => true,
+                                        Expr::PropertyGet { object: inner, .. } => {
+                                            matches!(inner.as_ref(), Expr::GlobalGet(0))
+                                        }
+                                        _ => false,
+                                    };
+                                    if lowered_obj_is_global_intrinsic {
+                                        let folded = super::name_fold::builtin_fn_name_for_arg(
+                                            call.args[0].expr.as_ref(),
+                                        );
+                                        if let Some(fname) = folded {
+                                            return Ok(Ok(super::name_fold::name_data_descriptor(
+                                                fname,
+                                            )));
+                                        }
+                                    }
+                                }
+                            }
                             let mut iter = args.into_iter();
                             let obj = iter.next().unwrap_or(Expr::Undefined);
                             let key = iter.next().unwrap_or(Expr::Undefined);
@@ -1030,7 +1134,35 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            if let Some((module_name, _imported_method)) = ctx.lookup_native_module(&obj_name) {
+            if let Some((module_name, imported_method)) = ctx.lookup_native_module(&obj_name) {
+                if module_name == "url" && imported_method == Some("URL") {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.as_ref();
+                        if method_name == "canParse" && !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let input = iter.next().unwrap();
+                            if let Some(base) = iter.next() {
+                                return Ok(Ok(Expr::UrlCanParseWithBase {
+                                    input: Box::new(input),
+                                    base: Box::new(base),
+                                }));
+                            }
+                            return Ok(Ok(Expr::UrlCanParse(Box::new(input))));
+                        }
+                        if method_name == "parse" && !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let input = iter.next().unwrap();
+                            if let Some(base) = iter.next() {
+                                return Ok(Ok(Expr::UrlParseWithBase {
+                                    input: Box::new(input),
+                                    base: Box::new(base),
+                                }));
+                            }
+                            return Ok(Ok(Expr::UrlParse(Box::new(input))));
+                        }
+                    }
+                }
+
                 // Skip modules handled specifically below (path, fs, child_process, etc.)
                 // `net` used to be in this list back when its method calls
                 // were short-circuited into `Expr::NetCreateConnection` etc.
@@ -1075,14 +1207,16 @@ pub(super) fn try_native_module_methods(
                             )
                             .map(|h| format!(" {h}"))
                             .unwrap_or_default();
-                            crate::lower_bail!(
-                                member.span,
+                            let msg = format!(
                                 "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
                                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
-                                module_name,
-                                method_name,
-                                hint,
+                                module_name, method_name, hint,
                             );
+                            // #2309: defer under tree-shaking; re-raised only
+                            // if the module survives pruning.
+                            if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                                crate::lower_bail!(member.span, "{}", msg);
+                            }
                         }
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: module_name.to_string(),

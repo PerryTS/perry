@@ -7,6 +7,42 @@ use std::sync::Arc;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 
+/// Decode a `key`/`cert`-shaped JSON value into the PEM bytes the
+/// rustls parsers expect.
+///
+/// Node lets users pass either a PEM string OR a `Buffer` (the form
+/// `fs.readFileSync('key.pem')` returns when no encoding is supplied).
+/// `https.createServer` / `http2.createSecureServer` decode their
+/// options object via `JSON.stringify` → `serde_json`, which
+/// round-trips a `Buffer` as `{ "type": "Buffer", "data": [..] }`.
+/// Without this helper, the `.as_str()` extraction silently yielded
+/// an empty string for Buffer-typed PEMs and the user saw a
+/// `"no recognized PEM private key"` error even with valid input
+/// (#2132).
+pub fn json_value_to_pem_bytes(v: Option<&serde_json::Value>) -> Vec<u8> {
+    let Some(v) = v else { return Vec::new() };
+    if let Some(s) = v.as_str() {
+        return s.as_bytes().to_vec();
+    }
+    if let Some(obj) = v.as_object() {
+        if obj.get("type").and_then(|t| t.as_str()) == Some("Buffer") {
+            if let Some(arr) = obj.get("data").and_then(|d| d.as_array()) {
+                return arr
+                    .iter()
+                    .filter_map(|n| n.as_u64().map(|u| u as u8))
+                    .collect();
+            }
+        }
+    }
+    if let Some(arr) = v.as_array() {
+        return arr
+            .iter()
+            .filter_map(|n| n.as_u64().map(|u| u as u8))
+            .collect();
+    }
+    Vec::new()
+}
+
 /// Parse PEM-encoded certificate chain bytes into rustls
 /// `CertificateDer`s. Returns an empty vec on parse failure (caller
 /// must check for emptiness before building a ServerConfig — empty
@@ -54,6 +90,41 @@ fn ensure_crypto_provider_installed() {
         // existing provider is already usable.
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::json_value_to_pem_bytes;
+    use serde_json::json;
+
+    #[test]
+    fn string_value_returns_utf8_bytes() {
+        let v = json!("-----BEGIN RSA PRIVATE KEY-----\n");
+        assert_eq!(
+            json_value_to_pem_bytes(Some(&v)),
+            b"-----BEGIN RSA PRIVATE KEY-----\n"
+        );
+    }
+
+    #[test]
+    fn node_buffer_shape_returns_data_bytes() {
+        // `JSON.stringify(Buffer.from("hi"))` → `{"type":"Buffer","data":[104,105]}`.
+        let v = json!({"type":"Buffer","data":[104,105]});
+        assert_eq!(json_value_to_pem_bytes(Some(&v)), b"hi");
+    }
+
+    #[test]
+    fn plain_numeric_array_returns_bytes() {
+        let v = json!([104, 105]);
+        assert_eq!(json_value_to_pem_bytes(Some(&v)), b"hi");
+    }
+
+    #[test]
+    fn none_and_unknown_shapes_return_empty() {
+        assert!(json_value_to_pem_bytes(None).is_empty());
+        assert!(json_value_to_pem_bytes(Some(&json!(42))).is_empty());
+        assert!(json_value_to_pem_bytes(Some(&json!({"foo": "bar"}))).is_empty());
+    }
 }
 
 /// Build a rustls `ServerConfig` ready for `tokio_rustls::TlsAcceptor`.

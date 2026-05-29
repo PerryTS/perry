@@ -37,8 +37,9 @@ use perry_ffi::{
 };
 use std::collections::HashMap;
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -52,6 +53,18 @@ use tokio_rustls::client::TlsStream;
 // holds the `net.isIP*` + auto-select-family helpers.
 mod ip;
 mod tls;
+// #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
+// (once / off / removeAllListeners / listenerCount / eventNames /
+// resetAndDestroy, plus `socket.address()`). Re-exports keep the
+// `pub unsafe extern "C" fn js_net_*` symbols at the crate root so the
+// ext_registry well-known flip + native_table entries link the same as
+// the rest of the FFI surface.
+mod lifecycle;
+pub use lifecycle::*;
+// #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
+// over a socket produced by `agent.createConnection` (split out for the gate).
+mod raw_bridge;
+use raw_bridge::RawReadState;
 
 use crate::tls::do_tls_handshake;
 
@@ -109,7 +122,7 @@ impl AsyncWrite for Transport {
 // them into one `SocketHandle` value would make the GC scanner walk noisier.
 // The pattern matches perry-stdlib's existing copy exactly.
 
-mod statics {
+pub(crate) mod statics {
     use super::*;
     use std::sync::OnceLock;
 
@@ -121,6 +134,21 @@ mod statics {
     pub fn listeners() -> &'static Mutex<HashMap<i64, HashMap<String, Vec<i64>>>> {
         static L: OnceLock<Mutex<HashMap<i64, HashMap<String, Vec<i64>>>>> = OnceLock::new();
         L.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Issue #2131 — closure pointers that were registered via
+    /// `socket.once(event, cb)` / `server.once(event, cb)`. Keyed by
+    /// handle id (socket OR server — they share the listener namespace)
+    /// then event name. After the pump fires an event, any callback in
+    /// this set is removed from both the regular listener vector AND
+    /// this set, giving Node's "fire once and auto-remove" semantics.
+    /// Kept as a side table so the flat `Vec<i64>` listener storage
+    /// (and the GC scanner that walks it) stays unchanged.
+    pub fn once_flags(
+    ) -> &'static Mutex<HashMap<i64, HashMap<String, std::collections::HashSet<i64>>>> {
+        static O: OnceLock<Mutex<HashMap<i64, HashMap<String, std::collections::HashSet<i64>>>>> =
+            OnceLock::new();
+        O.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
     pub fn pending_events() -> &'static Mutex<Vec<PendingNetEvent>> {
@@ -165,9 +193,12 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 /// Register the net GC root scanner exactly once. Safe to call from any
 /// `js_net_*` entry point on the main thread.
-fn ensure_gc_scanner_registered() {
+pub(crate) fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
+        // #2154 — publish the raw-consumer vtable for perry-ext-http (runs on
+        // the first net FFI entry, before http could reference a socket).
+        raw_bridge::register();
     });
 }
 
@@ -188,17 +219,25 @@ fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
     }
 }
 
-struct SocketState {
-    cmd_tx: mpsc::UnboundedSender<SocketCommand>,
+pub(crate) struct SocketState {
+    pub(crate) cmd_tx: mpsc::UnboundedSender<SocketCommand>,
     /// `Some` only between `js_net_socket_alloc` and the first
     /// `js_net_socket_method_connect`. Held here so the deferred-connect
     /// path (issue #422: `new net.Socket()` then `sock.connect(port,host)`)
     /// can move it into the spawned task at connect time.
     pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
     is_open: bool,
+    /// Issue #2131 — the kernel-assigned local address, populated after
+    /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
+    /// "undefined.address" cluster reports the actual bound port/family.
+    pub(crate) local_addr: Option<SocketAddr>,
+    /// #2154 — raw-consumer mode (see `raw_bridge`). When `Some`,
+    /// `run_socket_task` buffers inbound bytes here for `perry-ext-http` to
+    /// drain instead of firing JS `'data'` events.
+    raw: Option<Arc<Mutex<RawReadState>>>,
 }
 
-enum SocketCommand {
+pub(crate) enum SocketCommand {
     Write(Vec<u8>),
     End,
     Destroy,
@@ -624,6 +663,8 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
+            local_addr: None,
+            raw: None,
         },
     );
     statics::listeners()
@@ -858,12 +899,20 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                                 // the accepted stream.
                                 let socket_id = next_id();
                                 let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+                                // Issue #2131 — record the accepted
+                                // stream's local address so `sock.address()`
+                                // on the server-side socket reports the
+                                // bound port/family instead of returning
+                                // undefined.
+                                let accepted_local = stream.local_addr().ok();
                                 statics::sockets().lock().unwrap().insert(
                                     socket_id,
                                     SocketState {
                                         cmd_tx: tx,
                                         pending_rx: None,
                                         is_open: true,
+                                        local_addr: accepted_local,
+                                        raw: None,
                                     },
                                 );
                                 statics::listeners()
@@ -1071,8 +1120,12 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
                 }
             };
 
+            // Issue #2131 — record the local addr so `socket.address()`
+            // returns the bound port/family on the deferred-connect path.
+            let local = tcp.local_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
+                s.local_addr = local;
             }
             push_event(PendingNetEvent::Connect(handle));
 
@@ -1125,6 +1178,8 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
+            local_addr: None,
+            raw: None,
         },
     );
     statics::listeners()
@@ -1146,6 +1201,10 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
                 }
             };
 
+            // Issue #2131 — capture the local addr before we possibly
+            // hand the stream to rustls (the TLS path consumes it).
+            let local = tcp.local_addr().ok();
+
             let transport = match direct_tls {
                 Some((servername, verify)) => {
                     match do_tls_handshake(tcp, &servername, verify).await {
@@ -1163,6 +1222,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
 
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
+                s.local_addr = local;
             }
             push_event(PendingNetEvent::Connect(id));
 
@@ -1192,21 +1252,28 @@ async fn run_socket_task(
             read_result = t.read(&mut buf) => {
                 match read_result {
                     Ok(0) => {
-                        // Issue #1852 — peer sent FIN. Fire `'end'` first
-                        // (readable side ended) then `'close'`, matching
-                        // Node's default `allowHalfOpen: false` socket
-                        // teardown order.
-                        push_event(PendingNetEvent::End(id));
-                        push_event(PendingNetEvent::Close(id));
+                        // #2154 raw mode: signal EOF on the buffer, suppress
+                        // JS events. Else (#1852) fire 'end' then 'close' per
+                        // Node's default `allowHalfOpen: false` teardown order.
+                        if !raw_bridge::mark_terminal(id, None) {
+                            push_event(PendingNetEvent::End(id));
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
                     Ok(n) => {
-                        push_event(PendingNetEvent::Data(id, buf[..n].to_vec()));
+                        // #2154 raw mode buffers for `poll_read`; else 'data'.
+                        if !raw_bridge::route_data(id, &buf[..n]) {
+                            push_event(PendingNetEvent::Data(id, buf[..n].to_vec()));
+                        }
                     }
                     Err(e) => {
-                        push_event(PendingNetEvent::Error(id, format!("{}", e)));
-                        push_event(PendingNetEvent::Close(id));
+                        let msg = format!("{}", e);
+                        if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
+                            push_event(PendingNetEvent::Error(id, msg));
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
@@ -1216,8 +1283,11 @@ async fn run_socket_task(
                 match cmd {
                     Some(SocketCommand::Write(bytes)) => {
                         if let Err(e) = t.write_all(&bytes).await {
-                            push_event(PendingNetEvent::Error(id, format!("{}", e)));
-                            push_event(PendingNetEvent::Close(id));
+                            let msg = format!("{}", e);
+                            if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
+                                push_event(PendingNetEvent::Error(id, msg));
+                                push_event(PendingNetEvent::Close(id));
+                            }
                             mark_closed(id);
                             break;
                         }
@@ -1226,7 +1296,9 @@ async fn run_socket_task(
                         let _ = t.shutdown().await;
                     }
                     Some(SocketCommand::Destroy) | None => {
-                        push_event(PendingNetEvent::Close(id));
+                        if !raw_bridge::mark_terminal(id, None) {
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
@@ -1503,6 +1575,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
+                lifecycle::drain_once_listeners(id, "connect");
             }
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
@@ -1521,6 +1594,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(buf_f64);
                     }
                 }
+                lifecycle::drain_once_listeners(id, "data");
             }
             PendingNetEvent::Error(id, msg) => {
                 let cbs = listeners_for(id, "error");
@@ -1536,6 +1610,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
                     }
                 }
+                lifecycle::drain_once_listeners(id, "error");
             }
             PendingNetEvent::End(id) => {
                 // Issue #1852 — readable side ended (peer FIN). Fire the
@@ -1548,6 +1623,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
+                lifecycle::drain_once_listeners(id, "end");
             }
             PendingNetEvent::Close(id) => {
                 for cb in listeners_for(id, "close") {
@@ -1557,6 +1633,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 }
                 statics::listeners().lock().unwrap().remove(&id);
                 statics::sockets().lock().unwrap().remove(&id);
+                statics::once_flags().lock().unwrap().remove(&id);
             }
             // Issue #1123 followup — server-side events. The
             // accept loop pushes `ServerConnection`/`ServerListening`/
@@ -1565,6 +1642,10 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
             PendingNetEvent::ServerConnection(server_id, socket_id) => {
                 let cbs = listeners_for(server_id, "connection");
                 if cbs.is_empty() {
+                    // Drain any `server.once('connection', cb)` flagged
+                    // here too — listeners_for returned empty but the
+                    // once-set may still be holding stale entries.
+                    lifecycle::drain_once_listeners(server_id, "connection");
                     continue;
                 }
                 // Sockets returned by the codegen's `net.connect`
@@ -1586,6 +1667,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(sock_f64);
                     }
                 }
+                lifecycle::drain_once_listeners(server_id, "connection");
             }
             PendingNetEvent::ServerListening(server_id) => {
                 // Take + drain the 'listening' listeners so the
@@ -1629,6 +1711,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 // exit cleanly after the user's close() resolves.
                 statics::servers().lock().unwrap().remove(&server_id);
                 statics::listeners().lock().unwrap().remove(&server_id);
+                statics::once_flags().lock().unwrap().remove(&server_id);
             }
             PendingNetEvent::ServerError(server_id, msg) => {
                 let cbs = listeners_for(server_id, "error");
@@ -1646,6 +1729,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
                     }
                 }
+                lifecycle::drain_once_listeners(server_id, "error");
             }
         }
     }
@@ -1671,6 +1755,9 @@ fn listeners_for(id: i64, event: &str) -> Vec<i64> {
         .and_then(|m| m.get(event).cloned())
         .unwrap_or_default()
 }
+
+// `drain_once_listeners` lives in `lifecycle::drain_once_listeners` so
+// the file-size gate keeps a single owner for the EventEmitter surface.
 
 /// Returns 1 if there are pending events or live sockets keeping the
 /// runtime's main loop alive.

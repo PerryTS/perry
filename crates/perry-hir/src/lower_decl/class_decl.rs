@@ -414,9 +414,39 @@ pub fn lower_class_decl(
                                 } else {
                                     "__perry_dispose__".to_string()
                                 }
+                            } else if wk == "asyncIterator"
+                                && !method.is_static
+                                && matches!(method.kind, ast::MethodKind::Method)
+                            {
+                                // #1838 follow-up: `[Symbol.asyncIterator]() {}`
+                                // on a class — register under `@@asyncIterator`
+                                // so the symbol resolver in `runtime/src/symbol.rs`
+                                // (`well_known_symbol_method_key`) binds it as
+                                // `instance[Symbol.asyncIterator]`. Mirrors the
+                                // `@@iterator` path; for-await over a class
+                                // instance picks the same vtable entry.
+                                "@@asyncIterator".to_string()
+                            } else if wk == "toPrimitive"
+                                && !method.is_static
+                                && matches!(method.kind, ast::MethodKind::Method)
+                            {
+                                // #2374: `[Symbol.toPrimitive](hint) {}` on a
+                                // class — register under `@@toPrimitive` so the
+                                // symbol resolver in `runtime/src/symbol.rs`
+                                // (`well_known_symbol_method_key`) binds it as
+                                // `instance[Symbol.toPrimitive]`. The runtime's
+                                // ToPrimitive (`js_to_primitive`, consulted by
+                                // unary `+` numeric coercion and template/`String()`
+                                // string coercion) then invokes it with the
+                                // appropriate hint before falling back to
+                                // `valueOf`/`toString`. Mirrors the `@@iterator`
+                                // / `@@asyncIterator` path. Pre-fix the method
+                                // was dropped here, so class instances coerced to
+                                // `NaN` / `[object Object]`.
+                                "@@toPrimitive".to_string()
                             } else {
-                                // Other well-known (toPrimitive, asyncIterator)
-                                // on a class: not yet implemented, skip.
+                                // Other well-known on a class: not yet
+                                // implemented, skip.
                                 continue;
                             }
                         } else {

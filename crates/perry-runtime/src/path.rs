@@ -46,6 +46,57 @@ fn string_to_js(s: &str) -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
+fn split_extension(base: &str) -> (String, String) {
+    if base.is_empty() || base == "." || base == ".." {
+        return (String::new(), base.to_string());
+    }
+    match base.rfind('.') {
+        Some(0) | None => (String::new(), base.to_string()),
+        Some(dot) => (base[dot..].to_string(), base[..dot].to_string()),
+    }
+}
+
+fn parse_posix_components(path_str: &str) -> (String, String, String, String, String) {
+    if path_str.is_empty() {
+        return (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+    }
+
+    let root = if path_str.starts_with('/') { "/" } else { "" }.to_string();
+    let root_len = root.len();
+    let bytes = path_str.as_bytes();
+    let mut end = bytes.len();
+    while end > root_len && bytes[end - 1] == b'/' {
+        end -= 1;
+    }
+    if end == root_len && root_len > 0 {
+        return (
+            root.clone(),
+            root,
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+    }
+
+    let trimmed = &path_str[..end];
+    let sep = trimmed.rfind('/');
+    let base_start = sep.map_or(0, |idx| idx + 1);
+    let base = trimmed[base_start..].to_string();
+    let dir = match sep {
+        Some(0) => "/".to_string(),
+        Some(idx) => path_str[..idx].to_string(),
+        None => String::new(),
+    };
+    let (ext, name) = split_extension(&base);
+    (root, dir, base, ext, name)
+}
+
 pub(crate) fn throw_invalid_path_arg_type() -> ! {
     let msg = b"The \"path\" argument must be of type string.";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
@@ -60,7 +111,7 @@ fn string_from_header_or_throw(ptr: *const StringHeader) -> String {
     unsafe { string_from_header(ptr) }.unwrap_or_else(|| throw_invalid_path_arg_type())
 }
 
-fn resolve_posix_str(path_str: &str) -> String {
+pub(crate) fn resolve_posix_str(path_str: &str) -> String {
     if path_str.is_empty() {
         return std::env::current_dir()
             .map(|cwd| cwd.to_string_lossy().to_string())
@@ -343,6 +394,38 @@ fn normalize_win32_str(input: &str) -> String {
     format!("{}{}", device, tail)
 }
 
+fn posix_cwd_as_win32_path() -> String {
+    std::env::current_dir()
+        .map(|cwd| cwd.to_string_lossy().replace('/', "\\"))
+        .unwrap_or_else(|_| "\\".to_string())
+}
+
+fn join_win32_paths(base: &str, tail: &str) -> String {
+    if tail.is_empty() {
+        base.to_string()
+    } else if base.ends_with('\\') || base.ends_with('/') {
+        format!("{}{}", base, tail)
+    } else {
+        format!("{}\\{}", base, tail)
+    }
+}
+
+fn win32_resolve_inner(path_str: &str) -> String {
+    let split = split_win32(path_str);
+    if split.is_absolute {
+        return normalize_win32_str(path_str);
+    }
+
+    let cwd = posix_cwd_as_win32_path();
+    let path = if split.prefix.is_empty() {
+        join_win32_paths(&cwd, path_str)
+    } else {
+        let drive_cwd = format!("{}{}", split.prefix, cwd);
+        join_win32_paths(&drive_cwd, split.rest)
+    };
+    normalize_win32_str(&path)
+}
+
 /// Get directory name from path. Per Node spec, the root's dirname is the
 /// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
 /// returns `None` there, which we treat as "stay at root".
@@ -555,31 +638,7 @@ pub extern "C" fn js_path_parse(path_ptr: *const StringHeader) -> *mut crate::ob
     use crate::value::JSValue;
 
     let path_str = unsafe { string_from_header(path_ptr) }.unwrap_or_default();
-    let p = Path::new(&path_str);
-
-    let root = if path_str.starts_with('/') { "/" } else { "" }.to_string();
-    let dir = if !root.is_empty() && path_str.chars().all(|c| c == '/') {
-        // Node's path.parse("/") preserves the root as the dir as well:
-        // { root: "/", dir: "/", base: "", ext: "", name: "" }.
-        root.clone()
-    } else {
-        match p.parent() {
-            Some(parent) => parent.to_string_lossy().to_string(),
-            None => String::new(),
-        }
-    };
-    let base = match p.file_name() {
-        Some(b) => b.to_string_lossy().to_string(),
-        None => String::new(),
-    };
-    let ext = match p.extension() {
-        Some(e) => format!(".{}", e.to_string_lossy()),
-        None => String::new(),
-    };
-    let name = match p.file_stem() {
-        Some(n) => n.to_string_lossy().to_string(),
-        None => String::new(),
-    };
+    let (root, dir, base, ext, name) = parse_posix_components(&path_str);
 
     // Build the object via shape with packed keys
     let packed = b"root\0dir\0base\0ext\0name\0";
@@ -706,13 +765,37 @@ pub extern "C" fn js_path_to_namespaced_path(path_ptr: *const StringHeader) -> *
     }
 }
 
-/// Convert a glob pattern (`*`, `?`, `[abc]`, `**`) into a regex, anchored
-/// at both ends. Mirrors Node's `path.matchesGlob` semantics, which Node
-/// documents as identical to `picomatch` defaults: `*` matches any chars
-/// except `/`, `**` matches across `/`, `?` matches a single char except
-/// `/`, character classes `[...]` work like regex.
-fn glob_to_regex(pattern: &str) -> String {
-    let mut out = String::from("^");
+fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'a str>)> {
+    let bytes = pattern.as_bytes();
+    let mut depth = 0usize;
+    let mut arm_start = open + 1;
+    let mut arms = Vec::new();
+    let mut saw_comma = false;
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] as char {
+            '{' => depth += 1,
+            '}' if depth == 0 => {
+                if !saw_comma {
+                    return None;
+                }
+                arms.push(&pattern[arm_start..i]);
+                return Some((i, arms));
+            }
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                saw_comma = true;
+                arms.push(&pattern[arm_start..i]);
+                arm_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn push_glob_regex(pattern: &str, out: &mut String) {
     let bytes = pattern.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -742,7 +825,23 @@ fn glob_to_regex(pattern: &str) -> String {
                 }
                 out.push(']');
             }
-            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '\\' => {
+            '{' => {
+                if let Some((close, arms)) = brace_alternation(pattern, i) {
+                    out.push_str("(?:");
+                    for (idx, arm) in arms.iter().enumerate() {
+                        if idx > 0 {
+                            out.push('|');
+                        }
+                        push_glob_regex(arm, out);
+                    }
+                    out.push(')');
+                    i = close;
+                } else {
+                    out.push('\\');
+                    out.push(c);
+                }
+            }
+            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => {
                 out.push('\\');
                 out.push(c);
             }
@@ -750,6 +849,16 @@ fn glob_to_regex(pattern: &str) -> String {
         }
         i += 1;
     }
+}
+
+/// Convert a glob pattern (`*`, `?`, `[abc]`, `{a,b}`, `**`) into a regex,
+/// anchored at both ends. Mirrors Node's `path.matchesGlob` basics: `*`
+/// matches any chars except `/`, `**` matches across `/`, `?` matches a
+/// single char except `/`, character classes `[...]` work like regex, and
+/// brace alternation expands alternatives such as `*.{md,txt}`.
+fn glob_to_regex(pattern: &str) -> String {
+    let mut out = String::from("^");
+    push_glob_regex(pattern, &mut out);
     out.push('$');
     out
 }
@@ -845,60 +954,82 @@ pub extern "C" fn js_path_win32_dirname(path_ptr: *const StringHeader) -> *mut S
             Some(s) => s,
             None => return string_to_js("."),
         };
-        if path_str.is_empty() {
-            return string_to_js(".");
-        }
-        let split = split_win32(&path_str);
-        let prefix = split.prefix;
-        let is_absolute = split.is_absolute;
-        let rest = split.rest;
-        let prefix_is_unc = prefix.starts_with('\\') || prefix.starts_with('/');
+        string_to_js(&win32_dirname_inner(&path_str))
+    }
+}
 
-        // Split `rest` into segments and drop the last one (the basename).
-        let mut segments: Vec<&str> = rest.split(is_win32_sep).filter(|s| !s.is_empty()).collect();
-        if segments.is_empty() {
-            // Path is just the root — dirname is the root itself.
-            return string_to_js(&path_str);
-        }
-        segments.pop();
+fn win32_dirname_inner(path_str: &str) -> String {
+    let bytes = path_str.as_bytes();
+    let len = bytes.len();
+    if len == 0 {
+        return ".".to_string();
+    }
+    if len == 1 {
+        return if is_win32_sep(bytes[0] as char) {
+            path_str.to_string()
+        } else {
+            ".".to_string()
+        };
+    }
 
-        if segments.is_empty() {
-            // Only one segment after the root.
-            if is_absolute {
-                // Drive-absolute or UNC: dirname is the root with separator.
-                let mut r = String::new();
-                if prefix_is_unc {
-                    for c in prefix.chars() {
-                        r.push(if c == '/' { '\\' } else { c });
-                    }
-                } else {
-                    r.push_str(prefix);
+    let mut root_end: Option<usize> = None;
+    let mut offset = 0usize;
+
+    if is_win32_sep(bytes[0] as char) {
+        root_end = Some(1);
+        offset = 1;
+        if is_win32_sep(bytes[1] as char) {
+            let mut j = 2usize;
+            let mut last = j;
+            while j < len && !is_win32_sep(bytes[j] as char) {
+                j += 1;
+            }
+            if j < len && j != last {
+                last = j;
+                while j < len && is_win32_sep(bytes[j] as char) {
+                    j += 1;
                 }
-                r.push('\\');
-                return string_to_js(&r);
+                if j < len && j != last {
+                    last = j;
+                    while j < len && !is_win32_sep(bytes[j] as char) {
+                        j += 1;
+                    }
+                    if j == len {
+                        return path_str.to_string();
+                    }
+                    if j != last {
+                        root_end = Some(j + 1);
+                        offset = j + 1;
+                    }
+                }
             }
-            // Drive-relative with one segment ("C:foo") → "C:".
-            if !prefix.is_empty() {
-                return string_to_js(prefix);
-            }
-            // Bare relative one-segment → ".".
-            return string_to_js(".");
         }
+    } else if len >= 2 && bytes[1] == b':' && (bytes[0] as char).is_ascii_alphabetic() {
+        let end = if len > 2 && is_win32_sep(bytes[2] as char) {
+            3
+        } else {
+            2
+        };
+        root_end = Some(end);
+        offset = end;
+    }
 
-        // Multi-segment: rejoin segments after the root.
-        let mut r = String::new();
-        if prefix_is_unc {
-            for c in prefix.chars() {
-                r.push(if c == '/' { '\\' } else { c });
+    let mut end = None;
+    let mut matched_slash = true;
+    for i in (offset..len).rev() {
+        if is_win32_sep(bytes[i] as char) {
+            if !matched_slash {
+                end = Some(i);
+                break;
             }
         } else {
-            r.push_str(prefix);
+            matched_slash = false;
         }
-        if is_absolute {
-            r.push('\\');
-        }
-        r.push_str(&segments.join("\\"));
-        string_to_js(&r)
+    }
+
+    match end.or(root_end) {
+        Some(end) => path_str[..end].to_string(),
+        None => ".".to_string(),
     }
 }
 
@@ -1087,35 +1218,77 @@ pub extern "C" fn js_path_win32_format(obj_f64: f64) -> *mut StringHeader {
     string_to_js(&result)
 }
 
+fn current_dir_as_win32() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| normalize_win32_str(&cwd.to_string_lossy()))
+}
+
+fn resolve_win32_for_namespace(path_str: &str) -> String {
+    let normalized = normalize_win32_str(path_str);
+    let split = split_win32(&normalized);
+    if split.is_absolute {
+        return normalized;
+    }
+
+    if !split.prefix.is_empty() {
+        let cwd = current_dir_as_win32().unwrap_or_else(|| "\\".to_string());
+        let cwd_tail = cwd.trim_start_matches('\\');
+        if split.rest.is_empty() || split.rest == "." {
+            return normalize_win32_str(&format!("{}\\{}", split.prefix, cwd_tail));
+        }
+        return normalize_win32_str(&format!("{}\\{}\\{}", split.prefix, cwd_tail, split.rest));
+    }
+
+    let cwd = current_dir_as_win32().unwrap_or_default();
+    if cwd.is_empty() {
+        normalized
+    } else if cwd.ends_with('\\') {
+        normalize_win32_str(&format!("{}{}", cwd, normalized))
+    } else {
+        normalize_win32_str(&format!("{}\\{}", cwd, normalized))
+    }
+}
+
+fn win32_to_namespaced_path(path_str: &str) -> String {
+    if path_str.is_empty() {
+        return String::new();
+    }
+    let normalized = normalize_win32_str(path_str);
+    if normalized.starts_with("\\\\?\\") || normalized.starts_with("\\\\.\\") {
+        return normalized;
+    }
+
+    let resolved = resolve_win32_for_namespace(path_str);
+    if resolved.len() <= 2 {
+        return path_str.to_string();
+    }
+    if let Some(stripped) = resolved.strip_prefix("\\\\") {
+        let third = stripped.as_bytes().first().copied();
+        if third != Some(b'?') && third != Some(b'.') {
+            return format!("\\\\?\\UNC\\{}", stripped);
+        }
+    }
+
+    let split = split_win32(&resolved);
+    if split.is_absolute
+        && split.prefix.len() == 2
+        && split.prefix.as_bytes()[1] == b':'
+        && split.prefix.as_bytes()[0].is_ascii_alphabetic()
+    {
+        return format!("\\\\?\\{}", resolved);
+    }
+
+    resolved
+}
+
 #[no_mangle]
 pub extern "C" fn js_path_win32_to_namespaced_path(
     path_ptr: *const StringHeader,
 ) -> *mut StringHeader {
     unsafe {
         let s = string_from_header(path_ptr).unwrap_or_default();
-        // Node's win32 implementation prepends `\\?\` for drive-absolute
-        // and UNC paths (`\\?\C:\foo`, `\\?\UNC\server\share`). Bare
-        // relative paths and already-prefixed paths are returned as-is.
-        if s.is_empty() {
-            return string_to_js(&s);
-        }
-        let normalized = normalize_win32_str(&s);
-        if normalized.starts_with("\\\\?\\") || normalized.starts_with("\\\\.\\") {
-            return string_to_js(&normalized);
-        }
-        let split = split_win32(&normalized);
-        if split.is_absolute {
-            if let Some(stripped) = normalized.strip_prefix("\\\\") {
-                // UNC: "\\\\server\\share\\..." → "\\\\?\\UNC\\server\\share\\..."
-                let prefixed = format!("\\\\?\\UNC\\{}", stripped);
-                return string_to_js(&prefixed);
-            }
-            // Drive-absolute: "C:\\..." → "\\\\?\\C:\\..."
-            let prefixed = format!("\\\\?\\{}", normalized);
-            return string_to_js(&prefixed);
-        }
-        // Drive-relative or plain relative paths pass through unchanged.
-        string_to_js(&normalized)
+        string_to_js(&win32_to_namespaced_path(&s))
     }
 }
 
@@ -1178,16 +1351,7 @@ pub extern "C" fn js_path_win32_resolve(path_ptr: *const StringHeader) -> *mut S
             Some(s) => s,
             None => return string_to_js(""),
         };
-        let split = split_win32(&path_str);
-        let absolute = if split.is_absolute {
-            normalize_win32_str(&path_str)
-        } else {
-            // Synthesize a C:\-rooted result when called with a purely
-            // relative input. Real-world parity tests always feed an
-            // absolute first segment.
-            normalize_win32_str(&format!("C:\\{}", path_str))
-        };
-        string_to_js(&absolute)
+        string_to_js(&win32_resolve_inner(&path_str))
     }
 }
 
@@ -1251,8 +1415,111 @@ pub extern "C" fn js_path_win32_relative(
 }
 
 #[cfg(test)]
+mod posix_parse_tests {
+    use super::parse_posix_components;
+
+    fn parse(path: &str) -> (String, String, String, String, String) {
+        parse_posix_components(path)
+    }
+
+    #[test]
+    fn final_dot_segments_are_literal_base_names() {
+        assert_eq!(
+            parse("/tmp/."),
+            (
+                "/".to_string(),
+                "/tmp".to_string(),
+                ".".to_string(),
+                String::new(),
+                ".".to_string()
+            )
+        );
+        assert_eq!(
+            parse("/tmp/.."),
+            (
+                "/".to_string(),
+                "/tmp".to_string(),
+                "..".to_string(),
+                String::new(),
+                "..".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn trailing_separators_are_ignored_without_normalizing() {
+        assert_eq!(
+            parse("/foo//bar//"),
+            (
+                "/".to_string(),
+                "/foo/".to_string(),
+                "bar".to_string(),
+                String::new(),
+                "bar".to_string()
+            )
+        );
+        assert_eq!(
+            parse("foo//"),
+            (
+                String::new(),
+                String::new(),
+                "foo".to_string(),
+                String::new(),
+                "foo".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn dotfile_extension_rules_match_node() {
+        assert_eq!(
+            parse("/.bashrc"),
+            (
+                "/".to_string(),
+                "/".to_string(),
+                ".bashrc".to_string(),
+                String::new(),
+                ".bashrc".to_string()
+            )
+        );
+        assert_eq!(
+            parse(".profile.js"),
+            (
+                String::new(),
+                String::new(),
+                ".profile.js".to_string(),
+                ".js".to_string(),
+                ".profile".to_string()
+            )
+        );
+    }
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::glob_to_regex;
+
+    #[test]
+    fn brace_alternation_expands_to_group() {
+        assert_eq!(glob_to_regex("*.{md,txt}"), "^[^/]*\\.(?:md|txt)$");
+        assert_eq!(
+            glob_to_regex("src/{app,test}.ts"),
+            "^src/(?:app|test)\\.ts$"
+        );
+    }
+
+    #[test]
+    fn braces_without_alternation_stay_literal() {
+        assert_eq!(glob_to_regex("file.{md}"), "^file\\.\\{md\\}$");
+    }
+}
+
+#[cfg(test)]
 mod win32_normalize_tests {
-    use super::{normalize_win32_str, win32_basename_inner};
+    use super::{
+        current_dir_as_win32, join_win32_paths, normalize_win32_str, posix_cwd_as_win32_path,
+        win32_basename_inner, win32_dirname_inner, win32_resolve_inner, win32_to_namespaced_path,
+    };
 
     #[test]
     fn drive_relative_bare_appends_dot() {
@@ -1301,6 +1568,16 @@ mod win32_normalize_tests {
     }
 
     #[test]
+    fn dirname_preserves_input_separator_style() {
+        assert_eq!(win32_dirname_inner("/foo/bar"), "/foo");
+        assert_eq!(win32_dirname_inner("/foo/bar/"), "/foo");
+        assert_eq!(win32_dirname_inner("foo/bar/baz"), "foo/bar");
+        assert_eq!(win32_dirname_inner("C:/foo/bar"), "C:/foo");
+        assert_eq!(win32_dirname_inner("//server/share"), "//server/share");
+        assert_eq!(win32_dirname_inner("//server/share/a"), "//server/share/");
+    }
+
+    #[test]
     fn drive_relative_with_segments_unchanged() {
         // The `.` is only appended when there are no segments.
         assert_eq!(normalize_win32_str("C:foo"), "C:foo");
@@ -1316,5 +1593,37 @@ mod win32_normalize_tests {
         assert_eq!(normalize_win32_str("a//b//../b"), "a\\b");
         assert_eq!(normalize_win32_str("/foo/../../../bar"), "\\bar");
         assert_eq!(normalize_win32_str(""), ".");
+    }
+
+    #[test]
+    fn resolve_drive_relative_uses_posix_cwd_as_drive_cwd() {
+        let cwd = posix_cwd_as_win32_path();
+        let drive_cwd = format!("C:{}", cwd);
+        assert_eq!(
+            win32_resolve_inner("C:foo"),
+            normalize_win32_str(&join_win32_paths(&drive_cwd, "foo"))
+        );
+        assert_ne!(win32_resolve_inner("C:foo"), "C:\\C:foo");
+        assert_eq!(
+            win32_resolve_inner("foo"),
+            normalize_win32_str(&join_win32_paths(&cwd, "foo"))
+        );
+    }
+
+    #[test]
+    fn to_namespaced_path_resolves_but_only_namespaces_drive_and_unc() {
+        let cwd = current_dir_as_win32().unwrap();
+        let expected_relative = normalize_win32_str(&format!("{}\\foo", cwd));
+        assert_eq!(win32_to_namespaced_path("foo"), expected_relative);
+        assert_eq!(win32_to_namespaced_path("/tmp/x"), "\\tmp\\x");
+        assert_eq!(win32_to_namespaced_path("C:\\foo"), "\\\\?\\C:\\foo");
+        assert_eq!(
+            win32_to_namespaced_path("\\\\server\\share\\file"),
+            "\\\\?\\UNC\\server\\share\\file"
+        );
+        assert_eq!(
+            win32_to_namespaced_path("\\\\?\\C:\\already"),
+            "\\\\?\\C:\\already"
+        );
     }
 }

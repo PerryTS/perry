@@ -183,6 +183,21 @@ pub extern "C" fn js_proxy_target(proxy_boxed: f64) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+/// Return the proxy's handler for `util.inspect(..., { showProxy: true })`.
+#[no_mangle]
+pub extern "C" fn js_proxy_handler(proxy_boxed: f64) -> f64 {
+    if let Some(id) = lookup(proxy_boxed) {
+        return PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|o| o.as_ref())
+                .map(|e| e.handler)
+                .unwrap_or(f64::from_bits(TAG_UNDEFINED))
+        });
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 /// Helper: fetch the trap closure from the handler object by name. Returns
 /// TAG_UNDEFINED if the handler has no such trap.
 fn handler_trap(handler: f64, trap_name: &str) -> f64 {

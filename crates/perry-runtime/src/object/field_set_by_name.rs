@@ -196,6 +196,26 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
+    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. Setting
+    // an arbitrary property on it (`date.foo = x`) must NOT deref the small
+    // cell as an `ObjectHeader` below (memory corruption). Perry doesn't model
+    // expando properties on Date objects, so treat it as a no-op — the same
+    // observable result as the old value-type representation (a property set
+    // on a primitive number).
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::date::is_date_cell_addr(addr) {
+            return;
+        }
+    }
     // Strip NaN-boxing tags if present (defensive: handle POINTER_TAG, UNDEFINED, NULL, etc.)
     let obj = {
         let bits = obj as u64;
@@ -373,6 +393,19 @@ pub extern "C" fn js_object_set_field_by_name(
                     }
                 }
             }
+        }
+
+        if !key.is_null()
+            && (key as usize) > 0x10000
+            && key_to_str_for_diag(key) == "href"
+            && crate::url::is_url_object_shape(obj)
+        {
+            let value_string = crate::value::js_jsvalue_to_string(value);
+            let value_string_handle = scope.root_string_ptr(value_string);
+            let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            let value_string = value_string_handle.get_raw_mut_ptr::<crate::StringHeader>();
+            crate::url::js_url_set_href(obj, value_string);
+            return;
         }
 
         // Check Object.freeze/seal/preventExtensions flags
@@ -673,60 +706,60 @@ pub extern "C" fn js_object_set_field_by_name(
 
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
-            // Keys are stored as string pointers (NaN-boxed)
-            if key_val.is_string() {
-                let stored_key = key_val.as_string_ptr();
-                if crate::string::js_string_equals(key, stored_key) != 0 {
-                    // Found it - update the field. Frozen objects must
-                    // throw a TypeError on writes to existing keys
-                    // (issue #615 — strict-mode behavior, default for TS).
-                    if is_frozen {
-                        let key_str = key_to_str_for_diag(key);
-                        crate::error::throw_immutable_write(0, &key_str);
-                    }
-                    // Accessor short-circuit: if a setter is registered, invoke
-                    // it instead of writing the slot. A property with `get` but
-                    // no `set` silently ignores the write (non-strict mode).
-                    if ACCESSORS_IN_USE.with(|c| c.get()) {
-                        if let Some(ref k) = incoming_key_str {
-                            if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
-                                if acc.set != 0 {
-                                    let closure = (acc.set & crate::value::POINTER_MASK)
-                                        as *const crate::closure::ClosureHeader;
-                                    if !closure.is_null() {
-                                        crate::closure::js_closure_call1(closure, value);
-                                    }
-                                }
-                                return;
-                            }
-                        }
-                    }
-                    // Per-property writable check (set by Object.defineProperty / freeze).
-                    // Issue #615 — strict-mode throw on read-only assign.
-                    if PROPERTY_ATTRS_IN_USE.with(|c| c.get()) {
-                        if let Some(ref k) = incoming_key_str {
-                            if let Some(attrs) = get_property_attrs(obj as usize, k) {
-                                if !attrs.writable() {
-                                    crate::error::throw_immutable_write(0, k);
-                                }
-                            }
-                        }
-                    }
-                    if i < alloc_limit {
-                        js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
-                    } else {
-                        // This key was previously stored in the overflow map — update it there
-                        let vbits = value.to_bits();
-                        let vbits =
-                            if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
-                                crate::value::TAG_UNDEFINED
-                            } else {
-                                vbits
-                            };
-                        overflow_set(obj as usize, i, vbits);
-                    }
-                    return;
+            // #1781: SSO-aware match — keys are stored as either a
+            // STRING_TAG pointer OR a SHORT_STRING_TAG inline value for
+            // ≤5-byte names. Pre-fix the assignment `obj.id = v` would
+            // append a duplicate `id` key instead of updating the slot
+            // when the original `id` was stored inline as SSO.
+            if crate::string::js_string_key_matches(key_val, key) {
+                // Found it - update the field. Frozen objects must
+                // throw a TypeError on writes to existing keys
+                // (issue #615 — strict-mode behavior, default for TS).
+                if is_frozen {
+                    let key_str = key_to_str_for_diag(key);
+                    crate::error::throw_immutable_write(0, &key_str);
                 }
+                // Accessor short-circuit: if a setter is registered, invoke
+                // it instead of writing the slot. A property with `get` but
+                // no `set` silently ignores the write (non-strict mode).
+                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                    if let Some(ref k) = incoming_key_str {
+                        if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
+                            if acc.set != 0 {
+                                let closure = (acc.set & crate::value::POINTER_MASK)
+                                    as *const crate::closure::ClosureHeader;
+                                if !closure.is_null() {
+                                    crate::closure::js_closure_call1(closure, value);
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+                // Per-property writable check (set by Object.defineProperty / freeze).
+                // Issue #615 — strict-mode throw on read-only assign.
+                if PROPERTY_ATTRS_IN_USE.with(|c| c.get()) {
+                    if let Some(ref k) = incoming_key_str {
+                        if let Some(attrs) = get_property_attrs(obj as usize, k) {
+                            if !attrs.writable() {
+                                crate::error::throw_immutable_write(0, k);
+                            }
+                        }
+                    }
+                }
+                if i < alloc_limit {
+                    js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
+                } else {
+                    // This key was previously stored in the overflow map — update it there
+                    let vbits = value.to_bits();
+                    let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+                        crate::value::TAG_UNDEFINED
+                    } else {
+                        vbits
+                    };
+                    overflow_set(obj as usize, i, vbits);
+                }
+                return;
             }
         }
 

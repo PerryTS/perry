@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1392 entries across 82 modules.
+Total: 1506 entries across 82 modules.
 
 ## Modules
 
@@ -131,6 +131,7 @@ Total: 1392 entries across 82 modules.
 - `notEqual` — module
 - `notStrictEqual` — module
 - `ok` — module
+- `partialDeepStrictEqual` — module
 - `rejects` — module
 - `strict` — module
 - `strictEqual` — module
@@ -163,6 +164,7 @@ Total: 1392 entries across 82 modules.
 - `notEqual` — module
 - `notStrictEqual` — module
 - `ok` — module
+- `partialDeepStrictEqual` — module
 - `rejects` — module
 - `strictEqual` — module
 - `throws` — module
@@ -251,6 +253,8 @@ Total: 1392 entries across 82 modules.
 - `alloc` — module
 - `allocUnsafe` — module
 - `allocUnsafeSlow` — module
+- `atob` — module
+- `btoa` — module
 - `byteLength` — module
 - `concat` — module
 - `from` — module
@@ -743,6 +747,7 @@ Total: 1392 entries across 82 modules.
 
 ### Classes
 
+- `Agent`
 - `ClientRequest`
 - `IncomingMessage`
 - `IncomingMessage`
@@ -753,55 +758,112 @@ Total: 1392 entries across 82 modules.
 
 ### Methods
 
+- `Agent` — module
+- `Server` — module
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
+- `__get_createConnection` — instance *(class: `Agent`)*
+- `__get_createSocket` — instance *(class: `Agent`)*
+- `__get_destroyed` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
+- `__get_freeSockets` — instance *(class: `Agent`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
+- `__get_headersTimeout` — instance *(class: `HttpServer`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
+- `__get_keepAlive` — instance *(class: `Agent`)*
+- `__get_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__get_keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `__get_maxFreeSockets` — instance *(class: `Agent`)*
+- `__get_maxHeadersCount` — instance *(class: `HttpServer`)*
+- `__get_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
+- `__get_maxSockets` — instance *(class: `Agent`)*
+- `__get_maxTotalSockets` — instance *(class: `Agent`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
+- `__get_protocol` — instance *(class: `Agent`)*
+- `__get_requestTimeout` — instance *(class: `HttpServer`)*
+- `__get_requests` — instance *(class: `Agent`)*
+- `__get_sockets` — instance *(class: `Agent`)*
 - `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
 - `__get_statusMessage` — instance *(class: `IncomingMessage`)*
+- `__get_timeout` — instance *(class: `HttpServer`)*
 - `__get_trailers` — instance *(class: `IncomingMessage`)*
 - `__get_url` — instance *(class: `IncomingMessage`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
+- `__set_createConnection` — instance *(class: `Agent`)*
+- `__set_createSocket` — instance *(class: `Agent`)*
+- `__set_headersTimeout` — instance *(class: `HttpServer`)*
+- `__set_keepAlive` — instance *(class: `Agent`)*
+- `__set_keepAliveMsecs` — instance *(class: `Agent`)*
+- `__set_keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `__set_maxFreeSockets` — instance *(class: `Agent`)*
+- `__set_maxHeadersCount` — instance *(class: `HttpServer`)*
+- `__set_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
+- `__set_maxSockets` — instance *(class: `Agent`)*
+- `__set_maxTotalSockets` — instance *(class: `Agent`)*
+- `__set_protocol` — instance *(class: `Agent`)*
+- `__set_requestTimeout` — instance *(class: `HttpServer`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
+- `__set_timeout` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
 - `addTrailers` — instance *(class: `ServerResponse`)*
+- `address` — instance *(class: `HttpServer`)*
+- `close` — instance *(class: `Agent`)*
 - `close` — instance *(class: `HttpServer`)*
 - `closeAllConnections` — instance *(class: `HttpServer`)*
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
 - `createServer` — module
 - `createServer` — module
+- `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
+- `destroyed` — instance *(class: `Agent`)*
 - `end` — instance *(class: `ServerResponse`)*
 - `flushHeaders` — instance *(class: `ServerResponse`)*
+- `freeSockets` — instance *(class: `Agent`)*
 - `get` — module
 - `getHeader` — instance *(class: `ServerResponse`)*
+- `getName` — instance *(class: `Agent`)*
 - `getStatus` — instance *(class: `ServerResponse`)*
 - `hasHeader` — instance *(class: `ServerResponse`)*
 - `headers` — instance *(class: `IncomingMessage`)*
+- `headersTimeout` — instance *(class: `HttpServer`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
+- `keepAlive` — instance *(class: `Agent`)*
+- `keepAliveMsecs` — instance *(class: `Agent`)*
+- `keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
+- `maxFreeSockets` — instance *(class: `Agent`)*
+- `maxHeadersCount` — instance *(class: `HttpServer`)*
+- `maxRequestsPerSocket` — instance *(class: `HttpServer`)*
+- `maxSockets` — instance *(class: `Agent`)*
+- `maxTotalSockets` — instance *(class: `Agent`)*
 - `method` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `HttpServer`)*
 - `on` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `ServerResponse`)*
 - `pause` — instance *(class: `IncomingMessage`)*
+- `protocol` — instance *(class: `Agent`)*
 - `read` — instance *(class: `IncomingMessage`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
+- `requestTimeout` — instance *(class: `HttpServer`)*
+- `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
+- `reuseSocket` — instance *(class: `Agent`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
+- `setTimeout` — instance *(class: `HttpServer`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
+- `sockets` — instance *(class: `Agent`)*
 - `statusCode` — instance *(class: `IncomingMessage`)*
 - `statusMessage` — instance *(class: `IncomingMessage`)*
+- `timeout` — instance *(class: `HttpServer`)*
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `write` — instance *(class: `ServerResponse`)*
@@ -824,6 +886,7 @@ Total: 1392 entries across 82 modules.
 
 ### Methods
 
+- `address` — instance *(class: `Http2SecureServer`)*
 - `close` — instance *(class: `Http2SecureServer`)*
 - `createSecureServer` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
@@ -837,6 +900,7 @@ Total: 1392 entries across 82 modules.
 
 ### Classes
 
+- `Agent`
 - `ClientRequest`
 - `IncomingMessage`
 - `Server`
@@ -845,6 +909,9 @@ Total: 1392 entries across 82 modules.
 
 ### Methods
 
+- `Agent` — module
+- `Server` — module
+- `address` — instance *(class: `HttpsServer`)*
 - `close` — instance *(class: `HttpsServer`)*
 - `createServer` — module
 - `createServer` — module
@@ -1033,7 +1100,9 @@ Total: 1392 entries across 82 modules.
 ### Methods
 
 - `Socket` — module
+- `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
+- `address` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Server`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
@@ -1042,15 +1111,32 @@ Total: 1392 entries across 82 modules.
 - `createConnection` — module
 - `destroy` — instance *(class: `Socket`)*
 - `end` — instance *(class: `Socket`)*
+- `eventNames` — instance *(class: `Socket`)*
+- `eventNames` — instance *(class: `Server`)*
 - `getDefaultAutoSelectFamily` — module
 - `getDefaultAutoSelectFamilyAttemptTimeout` — module
 - `isIP` — module
 - `isIPv4` — module
 - `isIPv6` — module
 - `listen` — instance *(class: `Server`)*
+- `listenerCount` — instance *(class: `Socket`)*
+- `listenerCount` — instance *(class: `Server`)*
+- `listeners` — instance *(class: `Socket`)*
+- `listeners` — instance *(class: `Server`)*
+- `off` — instance *(class: `Socket`)*
+- `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
+- `once` — instance *(class: `Socket`)*
+- `once` — instance *(class: `Server`)*
 - `pause` — instance *(class: `Socket`)*
+- `rawListeners` — instance *(class: `Socket`)*
+- `rawListeners` — instance *(class: `Server`)*
 - `ref` — instance *(class: `Socket`)*
+- `removeAllListeners` — instance *(class: `Socket`)*
+- `removeAllListeners` — instance *(class: `Server`)*
+- `removeListener` — instance *(class: `Socket`)*
+- `removeListener` — instance *(class: `Server`)*
+- `resetAndDestroy` — instance *(class: `Socket`)*
 - `resume` — instance *(class: `Socket`)*
 - `setDefaultAutoSelectFamily` — module
 - `setDefaultAutoSelectFamilyAttemptTimeout` — module
@@ -1319,6 +1405,7 @@ Total: 1392 entries across 82 modules.
 - `getDeviceModel` — module
 - `getLocale` — module
 - `getOSVersion` — module
+- `getSafeAreaInsets` — module
 - `imagePickerPick` — module
 - `isDarkMode` — module
 - `keychainDelete` — module
@@ -1596,11 +1683,14 @@ Total: 1392 entries across 82 modules.
 - `getegid` — module
 - `geteuid` — module
 - `getgid` — module
+- `getgroups` — module
 - `getuid` — module
 - `hrtime` — module
+- `initgroups` — module
 - `kill` — module
 - `listenerCount` — module
 - `listeners` — module
+- `loadEnvFile` — module
 - `memoryUsage` — module
 - `nextTick` — module
 - `off` — module
@@ -1613,6 +1703,11 @@ Total: 1392 entries across 82 modules.
 - `removeListener` — module
 - `resourceUsage` — module
 - `setMaxListeners` — module
+- `setegid` — module
+- `seteuid` — module
+- `setgid` — module
+- `setgroups` — module
+- `setuid` — module
 - `threadCpuUsage` — module
 - `umask` — module
 - `uptime` — module
@@ -1764,6 +1859,7 @@ Total: 1392 entries across 82 modules.
 - `toWeb` — module
 - `uncork` — instance
 - `unpipe` — instance
+- `unshift` — instance
 - `writable` — instance
 - `writableCorked` — instance
 - `writableEnded` — instance
@@ -1886,6 +1982,7 @@ Total: 1392 entries across 82 modules.
 - `inherits` — module
 - `inspect` — module
 - `isDeepStrictEqual` — module
+- `parseArgs` — module
 - `promisify` — module
 - `stripVTControlCharacters` — module
 
@@ -1900,21 +1997,35 @@ Total: 1392 entries across 82 modules.
 - `isAnyArrayBuffer` — module
 - `isArrayBuffer` — module
 - `isArrayBufferView` — module
+- `isAsyncFunction` — module
+- `isBigInt64Array` — module
+- `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
 - `isDate` — module
+- `isFloat32Array` — module
 - `isFloat64Array` — module
+- `isGeneratorFunction` — module
+- `isGeneratorObject` — module
+- `isInt16Array` — module
 - `isInt32Array` — module
+- `isInt8Array` — module
 - `isMap` — module
+- `isMapIterator` — module
+- `isNativeError` — module
 - `isNumberObject` — module
 - `isPromise` — module
+- `isProxy` — module
 - `isRegExp` — module
 - `isSet` — module
+- `isSetIterator` — module
 - `isSharedArrayBuffer` — module
 - `isStringObject` — module
 - `isTypedArray` — module
 - `isUint16Array` — module
+- `isUint32Array` — module
 - `isUint8Array` — module
+- `isUint8ClampedArray` — module
 
 ## `uuid`
 
@@ -1945,6 +2056,12 @@ Total: 1392 entries across 82 modules.
 - `postMessage` — instance
 - `setEnvironmentData` — module
 - `workerData` — module
+
+### Properties
+
+- `isMainThread`
+- `resourceLimits`
+- `threadId`
 
 ## `ws`
 
@@ -2030,4 +2147,3 @@ Total: 1392 entries across 82 modules.
 ### Properties
 
 - `constants`
-

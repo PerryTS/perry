@@ -24,10 +24,11 @@
 use anyhow::{bail, Result};
 use perry_dispatch::{ArgKind as UiArgKind, ReturnKind as UiReturnKind};
 use perry_hir::Expr;
+use perry_types::Type as HirType;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 // Re-export parent items so siblings can pick them up via `use super::*;`.
 // `pub(super)` is the visibility-tightest form that still lets the glob
@@ -49,6 +50,26 @@ mod perf_hooks;
 
 use box_style::apply_box_style;
 use jsonwebtoken::{lower_jsonwebtoken_sign, lower_jsonwebtoken_verify};
+
+fn util_types_arg_is_async_function_static(ctx: &FnCtx<'_>, expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::FuncRef(fid) => Some(ctx.local_async_funcs.contains(fid)),
+        Expr::Closure { is_async, .. } => Some(*is_async),
+        Expr::LocalGet(id) => match ctx.local_types.get(id) {
+            Some(HirType::Function(ft)) => Some(ft.is_async),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn nanbox_bool_literal(value: bool) -> String {
+    double_literal(f64::from_bits(if value {
+        crate::nanbox::TAG_TRUE
+    } else {
+        crate::nanbox::TAG_FALSE
+    }))
+}
 
 pub(crate) fn lower_native_method_call(
     ctx: &mut FnCtx<'_>,
@@ -84,6 +105,24 @@ pub(crate) fn lower_native_method_call(
     // Node util.types predicate calls lower to the canonical receiver-less
     // NativeMethodCall { module: "util/types", class_name: None, ... }.
     if module == "util/types" && class_name.is_none() && object.is_none() {
+        if method == "isAsyncFunction" {
+            if let Some(is_async) = args
+                .first()
+                .and_then(|arg| util_types_arg_is_async_function_static(ctx, arg))
+            {
+                return Ok(nanbox_bool_literal(is_async));
+            }
+            let value = if let Some(first) = args.first() {
+                lower_expr(ctx, first)?
+            } else {
+                double_literal(0.0)
+            };
+            return Ok(ctx.block().call(
+                DOUBLE,
+                "js_util_types_is_async_function",
+                &[(DOUBLE, &value)],
+            ));
+        }
         let runtime = match method {
             "isPromise" => Some("js_util_types_is_promise"),
             "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
@@ -92,13 +131,27 @@ pub(crate) fn lower_native_method_call(
             "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
             "isTypedArray" => Some("js_util_types_is_typed_array"),
             "isUint8Array" => Some("js_util_types_is_uint8_array"),
+            "isInt8Array" => Some("js_util_types_is_int8_array"),
+            "isInt16Array" => Some("js_util_types_is_int16_array"),
             "isUint16Array" => Some("js_util_types_is_uint16_array"),
             "isInt32Array" => Some("js_util_types_is_int32_array"),
+            "isUint32Array" => Some("js_util_types_is_uint32_array"),
+            "isFloat32Array" => Some("js_util_types_is_float32_array"),
             "isFloat64Array" => Some("js_util_types_is_float64_array"),
+            "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
+            "isBigInt64Array" => Some("js_util_types_is_big_int64_array"),
+            "isBigUint64Array" => Some("js_util_types_is_big_uint64_array"),
             "isMap" => Some("js_util_types_is_map"),
+            "isMapIterator" => Some("js_util_types_is_map_iterator"),
+            "isProxy" => Some("js_util_types_is_proxy"),
             "isSet" => Some("js_util_types_is_set"),
+            "isSetIterator" => Some("js_util_types_is_set_iterator"),
             "isDate" => Some("js_util_types_is_date"),
             "isRegExp" => Some("js_util_types_is_reg_exp"),
+            "isAsyncFunction" => Some("js_util_types_is_async_function"),
+            "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
+            "isGeneratorObject" => Some("js_util_types_is_generator_object"),
+            "isNativeError" => Some("js_util_types_is_native_error"),
             _ => None,
         };
         if let Some(runtime) = runtime {
@@ -1606,18 +1659,21 @@ pub(crate) fn lower_native_method_call(
     // failed the parity gate on every PR.
     //
     // Bundle the substitution args into a heap array (same shape
-    // `js_console_log_spread` uses) and call `js_util_format`. For
-    // `formatWithOptions(opts, fmt, ...args)`, drop arg[0] (the
-    // `util.inspect` options bag) — the runtime stub ignores it; full
-    // options-passthrough (real `%o` / `%O` styling) is a follow-up.
+    // `js_console_log_spread` uses). For `formatWithOptions(opts, fmt,
+    // ...args)`, pass arg[0] separately so the runtime can apply the
+    // inspect options around `%O` / `%o`.
     if module == "util" && object.is_none() && (method == "format" || method == "formatWithOptions")
     {
-        let skip = if method == "formatWithOptions" { 1 } else { 0 };
-        // Lower any dropped args (just the options bag for now) for
-        // side effects so closures inside them still register.
-        for a in args.iter().take(skip) {
-            let _ = lower_expr(ctx, a)?;
-        }
+        let options_value = if method == "formatWithOptions" {
+            if let Some(options_arg) = args.first() {
+                Some(lower_expr(ctx, options_arg)?)
+            } else {
+                Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            }
+        } else {
+            None
+        };
+        let skip = usize::from(method == "formatWithOptions");
         let payload: Vec<&Expr> = args.iter().skip(skip).collect();
         let cap = (payload.len() as u32).to_string();
         let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
@@ -1631,8 +1687,62 @@ pub(crate) fn lower_native_method_call(
             );
         }
         let blk = ctx.block();
-        let result = blk.call(DOUBLE, "js_util_format", &[(I64, &current_arr)]);
+        let result = if let Some(options_value) = options_value {
+            blk.call(
+                DOUBLE,
+                "js_util_format_with_options",
+                &[(DOUBLE, &options_value), (I64, &current_arr)],
+            )
+        } else {
+            blk.call(DOUBLE, "js_util_format", &[(I64, &current_arr)])
+        };
         return Ok(result);
+    }
+
+    // `new Console({ stdout, stderr }).log(...)` reaches HIR as an instance
+    // `NativeMethodCall` on module "console" / class "Console", not as a
+    // generic `PropertyGet` call. Preserve the receiver and route through the
+    // runtime's method dispatcher so per-instance streams, indentation, and
+    // counters are used instead of the process-global console helpers.
+    if module == "console" && class_name == Some("Console") {
+        if let Some(recv) = object {
+            let recv_box = lower_expr(ctx, recv)?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                {
+                    let blk = ctx.block();
+                    for (i, value) in lowered_args.iter().enumerate() {
+                        let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                        blk.store(DOUBLE, value, &slot);
+                    }
+                }
+                (buf, n.to_string())
+            };
+
+            let method_idx = ctx.strings.intern(method);
+            let entry = ctx.strings.entry(method_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len = entry.byte_len.to_string();
+            return Ok(ctx.block().call(
+                DOUBLE,
+                "js_native_call_method",
+                &[
+                    (DOUBLE, &recv_box),
+                    (PTR, &bytes_global),
+                    (I64, &name_len),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            ));
+        }
     }
 
     // Receiver-less native method calls (e.g. plugin::setConfig(...)

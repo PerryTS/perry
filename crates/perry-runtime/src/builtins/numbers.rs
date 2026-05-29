@@ -201,6 +201,48 @@ mod parse_float_tests {
     }
 
     #[test]
+    fn number_coerce_handles_nondecimal_integer_literals() {
+        fn nc(s: &str) -> f64 {
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            super::js_number_coerce(crate::value::js_nanbox_string(ptr as i64))
+        }
+        // 0x / 0o / 0b, case-insensitive, with/without surrounding whitespace.
+        assert_eq!(nc("0xff"), 255.0);
+        assert_eq!(nc("0o17"), 15.0);
+        assert_eq!(nc("0b11"), 3.0);
+        assert_eq!(nc("0XaB"), 171.0);
+        assert_eq!(nc("  0b1010  "), 10.0);
+        // No leading sign allowed on a NonDecimalIntegerLiteral → NaN.
+        assert!(nc("-0xff").is_nan());
+        assert!(nc("+0b11").is_nan());
+        // Empty / out-of-radix digits → NaN.
+        assert!(nc("0b").is_nan());
+        assert!(nc("0b12").is_nan());
+        // Plain decimals still parse.
+        assert_eq!(nc("42"), 42.0);
+        assert_eq!(nc("-3.5"), -3.5);
+    }
+
+    #[test]
+    fn number_coerce_arrays_via_tostring() {
+        // Number(array) = ToNumber(array.join(",")): [] -> "" -> 0,
+        // [5] -> "5" -> 5, [1,2] -> "1,2" -> NaN.
+        fn nc_arr(vals: &[f64]) -> f64 {
+            let arr = crate::array::js_array_alloc(vals.len().max(1) as u32);
+            for &v in vals {
+                crate::array::js_array_push_f64(arr, v);
+            }
+            let boxed = crate::value::js_nanbox_pointer(arr as i64);
+            super::js_number_coerce(boxed)
+        }
+        assert_eq!(nc_arr(&[]), 0.0);
+        assert_eq!(nc_arr(&[5.0]), 5.0);
+        assert_eq!(nc_arr(&[42.0]), 42.0);
+        assert!(nc_arr(&[1.0, 2.0]).is_nan()); // "1,2"
+        assert_eq!(nc_arr(&[0.0]), 0.0);
+    }
+
+    #[test]
     fn leading_whitespace() {
         assert_eq!(pf("  3.14"), 3.14_f64);
         assert_eq!(pf("\t3.14"), 3.14_f64);
@@ -274,15 +316,23 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
                     if trimmed.is_empty() {
                         return 0.0;
                     }
-                    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-                        return match u64::from_str_radix(&trimmed[2..], 16) {
+                    // Non-decimal integer literals (ECMA-262 StrNumericLiteral
+                    // → NonDecimalIntegerLiteral): `0x`/`0o`/`0b`,
+                    // case-insensitive, with NO leading sign. A signed form
+                    // like "-0xff" is not a NonDecimalIntegerLiteral and is
+                    // not a StrDecimalLiteral either, so it must parse to NaN
+                    // (Node agrees) — we therefore do NOT special-case "-0x".
+                    let radix = match trimmed.as_bytes() {
+                        [b'0', b'x' | b'X', ..] => Some(16),
+                        [b'0', b'o' | b'O', ..] => Some(8),
+                        [b'0', b'b' | b'B', ..] => Some(2),
+                        _ => None,
+                    };
+                    if let Some(radix) = radix {
+                        // Empty digits ("0x") or out-of-radix digits ("0b12")
+                        // are errors → NaN, matching Node.
+                        return match u64::from_str_radix(&trimmed[2..], radix) {
                             Ok(n) => n as f64,
-                            Err(_) => f64::NAN,
-                        };
-                    }
-                    if trimmed.starts_with("-0x") || trimmed.starts_with("-0X") {
-                        return match u64::from_str_radix(&trimmed[3..], 16) {
-                            Ok(n) => -(n as f64),
                             Err(_) => f64::NAN,
                         };
                     }
@@ -303,6 +353,11 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         crate::bigint::js_bigint_to_f64(ptr)
     } else if jsval.is_pointer() {
         let id = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        // #2089: a Date is a NaN-boxed pointer to a `DateCell`. `Number(date)`
+        // / `+date` / `date - other` coerce to the millisecond timestamp.
+        if crate::date::is_date_cell_addr(id as usize) {
+            return crate::date::date_cell_timestamp(value);
+        }
         // Timer handles coerce numerically to their internal id (matches
         // Node's `+timeout` shape — Node returns `_idleTimeout`, Perry
         // returns the handle id; both are numbers and both are stable
@@ -312,15 +367,37 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         if id > 0 && id < 0x100000 && crate::timer::is_known_timer_id(id) {
             return id as f64;
         }
+        // Array → ToPrimitive(number) finds no `valueOf` override, so it
+        // falls to `Array.prototype.toString` = `join(",")`, then ToNumber on
+        // that string: `Number([]) === 0`, `Number([5]) === 5`,
+        // `Number([1,2]) === NaN` ("1,2"). `js_to_primitive` doesn't apply
+        // this, so handle arrays explicitly before the generic path. #2378.
+        const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+        if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_BITS {
+            let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
+            let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
+            let joined = unsafe { crate::array::js_array_join(arr_ptr, comma) };
+            return js_number_coerce(crate::value::js_nanbox_string(joined as i64));
+        }
         // Object → consult [Symbol.toPrimitive]("number") first; if the
         // object has a custom toPrimitive method, recurse with the result.
-        // Otherwise returns NaN.
         let primitive = unsafe { crate::symbol::js_to_primitive(value, 1) };
         if primitive.to_bits() != value.to_bits() {
             // toPrimitive returned something different — re-coerce.
             return js_number_coerce(primitive);
         }
-        f64::NAN
+        // No custom [Symbol.toPrimitive]: complete OrdinaryToPrimitive by
+        // stringifying the object and re-running ToNumber on the result
+        // (#2378). `js_jsvalue_to_string` handles arrays via join(",") and
+        // objects via their own/inherited toString, so `Number([])` → "" → 0,
+        // `Number([5])` → "5" → 5, and `Number({})` → "[object Object]" → NaN
+        // all match Node. The result is a string, so the recursive call lands
+        // in the string branch — no infinite pointer-branch recursion.
+        let str_ptr = crate::value::js_jsvalue_to_string(value);
+        if str_ptr.is_null() {
+            return f64::NAN;
+        }
+        js_number_coerce(crate::value::js_nanbox_string(str_ptr as i64))
     } else {
         // Already a number
         value

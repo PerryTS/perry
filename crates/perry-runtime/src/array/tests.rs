@@ -75,6 +75,35 @@ fn test_array_from_f64() {
 }
 
 #[test]
+fn test_array_clone_prefers_buffer_registry_before_gc_header_probe() {
+    let mut adjacent = None;
+    for _ in 0..4 {
+        let fake_prev = crate::buffer::buffer_alloc(8);
+        let buf = crate::buffer::buffer_alloc(4);
+        let expected_next = fake_prev as usize
+            + ((std::mem::size_of::<crate::buffer::BufferHeader>() + 8 + 7) & !7);
+        if buf as usize == expected_next {
+            adjacent = Some((fake_prev, buf));
+            break;
+        }
+    }
+    let (fake_prev, buf) = adjacent.expect("expected adjacent small-buffer slab allocations");
+
+    unsafe {
+        *crate::buffer::buffer_data_mut(fake_prev) = crate::gc::GC_TYPE_STRING;
+        (*buf).length = 4;
+        std::ptr::copy_nonoverlapping(
+            [1u8, 2, 3, 4].as_ptr(),
+            crate::buffer::buffer_data_mut(buf),
+            4,
+        );
+    }
+
+    let cloned = js_array_clone(buf as *const ArrayHeader);
+    assert_numeric_raw_values(cloned, &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
 fn test_array_set() {
     let arr = js_array_alloc(3);
     js_array_push_f64(arr, 1.0);
@@ -764,6 +793,27 @@ fn test_array_includes() {
 }
 
 #[test]
+fn test_array_last_index_of() {
+    let arr = js_array_alloc(8);
+    for v in [1.0, 2.0, 3.0, 2.0, 1.0] {
+        js_array_push_f64(arr, v);
+    }
+    // No fromIndex (has_from == 0) → search from the last element.
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 0.0, 0), 3);
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 1.0, 0.0, 0), 4);
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 9.0, 0.0, 0), -1);
+    // Explicit fromIndex (has_from == 1), including the spec's clamping.
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 2.0, 1), 1);
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, -2.0, 1), 3); // 5 + (-2) = 3
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, -10.0, 1), -1); // < -length
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 100.0, 1), 3); // clamp to len-1
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 0.0, 1), -1); // only index 0
+                                                                      // Empty array.
+    let empty = js_array_alloc(1);
+    assert_eq!(js_array_last_index_of_jsvalue(empty, 1.0, 0.0, 0), -1);
+}
+
+#[test]
 fn test_array_from_f64_and_length() {
     let values = [5.0, 10.0, 15.0];
     let arr = js_array_from_f64(values.as_ptr(), 3);
@@ -905,4 +955,27 @@ fn test_array_splice_grow_realloc() {
         );
     }
     assert_eq!(js_array_get_f64(out_arr, 11), 2.0);
+}
+
+#[test]
+fn join_routes_objects_and_nested_arrays_through_tostring() {
+    // #800/#2135: a POINTER_TAG element that is an object/array (not a string)
+    // must go through the spec ToString — a nested array joins recursively, a
+    // plain object becomes "[object Object]" — instead of being mis-read as a
+    // StringHeader (which produced corrupted/empty output).
+    unsafe {
+        let inner = js_array_push_f64(js_array_push_f64(js_array_alloc(2), 1.0), 2.0);
+        let inner_v = f64::from_bits(crate::value::JSValue::pointer(inner as *const u8).bits());
+        let obj = crate::object::js_object_alloc(0, 0);
+        let obj_v = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+        let mut arr = js_array_alloc(2);
+        arr = js_array_push_f64(arr, inner_v);
+        arr = js_array_push_f64(arr, obj_v);
+        let sep = crate::string::js_string_from_bytes(b";".as_ptr(), 1);
+        let out = js_array_join(arr, sep);
+        let len = (*out).byte_len as usize;
+        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
+        assert_eq!(s, "1,2;[object Object]");
+    }
 }

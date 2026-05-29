@@ -272,12 +272,26 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 let is_known_native_class = matches!(
                                     (module_name, class_name),
                                     ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                                        // #2129: `new http.Agent()` /
+                                        // `new https.Agent()` — both share
+                                        // the same Agent method surface;
+                                        // we normalize https → http so the
+                                        // class-filtered ("http", "Agent")
+                                        // rows in native_table/http.rs
+                                        // dispatch correctly.
+                                        | ("http", "Agent")
+                                        | ("https", "Agent")
                                 );
                                 if is_known_native_class {
+                                    let (mod_for_class, cls_for_class) = if class_name == "Agent" {
+                                        ("http", "Agent")
+                                    } else {
+                                        (module_name, class_name)
+                                    };
                                     ctx.register_native_instance(
                                         name.clone(),
-                                        module_name.to_string(),
-                                        class_name.to_string(),
+                                        mod_for_class.to_string(),
+                                        cls_for_class.to_string(),
                                     );
                                 }
                             }
@@ -395,6 +409,26 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             ("pg", "connect") => Some("Client"),
                                             ("http" | "https", "request" | "get") => {
                                                 Some("ClientRequest")
+                                            }
+                                            // #2153 — `const server = http.createServer(...)`
+                                            // inside a function body (the CJS wrapper closure
+                                            // counts: a raw `.js` user file is wrapped in
+                                            // `(function(){ ... })()` before lowering). The
+                                            // module-level + named-import paths
+                                            // (`createServer(...)` after
+                                            // `import { createServer } from 'node:http'`) were
+                                            // already registering correctly; the member-call
+                                            // form `http.createServer(...)` slipped through
+                                            // this arm's match because the row didn't exist.
+                                            // Without the tag, `server.listen(...)` /
+                                            // `server.on(...)` / `server.close()` falls
+                                            // through to `js_typed_feedback_native_call_method`
+                                            // → generic `js_native_call_method`, which has no
+                                            // HttpServer arm → returns NaN.
+                                            ("http", "createServer") => Some("HttpServer"),
+                                            ("https", "createServer") => Some("HttpsServer"),
+                                            ("http2", "createSecureServer") => {
+                                                Some("Http2SecureServer")
                                             }
                                             // node-cron's `cron.schedule(expr, cb)` returns a job
                                             // handle whose `start()`/`stop()`/`isRunning()` methods

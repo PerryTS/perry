@@ -9,6 +9,17 @@
 use super::println;
 use super::*;
 
+mod array_buffer;
+mod boxed_primitives;
+mod collection_equality;
+pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
+mod collections;
+mod identity_equality;
+mod strip_vt;
+mod typed_array_equality;
+
+pub use strip_vt::js_util_strip_vt_control_characters;
+
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
 /// (they compare equal with normal `==`).
@@ -170,10 +181,9 @@ pub(crate) fn format_bigint_literal(val: f64) -> String {
 
 /// Per-thread override for the depth at which nested objects/arrays
 /// collapse to `[Object]` / `[Array]`. Defaults to Node's `util.inspect`
-/// default of 2. The `%o` format specifier raises this temporarily so
-/// `console.log("%o", deep)` renders deeper than `%O` / a bare arg
-/// (Node distinguishes them: `%o` is effectively unbounded, `%O` uses
-/// the default cap of 2).
+/// default of 2. The `%o` format specifier raises this temporarily to
+/// Node's object-format depth of 4, while `%O` uses the current inspect
+/// options unchanged.
 thread_local! {
     static INSPECT_DEPTH_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(2) };
 }
@@ -368,10 +378,15 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
 /// surface in `[bracketed]` form. See #1200.
 thread_local! {
     static INSPECT_SHOW_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INSPECT_SHOW_PROXY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(crate) fn inspect_show_hidden() -> bool {
     INSPECT_SHOW_HIDDEN.with(|c| c.get())
+}
+
+fn inspect_show_proxy() -> bool {
+    INSPECT_SHOW_PROXY.with(|c| c.get())
 }
 
 /// RAII guard for `INSPECT_SHOW_HIDDEN`; restores the previous value on
@@ -388,6 +403,21 @@ impl InspectShowHiddenGuard {
 impl Drop for InspectShowHiddenGuard {
     fn drop(&mut self) {
         INSPECT_SHOW_HIDDEN.with(|c| c.set(self.0));
+    }
+}
+
+pub(crate) struct InspectShowProxyGuard(bool);
+
+impl InspectShowProxyGuard {
+    pub(crate) fn new(show: bool) -> Self {
+        let prev = INSPECT_SHOW_PROXY.with(|c| c.replace(show));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectShowProxyGuard {
+    fn drop(&mut self) {
+        INSPECT_SHOW_PROXY.with(|c| c.set(self.0));
     }
 }
 
@@ -423,6 +453,7 @@ impl Drop for InspectCustomInspectGuard {
 thread_local! {
     static INSPECT_GETTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_SORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INSPECT_COMPACT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 fn inspect_getters_enabled() -> bool {
@@ -431,6 +462,10 @@ fn inspect_getters_enabled() -> bool {
 
 fn inspect_sorted_enabled() -> bool {
     INSPECT_SORTED.with(|c| c.get())
+}
+
+fn inspect_compact_enabled() -> bool {
+    INSPECT_COMPACT.with(|c| c.get())
 }
 
 pub(crate) struct InspectGettersGuard(bool);
@@ -460,6 +495,21 @@ impl InspectSortedGuard {
 impl Drop for InspectSortedGuard {
     fn drop(&mut self) {
         INSPECT_SORTED.with(|c| c.set(self.0));
+    }
+}
+
+pub(crate) struct InspectCompactGuard(bool);
+
+impl InspectCompactGuard {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let prev = INSPECT_COMPACT.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectCompactGuard {
+    fn drop(&mut self) {
+        INSPECT_COMPACT.with(|c| c.set(self.0));
     }
 }
 
@@ -566,6 +616,20 @@ unsafe fn format_error_value(error_ptr: *const crate::error::ErrorHeader, depth:
     out
 }
 
+/// #2089: a Date's `util.inspect` rendering — ISO string (unquoted) or "Invalid Date". DateCell pointer only (gated by callers).
+unsafe fn date_inspect_string(value: f64) -> String {
+    let s_ptr = crate::date::js_date_to_iso_string(value);
+    if s_ptr.is_null() {
+        return "Invalid Date".to_string();
+    }
+    let len = (*s_ptr).byte_len as usize;
+    let data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes)
+        .unwrap_or("Invalid Date")
+        .to_string()
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -628,27 +692,43 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // Typed array — Int32Array(N) [ a, b, c ] etc.
                 let ta = ptr as *const crate::typedarray::TypedArrayHeader;
                 crate::typedarray::format_typed_array(ta)
+            } else if crate::buffer::is_data_view(ptr as usize) {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                array_buffer::format_data_view_value(buf_ptr)
+            } else if crate::buffer::is_any_array_buffer(ptr as usize)
+                && !crate::buffer::is_uint8array_buffer(ptr as usize)
+            {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                let label = if crate::buffer::is_shared_array_buffer(ptr as usize) {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                };
+                array_buffer::format_array_buffer_value(buf_ptr, label)
             } else if crate::buffer::is_registered_buffer(ptr as usize) {
-                // Buffer/Uint8Array — Node prints as `<Buffer xx xx xx ...>`
-                // (lowercase hex bytes separated by single spaces). Buffer
-                // headers don't carry a GC header, so this check must happen
-                // BEFORE the GC_HEADER_SIZE pointer arithmetic below (which
+                // Buffer/Uint8Array — `<Buffer xx xx ...>`. No GC header, so
+                // this must precede the GC_HEADER_SIZE arithmetic below (which
                 // would read garbage one word before the BufferHeader).
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 format_buffer_value(buf_ptr)
+            } else if crate::regex::is_registered_regex(ptr as usize) {
+                // RegExp literals are GC_TYPE_OBJECT with no enumerable keys
+                // (generic formatter prints `{}`); render `/source/flags`
+                // instead (registry-gated, before the GC-header read; #800).
+                collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
             } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
-                let target = crate::proxy::js_proxy_target(value);
-                format_jsvalue(target, depth)
+                format_proxy_value(value, depth, false)
+            } else if crate::date::is_date_cell_addr(ptr as usize) {
+                // #2089: a Date is a NaN-boxed `DateCell` pointer. Node's
+                // `util.inspect` prints the ISO string unquoted (or
+                // `Invalid Date`). Handle before the GC-header object dispatch
+                // below, which would deref the 8-byte cell as an ObjectHeader.
+                date_inspect_string(value)
             } else if (ptr as usize) < 0x100000 {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
-                // POINTER_TAG values whose unboxed payload is a small
-                // registry id (1, 2, 3, ...) — NOT a real heap pointer.
-                // Reading the GC header at `ptr - 8` would deref unmapped
-                // memory and SIGSEGV. Print a placeholder that distinguishes
-                // the value from "{}". A future enhancement can look up the
-                // specific registry (Request / Response / Headers / Blob /
-                // sockets / DB connections / etc.) and format with the type
-                // name and key fields the way Node does for those classes.
+                // POINTER_TAG values whose payload is a small registry id, NOT
+                // a heap pointer — reading the GC header at `ptr - 8` would
+                // SIGSEGV. Placeholder distinguishes it from "{}".
                 "{}".to_string()
             } else {
                 // Use GC header to determine the actual type of the object.
@@ -723,7 +803,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     }
                     let inner = parts.join(", ");
                     // Node uses multi-line when length > 6 or single-line exceeds breakLength (76)
-                    let use_multiline = length > 6 || inner.len() + 4 > 76;
+                    let use_multiline =
+                        !inspect_compact_enabled() || length > 6 || inner.len() + 4 > 76;
                     let body_str = if !use_multiline {
                         format!("[ {} ]", inner)
                     } else if all_numeric {
@@ -781,14 +862,17 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     // self-referencing case wins over the depth-2 collapse to
                     // `[Object]` (#1204). The depth cap is overridable via
                     // INSPECT_DEPTH_LIMIT for `%o` / `console.dir(v, { depth })`.
+                    let obj_ptr = ptr as *const crate::object::ObjectHeader;
+                    if let Some(body) = format_weak_wrapper(obj_ptr, depth) {
+                        return body;
+                    }
                     if let Err(id) = inspect_enter_circular(ptr as usize) {
                         return format!("[Circular *{}]", id);
                     }
                     if depth > inspect_depth_limit() {
                         return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                     }
-                    let obj_ptr = ptr as *const crate::object::ObjectHeader;
-                    let keys_array = (*obj_ptr).keys_array;
+                    let _keys_array = (*obj_ptr).keys_array;
 
                     // Always route through `format_object_as_json` so the
                     // `[util.inspect.custom]` hook lookup runs even for
@@ -801,7 +885,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let body_str = format_object_as_json(obj_ptr, depth);
                     inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
-                    "Map {}".to_string()
+                    collections::format_map_with_cycle(ptr, depth)
+                } else if gc_type == crate::gc::GC_TYPE_SET {
+                    collections::format_set_with_cycle(ptr, depth)
                 } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
                     format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                 } else if gc_type == crate::gc::GC_TYPE_PROMISE {
@@ -897,6 +983,66 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
     }
     out.push('>');
     out
+}
+
+fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
+    let target = crate::proxy::js_proxy_target(value);
+    if !inspect_show_proxy() {
+        return if json {
+            format_jsvalue_for_json(target, depth)
+        } else {
+            format_jsvalue(target, depth)
+        };
+    }
+
+    let handler = crate::proxy::js_proxy_handler(value);
+    let target_str = if json {
+        format_jsvalue_for_json(target, depth + 1)
+    } else {
+        format_jsvalue(target, depth + 1)
+    };
+    let handler_str = if json {
+        format_jsvalue_for_json(handler, depth + 1)
+    } else {
+        format_jsvalue(handler, depth + 1)
+    };
+    format!("Proxy [ {}, {} ]", target_str, handler_str)
+}
+
+fn format_weak_wrapper(
+    obj_ptr: *const crate::object::ObjectHeader,
+    depth: usize,
+) -> Option<String> {
+    use crate::weakref::WeakWrapperKind;
+
+    match crate::weakref::weak_wrapper_kind(obj_ptr)? {
+        WeakWrapperKind::WeakRef | WeakWrapperKind::FinalizationRegistry => {
+            crate::weakref::weak_wrapper_inspect_label(obj_ptr).map(str::to_string)
+        }
+        WeakWrapperKind::WeakMap | WeakWrapperKind::WeakSet if !inspect_show_hidden() => {
+            crate::weakref::weak_wrapper_inspect_label(obj_ptr).map(str::to_string)
+        }
+        WeakWrapperKind::WeakMap => {
+            let parts = crate::weakref::weak_collection_entries(obj_ptr)
+                .into_iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{} => {}",
+                        format_jsvalue(key, depth + 1),
+                        format_jsvalue_for_json(value, depth + 1)
+                    )
+                })
+                .collect::<Vec<_>>();
+            Some(format!("WeakMap {{ {} }}", parts.join(", ")))
+        }
+        WeakWrapperKind::WeakSet => {
+            let parts = crate::weakref::weak_collection_entries(obj_ptr)
+                .into_iter()
+                .map(|(key, _)| format_jsvalue(key, depth + 1))
+                .collect::<Vec<_>>();
+            Some(format!("WeakSet {{ {} }}", parts.join(", ")))
+        }
+    }
 }
 
 /// Format an object as JSON-like string
@@ -1011,6 +1157,7 @@ unsafe fn format_object_as_json(
         }
     }
 
+    let boxed_base = boxed_primitives::boxed_primitive_base_for_object(obj_ptr);
     let class_name = {
         let class_id = (*obj_ptr).class_id;
         if class_id == 0 {
@@ -1020,20 +1167,22 @@ unsafe fn format_object_as_json(
         }
     };
     let class_name_ref = class_name.as_deref();
-    let empty_object = || match class_name_ref {
-        Some(name) => format!("{name} {{}}"),
-        None => "{}".to_string(),
+    let empty_object = || {
+        if let Some(base) = boxed_base.as_deref() {
+            return base.to_string();
+        }
+        match class_name_ref {
+            Some(name) => format!("{name} {{}}"),
+            None => "{}".to_string(),
+        }
     };
 
     let keys_array = (*obj_ptr).keys_array;
-    if keys_array.is_null() {
-        return empty_object();
-    }
-
-    let key_count = crate::array::js_array_length(keys_array) as usize;
-    if key_count == 0 {
-        return empty_object();
-    }
+    let key_count = if keys_array.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(keys_array) as usize
+    };
 
     // Honor `Object.defineProperty(..., { enumerable: false })`. By default
     // we include every key in the `keys_array` (enumerability is rarely
@@ -1137,9 +1286,10 @@ unsafe fn format_object_as_json(
     if parts.is_empty() {
         return empty_object();
     }
-    let single_line = match class_name_ref {
-        Some(name) => format!("{} {{ {} }}", name, parts.join(", ")),
-        None => format!("{{ {} }}", parts.join(", ")),
+    let single_line = match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{ {} }}", base, parts.join(", ")),
+        (None, Some(name)) => format!("{} {{ {} }}", name, parts.join(", ")),
+        (None, None) => format!("{{ {} }}", parts.join(", ")),
     };
     // Node's `util.inspect` switches to multi-line layout when the single-line
     // rendering would exceed `breakLength` (default 80). The threshold is
@@ -1154,7 +1304,7 @@ unsafe fn format_object_as_json(
     // indent prefix, producing a left-aligned inner body inside an indented
     // outer body.
     let any_child_multiline = parts.iter().any(|p| p.contains('\n'));
-    if !any_child_multiline && single_line.len() <= 72 {
+    if inspect_compact_enabled() && !any_child_multiline && single_line.len() <= 72 {
         return single_line;
     }
     let indent = "  ";
@@ -1163,9 +1313,10 @@ unsafe fn format_object_as_json(
         .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
-    match class_name_ref {
-        Some(name) => format!("{} {{\n{}\n}}", name, body),
-        None => format!("{{\n{}\n}}", body),
+    match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{\n{}\n}}", base, body),
+        (None, Some(name)) => format!("{} {{\n{}\n}}", name, body),
+        (None, None) => format!("{{\n{}\n}}", body),
     }
 }
 
@@ -1257,10 +1408,26 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 // Request) carries no GC header, so reading `ptr - 8` would
                 // deref unmapped memory — print a placeholder instead.
                 if crate::proxy::js_proxy_is_proxy(value) != 0 {
-                    let target = crate::proxy::js_proxy_target(value);
-                    format_jsvalue_for_json(target, depth)
+                    format_proxy_value(value, depth, true)
+                } else if crate::date::is_date_cell_addr(ptr as usize) {
+                    // #2089: Date inside an inspected object — ISO string
+                    // unquoted (or `Invalid Date`), not the 8-byte cell deref'd
+                    // as an object.
+                    date_inspect_string(value)
                 } else if (ptr as usize) < 0x100000 {
                     "[object Object]".to_string()
+                } else if crate::symbol::is_registered_symbol(ptr as usize)
+                    || crate::regex::is_registered_regex(ptr as usize)
+                    || crate::buffer::is_registered_buffer(ptr as usize)
+                    || crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some()
+                {
+                    // Symbol / RegExp / Buffer / TypedArray field values need
+                    // type-specific rendering this JSON-ish formatter never
+                    // implemented — they collapsed to `[object Object]` / `{}`
+                    // (#800). Delegate to `format_jsvalue`, which gates these
+                    // on the same registries BEFORE any GC-header read (Buffers
+                    // carry no GC header, so the read below would be garbage).
+                    format_jsvalue(value, depth)
                 } else {
                     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                         as *const crate::gc::GcHeader;
@@ -1326,13 +1493,16 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // depth-limit collapse to `[Object]` (#1204). The
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT
                         // for `%o` / `console.dir(v, { depth })`.
+                        let obj_ptr = ptr as *const crate::object::ObjectHeader;
+                        if let Some(body) = format_weak_wrapper(obj_ptr, depth) {
+                            return body;
+                        }
                         if let Err(id) = inspect_enter_circular(ptr as usize) {
                             return format!("[Circular *{}]", id);
                         }
                         if depth > inspect_depth_limit() {
                             return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                         }
-                        let obj_ptr = ptr as *const crate::object::ObjectHeader;
                         let keys_array = (*obj_ptr).keys_array;
                         let body_str = if !keys_array.is_null()
                             && (keys_array as usize) > 0x10000
@@ -1343,15 +1513,14 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                             "[object Object]".to_string()
                         };
                         inspect_finish_circular(ptr as usize, body_str)
+                    } else if gc_type == crate::gc::GC_TYPE_MAP {
+                        collections::format_map_with_cycle(ptr, depth)
+                    } else if gc_type == crate::gc::GC_TYPE_SET {
+                        collections::format_set_with_cycle(ptr, depth)
                     } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
-                        // Function-valued object fields used to fall through
-                        // to the `[object Object]` catch-all below, hiding
-                        // both the function name and any user-attached own
-                        // properties (e.g. `console.log({ handler: myFn })`
-                        // collapsed `myFn` to `[object Object]`). Route
-                        // through the same display path `format_jsvalue`'s
-                        // own GC_TYPE_CLOSURE branch uses so the registered
-                        // function name flows out.
+                        // Function-valued field: route through the same display
+                        // path as `format_jsvalue` so the registered function
+                        // name flows out instead of `[object Object]`.
                         format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                     } else {
                         "[object Object]".to_string()
@@ -1361,6 +1530,11 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
+            // A TypedArray field is a RAW (non-NaN-boxed) heap pointer, so it
+            // lands here, not in the pointer branch; redirect it (#800).
+            if let Some(s) = collections::raw_heap_pointer_display(value, depth) {
+                return s;
+            }
             let n = value;
             if n.is_nan() {
                 "NaN".to_string()
@@ -1704,11 +1878,11 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'o' => {
-                    // Node's `%o` uses an effectively unbounded inspect
-                    // depth (showHidden + showProxy with no depth cap on
-                    // the typical fixtures used in the parity suite), so
-                    // raise the per-thread depth limit just for this call.
-                    let _guard = InspectDepthLimitGuard::new(usize::MAX);
+                    // Node's `%o` overlays util.inspect options with
+                    // showHidden/showProxy and depth: 4.
+                    let _depth_guard = InspectDepthLimitGuard::new(4);
+                    let _hidden_guard = InspectShowHiddenGuard::new(true);
+                    let _proxy_guard = InspectShowProxyGuard::new(true);
                     out.push_str(&format_jsvalue(val, 0));
                 }
                 b'O' => {
@@ -1752,7 +1926,40 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_format_with_options(
+    options: f64,
+    arr_ptr: *const crate::array::ArrayHeader,
+) -> f64 {
+    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
+    let show_hidden =
+        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
+    let show_proxy =
+        unsafe { super::console::decode_dir_bool_option(options, "showProxy") }.unwrap_or(false);
+    let custom_inspect =
+        unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
+    let getters =
+        unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
+    let sorted =
+        unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
+    let compact =
+        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
+    let _proxy_guard = InspectShowProxyGuard::new(show_proxy);
+    let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
+    let _getters_guard = InspectGettersGuard::new(getters);
+    let _sorted_guard = InspectSortedGuard::new(sorted);
+    let _compact_guard = InspectCompactGuard::new(compact);
+    js_util_format(arr_ptr)
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
+    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
+    let show_hidden =
+        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
+    let show_proxy =
+        unsafe { super::console::decode_dir_bool_option(options, "showProxy") }.unwrap_or(false);
     // `util.inspect` defaults to `customInspect: true`; an explicit
     // `{ customInspect: false }` opts out and surfaces the hook as a
     // symbol property. Refs #1201.
@@ -1762,9 +1969,15 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
         unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
     let sorted =
         unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
+    let compact =
+        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
+    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
+    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
+    let _proxy_guard = InspectShowProxyGuard::new(show_proxy);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     let _getters_guard = InspectGettersGuard::new(getters);
     let _sorted_guard = InspectSortedGuard::new(sorted);
+    let _compact_guard = InspectCompactGuard::new(compact);
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     let out = if jv.is_any_string() {
         let s = jsvalue_string_content(value).unwrap_or_default();
@@ -1786,171 +1999,52 @@ fn looks_like_raw_heap_pointer(value: f64) -> bool {
     (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
 }
 
-const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
-const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
-const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
-
-#[inline]
-fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return None;
+fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
+    if depth > 64 {
+        return format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0);
     }
-    let ptr = jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    unsafe {
-        let class_id = (*ptr).class_id;
-        if !matches!(
-            class_id,
-            CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN
-        ) {
-            return None;
-        }
-        let payload = crate::object::js_object_get_field_f64(ptr, 0);
-        Some((class_id, payload))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_NUMBER, 1);
-    // `new Number()` (no args) is spec'd to box +0, not NaN. js_number_coerce
-    // would map undefined → NaN, so detect the missing-arg sentinel first.
-    let payload = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
-        0.0
-    } else {
-        js_number_coerce(value)
-    };
-    crate::object::js_object_set_field_f64(obj, 0, payload);
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
-#[no_mangle]
-pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_STRING, 1);
-    // `new String()` (no args) is spec'd to box "", not "undefined".
-    let ptr = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
-        crate::string::js_string_from_bytes(std::ptr::null(), 0)
-    } else {
-        js_string_coerce(value)
-    };
-    let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
-    crate::object::js_object_set_field_f64(obj, 0, boxed);
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
-#[no_mangle]
-pub extern "C" fn js_boxed_boolean_new(value: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_BOOLEAN, 1);
-    let boxed =
-        f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value) != 0).bits());
-    crate::object::js_object_set_field_f64(obj, 0, boxed);
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
-#[no_mangle]
-pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
     let left_value = crate::value::JSValue::from_bits(left.to_bits());
     let right_value = crate::value::JSValue::from_bits(right.to_bits());
-    let left_boxed = boxed_primitive_payload(left);
-    let right_boxed = boxed_primitive_payload(right);
+    let left_boxed = boxed_primitives::boxed_primitive_payload(left);
+    let right_boxed = boxed_primitives::boxed_primitive_payload(right);
     if left_boxed.is_some() || right_boxed.is_some() {
-        let equal = match (left_boxed, right_boxed) {
+        return match (left_boxed, right_boxed) {
             (Some((left_class, left_payload)), Some((right_class, right_payload)))
                 if left_class == right_class =>
             {
-                let payload_equal = js_util_is_deep_strict_equal(left_payload, right_payload);
-                crate::value::js_is_truthy(payload_equal) != 0
+                js_util_deep_strict_equal_bool(left_payload, right_payload, depth + 1)
             }
             _ => false,
         };
-        return f64::from_bits(crate::value::JSValue::bool(equal).bits());
+    }
+    if let Some(equal) = collection_equality::deep_strict_collection_equal(left, right, depth) {
+        return equal;
+    }
+    if let Some(equal) = typed_array_equality::deep_strict_typed_array_equal(left, right) {
+        return equal;
+    }
+    if identity_equality::is_identity_only_deep_equal_value(left)
+        || identity_equality::is_identity_only_deep_equal_value(right)
+    {
+        return left.to_bits() == right.to_bits();
     }
     let has_tagged_heap_operand = left_value.is_pointer() || right_value.is_pointer();
     let has_raw_heap_operand =
         looks_like_raw_heap_pointer(left) || looks_like_raw_heap_pointer(right);
-    let equal = if has_raw_heap_operand {
+    if has_raw_heap_operand {
         false
     } else if has_tagged_heap_operand {
         format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
     } else {
         crate::value::js_jsvalue_equals(left, right) != 0
             || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
-    };
-    f64::from_bits(crate::value::JSValue::bool(equal).bits())
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
-    unsafe {
-        let s_ptr = crate::value::js_jsvalue_to_string(value);
-        let input = if s_ptr.is_null() {
-            String::new()
-        } else {
-            let len = (*s_ptr).byte_len as usize;
-            let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            std::str::from_utf8(bytes).unwrap_or("").to_string()
-        };
-        let mut out = String::with_capacity(input.len());
-        let bytes = input.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == 0x1b {
-                let start = i;
-                i += 1;
-                if i < bytes.len() && bytes[i] == b'[' {
-                    i += 1;
-                    while i < bytes.len() {
-                        let b = bytes[i];
-                        i += 1;
-                        if (0x40..=0x7e).contains(&b) {
-                            break;
-                        }
-                    }
-                    continue;
-                } else if i < bytes.len() && bytes[i] == b']' {
-                    i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                    continue;
-                }
-                out.push_str(&input[start..i]);
-            } else {
-                // Preserve multi-byte UTF-8 sequences: advance by the
-                // full code-point width instead of casting one byte to
-                // char (which mangles non-ASCII, e.g. "café" → "cafÃ©").
-                let lead = bytes[i];
-                let width = if lead < 0x80 {
-                    1
-                } else if lead < 0xc0 {
-                    1 // stray continuation byte; copy verbatim
-                } else if lead < 0xe0 {
-                    2
-                } else if lead < 0xf0 {
-                    3
-                } else {
-                    4
-                };
-                let end = (i + width).min(bytes.len());
-                out.push_str(std::str::from_utf8(&bytes[i..end]).unwrap_or(""));
-                i = end;
-            }
-        }
-        let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
-        f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
-    }
+pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
+    let equal = js_util_deep_strict_equal_bool(left, right, 0);
+    f64::from_bits(crate::value::JSValue::bool(equal).bits())
 }
 
 /// Print an array in the format [element1, element2, ...]

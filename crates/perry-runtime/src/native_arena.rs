@@ -276,7 +276,7 @@ pub extern "C" fn js_native_arena_view(
         throw_range_error(b"NativeArena view is out of bounds");
     }
     let kind = kind as u8;
-    if kind > typedarray::KIND_UINT8_CLAMPED {
+    if kind > typedarray::KIND_BIGUINT64 {
         throw_range_error(b"NativeArena view kind is invalid");
     }
     let elem_size = typedarray::elem_size_for_kind(kind) as u64;

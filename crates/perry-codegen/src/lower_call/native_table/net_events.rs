@@ -401,6 +401,131 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_PTR,
     },
+    // Issue #2131 — `socket.address()` returns the local bind address
+    // (`{ address, family, port }`). Captured at connect/accept time and
+    // emitted as JSON through `NR_OBJ_FROM_JSON_STR` so user code reads
+    // a real object whose `.port` is a number — closes the "undefined.address"
+    // cluster on the radar.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "address",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_address",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
+    // Issue #2131 — EventEmitter surface beyond `on`/`addListener`.
+    // `once` flags the listener in a side-table so the pump removes it
+    // after the next event fires. `off`/`removeListener` delete a
+    // specific callback; `removeAllListeners(event?)` drains the event
+    // (or every event when called bare). `listenerCount` and
+    // `eventNames` round out the introspection surface — Perry
+    // pre-#2131 returned "x is not a function" for all of these
+    // (radar's "function should not have been called" + "undefined.on"
+    // clusters).
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "once",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_once",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "addListener",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_on",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "off",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_remove_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "removeListener",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_remove_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "removeAllListeners",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_remove_all_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "listenerCount",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_listener_count",
+        args: &[NA_STR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "eventNames",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_event_names",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
+    // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`.
+    // Returns a real JS array of registered callbacks; consumers do
+    // `socket.listeners('timeout').length` etc. Returned as NR_PTR so
+    // the runtime ArrayHeader is NaN-boxed POINTER_TAG. Perry collapses
+    // `once` into the listener vector + a removal side-table, so
+    // `listeners` and `rawListeners` share an impl — the onceWrapper
+    // distinction is unobservable to callers that read the array before
+    // any event has fired (which is the shape the radar tests use).
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "listeners",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "rawListeners",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_raw_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    // Issue #2131 — `socket.resetAndDestroy()` is the "send RST then
+    // destroy" variant; we alias to `destroy()` (FIN-then-close) for
+    // now since the connected peer treats both as an abrupt close in
+    // the cases the parity radar exercises.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "resetAndDestroy",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_reset_and_destroy",
+        args: &[],
+        ret: NR_PTR,
+    },
     // upgradeToTLS returns a Promise (handle pointer) — await it to wait
     // for the TLS handshake before sending anything over the upgraded stream.
     // upgradeToTLS(servername, verify): verify is 0/1 (number, not bool).
@@ -518,6 +643,85 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_PTR,
     },
+    // Issue #2131 — `net.Server` EventEmitter surface beyond
+    // `on`/`addListener`. Same shape as the Socket entries above; the
+    // FFI implementations share the underlying `statics::listeners()`
+    // map and `statics::once_flags()` side-table.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "once",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_once",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "off",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_remove_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "removeListener",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_remove_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "removeAllListeners",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_remove_all_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "listenerCount",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_listener_count",
+        args: &[NA_STR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "eventNames",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_event_names",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
+    // Issue #2211 — mirror of the Socket listeners/rawListeners surface
+    // for net.Server. Same impl since socket and server handles share
+    // the `statics::listeners()` map keyed by id.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "listeners",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "rawListeners",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_raw_listeners",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
     // ========== node:stream — Readable.from(iterable) (#631) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired
     // via `lower_builtin_new` so the codegen can carry the closure-fields
@@ -529,8 +733,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "from",
         class_filter: None,
-        runtime: "js_node_stream_readable_from",
-        args: &[NA_F64],
+        runtime: "js_node_stream_readable_from_options",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     // #1534: static introspection helpers `isDisturbed` and
@@ -647,6 +851,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "stream",
         has_receiver: false,
+        method: "pipeline",
+        class_filter: None,
+        runtime: "js_node_stream_pipeline",
+        args: &[NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
         method: "duplexPair",
         class_filter: None,
         runtime: "js_node_stream_duplex_pair",
@@ -735,7 +948,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "pipe",
         class_filter: None,
         runtime: "js_node_stream_method_pipe",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -773,6 +986,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "push",
         class_filter: None,
         runtime: "js_node_stream_method_push",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: true,
+        method: "unshift",
+        class_filter: None,
+        runtime: "js_node_stream_method_unshift",
         args: &[NA_F64],
         ret: NR_F64,
     },

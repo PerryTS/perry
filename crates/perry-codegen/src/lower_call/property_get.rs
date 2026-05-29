@@ -24,6 +24,27 @@ fn is_event_target_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     matches!(receiver_class_name(ctx, e).as_deref(), Some("EventTarget"))
 }
 
+/// Methods that exist on `Array.prototype` but NOT on `String.prototype`.
+/// Used to keep the string-method dispatch from claiming a call site
+/// like `(s | T[]).join(",")` where the static type is permissive
+/// (Union with String — see `is_string_expr`'s Union arm) but the
+/// method itself isn't part of the string surface. Falling through to
+/// the runtime dispatcher (`js_native_call_method`) lets the actual
+/// runtime shape pick the right path. Refs #2277.
+fn is_array_only_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        // Mutating
+        "push" | "pop" | "shift" | "unshift" | "splice" | "sort" | "reverse" | "fill" | "copyWithin"
+        // Aggregation / iteration
+        | "join" | "every" | "some" | "filter" | "map" | "forEach" | "reduce" | "reduceRight"
+        | "find" | "findIndex" | "findLast" | "findLastIndex" | "flat" | "flatMap"
+        | "keys" | "values" | "entries"
+        // Immutable variants
+        | "toReversed" | "toSorted" | "toSpliced" | "with"
+    )
+}
+
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance method
 /// dispatch tower. Returns `Ok(None)` when the callee shape doesn't
@@ -134,6 +155,7 @@ pub fn try_lower_property_get_method_call(
                     "base64url" => 3,
                     "latin1" | "binary" => 4,
                     "ascii" => 5,
+                    "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => 6,
                     _ => 0,
                 };
                 tag.to_string()
@@ -228,7 +250,7 @@ pub fn try_lower_property_get_method_call(
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
     }
-    if is_string_expr(ctx, object) {
+    if is_string_expr(ctx, object) && !is_array_only_method_name(property) {
         return Ok(Some(lower_string_method(ctx, object, property, args)?));
     }
     // String method fallback for Any-typed receivers: when the method
@@ -642,11 +664,16 @@ pub fn try_lower_property_get_method_call(
         if is_url_search_params_expr(ctx, object) {
             let p_box = lower_expr(ctx, object)?;
             let cb_box = lower_expr(ctx, &args[0])?;
+            let this_arg = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let p_handle = unbox_to_i64(blk, &p_box);
             blk.call_void(
                 "js_url_search_params_for_each",
-                &[(I64, &p_handle), (DOUBLE, &cb_box)],
+                &[(I64, &p_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
             );
             return Ok(Some(double_literal(0.0)));
         }
@@ -1382,13 +1409,20 @@ pub fn try_lower_property_get_method_call(
             // `this` is captured/bound, so we don't pass the receiver
             // as an extra arg — matches the static-class fast path's
             // contract.
+            //
+            // Use `static_user_args` (the raw user args captured before
+            // rest-bundling / issue-#235 padding mutated `lowered_args`).
+            // The override target runs its own rest-bundling at call time
+            // (via `js_native_call_value` → closure-call dispatch), so it
+            // must receive the un-bundled args — the same fix as the
+            // default branch below for #321 / regression from #2162.
             ctx.current_block = probe_override_idx;
-            let user_arg_count_probe = lowered_args.len().saturating_sub(1);
+            let user_arg_count_probe = static_user_args.len();
             let (probe_args_ptr, probe_args_len_str) = if user_arg_count_probe == 0 {
                 ("null".to_string(), "0".to_string())
             } else {
                 let buf_reg = ctx.func.alloca_entry_array(DOUBLE, user_arg_count_probe);
-                for (i, a_val) in lowered_args.iter().skip(1).enumerate() {
+                for (i, a_val) in static_user_args.iter().enumerate() {
                     let slot = ctx
                         .block()
                         .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
@@ -1529,18 +1563,30 @@ pub fn try_lower_property_get_method_call(
             let entry = ctx.strings.entry(key_idx);
             let bytes_global = format!("@{}", entry.bytes_global);
             let name_len_str = entry.byte_len.to_string();
-            let (fb_args_ptr, fb_args_len) = if args.is_empty() {
+            let (fb_args_ptr, fb_args_len) = if static_user_args.is_empty() {
                 ("null".to_string(), "0".to_string())
             } else {
                 // Hoist the args-array alloca to the function entry
                 // block — see issue #167 and `alloca_entry_array` doc.
-                let n = args.len();
+                //
+                // Use `static_user_args` (the raw user-provided args captured
+                // before rest-bundling / issue-#235 padding mutated
+                // `lowered_args`). The `js_native_call_method` fallback path
+                // performs its own rest-bundling at runtime, so it must
+                // receive the un-bundled args. Pre-fix this read from the
+                // post-bundling `lowered_args`, which on a rest-bearing
+                // dispatch (e.g. `obj.pipe(c1, c2, c3)` post-#2162 where
+                // `pipe()` now has a synthesized `...arguments` rest) had
+                // already been truncated+rest_box'd to `[recv, rest_arr]`.
+                // The old code then alloca'd `[args.len() x double]`, stored
+                // only the rest_arr into slot 0, and told the runtime to
+                // read `args.len()` doubles — slots 1..N-1 were uninit
+                // garbage that landed in pipeArguments's `arguments[i]`,
+                // tripping `value is not a function` (#321 regression from
+                // #2162; effect-barrel-init crash).
+                let n = static_user_args.len();
                 let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-                // skip(1) the receiver, take(n) so the issue-#235 default-arg
-                // padding entries appended to lowered_args don't overflow the
-                // n-sized buffer (and aren't needed for the ncm fallback path,
-                // which forwards user-provided args only).
-                for (i, a_val) in lowered_args.iter().skip(1).take(n).enumerate() {
+                for (i, a_val) in static_user_args.iter().enumerate() {
                     let slot = ctx
                         .block()
                         .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);

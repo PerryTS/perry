@@ -143,6 +143,39 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_count_queuing_strategy_new",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_byte_length_queuing_strategy_new",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
 
+    // ── #2129: http.Agent / https.Agent ──────────────────────────────
+    // `perry-stdlib::http` (gated behind `http-client`) owns these.
+    // Without the registry entry, a program that does `new http.Agent()`
+    // but never `http.request(...)` could leave the auto-optimize build
+    // stripping `http-client`, breaking the link on agent symbols.
+    ("js_http_agent_new",                           OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_https_agent_new",                          OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_get_name",                      OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_noop_self",                     OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_max_sockets",                   OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_max_free_sockets",              OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_max_total_sockets",             OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_keep_alive_msecs",              OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_keep_alive",                    OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_protocol",                      OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_protocol",                  OwnerKind::Stdlib { feature: Some("http-client") }),
+    // ── #2154: Agent argument validation + per-agent client + setter
+    // / sockets-accessor surface ─────────────────────────────────────
+    ("js_http_agent_destroy",                       OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_destroyed",                     OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_sockets",                       OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_free_sockets",                  OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_requests",                      OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_max_sockets",               OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_max_free_sockets",          OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_max_total_sockets",         OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_keep_alive",                OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_keep_alive_msecs",          OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_create_connection",         OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_set_create_socket",             OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_create_connection",             OwnerKind::Stdlib { feature: Some("http-client") }),
+    ("js_http_agent_create_socket",                 OwnerKind::Stdlib { feature: Some("http-client") }),
+
     // ── #846: node:http server ───────────────────────────────────────
     // `perry-ext-http-server` defines `js_node_http_*`. It's pulled in
     // transitively via `perry-ext-http` (rlib dep), and the well-known
@@ -189,6 +222,24 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // #1852 — chainable no-op option setters for Socket/Server.
     ("js_net_socket_noop_self",                     OwnerKind::WellKnown("net")),
     ("js_net_server_noop_self",                     OwnerKind::WellKnown("net")),
+    // #2131 — net.Socket / net.Server lifecycle + EventEmitter surface
+    // (once / off / removeAllListeners / listenerCount / eventNames /
+    // resetAndDestroy, plus the socket-side address()). Same well-known
+    // anchor as the rest of the net FFI — tagging here pulls in
+    // libperry_ext_net.a when these symbols are referenced from a
+    // program that doesn't otherwise import socket-side surface.
+    ("js_net_socket_address",                       OwnerKind::WellKnown("net")),
+    ("js_net_socket_once",                          OwnerKind::WellKnown("net")),
+    ("js_net_socket_remove_listener",               OwnerKind::WellKnown("net")),
+    ("js_net_socket_remove_all_listeners",          OwnerKind::WellKnown("net")),
+    ("js_net_socket_listener_count",                OwnerKind::WellKnown("net")),
+    ("js_net_socket_event_names",                   OwnerKind::WellKnown("net")),
+    ("js_net_socket_reset_and_destroy",             OwnerKind::WellKnown("net")),
+    ("js_net_server_once",                          OwnerKind::WellKnown("net")),
+    ("js_net_server_remove_listener",               OwnerKind::WellKnown("net")),
+    ("js_net_server_remove_all_listeners",          OwnerKind::WellKnown("net")),
+    ("js_net_server_listener_count",                OwnerKind::WellKnown("net")),
+    ("js_net_server_event_names",                   OwnerKind::WellKnown("net")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,

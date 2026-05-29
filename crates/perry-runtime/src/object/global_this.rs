@@ -424,6 +424,64 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
     }
 }
 
+/// Allocate the shared `%TypedArray%` intrinsic constructor (a closure) and
+/// its `.prototype` object, cache both in the GC-rooted atomics, and wire the
+/// closure's `prototype` dynamic-prop to point at the shared prototype.
+///
+/// Spec: `%TypedArray%` is the abstract parent constructor for `Int8Array`,
+/// `Uint8Array`, … — `Int8Array.__proto__ === %TypedArray%` and
+/// `Object.getPrototypeOf(Int8Array.prototype) === %TypedArray%.prototype`.
+/// Perry didn't model this before #2145, so test262's TypedArray-prototype
+/// walks read `null.prototype` and the constructor's `__proto__` returned the
+/// `0.0` no-value placeholder (`typeof Int8Array.__proto__ === "number"`).
+///
+/// Idempotent: subsequent calls return the cached pointer. Called from
+/// `populate_global_this_builtins` (single-threaded under the singleton CAS),
+/// so the AtomicI64 stores don't need to race-resolve.
+fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut ObjectHeader) {
+    let existing_ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire);
+    let existing_proto = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+    if existing_ctor != 0 && existing_proto != 0 {
+        return (
+            existing_ctor as *mut crate::closure::ClosureHeader,
+            existing_proto as *mut ObjectHeader,
+        );
+    }
+    let ctor = crate::closure::js_closure_alloc(global_this_builtin_noop_thunk as *const u8, 0);
+    let proto = js_object_alloc(0, 0);
+    if ctor.is_null() || proto.is_null() {
+        return (std::ptr::null_mut(), std::ptr::null_mut());
+    }
+    // Wire `%TypedArray%.prototype` so `getPrototypeOf(Int8Array).prototype`
+    // hits a real object instead of undefined.
+    let proto_key_bytes = b"prototype";
+    let proto_key =
+        crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
+    // #2060: the four reflectable `length`/`byteLength`/`byteOffset`/`buffer`
+    // accessor descriptors are own properties of `%TypedArray%.prototype` per
+    // spec, NOT of the per-kind proto. Pre-#2145 they were installed on each
+    // per-kind proto because `getPrototypeOf(per_kind_proto)` returned the
+    // per-kind proto itself (identity), so the same lookup happened to land
+    // there. After #2145 wires the per-kind protos to share the intrinsic
+    // proto, the descriptors must live on the intrinsic itself for
+    // `Object.getOwnPropertyDescriptor(getPrototypeOf(Int8Array.prototype),
+    // "length")` to keep working.
+    install_typed_array_proto_accessors(proto);
+    crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
+    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+    (ctor, proto)
+}
+
+/// Public accessor for the `%TypedArray%.prototype` object. Returns the cached
+/// pointer if `populate_global_this_builtins` has run (so the intrinsic is
+/// initialised), else null. Used by `js_object_get_prototype_of` to resolve
+/// `Object.getPrototypeOf(Int8Array.prototype)` to the shared prototype.
+pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
+    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as *mut ObjectHeader
+}
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -441,6 +499,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     let proto_key_bytes = b"prototype";
     let proto_key =
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
+    // #2145: pre-allocate the shared `%TypedArray%` intrinsic so per-kind
+    // typed-array constructors can link their `__proto__` to it as they're
+    // built below, and the per-kind `.prototype` objects can be flagged with
+    // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
+    let (typed_array_intrinsic_ctor, _) = ensure_typed_array_intrinsic();
     // Constructors: ClosureHeader-backed so typeof is "function".
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         let func_ptr = if name == "String" {
@@ -470,6 +533,38 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // entry point — works in tandem with `.call`/`.apply` since
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
+            // #2145: link per-kind typed-array constructors into the
+            // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
+            // and `Object.getPrototypeOf(Int8Array.prototype) ===
+            // %TypedArray%.prototype`. Both reads are resolved off this
+            // wiring (closure static-prototype side-table for the ctor;
+            // `OBJ_FLAG_TYPED_ARRAY_PROTO` + the cached
+            // `TYPED_ARRAY_INTRINSIC_PROTO_PTR` for the per-kind proto).
+            if !typed_array_intrinsic_ctor.is_null()
+                && matches!(
+                    name,
+                    "Int8Array"
+                        | "Uint8Array"
+                        | "Uint8ClampedArray"
+                        | "Int16Array"
+                        | "Uint16Array"
+                        | "Int32Array"
+                        | "Uint32Array"
+                        | "Float32Array"
+                        | "Float64Array"
+                        | "BigInt64Array"
+                        | "BigUint64Array"
+                )
+            {
+                let intrinsic_bits =
+                    crate::value::js_nanbox_pointer(typed_array_intrinsic_ctor as i64).to_bits();
+                crate::closure::closure_set_static_prototype(closure_ptr as usize, intrinsic_bits);
+                unsafe {
+                    let gc = (proto_obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE)
+                        as *mut crate::gc::GcHeader;
+                    (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                }
+            }
         }
         let name_bytes = name.as_bytes();
         let name_key =
@@ -504,74 +599,387 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     }
 }
 
-/// Populate well-known method properties on a builtin constructor's
-/// prototype object. Each registered method is a closure that, when
-/// invoked through `.call(thisArg, …args)` / `.apply(thisArg, args)`,
-/// reads its receiver from `IMPLICIT_THIS` and dispatches to the
-/// corresponding native runtime entry point.
+/// Install a method on a prototype object as a callable closure value with
+/// the proper `name` property and registered arity. Used to reify built-in
+/// prototype methods so `Array.prototype.map`, `Date.prototype.toISOString`,
+/// etc. read back as `typeof === "function"` (issue #2142) — the actual
+/// method *call* path is already covered by codegen's NativeMethodCall and
+/// the `try_builtin_prototype_method_apply_call` HIR rewrite, so the no-op
+/// thunk backing here is only invoked when user code calls the method
+/// through indirection (`const m = Array.prototype.map; m.call(arr, fn)`),
+/// a rare pattern. The reification is the value-read parity win.
 ///
-/// Currently only `Array.prototype.slice` is wired up — that's the one
-/// pattern ramda's curry/variadic helpers depend on. Other builtins
-/// (`Function.prototype.bind`, `String.prototype.split`, …) and other
-/// Array methods (`concat`, `forEach`, `indexOf`, `map`, `reduce`,
-/// `reduceRight`) can be added here as additional packages need them
-/// (ramda only uses those on real array receivers, where the codegen
-/// method-dispatch path already handles them — the prototype route is
-/// only required when the call site reaches through `.call(arr, …)`).
+/// `func_ptr` defaults to `global_this_builtin_noop_thunk` (returns
+/// undefined) for methods we don't have a dedicated thunk for; callers
+/// that want spec-accurate call behavior pass a custom thunk instead
+/// (`array_prototype_slice_thunk`, `object_prototype_to_string_thunk`).
+fn install_proto_method(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    super::native_module::set_bound_native_closure_name(closure, method_name);
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(proto_obj, key, value);
+}
+
+/// Install a list of `(method_name, arity)` pairs on a prototype object,
+/// each backed by `global_this_builtin_noop_thunk`. The shared no-op thunk
+/// is fine because every method shares the same backing func pointer (the
+/// arity registration on that pointer is overwritten harmlessly with each
+/// call — the last winner is whichever arity matches the dominant call
+/// site, but no current code path depends on the registered arity for the
+/// noop thunk; the real dispatch arms each register their own arity on
+/// their own thunk pointer).
+fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u32)]) {
+    for (name, arity) in methods.iter().copied() {
+        install_proto_method(
+            proto_obj,
+            name,
+            global_this_builtin_noop_thunk as *const u8,
+            arity,
+        );
+    }
+}
+
+/// Universal `Object.prototype` methods inherited by every receiver in
+/// JS. Installed on every built-in constructor's prototype since Perry's
+/// prototype chain on these built-ins doesn't walk back up to a shared
+/// `Object.prototype` — so `Number.prototype.hasOwnProperty` would
+/// otherwise be missing.
+const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
+    ("hasOwnProperty", 1),
+    ("isPrototypeOf", 1),
+    ("propertyIsEnumerable", 1),
+    ("toLocaleString", 0),
+    ("valueOf", 0),
+    // `toString` is installed separately on Object/typed arrays etc. with
+    // dedicated thunks; do not include it here to avoid clobbering those.
+];
+
+/// Populate well-known method properties on a built-in constructor's
+/// prototype object. Each registered method is a closure carrying a
+/// proper `name` property so feature-detection idioms like
+/// `typeof Array.prototype.map === "function"` and `.name === "map"`
+/// agree with Node when the value is read through indirection.
+///
+/// Two of these methods retain dedicated thunks for spec-accurate call
+/// behavior — `Array.prototype.slice` (ramda's curry/variadic helpers
+/// reach through `Array.prototype.slice.call(args, …)` and depend on it
+/// returning a real sliced array, even via indirection) and
+/// `Object.prototype.toString` (ramda's `_isArguments.js` IIFE calls
+/// `Object.prototype.toString.call(arguments)` at module-init time).
+/// All other methods are noop-backed: typeof + `.name` introspection
+/// works, but a stored-and-called-indirect reference returns undefined.
+/// The common forms — `arr.map(fn)` (codegen's NativeMethodCall) and
+/// `Array.prototype.map.call(arr, fn)` (HIR rewrite, see
+/// `try_builtin_prototype_method_apply_call`) — are unaffected.
 fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
     }
     match builtin_name {
         "Array" => {
-            let slice_closure =
-                crate::closure::js_closure_alloc(array_prototype_slice_thunk as *const u8, 0);
-            if !slice_closure.is_null() {
-                // Register arity so `.call(this, start)` (1 user arg
-                // after the receiver) pads the missing `end` with
-                // `undefined` instead of dispatching to a 1-arg
-                // signature that reads `end_val` out of an
-                // uninitialised register.
-                crate::closure::js_register_closure_arity(
-                    array_prototype_slice_thunk as *const u8,
-                    2,
-                );
-                let key_bytes = b"slice";
-                let key =
-                    crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-                let value = crate::value::js_nanbox_pointer(slice_closure as i64);
-                js_object_set_field_by_name(proto_obj, key, value);
-            }
+            install_proto_method(
+                proto_obj,
+                "slice",
+                array_prototype_slice_thunk as *const u8,
+                2,
+            );
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("at", 1),
+                    ("concat", 1),
+                    ("copyWithin", 2),
+                    ("entries", 0),
+                    ("every", 1),
+                    ("fill", 1),
+                    ("filter", 1),
+                    ("find", 1),
+                    ("findIndex", 1),
+                    ("findLast", 1),
+                    ("findLastIndex", 1),
+                    ("flat", 0),
+                    ("flatMap", 1),
+                    ("forEach", 1),
+                    ("includes", 1),
+                    ("indexOf", 1),
+                    ("join", 1),
+                    ("keys", 0),
+                    ("lastIndexOf", 1),
+                    ("map", 1),
+                    ("pop", 0),
+                    ("push", 1),
+                    ("reduce", 1),
+                    ("reduceRight", 1),
+                    ("reverse", 0),
+                    ("shift", 0),
+                    ("some", 1),
+                    ("sort", 1),
+                    ("splice", 2),
+                    ("toLocaleString", 0),
+                    ("toReversed", 0),
+                    ("toSorted", 1),
+                    ("toSpliced", 2),
+                    ("toString", 0),
+                    ("unshift", 1),
+                    ("values", 0),
+                    ("with", 2),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Object" => {
-            let to_string_closure =
-                crate::closure::js_closure_alloc(object_prototype_to_string_thunk as *const u8, 0);
-            if !to_string_closure.is_null() {
-                // 0-arg thunk — `.call(this)` forwards 0 user args to
-                // `js_native_call_value`, which dispatches via
-                // `js_closure_call0`.
-                crate::closure::js_register_closure_arity(
-                    object_prototype_to_string_thunk as *const u8,
-                    0,
-                );
-                let key_bytes = b"toString";
-                let key =
-                    crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-                let value = crate::value::js_nanbox_pointer(to_string_closure as i64);
-                js_object_set_field_by_name(proto_obj, key, value);
-            }
+            install_proto_method(
+                proto_obj,
+                "toString",
+                object_prototype_to_string_thunk as *const u8,
+                0,
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
-        // Typed-array constructors: install the `%TypedArray%.prototype`
-        // accessor descriptors (`length`/`byteLength`/`byteOffset`/`buffer`)
-        // on the per-kind prototype object. Perry's `getPrototypeOf(heapObj)`
-        // returns the object itself, so `Object.getOwnPropertyDescriptor(
-        // Object.getPrototypeOf(Int8Array.prototype), "length")` resolves to
-        // this same object and finds the accessor — closing the
-        // `Cannot read properties of undefined (reading 'get')` cascade. #2060.
+        "Function" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[("apply", 2), ("bind", 1), ("call", 1), ("toString", 0)],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "String" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("at", 1),
+                    ("charAt", 1),
+                    ("charCodeAt", 1),
+                    ("codePointAt", 1),
+                    ("concat", 1),
+                    ("endsWith", 1),
+                    ("includes", 1),
+                    ("indexOf", 1),
+                    ("isWellFormed", 0),
+                    ("lastIndexOf", 1),
+                    ("localeCompare", 1),
+                    ("match", 1),
+                    ("matchAll", 1),
+                    ("normalize", 0),
+                    ("padEnd", 1),
+                    ("padStart", 1),
+                    ("repeat", 1),
+                    ("replace", 2),
+                    ("replaceAll", 2),
+                    ("search", 1),
+                    ("slice", 2),
+                    ("split", 2),
+                    ("startsWith", 1),
+                    ("substring", 2),
+                    ("toLocaleLowerCase", 0),
+                    ("toLocaleUpperCase", 0),
+                    ("toLowerCase", 0),
+                    ("toString", 0),
+                    ("toUpperCase", 0),
+                    ("toWellFormed", 0),
+                    ("trim", 0),
+                    ("trimEnd", 0),
+                    ("trimStart", 0),
+                    ("valueOf", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Number" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("toExponential", 1),
+                    ("toFixed", 1),
+                    ("toLocaleString", 0),
+                    ("toPrecision", 1),
+                    ("toString", 1),
+                    ("valueOf", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Boolean" => {
+            install_noop_proto_methods(proto_obj, &[("toString", 0), ("valueOf", 0)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Date" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("getDate", 0),
+                    ("getDay", 0),
+                    ("getFullYear", 0),
+                    ("getHours", 0),
+                    ("getMilliseconds", 0),
+                    ("getMinutes", 0),
+                    ("getMonth", 0),
+                    ("getSeconds", 0),
+                    ("getTime", 0),
+                    ("getTimezoneOffset", 0),
+                    ("getUTCDate", 0),
+                    ("getUTCDay", 0),
+                    ("getUTCFullYear", 0),
+                    ("getUTCHours", 0),
+                    ("getUTCMilliseconds", 0),
+                    ("getUTCMinutes", 0),
+                    ("getUTCMonth", 0),
+                    ("getUTCSeconds", 0),
+                    ("getYear", 0),
+                    ("setDate", 1),
+                    ("setFullYear", 3),
+                    ("setHours", 4),
+                    ("setMilliseconds", 1),
+                    ("setMinutes", 3),
+                    ("setMonth", 2),
+                    ("setSeconds", 2),
+                    ("setTime", 1),
+                    ("setUTCDate", 1),
+                    ("setUTCFullYear", 3),
+                    ("setUTCHours", 4),
+                    ("setUTCMilliseconds", 1),
+                    ("setUTCMinutes", 3),
+                    ("setUTCMonth", 2),
+                    ("setUTCSeconds", 2),
+                    ("setYear", 1),
+                    ("toDateString", 0),
+                    ("toISOString", 0),
+                    ("toJSON", 1),
+                    ("toLocaleDateString", 0),
+                    ("toLocaleString", 0),
+                    ("toLocaleTimeString", 0),
+                    ("toString", 0),
+                    ("toTimeString", 0),
+                    ("toUTCString", 0),
+                    ("valueOf", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "RegExp" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[("exec", 1), ("test", 1), ("toString", 0), ("compile", 2)],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Promise" => {
+            install_noop_proto_methods(proto_obj, &[("catch", 1), ("finally", 1), ("then", 2)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Map" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("clear", 0),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("values", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Set" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("add", 1),
+                    ("clear", 0),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("values", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "WeakMap" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[("delete", 1), ("get", 1), ("has", 1), ("set", 2)],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "WeakSet" => {
+            install_noop_proto_methods(proto_obj, &[("add", 1), ("delete", 1), ("has", 1)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
+        | "URIError" => {
+            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        // Typed-array constructors: keep the reified per-kind prototype
+        // method set (#2142) on each per-kind `.prototype` so direct
+        // reads like `Int8Array.prototype.at` continue to return a
+        // function. The accessor descriptors
+        // (`length`/`byteLength`/`byteOffset`/`buffer`) are installed
+        // *only* on the shared `%TypedArray%.prototype` (#2145, in
+        // `ensure_typed_array_intrinsic`) — reached via
+        // `Object.getPrototypeOf(Int8Array.prototype) ===
+        // %TypedArray%.prototype`. Pre-#2145 they were also stamped on
+        // each per-kind proto because `getPrototypeOf(per_kind)`
+        // returned identity; now that it walks to the intrinsic, they
+        // belong on the parent (matches Node's
+        // `getOwnPropertyDescriptor(Int8Array.prototype, "length")` =
+        // `undefined`).
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
         | "BigUint64Array" => {
-            install_typed_array_proto_accessors(proto_obj);
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("at", 1),
+                    ("copyWithin", 2),
+                    ("entries", 0),
+                    ("every", 1),
+                    ("fill", 1),
+                    ("filter", 1),
+                    ("find", 1),
+                    ("findIndex", 1),
+                    ("findLast", 1),
+                    ("findLastIndex", 1),
+                    ("forEach", 1),
+                    ("includes", 1),
+                    ("indexOf", 1),
+                    ("join", 1),
+                    ("keys", 0),
+                    ("lastIndexOf", 1),
+                    ("map", 1),
+                    ("reduce", 1),
+                    ("reduceRight", 1),
+                    ("reverse", 0),
+                    ("set", 2),
+                    ("slice", 2),
+                    ("some", 1),
+                    ("sort", 1),
+                    ("subarray", 2),
+                    ("toLocaleString", 0),
+                    ("toReversed", 0),
+                    ("toSorted", 1),
+                    ("toString", 0),
+                    ("values", 0),
+                    ("with", 2),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         _ => {}
     }

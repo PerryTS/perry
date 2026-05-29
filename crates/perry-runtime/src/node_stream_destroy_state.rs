@@ -2,11 +2,11 @@ use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
     js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
 };
+use crate::value::JSValue;
 
 use super::{
-    get_hidden_value, has_truthy_hidden, hidden_destroy_key, hidden_error_key, hidden_key,
-    set_hidden_value, stream_value_from_handle, this_value, TAG_FALSE, TAG_NULL, TAG_TRUE,
-    TAG_UNDEFINED,
+    get_hidden_value, has_truthy_hidden, hidden_error_key, hidden_key, set_hidden_value,
+    stream_value_from_handle, this_value, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
 pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeader) -> f64 {
@@ -23,20 +23,27 @@ pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeade
             let _ = super::event_emitter::emit_stream_event(stream, error, &[err]);
         }
     }
-    super::emit_stream_close_once(stream);
+    super::mark_stream_closed(stream);
+    let _ = super::event_emitter::emit_stream_event(stream, super::string_value(b"close"), &[]);
     f64::from_bits(TAG_UNDEFINED)
 }
 
-pub(super) extern "C" fn ns_destroy_callback1(closure: *const ClosureHeader, err: f64) -> f64 {
+extern "C" fn ns_destroy_option_done(closure: *const ClosureHeader, err: f64) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
     let stream = js_closure_get_capture_f64(closure, 0);
-    queue_destroy_error_microtask(stream, err);
+    let original_err = js_closure_get_capture_f64(closure, 1);
+    let destroy_err = if err.to_bits() == TAG_UNDEFINED || err.to_bits() == TAG_NULL {
+        original_err
+    } else {
+        err
+    };
+    queue_destroy_events(stream, destroy_err);
     f64::from_bits(TAG_UNDEFINED)
 }
 
-fn queue_destroy_error_microtask(stream: f64, err: f64) {
+fn queue_destroy_events(stream: f64, err: f64) {
     let closure = js_closure_alloc(ns_destroy_error_microtask as *const u8, 2);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     js_closure_set_capture_f64(closure, 1, err);
@@ -49,21 +56,28 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
     }
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_TRUE));
     super::refresh_readable_aborted_flag(stream);
-    if let Some(destroy) = get_hidden_value(stream, hidden_destroy_key())
-        .filter(|value| super::event_emitter::is_callable_value(*value))
-    {
-        let cb = js_closure_alloc(ns_destroy_callback1 as *const u8, 1);
-        js_closure_set_capture_f64(cb, 0, stream);
-        let cb_value = f64::from_bits(crate::value::JSValue::pointer(cb as *const u8).bits());
-        let destroy_err = if err.to_bits() == TAG_UNDEFINED {
-            f64::from_bits(TAG_NULL)
-        } else {
-            err
-        };
-        super::event_emitter::call_listener_args(stream, destroy, &[destroy_err, cb_value]);
-        return;
+    if let Some(destroy) = get_hidden_value(stream, hidden_key(b"__perryStreamDestroy")) {
+        if super::is_callable_value(destroy) {
+            crate::closure::js_register_closure_arity(ns_destroy_option_done as *const u8, 1);
+            let cb = js_closure_alloc(ns_destroy_option_done as *const u8, 2);
+            js_closure_set_capture_f64(cb, 0, stream);
+            js_closure_set_capture_f64(cb, 1, err);
+            let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+            let destroy_arg = if err.to_bits() == TAG_UNDEFINED {
+                f64::from_bits(TAG_NULL)
+            } else {
+                err
+            };
+            let args = [destroy_arg, cb_value];
+            let prev_this = crate::object::js_implicit_this_set(stream);
+            unsafe {
+                let _ = crate::closure::js_native_call_value(destroy, args.as_ptr(), args.len());
+            }
+            crate::object::js_implicit_this_set(prev_this);
+            return;
+        }
     }
-    queue_destroy_error_microtask(stream, err);
+    queue_destroy_events(stream, err);
 }
 
 pub(super) extern "C" fn ns_destroy1(closure: *const ClosureHeader, err: f64) -> f64 {

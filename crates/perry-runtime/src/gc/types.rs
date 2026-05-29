@@ -38,7 +38,14 @@ pub const GC_TYPE_NATIVE_ARENA_OWNER: u8 = 13;
 pub const GC_TYPE_NATIVE_TYPED_VIEW: u8 = 14;
 pub const GC_TYPE_NATIVE_HANDLE: u8 = 15;
 pub const GC_TYPE_NATIVE_POD_VIEW: u8 = 16;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_NATIVE_POD_VIEW;
+/// A 1-slot mutable `Date` cell (`DateCell { ts: f64 }`). Arena-allocated,
+/// non-movable (so a NaN-boxed pointer held in a plain f64/DOUBLE local
+/// never goes stale across a copying GC), pointer-free (the `ts` slot is a
+/// raw IEEE double, not a JSValue). Gives `Date` reference semantics so
+/// setter mutations propagate through aliasing / function / closure
+/// boundaries (#2089).
+pub const GC_TYPE_DATE_CELL: u8 = 17;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_DATE_CELL;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -422,6 +429,26 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::NativePodView,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_DATE_CELL,
+        "date",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        // Non-movable: a Date is referenced by a NaN-boxed pointer kept in a
+        // plain f64/DOUBLE local that codegen does NOT shadow-root. The
+        // conservative stack scan keeps it alive; keeping the address stable
+        // means that un-rooted pointer never goes stale across a GC move.
+        false,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        // pointer_free: the single `ts` slot is a raw f64, never a JSValue.
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
 ];
 
 #[inline]
@@ -457,11 +484,15 @@ pub(crate) fn gc_type_is_movable(obj_type: u8) -> bool {
     gc_type_info(obj_type).is_some_and(|info| info.movable)
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn gc_type_external_byte_policy(obj_type: u8) -> GcExternalBytePolicy {
     gc_type_info(obj_type).map_or(GcExternalBytePolicy::None, |info| info.external_byte_policy)
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn gc_type_large_object_policy(obj_type: u8) -> GcLargeObjectPolicy {
     gc_type_info(obj_type).map_or(GcLargeObjectPolicy::NotApplicable, |info| {
@@ -469,6 +500,8 @@ pub(crate) fn gc_type_large_object_policy(obj_type: u8) -> GcLargeObjectPolicy {
     })
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn gc_type_is_pointer_free(obj_type: u8) -> bool {
     gc_type_info(obj_type).map_or(true, |info| info.pointer_free)
@@ -551,6 +584,8 @@ pub(super) fn gc_type_name(obj_type: u8) -> &'static str {
     gc_type_info(obj_type).map_or("unknown", |info| info.name)
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static str> {
     let descriptor_is_leaf = info.rewrite_descriptor_kind == GcRewriteDescriptorKind::Leaf;
     if info.pointer_free {
@@ -605,6 +640,8 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
     Ok(())
 }
 
+// #854: part of GC type-metadata verification contract (exercised by gc/tests)
+#[allow(dead_code)]
 pub(crate) fn validate_gc_type_metadata() -> Result<(), String> {
     for info in gc_type_infos() {
         validate_gc_type_info(info)
@@ -723,6 +760,12 @@ pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+// #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
+// `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
+// `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
+// `TYPED_ARRAY_INTRINSIC_PROTO_PTR` (a single object shared across all
+// 11 typed-array kinds) when this bit is set.
+pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
 /// Array payload is stored as canonical raw `f64` values, not NaN-boxed
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.

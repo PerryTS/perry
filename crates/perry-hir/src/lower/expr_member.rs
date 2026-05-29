@@ -473,30 +473,37 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
-    // `util.inspect.custom` / `inspect.custom` (named import from node:util)
-    // — Node exposes this as the registered symbol `Symbol.for("nodejs.util.inspect.custom")`,
-    // and object-literal keys / inspect output expect that exact description.
-    // See #1201.
+    // `util.inspect.custom` / `inspect.custom` and
+    // `util.promisify.custom` / `promisify.custom` (named imports from
+    // node:util) — Node exposes these as registered `Symbol.for(...)`
+    // values, and computed keys expect those exact descriptions.
+    // See #1201 and util.promisify.custom parity.
     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
         if prop_ident.sym.as_ref() == "custom" {
             // Case A: `inspect.custom` where `inspect` is a named import from
-            // node:util.
+            // node:util, and the analogous `promisify.custom`.
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 if let Some((module_name, Some(method_name))) =
                     ctx.lookup_native_module(obj_ident.sym.as_ref())
                 {
-                    if (module_name == "util" || module_name == "node:util")
-                        && method_name == "inspect"
-                    {
-                        return Ok(Expr::SymbolFor(Box::new(Expr::String(
-                            "nodejs.util.inspect.custom".to_string(),
-                        ))));
+                    if module_name == "util" || module_name == "node:util" {
+                        if method_name == "inspect" {
+                            return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                "nodejs.util.inspect.custom".to_string(),
+                            ))));
+                        }
+                        if method_name == "promisify" {
+                            return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                "nodejs.util.promisify.custom".to_string(),
+                            ))));
+                        }
                     }
                 }
             }
             // Case B: `util.inspect.custom` where `util` is a whole-module
             // alias (`import * as util from "node:util"` or
-            // `import util from "node:util"`).
+            // `import util from "node:util"`), and the analogous
+            // `util.promisify.custom`.
             if let ast::Expr::Member(inner) = member.obj.as_ref() {
                 if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(inner_prop)) =
                     (inner.obj.as_ref(), &inner.prop)
@@ -504,10 +511,20 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let obj_name = obj_ident.sym.to_string();
                     let is_util_module = obj_name == "util"
                         || ctx.lookup_builtin_module_alias(&obj_name) == Some("util");
-                    if is_util_module && inner_prop.sym.as_ref() == "inspect" {
-                        return Ok(Expr::SymbolFor(Box::new(Expr::String(
-                            "nodejs.util.inspect.custom".to_string(),
-                        ))));
+                    if is_util_module {
+                        match inner_prop.sym.as_ref() {
+                            "inspect" => {
+                                return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                    "nodejs.util.inspect.custom".to_string(),
+                                ))));
+                            }
+                            "promisify" => {
+                                return Ok(Expr::SymbolFor(Box::new(Expr::String(
+                                    "nodejs.util.promisify.custom".to_string(),
+                                ))));
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -571,6 +588,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 return Ok(Expr::EnvGet(var_name));
                             }
                             ast::MemberProp::Computed(computed) => {
+                                // process.env["NAME"] with a string-literal key
+                                // is a *static* access — lower to EnvGet so it
+                                // matches the dot form (and #2309 build-time
+                                // folding sees it). Non-literal keys stay
+                                // dynamic.
+                                if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
+                                    if let Some(name) = s.value.as_str() {
+                                        return Ok(Expr::EnvGet(name.to_string()));
+                                    }
+                                }
                                 // process.env[expr] (dynamic key)
                                 let key_expr = Box::new(lower_expr(ctx, &computed.expr)?);
                                 return Ok(Expr::EnvGetDynamic(key_expr));
@@ -940,7 +967,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("ServerResponse", "statusCode")
                             | ("ServerResponse", "headersSent")
                             | ("ServerResponse", "writableEnded")
-                            | ("ServerResponse", "writableFinished") => {
+                            | ("ServerResponse", "writableFinished")
+                            // Issue #2210 — `server.headersTimeout` etc.
+                            // get rewritten to `__get_<name>` so the read
+                            // dispatches through the per-prop FFI in
+                            // perry-ext-http-server (Phase 1 returns the
+                            // stored numeric default; Phase 2 will reflect
+                            // the live hyper accept-loop state).
+                            | ("HttpServer", "headersTimeout")
+                            | ("HttpServer", "keepAliveTimeout")
+                            | ("HttpServer", "requestTimeout")
+                            | ("HttpServer", "timeout")
+                            | ("HttpServer", "maxHeadersCount")
+                            | ("HttpServer", "maxRequestsPerSocket") => {
                                 format!("__get_{}", property_name)
                             }
                             _ => property_name,
@@ -1087,30 +1126,89 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 if obj_ident.sym.as_ref() == property.as_str() {
-                    // #2060: `<TypedArrayCtor>.prototype` must keep reading the
-                    // constructor closure's *real* prototype object — the per-kind
-                    // proto carries the reflectable `length`/`byteLength`/
-                    // `byteOffset`/`buffer` accessor descriptors installed by
-                    // `populate_builtin_prototype_methods`. Collapsing to
-                    // `PropertyGet { GlobalGet(0), "prototype" }` would instead hit
-                    // codegen's `0.0` no-value placeholder (a number), so
-                    // `Object.getPrototypeOf(Int8Array.prototype)` returned null and
-                    // the descriptor lookup found nothing. Leave the inner
-                    // `PropertyGet { GlobalGet(0), <ctor> }` in place so the outer
-                    // `.prototype` reads through the closure's dynamic-prop table.
-                    let outer_is_prototype = matches!(
+                    // #2060 / #2142 / #2145: `<Ctor>.prototype` and
+                    // `<Ctor>.__proto__` must keep reading the constructor
+                    // closure's real proto / static-prototype. Each built-in
+                    // constructor closure carries a populated proto (allocated
+                    // in `populate_global_this_builtins`, populated by
+                    // `populate_builtin_prototype_methods`) — that is where
+                    // typed-array accessor descriptors AND the reified
+                    // built-in prototype method values live. For
+                    // `__proto__`, typed-array constructors are linked to the
+                    // shared `%TypedArray%` intrinsic via
+                    // `closure_set_static_prototype` (#2145); collapsing here
+                    // would drop the receiver, and codegen lowers
+                    // `globalThis.__proto__` through the no-name path → literal
+                    // `0.0` (a number), which is the symptom reported in #2145.
+                    let outer_is_prototype_or_proto = matches!(
                         &member.prop,
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
+                            || p.sym.as_ref() == "__proto__"
                     );
-                    let is_typed_array_ctor =
-                        crate::ir::typed_array_kind_for_name(property).is_some();
-                    if !(outer_is_prototype && is_typed_array_ctor) {
+                    if !outer_is_prototype_or_proto {
                         object_expr = Expr::GlobalGet(0);
                     }
                 }
             }
         }
     }
+
+    // #2144: spec `.name` own-property on built-in functions / constructors.
+    //
+    // Built-in constructors (`TypeError`, `Promise`, `Array`, …) and the
+    // static functions on built-in namespaces / constructors (`Math.min`,
+    // `Promise.race`, `Array.isArray`, …) are not represented as named
+    // closure values in Perry. Reading their `.name` therefore falls through
+    // to a globalThis lookup that returns 0/undefined instead of the spec
+    // name string. `assert.throws` reports `expectedErrorConstructor.name`
+    // and Test262 regularly inspects built-in `.name`, so fold these reads
+    // here at lowering time when the receiver shape is unambiguous.
+    //
+    // Detection is gated on the *lowered* receiver expression — bare
+    // `GlobalGet(0)` (after the reroute-undo above for `TypeError.name`) or
+    // `PropertyGet { GlobalGet(0), <method> }` (for `Math.min.name` /
+    // `Promise.race.name`). Local shadowing (`const Math = …`) lowers the
+    // receiver to a `LocalGet` instead, so the fold is correctly skipped.
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if prop_ident.sym.as_ref() == "name" {
+            match &object_expr {
+                Expr::GlobalGet(0) => {
+                    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                        let name = obj_ident.sym.as_ref();
+                        if crate::analysis::is_builtin_global_value_name(name) {
+                            return Ok(Expr::String(name.to_string()));
+                        }
+                    }
+                }
+                Expr::PropertyGet {
+                    object: inner,
+                    property,
+                } => {
+                    if matches!(inner.as_ref(), Expr::GlobalGet(0)) {
+                        if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
+                            if let (
+                                ast::Expr::Ident(ns_ident),
+                                ast::MemberProp::Ident(method_ident),
+                            ) = (inner_member.obj.as_ref(), &inner_member.prop)
+                            {
+                                let ns = ns_ident.sym.as_ref();
+                                let method = method_ident.sym.as_ref();
+                                if method == property.as_str()
+                                    && crate::analysis::is_builtin_static_function_member(
+                                        ns, method,
+                                    )
+                                {
+                                    return Ok(Expr::String(method.to_string()));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     let object = Box::new(object_expr);
 
     // Unimplemented-API gate (#463). When the receiver is a
@@ -1213,14 +1311,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             let hint = super::unimpl_hints::module_member_hint(module, prop)
                 .map(|h| format!(" {h}"))
                 .unwrap_or_default();
-            crate::lower_bail!(
-                member.span,
+            let msg = format!(
                 "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
-                module,
-                prop,
-                hint,
+                module, prop, hint,
             );
+            // #2309: defer when tree-shaking (sink armed for this node_modules
+            // module); re-raised only if the module survives pruning.
+            if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                crate::lower_bail!(member.span, "{}", msg);
+            }
         }
     }
 

@@ -283,7 +283,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("buffer.Buffer", "concat") => {
             let arr = ptr_addr(arg(0)) as *const crate::array::ArrayHeader;
-            ptr_to_f64(crate::buffer::js_buffer_concat(arr) as *const u8)
+            let buf = if args_len >= 2 {
+                crate::buffer::js_buffer_concat_with_length(arr, arg(1))
+            } else {
+                crate::buffer::js_buffer_concat(arr)
+            };
+            ptr_to_f64(buf as *const u8)
         }
         ("buffer.Buffer", "of") => {
             let arr = pack_args();
@@ -352,6 +357,35 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("process", "chdir") => {
             crate::os::js_process_chdir(arg_event_ptr(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "loadEnvFile") => {
+            crate::process::js_process_load_env_file(optional_path_str_ptr(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "getgroups") => crate::process::js_process_getgroups(),
+        ("process", "setuid") => {
+            crate::process::js_process_setuid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "seteuid") => {
+            crate::process::js_process_seteuid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setgid") => {
+            crate::process::js_process_setgid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setegid") => {
+            crate::process::js_process_setegid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setgroups") => {
+            crate::process::js_process_setgroups(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "initgroups") => {
+            crate::process::js_process_initgroups(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "kill") => {
@@ -589,6 +623,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("assert", "deepStrictEqual")
         | ("assert/strict", "deepStrictEqual")
         | ("assert/strict", "deepEqual") => js_assert_deep_strict_equal(arg(0), arg(1), arg(2)),
+        ("assert", "partialDeepStrictEqual") | ("assert/strict", "partialDeepStrictEqual") => {
+            js_assert_partial_deep_strict_equal(arg(0), arg(1), arg(2))
+        }
         ("assert", "notDeepStrictEqual")
         | ("assert/strict", "notDeepStrictEqual")
         | ("assert/strict", "notDeepEqual") => {
@@ -866,7 +903,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             for i in 1..args_len {
                 arr = crate::array::js_array_push_f64(arr, arg(i));
             }
-            crate::builtins::js_util_format(arr)
+            crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
         ("util", "isDeepStrictEqual") => {
@@ -876,7 +913,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_strip_vt_control_characters(arg(0))
         }
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
+        ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
+        ("util", "parseArgs") => crate::util_parse_args::js_util_parse_args(arg(0)),
 
         ("util", "isPromise") => {
             let v = JSValue::from_bits(arg(0).to_bits());
@@ -896,11 +935,21 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
-            bool_tag(crate::buffer::is_uint8array_buffer(addr) || typed_kind(arg(0)).is_some())
+            bool_tag(
+                crate::buffer::is_uint8array_buffer(addr)
+                    || crate::buffer::is_data_view(addr)
+                    || typed_kind(arg(0)).is_some(),
+            )
         }
         ("util", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
+        }
+        ("util", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
         }
         ("util", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
@@ -908,8 +957,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+        }
+        ("util", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
         ("util", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
@@ -935,11 +993,21 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util.types", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
-            bool_tag(crate::buffer::is_uint8array_buffer(addr) || typed_kind(arg(0)).is_some())
+            bool_tag(
+                crate::buffer::is_uint8array_buffer(addr)
+                    || crate::buffer::is_data_view(addr)
+                    || typed_kind(arg(0)).is_some(),
+            )
         }
         ("util.types", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util.types", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
+        }
+        ("util.types", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util.types", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
         }
         ("util.types", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
@@ -947,18 +1015,42 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util.types", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util.types", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util.types", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
         }
-        ("util.types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
-        ("util.types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
-        ("util.types", "isDate") => {
-            bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
+        ("util.types", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
+        ("util.types", "isBigInt64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGINT64))
+        }
+        ("util.types", "isBigUint64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGUINT64))
+        }
+        ("util.types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
+        ("util.types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
+        ("util.types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
+        ("util.types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
+        ("util.types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
+        ("util.types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
         ("util.types", "isRegExp") => {
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
         }
+        ("util.types", "isAsyncFunction") => crate::object::js_util_types_is_async_function(arg(0)),
+        ("util.types", "isGeneratorFunction") => {
+            crate::object::js_util_types_is_generator_function(arg(0))
+        }
+        ("util.types", "isGeneratorObject") => {
+            crate::object::js_util_types_is_generator_object(arg(0))
+        }
+        ("util.types", "isNativeError") => crate::object::js_util_types_is_native_error(arg(0)),
         ("util.types", "isNumberObject") => crate::object::js_util_types_is_number_object(arg(0)),
         ("util.types", "isStringObject") => crate::object::js_util_types_is_string_object(arg(0)),
         ("util.types", "isBooleanObject") => crate::object::js_util_types_is_boolean_object(arg(0)),
@@ -987,11 +1079,21 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util/types", "isArrayBufferView") => {
             let addr = ptr_addr(arg(0));
-            bool_tag(crate::buffer::is_uint8array_buffer(addr) || typed_kind(arg(0)).is_some())
+            bool_tag(
+                crate::buffer::is_uint8array_buffer(addr)
+                    || crate::buffer::is_data_view(addr)
+                    || typed_kind(arg(0)).is_some(),
+            )
         }
         ("util/types", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util/types", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
+        }
+        ("util/types", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util/types", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
         }
         ("util/types", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
@@ -999,18 +1101,42 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util/types", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util/types", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util/types", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
         }
-        ("util/types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
-        ("util/types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
-        ("util/types", "isDate") => {
-            bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
+        ("util/types", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
+        ("util/types", "isBigInt64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGINT64))
+        }
+        ("util/types", "isBigUint64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGUINT64))
+        }
+        ("util/types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
+        ("util/types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
+        ("util/types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
+        ("util/types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
+        ("util/types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
+        ("util/types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
         ("util/types", "isRegExp") => {
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
         }
+        ("util/types", "isAsyncFunction") => crate::object::js_util_types_is_async_function(arg(0)),
+        ("util/types", "isGeneratorFunction") => {
+            crate::object::js_util_types_is_generator_function(arg(0))
+        }
+        ("util/types", "isGeneratorObject") => {
+            crate::object::js_util_types_is_generator_object(arg(0))
+        }
+        ("util/types", "isNativeError") => crate::object::js_util_types_is_native_error(arg(0)),
         ("util/types", "isNumberObject") => crate::object::js_util_types_is_number_object(arg(0)),
         ("util/types", "isStringObject") => crate::object::js_util_types_is_string_object(arg(0)),
         ("util/types", "isBooleanObject") => crate::object::js_util_types_is_boolean_object(arg(0)),
@@ -1024,7 +1150,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
         ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
-        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1)),
+        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),
         ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
 
         // ── console module namespace (`node:console` / `console`) ──
@@ -1104,11 +1230,60 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.
+        ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         ("stream", "Readable") => crate::node_stream::js_node_stream_readable_new(arg(0)),
         ("stream", "Writable") => crate::node_stream::js_node_stream_writable_new(arg(0)),
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+
+        // #2130: captured-then-called child_process methods (`const spawn =
+        // require('child_process').spawn; spawn(...)`, Node's canonical test
+        // idiom). The bound-method closure produced by `cp.spawn` (and the
+        // other entries allowlisted in `is_native_module_callable_export`)
+        // funnels back here when invoked. The method-call form
+        // (`cp.spawn(...)`) is lowered to the same FFIs through dedicated
+        // codegen arms (`expr/child_proc.rs`); this arm mirrors them for the
+        // value-call form. `cmd` / `file` / `module` strings come in NaN-boxed
+        // (SSO-safe via `js_string_materialize_to_heap`); `args` is the array
+        // pointer (or null); `opts` is the options-object pointer (or 0 →
+        // undefined inside the impls).
+        ("child_process", "spawn") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            let args_p = ptr_addr(arg(1)) as i64;
+            let opts_p = ptr_addr(arg(2)) as i64;
+            crate::child_process::reactor::js_child_process_spawn_streams(cmd, args_p, opts_p)
+        }
+        ("child_process", "spawnSync") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0));
+            let args_p = ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
+            let opts_p = ptr_addr(arg(2)) as *const ObjectHeader;
+            let result = crate::child_process::js_child_process_spawn_sync(cmd, args_p, opts_p);
+            ptr_to_f64(result as *const u8)
+        }
+        ("child_process", "execSync") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0));
+            let opts_p = ptr_addr(arg(1)) as *const ObjectHeader;
+            crate::child_process::js_child_process_exec_sync(cmd, opts_p)
+        }
+        ("child_process", "exec") => {
+            let cmd = crate::string::js_string_materialize_to_heap(arg(0));
+            crate::child_process::js_child_process_exec(cmd, arg(1), arg(2))
+        }
+        ("child_process", "execFile") => {
+            let file = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            crate::child_process::js_child_process_exec_file(file, arg(1), arg(2), arg(3))
+        }
+        ("child_process", "execFileSync") => {
+            let file = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            crate::child_process::js_child_process_exec_file_sync(file, arg(1), arg(2))
+        }
+        ("child_process", "fork") => {
+            let module = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
+            let args_p = ptr_addr(arg(1)) as i64;
+            let opts_p = ptr_addr(arg(2)) as i64;
+            crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
+        }
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which

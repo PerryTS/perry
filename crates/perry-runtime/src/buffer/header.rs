@@ -54,6 +54,10 @@ thread_local! {
     /// predicates (`isArrayBuffer` is false, `isSharedArrayBuffer` is true).
     static SHARED_ARRAY_BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> =
         RefCell::new(new_ptr_hash_set());
+    /// DataView is currently modeled as a view over an existing BufferHeader
+    /// backing store. Track constructor-created views so util.types can
+    /// distinguish the ArrayBufferView predicate from TypedArray predicates.
+    static DATA_VIEW_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// Issue #1225: ArrayBuffer-identity alias map for Buffers produced by
     /// copy paths like `Buffer.from(buf)`.  Node-compatible semantics: the
     /// new Buffer's `.buffer` returns the same ArrayBuffer object as the
@@ -108,6 +112,16 @@ pub fn is_shared_array_buffer(addr: usize) -> bool {
 
 pub fn is_any_array_buffer(addr: usize) -> bool {
     is_array_buffer(addr) || is_shared_array_buffer(addr)
+}
+
+pub fn mark_as_data_view(addr: usize) {
+    DATA_VIEW_REGISTRY.with(|r| {
+        r.borrow_mut().insert(addr);
+    });
+}
+
+pub fn is_data_view(addr: usize) -> bool {
+    DATA_VIEW_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
 /// Register a buffer pointer in the thread-local registry

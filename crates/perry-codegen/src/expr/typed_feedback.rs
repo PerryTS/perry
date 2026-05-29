@@ -9,7 +9,11 @@ pub(crate) enum TypedFeedbackKind {
     MethodCall,
     ClosureCall,
     ArrayElement,
+    // #854: in-progress typed-feedback kinds; the guard/observe emit sites that
+    // construct these are not wired into the codegen hot path yet.
+    #[allow(dead_code)]
     NumericFieldWrite,
+    #[allow(dead_code)]
     HelperReturn,
 }
 
@@ -54,6 +58,8 @@ impl TypedFeedbackContract {
         Self::new("method_direct_call_guard", "js_native_call_method")
     }
 
+    // #854: near-future typed-feedback contract seam, not yet emitted.
+    #[allow(dead_code)]
     pub(crate) const fn method_apply_call() -> Self {
         Self::new("method_call_guard", "js_native_call_method_apply")
     }
@@ -80,6 +86,8 @@ impl TypedFeedbackContract {
         Self::new("plain_array_index_set_guard", "js_array_set_f64_extend")
     }
 
+    // #854: near-future typed-feedback contract seam, not yet emitted.
+    #[allow(dead_code)]
     pub(crate) const fn bounded_array_set_index() -> Self {
         Self::new(
             "plain_array_index_set_guard",
@@ -91,6 +99,8 @@ impl TypedFeedbackContract {
         Self::new("numeric_array_index_set_guard", "js_array_set_f64_extend")
     }
 
+    // #854: near-future typed-feedback contract seam, not yet emitted.
+    #[allow(dead_code)]
     pub(crate) const fn bounded_numeric_array_set_index() -> Self {
         Self::new(
             "numeric_array_index_set_guard",
@@ -113,6 +123,8 @@ impl TypedFeedbackContract {
         )
     }
 
+    // #854: near-future typed-feedback contract seam, not yet emitted.
+    #[allow(dead_code)]
     pub(crate) const fn unboxed_numeric_field_write() -> Self {
         Self::new(
             "unboxed_numeric_field_write_guard",
@@ -120,6 +132,8 @@ impl TypedFeedbackContract {
         )
     }
 
+    // #854: near-future typed-feedback contract seam, not yet emitted.
+    #[allow(dead_code)]
     pub(crate) const fn helper_return() -> Self {
         Self::new("helper_return_shape_guard", "return_original_jsvalue")
     }
@@ -236,6 +250,9 @@ pub(crate) fn emit_typed_feedback_register_site(
     site_id.to_string()
 }
 
+// #854: near-future typed-feedback helper-return observation emitter; the call
+// sites that invoke it are not wired into the codegen hot path yet.
+#[allow(dead_code)]
 pub(crate) fn emit_typed_feedback_observe_helper_return(
     ctx: &mut FnCtx<'_>,
     operation: &str,

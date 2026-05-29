@@ -15,6 +15,10 @@ use super::*;
 use crate::ir::*;
 
 impl LoweringContext {
+    // #854: single-arg constructor (delegates to `with_class_id_start`).
+    // Currently only exercised from the `#[cfg(test)]` lowering tests, so it
+    // reads as dead in a non-test build. Kept as the canonical entry point.
+    #[allow(dead_code)]
     pub fn new(source_file_path: impl Into<String>) -> Self {
         Self::with_class_id_start(source_file_path, 1)
     }
@@ -59,6 +63,7 @@ impl LoweringContext {
             source_file_path: source_file_path.into(),
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
+            closure_display_names: HashMap::new(),
             func_return_native_instances: Vec::new(),
             pending_classes: Vec::new(),
             func_return_types: Vec::new(),
