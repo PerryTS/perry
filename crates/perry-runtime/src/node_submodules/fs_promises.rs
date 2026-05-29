@@ -39,14 +39,10 @@ pub(crate) extern "C" fn thunk_fs_promises_open(
     flags: f64,
     _mode: f64,
 ) -> f64 {
-    // Probe before opening so a missing path rejects the Promise instead of
-    // resolving with a FileHandle whose `fd === -1`. Matches Node's behavior
-    // for `fs/promises.open(path)` on ENOENT/EACCES.
-    if let Some(err_val) = unsafe { crate::fs::fs_promises_open_probe_error(path, flags) } {
-        let promise = crate::promise::js_promise_rejected(err_val);
-        return f64::from_bits(JSValue::pointer(promise as *const u8).bits());
+    match unsafe { crate::fs::js_fs_filehandle_open_result(path, flags) } {
+        Ok(handle) => promise_value(handle),
+        Err(err_val) => promise_rejected(err_val),
     }
-    promise_value(crate::fs::js_fs_filehandle_open(path, flags))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_writeFile(

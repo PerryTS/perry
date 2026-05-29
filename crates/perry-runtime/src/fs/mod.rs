@@ -1620,15 +1620,7 @@ pub extern "C" fn js_fs_readlink_dispatch(path_value: f64, options_value: f64) -
 }
 
 fn flag_string(value: f64) -> String {
-    unsafe {
-        let ptr = extract_string_ptr(value);
-        if ptr.is_null() {
-            return "r".to_string();
-        }
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-    }
+    unsafe { decode_flags_string(value).unwrap_or_else(|| "r".to_string()) }
 }
 
 fn buffer_ptr_from_value(value: f64) -> *mut crate::buffer::BufferHeader {
@@ -1713,6 +1705,22 @@ pub extern "C" fn js_fs_access_sync_throw_mode(path_value: f64, mode_value: f64)
 // ============================================================
 
 fn io_error_code(err: &std::io::Error) -> &'static str {
+    #[cfg(unix)]
+    if let Some(raw) = err.raw_os_error() {
+        match raw {
+            code if code == libc::ENOENT => return "ENOENT",
+            code if code == libc::EACCES => return "EACCES",
+            code if code == libc::EEXIST => return "EEXIST",
+            code if code == libc::ENOTDIR => return "ENOTDIR",
+            code if code == libc::EISDIR => return "EISDIR",
+            code if code == libc::EINVAL => return "EINVAL",
+            code if code == libc::EINTR => return "EINTR",
+            code if code == libc::ENOSPC => return "ENOSPC",
+            code if code == libc::ETIMEDOUT => return "ETIMEDOUT",
+            code if code == libc::EAGAIN => return "EAGAIN",
+            _ => {}
+        }
+    }
     use std::io::ErrorKind;
     match err.kind() {
         ErrorKind::NotFound => "ENOENT",

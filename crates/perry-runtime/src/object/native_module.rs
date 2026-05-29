@@ -1320,6 +1320,46 @@ pub(crate) unsafe fn get_native_module_constant(
             0x0100 as f64
         }
     };
+    let o_creat = {
+        #[cfg(unix)]
+        {
+            libc::O_CREAT as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0x200 as f64
+        }
+    };
+    let o_trunc = {
+        #[cfg(unix)]
+        {
+            libc::O_TRUNC as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0x400 as f64
+        }
+    };
+    let o_append = {
+        #[cfg(unix)]
+        {
+            libc::O_APPEND as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0x8 as f64
+        }
+    };
+    let o_excl = {
+        #[cfg(unix)]
+        {
+            libc::O_EXCL as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0x800 as f64
+        }
+    };
 
     // Helper for fs constants — shared between "fs" and "fs.constants" modules.
     // Using a nested match (module first, then property) instead of OR patterns
@@ -1335,10 +1375,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "O_WRONLY" => Some(1.0),
             "O_RDWR" => Some(2.0),
             "O_NOFOLLOW" => Some(o_nofollow),
-            "O_CREAT" => Some(0x200 as f64),
-            "O_TRUNC" => Some(0x400 as f64),
-            "O_APPEND" => Some(0x8 as f64),
-            "O_EXCL" => Some(0x800 as f64),
+            "O_CREAT" => Some(o_creat),
+            "O_TRUNC" => Some(o_trunc),
+            "O_APPEND" => Some(o_append),
+            "O_EXCL" => Some(o_excl),
             "COPYFILE_EXCL" => Some(1.0),
             "COPYFILE_FICLONE" => Some(2.0),
             "COPYFILE_FICLONE_FORCE" => Some(4.0),

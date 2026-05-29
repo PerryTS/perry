@@ -613,27 +613,6 @@ pub extern "C" fn js_fs_open_callback(path_value: f64, arg1: f64, arg2: f64, arg
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// Probe used by `fs/promises.open` to decide whether to resolve with a
-/// FileHandle or reject. Returns `Some(err_val)` when the underlying open
-/// would fail with ENOENT/EACCES/EEXIST/etc., else `None`.
-///
-/// Exposed at `pub(crate)` so `node_submodules::thunk_fs_promises_open` can
-/// turn the io::Error into a rejected Promise instead of resolving with a
-/// FileHandle whose `fd === -1`.
-pub(crate) unsafe fn fs_promises_open_probe_error(
-    path_value: f64,
-    flags_value: f64,
-) -> Option<f64> {
-    // Only probe for read-only flags; anything that may create the file —
-    // including numeric `O_CREAT|…` bitsets — is left to the underlying
-    // open so it can succeed when the file doesn't exist yet.
-    if open_flag_is_read_only(flags_value) {
-        fs_callback_read_error(path_value, "open")
-    } else {
-        None
-    }
-}
-
 /// Returns true when an `open` flags value is unambiguously read-only.
 /// Treats `undefined` (Node's default) as read-only, the string flags
 /// `"r"` and `"r+"` as read-only, and everything else — including any

@@ -5,8 +5,8 @@ This split suite replaces the legacy monolithic `test-files/test_parity_fs.ts` a
 ## Current coverage
 
 - `node:fs`: 108 TypeScript parity cases
-- `node:fs/promises`: 54 TypeScript parity cases
-- Total: 162 TypeScript parity cases
+- `node:fs/promises`: 55 TypeScript parity cases
+- Total: 163 TypeScript parity cases
 
 The suite was built from deterministic behavior in:
 
@@ -31,7 +31,7 @@ These areas are intentionally left as follow-up work because they require larger
 9. URL/path edge cases, especially full compatibility with `pathToFileURL()`-generated objects.
 10. Additional platform- and permission-sensitive behavior once the parity runner can model those deterministically.
 11. Real streaming for `createReadStream`/`createWriteStream`. The current implementation eagerly loads the source file into memory and emits one `data` chunk; arbitrary `highWaterMark`, mid-stream `pause`/`resume`, and backpressure-driven `drain` events are not yet modeled.
-12. Callback-style fs APIs now invoke `cb(err, …)` with a real `Error` carrying `err.code` (`"ENOENT"`, `"EACCES"`, `"EEXIST"`, …), `err.syscall`, and `err.path` — values are registered in per-message side tables (`register_error_code_pub` / `register_error_syscall` / `register_error_path`) and surfaced by the `OBJECT_TYPE_ERROR` getters in `object::field_get_set`. Errors raised inside the syscall after the pre-flight probe succeeds still surface as sentinel values (a deeper fix needs typed-error propagation through LLVM). `fs/promises.open` rejects on a missing read-only path; create-mode flags (`"w"`, `"a"`, numeric `O_CREAT|…`) still defer to the underlying syscall and may resolve with `fd === -1` on failure.
+12. Callback-style fs APIs now invoke `cb(err, …)` with a real `Error` carrying `err.code` (`"ENOENT"`, `"EACCES"`, `"EEXIST"`, …), `err.syscall`, and `err.path` — values are registered in per-message side tables (`register_error_code_pub` / `register_error_syscall` / `register_error_path`) and surfaced by the `OBJECT_TYPE_ERROR` getters in `object::field_get_set`. Errors raised inside the syscall after the pre-flight probe succeeds still surface as sentinel values (a deeper fix needs typed-error propagation through LLVM). `fs/promises.open` now rejects failed direct opens, including read-only and create/write-style flags, instead of resolving with `fd === -1`.
 13. `FileHandle` and the numeric-fd registry are `thread_local` — handles cannot be shared across threads spawned with `perry/thread` or `parallelMap`. The same fd in another thread is treated as missing.
 14. On POSIX, `ctime` is now read from `MetadataExt::ctime` (plus `ctime_nsec`) and the bigint `atimeNs`/`mtimeNs`/`ctimeNs` fields use real `*time_nsec` counters — so sub-millisecond precision is preserved. Windows still falls back to the millisecond×1e6 approximation.
 15. `mkdtemp` returns an empty path on exhaustion (after 64 collision retries) instead of throwing — once typed error propagation lands, promote this to a real ENOSPC/EACCES rejection.

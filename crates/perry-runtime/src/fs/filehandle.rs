@@ -563,10 +563,7 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
     interface
 }
 
-/// Build a minimal `fs.promises.FileHandle` object for deterministic parity.
-#[no_mangle]
-pub extern "C" fn js_fs_filehandle_open(path_value: f64, flags_value: f64) -> f64 {
-    let fd = js_fs_open_sync(path_value, flags_value) as i32;
+fn build_filehandle_object(fd: i32) -> f64 {
     crate::closure::js_register_closure_arity(filehandle_stat_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(filehandle_read_impl as *const u8, 5);
     crate::closure::js_register_closure_arity(filehandle_write_impl as *const u8, 5);
@@ -658,4 +655,21 @@ pub extern "C" fn js_fs_filehandle_open(path_value: f64, flags_value: f64) -> f6
         fds.borrow_mut().insert(obj as usize, fd);
     });
     handle
+}
+
+/// Build a minimal `fs.promises.FileHandle` object for deterministic parity.
+#[no_mangle]
+pub extern "C" fn js_fs_filehandle_open(path_value: f64, flags_value: f64) -> f64 {
+    let fd = js_fs_open_sync(path_value, flags_value) as i32;
+    build_filehandle_object(fd)
+}
+
+pub(crate) unsafe fn js_fs_filehandle_open_result(
+    path_value: f64,
+    flags_value: f64,
+) -> Result<f64, f64> {
+    match fs_open_sync_result(path_value, flags_value) {
+        Ok(fd) => Ok(build_filehandle_object(fd)),
+        Err((err, path)) => Err(build_fs_error_value(&err, "open", &path)),
+    }
 }

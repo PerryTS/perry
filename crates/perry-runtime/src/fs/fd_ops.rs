@@ -20,101 +20,155 @@ pub(crate) fn array_ptr_from_value(value: f64) -> *const crate::array::ArrayHead
     }
 }
 
+fn open_options_from_flags(flags_value: f64) -> (fs::OpenOptions, bool) {
+    let mut opts = fs::OpenOptions::new();
+    let append_mode;
+    if flags_value.is_finite() {
+        let flags = flags_value as i32;
+        append_mode = apply_numeric_open_flags(&mut opts, flags);
+    } else {
+        let flags = flag_string(flags_value);
+        append_mode = matches!(flags.as_str(), "a" | "a+" | "ax" | "ax+");
+        match flags.as_str() {
+            "r" | "rs" => {
+                opts.read(true);
+            }
+            "r+" | "rs+" => {
+                opts.read(true).write(true);
+            }
+            "w" => {
+                opts.write(true).create(true).truncate(true);
+            }
+            "w+" => {
+                opts.read(true).write(true).create(true).truncate(true);
+            }
+            "a" => {
+                opts.write(true).create(true).append(true);
+            }
+            "a+" => {
+                opts.read(true).write(true).create(true).append(true);
+            }
+            "wx" => {
+                opts.write(true).create_new(true);
+            }
+            "wx+" => {
+                opts.read(true).write(true).create_new(true);
+            }
+            "ax" => {
+                opts.write(true).create_new(true).append(true);
+            }
+            "ax+" => {
+                opts.read(true).write(true).create_new(true).append(true);
+            }
+            _ => {
+                opts.read(true);
+            }
+        }
+    }
+    (opts, append_mode)
+}
+
+#[cfg(unix)]
+fn apply_numeric_open_flags(opts: &mut fs::OpenOptions, flags: i32) -> bool {
+    match flags & libc::O_ACCMODE {
+        libc::O_WRONLY => {
+            opts.write(true);
+        }
+        libc::O_RDWR => {
+            opts.read(true).write(true);
+        }
+        _ => {
+            opts.read(true);
+        }
+    }
+    if flags & libc::O_CREAT != 0 && flags & libc::O_EXCL != 0 {
+        opts.create_new(true);
+    } else if flags & libc::O_CREAT != 0 {
+        opts.create(true);
+    }
+    if flags & libc::O_TRUNC != 0 {
+        opts.truncate(true);
+    }
+    let append_mode = flags & libc::O_APPEND != 0;
+    if append_mode {
+        opts.append(true).write(true);
+    }
+    append_mode
+}
+
+#[cfg(not(unix))]
+fn apply_numeric_open_flags(opts: &mut fs::OpenOptions, flags: i32) -> bool {
+    let append_mode = flags & 0x8 != 0;
+    let access = flags & 0x3;
+    match access {
+        1 => {
+            opts.write(true);
+        }
+        2 => {
+            opts.read(true).write(true);
+        }
+        _ => {
+            opts.read(true);
+        }
+    }
+    if flags & 0x200 != 0 && flags & 0x800 != 0 {
+        opts.create_new(true);
+    } else if flags & 0x200 != 0 {
+        opts.create(true);
+    }
+    if flags & 0x400 != 0 {
+        opts.truncate(true);
+    }
+    if append_mode {
+        opts.append(true).write(true);
+    }
+    append_mode
+}
+
+pub(crate) unsafe fn fs_open_sync_result(
+    path_value: f64,
+    flags_value: f64,
+) -> Result<i32, (std::io::Error, String)> {
+    crate::fs::validate::validate_path("path", path_value);
+    let path_str = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => {
+            return Err((
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid path"),
+                String::new(),
+            ));
+        }
+    };
+    let (opts, append_mode) = open_options_from_flags(flags_value);
+    match opts.open(&path_str) {
+        Ok(file) => {
+            let fd = NEXT_FD.with(|n| {
+                let mut n = n.borrow_mut();
+                let fd = *n;
+                *n += 1;
+                fd
+            });
+            FD_REGISTRY.with(|r| {
+                r.borrow_mut().insert(fd, file);
+            });
+            FD_PATHS.with(|r| {
+                r.borrow_mut().insert(fd, path_str.to_string());
+            });
+            FD_APPEND_MODE.with(|r| {
+                r.borrow_mut().insert(fd, append_mode);
+            });
+            Ok(fd)
+        }
+        Err(err) => Err((err, path_str)),
+    }
+}
+
 /// `fs.openSync(path, flags)` — small fd registry for deterministic tests.
 #[no_mangle]
 pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
-    crate::fs::validate::validate_path("path", path_value);
     unsafe {
-        let path_str = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return -1.0,
-        };
-        let mut opts = fs::OpenOptions::new();
-        let append_mode;
-        if flags_value.is_finite() {
-            let flags = flags_value as i32;
-            append_mode = flags & 0x8 != 0;
-            let access = flags & 0x3;
-            match access {
-                1 => {
-                    opts.write(true);
-                }
-                2 => {
-                    opts.read(true).write(true);
-                }
-                _ => {
-                    opts.read(true);
-                }
-            }
-            if flags & 0x200 != 0 && flags & 0x800 != 0 {
-                opts.create_new(true);
-            } else if flags & 0x200 != 0 {
-                opts.create(true);
-            }
-            if flags & 0x400 != 0 {
-                opts.truncate(true);
-            }
-            if append_mode {
-                opts.append(true).write(true);
-            }
-        } else {
-            let flags = flag_string(flags_value);
-            append_mode = matches!(flags.as_str(), "a" | "a+" | "ax" | "ax+");
-            match flags.as_str() {
-                "r" | "rs" => {
-                    opts.read(true);
-                }
-                "r+" | "rs+" => {
-                    opts.read(true).write(true);
-                }
-                "w" => {
-                    opts.write(true).create(true).truncate(true);
-                }
-                "w+" => {
-                    opts.read(true).write(true).create(true).truncate(true);
-                }
-                "a" => {
-                    opts.write(true).create(true).append(true);
-                }
-                "a+" => {
-                    opts.read(true).write(true).create(true).append(true);
-                }
-                "wx" => {
-                    opts.write(true).create_new(true);
-                }
-                "wx+" => {
-                    opts.read(true).write(true).create_new(true);
-                }
-                "ax" => {
-                    opts.write(true).create_new(true).append(true);
-                }
-                "ax+" => {
-                    opts.read(true).write(true).create_new(true).append(true);
-                }
-                _ => {
-                    opts.read(true);
-                }
-            }
-        }
-        match opts.open(&path_str) {
-            Ok(file) => {
-                let fd = NEXT_FD.with(|n| {
-                    let mut n = n.borrow_mut();
-                    let fd = *n;
-                    *n += 1;
-                    fd
-                });
-                FD_REGISTRY.with(|r| {
-                    r.borrow_mut().insert(fd, file);
-                });
-                FD_PATHS.with(|r| {
-                    r.borrow_mut().insert(fd, path_str.to_string());
-                });
-                FD_APPEND_MODE.with(|r| {
-                    r.borrow_mut().insert(fd, append_mode);
-                });
-                fd as f64
-            }
+        match fs_open_sync_result(path_value, flags_value) {
+            Ok(fd) => fd as f64,
             Err(_) => -1.0,
         }
     }
