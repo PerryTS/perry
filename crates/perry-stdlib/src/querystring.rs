@@ -30,6 +30,7 @@ use std::borrow::Cow;
 use std::os::raw::c_int;
 
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
+use perry_runtime::buffer::{buffer_alloc, buffer_data_mut, BufferHeader};
 use perry_runtime::closure::{is_closure_ptr, js_closure_call1, ClosureHeader};
 use perry_runtime::{
     js_object_alloc_null_proto, js_object_get_field_by_name, js_object_get_own_field_or_undef,
@@ -121,7 +122,7 @@ fn percent_encode(input: &str) -> String {
     out
 }
 
-fn percent_decode(input: &str, plus_as_space: bool) -> String {
+fn percent_decode_bytes(input: &str, plus_as_space: bool) -> Vec<u8> {
     let bytes = input.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -153,6 +154,11 @@ fn percent_decode(input: &str, plus_as_space: bool) -> String {
         }
         i += 1;
     }
+    out
+}
+
+fn percent_decode(input: &str, plus_as_space: bool) -> String {
+    let out = percent_decode_bytes(input, plus_as_space);
     String::from_utf8_lossy(&out).into_owned()
 }
 
@@ -183,6 +189,67 @@ pub unsafe extern "C" fn js_querystring_unescape(str_arg: f64) -> f64 {
         None => return f64::from_bits(JSValue::undefined().bits()),
     };
     nanbox_string(intern_string(&percent_decode(&s, false)))
+}
+
+unsafe fn buffer_from_bytes(bytes: &[u8]) -> *mut BufferHeader {
+    let buf = buffer_alloc(bytes.len() as u32);
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
+    (*buf).length = bytes.len() as u32;
+    if !bytes.is_empty() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), bytes.len());
+    }
+    buf
+}
+
+/// `querystring.unescapeBuffer(str, decodeSpaces?)` -> Buffer.
+#[no_mangle]
+pub unsafe extern "C" fn js_querystring_unescape_buffer(
+    str_arg: f64,
+    decode_spaces_arg: f64,
+) -> *mut BufferHeader {
+    let s = match nanboxed_to_string(str_arg) {
+        Some(s) => s,
+        None => return buffer_from_bytes(&[]),
+    };
+    let decode_spaces = perry_runtime::value::js_is_truthy(decode_spaces_arg) != 0;
+    let bytes = percent_decode_bytes(&s, decode_spaces);
+    buffer_from_bytes(&bytes)
+}
+
+/// Runtime bridge for captured native-module callables such as
+/// `const f = querystring.unescapeBuffer; f(...)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_querystring_native_dispatch(
+    method: *const u8,
+    method_len: usize,
+    args: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undefined = f64::from_bits(JSValue::undefined().bits());
+    if method.is_null() || method_len == 0 {
+        return undefined;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(method, method_len)).unwrap_or("");
+    let arg = |i: usize| -> f64 {
+        if i < args_len && !args.is_null() {
+            *args.add(i)
+        } else {
+            undefined
+        }
+    };
+    match name {
+        "unescapeBuffer" => {
+            let buf = js_querystring_unescape_buffer(arg(0), arg(1));
+            if buf.is_null() {
+                undefined
+            } else {
+                f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+            }
+        }
+        _ => undefined,
+    }
 }
 
 /// `querystring.parse(str, sep?, eq?, options?)` → object. Repeated keys produce

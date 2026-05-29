@@ -2204,6 +2204,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (deprecated since Node 11 but still imported by many npm pkgs).
     method("querystring", "escape", false, None),
     method("querystring", "unescape", false, None),
+    method("querystring", "unescapeBuffer", false, None),
     method("querystring", "parse", false, None),
     method("querystring", "stringify", false, None),
     // `decode` / `encode` are aliases the test_parity_querystring fixture

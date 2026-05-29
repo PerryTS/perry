@@ -123,6 +123,15 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        "querystring" => Some(&[
+            b"unescapeBuffer",
+            b"unescape",
+            b"escape",
+            b"stringify",
+            b"encode",
+            b"parse",
+            b"decode",
+        ]),
         _ => None,
     }
 }
@@ -990,6 +999,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("punycode", "encode")
             | ("punycode", "toASCII")
             | ("punycode", "toUnicode")
+            | ("querystring", "unescapeBuffer")
             | ("console", "Console")
             | ("console", "log")
             | ("console", "info")

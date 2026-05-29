@@ -1010,6 +1010,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // STRING_TAG value directly.
     module.declare_function("js_querystring_escape", DOUBLE, &[DOUBLE]);
     module.declare_function("js_querystring_unescape", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_querystring_unescape_buffer", I64, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_querystring_parse",
         I64,
