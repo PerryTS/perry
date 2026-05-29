@@ -30,7 +30,7 @@ mod stats;
 pub use stats::*;
 mod dirent;
 pub use dirent::*;
-pub(crate) mod validate;
+pub mod validate;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
