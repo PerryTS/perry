@@ -102,6 +102,12 @@ crates/perry-runtime/src/object/native_module.rs
 # ObjectHeader) tipped it over. Splitting the two towers into sibling
 # modules is tracked under #1435.
 crates/perry-runtime/src/builtins/formatting.rs
+# WHATWG Streams (ReadableStream/WritableStream/TransformStream + reader/
+# writer/controller dispatch). Crossed the limit at 2088 LOC after the
+# web-stream correctness batch (#2450 pipeTo preventClose, #2455 BYOB-on-
+# non-byte reject, #2460 reserved-type reject) landed on main without a
+# split. Splitting per stream-kind family is tracked under #2472.
+crates/perry-stdlib/src/streams.rs
 EOF
 )
 
