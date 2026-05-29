@@ -9,6 +9,7 @@ thread_local! {
     static WRITEV_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static WRITEV_BUFFER_SHAPE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static WRITE_ENCODINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static WRITE_CHUNK_STRING_FLAGS: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static WRITE_CALLBACK_COUNT: RefCell<usize> = const { RefCell::new(0) };
     pub(super) static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     pub(super) static READABLE_READ_CAPTURED: RefCell<Vec<Option<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
@@ -94,8 +95,26 @@ extern "C" fn write_capture_encoding(
     let bytes = js_node_stream_collect_bytes(readable);
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().push(bytes));
     WRITE_ENCODINGS.with(|encodings| encodings.borrow_mut().push(string_contents(enc)));
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| {
+        flags
+            .borrow_mut()
+            .push(JSValue::from_bits(chunk.to_bits()).is_any_string())
+    });
     unsafe {
         let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn write_callback_error(
+    closure: *const ClosureHeader,
+    _chunk: f64,
+    _enc: f64,
+    cb: f64,
+) -> f64 {
+    let err = crate::closure::js_closure_get_capture_f64(closure, 0);
+    unsafe {
+        let _ = crate::closure::js_native_call_value(cb, [err].as_ptr(), 1);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -910,6 +929,52 @@ fn writable_cork_uses_writev_for_multi_chunk_flush() {
 }
 
 #[test]
+fn writable_cork_with_decode_strings_false_preserves_writev_strings() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITEV_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITEV_BUFFER_SHAPE.with(|shape| shape.borrow_mut().clear());
+
+    let opts = crate::object::js_object_alloc(0, 3);
+    let write = js_closure_alloc(write_capture as *const u8, 0);
+    let writev = js_closure_alloc(writev_capture as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    crate::closure::js_register_closure_arity(writev_capture as *const u8, 2);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"writev"),
+        f64::from_bits(JSValue::pointer(writev as *const u8).bits()),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"decodeStrings"),
+        f64::from_bits(TAG_FALSE),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+
+    let _ = js_node_stream_method_cork(handle);
+    let _ = js_node_stream_method_write(handle, string_value("a"), undefined, undefined);
+    let _ = js_node_stream_method_write(handle, string_value("b"), undefined, undefined);
+    let _ = js_node_stream_method_uncork(handle);
+
+    WRITE_CAPTURED.with(|captured| assert!(captured.borrow().is_empty()));
+    WRITEV_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"a".to_vec(), b"b".to_vec()]
+        );
+    });
+    WRITEV_BUFFER_SHAPE.with(|shape| assert_eq!(shape.borrow().as_slice(), &[false, false]));
+}
+
+#[test]
 fn writable_write_after_end_emits_error_without_calling_write() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
     ERROR_COUNT.with(|count| *count.borrow_mut() = 0);
@@ -947,9 +1012,63 @@ fn writable_write_after_end_emits_error_without_calling_write() {
 }
 
 #[test]
+fn writable_write_callback_error_emits_error_and_destroys() {
+    STREAM_EVENT_ARG_MATCHES.with(|matches| matches.borrow_mut().clear());
+
+    let msg = crate::string::js_string_from_bytes(b"sink-rejection".as_ptr(), 14);
+    let err = crate::error::js_error_new_with_message(msg);
+    let err_value = crate::value::js_nanbox_pointer(err as i64);
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    let write = js_closure_alloc(write_callback_error as *const u8, 1);
+    crate::closure::js_register_closure_arity(write_callback_error as *const u8, 3);
+    crate::closure::js_closure_set_capture_f64(write, 0, err_value);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    crate::closure::js_register_closure_arity(capture_expected_arg_listener as *const u8, 1);
+
+    let error = js_closure_alloc(capture_expected_arg_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(error, 0, err_value);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("error"),
+        f64::from_bits(JSValue::pointer(error as *const u8).bits()),
+    );
+
+    let write_cb = js_closure_alloc(capture_expected_arg_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(write_cb, 0, err_value);
+    let write_cb_value = f64::from_bits(JSValue::pointer(write_cb as *const u8).bits());
+    let result = js_node_stream_method_write3(
+        handle,
+        string_value("x"),
+        write_cb_value,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    assert_eq!(result.to_bits(), TAG_TRUE);
+
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    STREAM_EVENT_ARG_MATCHES.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true, true]);
+    });
+    assert_eq!(js_node_stream_method_destroyed(handle).to_bits(), TAG_TRUE);
+    assert_eq!(
+        js_node_stream_method_errored(handle).to_bits(),
+        err_value.to_bits()
+    );
+}
+
+#[test]
 fn writable_write_decodes_string_chunks_and_runs_callback() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
     WRITE_ENCODINGS.with(|encodings| encodings.borrow_mut().clear());
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| flags.borrow_mut().clear());
     WRITE_CALLBACK_COUNT.with(|count| *count.borrow_mut() = 0);
 
     let opts = crate::object::js_object_alloc(0, 1);
@@ -987,6 +1106,62 @@ fn writable_write_decodes_string_chunks_and_runs_callback() {
             &["buffer".to_string(), "buffer".to_string()]
         );
     });
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| {
+        assert_eq!(flags.borrow().as_slice(), &[false, false]);
+    });
+    WRITE_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 2));
+}
+
+#[test]
+fn writable_decode_strings_false_preserves_string_chunks() {
+    WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    WRITE_ENCODINGS.with(|encodings| encodings.borrow_mut().clear());
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| flags.borrow_mut().clear());
+    WRITE_CALLBACK_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let opts = crate::object::js_object_alloc(0, 2);
+    let write = js_closure_alloc(write_capture_encoding as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_capture_encoding as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"write"),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"decodeStrings"),
+        f64::from_bits(TAG_FALSE),
+    );
+
+    let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let cb = js_closure_alloc(capture_write_callback as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_write_callback as *const u8, 0);
+    let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+
+    let result =
+        js_node_stream_method_write3(handle, string_value("6869"), string_value("hex"), cb_value);
+    assert_eq!(result.to_bits(), TAG_TRUE);
+
+    let result = js_node_stream_method_write3(handle, string_value("plain"), cb_value, undefined);
+    assert_eq!(result.to_bits(), TAG_TRUE);
+
+    WRITE_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"6869".to_vec(), b"plain".to_vec()]
+        );
+    });
+    WRITE_ENCODINGS.with(|encodings| {
+        assert_eq!(
+            encodings.borrow().as_slice(),
+            &["hex".to_string(), "utf8".to_string()]
+        );
+    });
+    WRITE_CHUNK_STRING_FLAGS.with(|flags| {
+        assert_eq!(flags.borrow().as_slice(), &[true, true]);
+    });
     WRITE_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 2));
 }
 
@@ -1014,4 +1189,35 @@ fn writable_buffer_write_passes_buffer_encoding() {
     WRITE_ENCODINGS.with(|encodings| {
         assert_eq!(encodings.borrow().as_slice(), &["buffer".to_string()]);
     });
+}
+
+#[test]
+fn readable_object_mode_read_returns_one_object_per_call() {
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"objectMode"), f64::from_bits(TAG_TRUE));
+    let stream = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    let first_obj = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(first_obj, hidden_key(b"a"), 1.0);
+    let first_value = box_pointer(first_obj as *const u8);
+    let second_obj = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(second_obj, hidden_key(b"b"), 2.0);
+    let second_value = box_pointer(second_obj as *const u8);
+
+    let _ = js_node_stream_method_push(handle, first_value);
+    let _ = js_node_stream_method_push(handle, second_value);
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+    assert_eq!(js_node_stream_method_readable_length(handle), 2.0);
+
+    let first_read = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(first_read.to_bits(), first_value.to_bits());
+    assert_eq!(js_node_stream_method_readable_length(handle), 1.0);
+    let second_read = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(second_read.to_bits(), second_value.to_bits());
+    assert_eq!(js_node_stream_method_readable_length(handle), 0.0);
+    assert_eq!(
+        js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED)).to_bits(),
+        TAG_NULL
+    );
 }

@@ -274,6 +274,7 @@ impl SH for Expr {
             Expr::BufferAlloc { size, fill, encoding } => { tag(h, 216); size.as_ref().hash(h); fill.hash(h); encoding.hash(h); }
             Expr::BufferAllocUnsafe(e) => { tag(h, 217); e.as_ref().hash(h); }
             Expr::BufferConcat(e) => { tag(h, 218); e.as_ref().hash(h); }
+            Expr::BufferConcatWithLength { list, total_length } => { tag(h, 11222); list.as_ref().hash(h); total_length.as_ref().hash(h); }
             Expr::BufferIsBuffer(e) => { tag(h, 219); e.as_ref().hash(h); }
             Expr::BufferIsEncoding(e) => { tag(h, 11219); e.as_ref().hash(h); }
             Expr::BufferByteLength { data, encoding } => { tag(h, 220); data.as_ref().hash(h); encoding.hash(h); }

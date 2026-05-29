@@ -748,6 +748,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::BufferLength(expr) => {
             collect_assigned_locals_expr(expr, assigned);
         }
+        Expr::BufferConcatWithLength { list, total_length } => {
+            collect_assigned_locals_expr(list, assigned);
+            collect_assigned_locals_expr(total_length, assigned);
+        }
         Expr::BufferByteLength { data, encoding } => {
             collect_assigned_locals_expr(data, assigned);
             if let Some(enc) = encoding {

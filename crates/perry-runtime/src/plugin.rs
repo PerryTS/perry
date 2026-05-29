@@ -76,6 +76,8 @@ struct ToolRegistration {
 
 struct ServiceRegistration {
     plugin_id: u64,
+    // #854: plugin manifest metadata retained for the plugin subsystem
+    #[allow(dead_code)]
     name: String,
     start_fn: u64,
     stop_fn: u64,
@@ -83,6 +85,8 @@ struct ServiceRegistration {
 
 struct RouteRegistration {
     plugin_id: u64,
+    // #854: plugin manifest metadata retained for the plugin subsystem
+    #[allow(dead_code)]
     path: String,
     handler_closure: u64,
 }

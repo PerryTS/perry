@@ -1,4 +1,6 @@
-use crate::closure::ClosureHeader;
+use crate::closure::{
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
+};
 use crate::value::JSValue;
 
 const STREAM_EVENT_NAMES_KEY: &[u8] = b"__perryStreamEventNames";
@@ -596,15 +598,41 @@ fn stream_listeners_array_for_event(
     out
 }
 
-pub(super) fn call_listener_args(stream: f64, listener: f64, args: &[f64]) {
+pub(super) fn call_listener_args(stream: f64, listener: f64, args: &[f64]) -> f64 {
     if !is_callable_value(listener) {
-        return;
+        return f64::from_bits(super::TAG_UNDEFINED);
     }
     let prev = crate::object::js_implicit_this_set(stream);
-    unsafe {
-        let _ = crate::closure::js_native_call_value(listener, args.as_ptr(), args.len());
-    }
+    let result =
+        unsafe { crate::closure::js_native_call_value(listener, args.as_ptr(), args.len()) };
     crate::object::js_implicit_this_set(prev);
+    result
+}
+
+pub(super) extern "C" fn ns_capture_rejection(closure: *const ClosureHeader, reason: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(super::TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let _ = emit_stream_event(stream, super::string_value(b"error"), &[reason]);
+    f64::from_bits(super::TAG_UNDEFINED)
+}
+
+fn capture_rejections_enabled(stream: f64) -> bool {
+    super::has_truthy_hidden(stream, super::hidden_capture_rejections_key())
+}
+
+fn capture_listener_rejection(stream: f64, result: f64) {
+    if crate::promise::js_value_is_promise(result) == 0 {
+        return;
+    }
+    let promise = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
+    if promise.is_null() {
+        return;
+    }
+    let on_rejected = js_closure_alloc(ns_capture_rejection as *const u8, 1);
+    js_closure_set_capture_f64(on_rejected, 0, stream);
+    crate::promise::js_promise_then(promise, std::ptr::null(), on_rejected);
 }
 
 pub(super) fn emit_stream_event_from_array(
@@ -657,8 +685,16 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     if snapshot.iter().any(|(_, once)| *once) {
         remove_once_listeners(stream, event);
     }
+    // Node's Readable data delivery path does not route async `data` listener
+    // rejections through captureRejections; custom EventEmitter-style events do.
+    let capture_rejections = capture_rejections_enabled(stream)
+        && !super::string_value_eq(event, b"error")
+        && !super::string_value_eq(event, b"data");
     for (listener, _) in snapshot {
-        call_listener_args(stream, listener, args);
+        let result = call_listener_args(stream, listener, args);
+        if capture_rejections {
+            capture_listener_rejection(stream, result);
+        }
     }
     f64::from_bits(super::TAG_TRUE)
 }

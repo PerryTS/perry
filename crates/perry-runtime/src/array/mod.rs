@@ -56,6 +56,13 @@ pub use self::iter_object::{
     ARRAY_ITERATOR_CLASS_ID,
 };
 pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
+// Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
+// so an `async function*` mapper return is driven through the iterator
+// protocol instead of being appended as a single chunk.
+pub(crate) use self::iterator::{
+    async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
+    has_iterator_next,
+};
 pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
@@ -68,7 +75,7 @@ pub use self::push_pop::{
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{
     js_array_includes_f64, js_array_includes_jsvalue, js_array_indexOf_f64,
-    js_array_indexOf_jsvalue,
+    js_array_indexOf_jsvalue, js_array_last_index_of_jsvalue,
 };
 pub use self::sort::{js_array_sort_default, js_array_sort_with_comparator};
 pub use self::splice_slice::{js_array_slice, js_array_splice};
