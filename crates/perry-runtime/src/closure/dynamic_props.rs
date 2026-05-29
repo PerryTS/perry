@@ -33,8 +33,14 @@ pub fn closure_set_static_prototype(closure_ptr: usize, proto_bits: u64) {
     if closure_ptr == 0 {
         return;
     }
+    let mut slot_addr = 0usize;
     if let Ok(mut map) = get_closure_prototypes().lock() {
-        map.insert(closure_ptr, proto_bits);
+        let slot = map.entry(closure_ptr).or_insert(0);
+        *slot = proto_bits;
+        slot_addr = slot as *mut u64 as usize;
+    }
+    if slot_addr != 0 {
+        crate::gc::runtime_write_barrier_external_slot(closure_ptr, slot_addr, proto_bits);
     }
 }
 
@@ -80,6 +86,11 @@ pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usi
             merge_closure_prop_map(&mut props, new_owner, old_props);
         }
     }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        if let Some(proto_bits) = prototypes.remove(&old_owner) {
+            prototypes.insert(new_owner, proto_bits);
+        }
+    }
 }
 
 pub(crate) fn visit_closure_dynamic_prop_values_mut(owner: usize, mut visit: impl FnMut(&mut f64)) {
@@ -112,7 +123,21 @@ pub(crate) fn visit_closure_dynamic_prop_value_slots_mut(
     });
 }
 
-/// Mutable GC scanner for the closure dynamic-property side-table.
+pub(crate) fn visit_closure_static_prototype_slot_mut(
+    owner: usize,
+    mut visit: impl FnMut(*mut u64),
+) {
+    if owner == 0 {
+        return;
+    }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        if let Some(proto_bits) = prototypes.get_mut(&owner) {
+            visit(proto_bits as *mut u64);
+        }
+    }
+}
+
+/// Mutable GC scanner for closure dynamic-property side-table metadata.
 ///
 /// The side table is keyed by closure address. The key itself is metadata
 /// (visited only so a moved closure has its entry re-keyed; the metadata
@@ -149,6 +174,22 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
         for (old_owner, new_owner) in moved {
             if let Some(old_props) = props.remove(&old_owner) {
                 merge_closure_prop_map(&mut props, new_owner, old_props);
+            }
+        }
+    }
+    let mut moved_prototypes = Vec::new();
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        for (owner, proto_bits) in prototypes.iter_mut() {
+            let old_owner = *owner;
+            let mut new_owner = old_owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved_prototypes.push((old_owner, new_owner));
+            }
+            visitor.visit_nanbox_u64_slot(proto_bits);
+        }
+        for (old_owner, new_owner) in moved_prototypes {
+            if let Some(proto_bits) = prototypes.remove(&old_owner) {
+                prototypes.insert(new_owner, proto_bits);
             }
         }
     }
@@ -247,6 +288,16 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
         let closure_props = props.entry(ptr).or_insert_with(HashMap::new);
         closure_props.insert(prop.to_string(), value);
         barrier_closure_dynamic_props(ptr, closure_props);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_closure_side_tables() {
+    if let Ok(mut props) = get_closure_props().lock() {
+        props.clear();
+    }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        prototypes.clear();
     }
 }
 

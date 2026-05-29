@@ -198,7 +198,7 @@ pub(super) fn emit_string_pool(
         };
         let handle = blk.call(I64, init_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
         let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
-        blk.store(DOUBLE, &nanboxed, &handle_ref);
+        crate::expr::emit_root_nanbox_store_on_block(blk, &nanboxed, &handle_ref);
         let addr_i64 = blk.ptrtoint(&handle_ref, I64);
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }
@@ -260,7 +260,7 @@ pub(super) fn emit_string_pool(
                 (I32, &len_str),
             ],
         );
-        blk.store(I64, &arr, &format!("@{}", global_name));
+        crate::expr::emit_root_heap_word_store_on_block(blk, &arr, &format!("@{}", global_name));
     }
 
     // Register the parent-class chain for every class with a parent.

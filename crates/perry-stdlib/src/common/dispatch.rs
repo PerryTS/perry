@@ -1963,6 +1963,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // `const f = zlib.gzipSync; f(buf)` reach the FFIs.
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
+    perry_runtime::js_set_native_querystring_dispatch(
+        crate::querystring::js_querystring_native_dispatch,
+    );
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext

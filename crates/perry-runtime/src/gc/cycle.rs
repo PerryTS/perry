@@ -91,13 +91,23 @@ impl TraceWorklistCycleState {
     }
 
     fn step(&mut self, valid_ptrs: &ValidPointerSet, budget: usize) -> bool {
-        drain_trace_worklist_step(
+        self.absorb_mark_seeds();
+        let done = drain_trace_worklist_step(
             &mut self.worklist,
             &mut self.cursor,
             valid_ptrs,
             self.minor_only,
             budget,
-        )
+        );
+        self.absorb_mark_seeds();
+        done && self.cursor >= self.worklist.len()
+    }
+
+    fn absorb_mark_seeds(&mut self) {
+        let mut seeds = take_mark_seeds();
+        if !seeds.is_empty() {
+            self.worklist.append(&mut seeds);
+        }
     }
 }
 
@@ -487,6 +497,10 @@ impl GcCycleState {
             .expect("valid-pointer builder exists");
         self.valid_ptrs = Some(builder.finish());
         trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
+        if matches!(self.collection_kind, GcCollectionKind::Full) {
+            let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+            incremental_mark_barrier_enable(valid_ptrs);
+        }
 
         let active_elapsed_us = self.active_elapsed_us();
         if let Some(minor) = self.minor.as_mut() {
@@ -618,7 +632,10 @@ impl GcCycleState {
         if self.minor.is_some() {
             self.atomic_finalize_minor();
         } else {
-            self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set());
+            let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+            drain_incremental_mark_barrier_seeds(valid_ptrs);
+            self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set(true));
+            incremental_mark_barrier_disable();
         }
         self.phase = GcCyclePhase::Sweep;
     }
@@ -712,7 +729,7 @@ impl GcCycleState {
 
         minor.evacuation = evacuation;
         minor.evacuation_sticky = evacuation_sticky;
-        self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set());
+        self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set(false));
     }
 
     fn step_sweep(&mut self) {
@@ -811,6 +828,17 @@ impl GcCycleState {
             trace: self.trace.take(),
         });
         self.phase = GcCyclePhase::Complete;
+    }
+}
+
+impl Drop for GcCycleState {
+    fn drop(&mut self) {
+        if matches!(self.collection_kind, GcCollectionKind::Full)
+            && self.phase != GcCyclePhase::Complete
+        {
+            incremental_mark_barrier_disable();
+            clear_mark_seeds();
+        }
     }
 }
 

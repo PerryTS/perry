@@ -2809,6 +2809,7 @@ Bun status: 🟢 Fully implemented. 100% of Node.js's test suite passes.
 | `querystring.stringify(obj[, sep[, eq[, options]]])` | ✓ | ✓ |  |
 | `querystring.escape(str)` | ✓ | ✓ |  |
 | `querystring.unescape(str)` | ✓ | ✓ |  |
+| `querystring.unescapeBuffer(str[, decodeSpaces])` | ✓ | ✓ | enumerable Buffer-returning helper |
 | `querystring.decode(...)` | ✓ | ✓ | alias of `parse` |
 | `querystring.encode(...)` | ✓ | ✓ | alias of `stringify` |
 

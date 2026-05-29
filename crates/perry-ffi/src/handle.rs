@@ -336,10 +336,11 @@ where
 ///
 /// The scanner is called during every GC mark phase; it should call its `mark`
 /// callback with each NaN-boxed JsValue that should be kept alive. This API
-/// exposes copied values only. During copied-minor evacuation the runtime
-/// cannot rewrite wrapper-owned storage discovered through this API, so live
-/// young roots reported here are treated as copy-only fallback roots. Prefer
-/// [`gc_register_mutable_root_scanner`] for new scanners.
+/// exposes copied values only. The runtime cannot rewrite wrapper-owned storage
+/// discovered through this API, so registering any scanner here makes
+/// low-pause copied-minor GC ineligible. It remains supported for legacy
+/// fallback/full collection only. Prefer [`gc_register_mutable_root_scanner`]
+/// for new scanners and for low-pause compatibility.
 ///
 /// This registers through `perry_ffi_gc_register_root_scanner`, the stable
 /// C ABI bridge exported by the runtime.
@@ -361,6 +362,9 @@ where
 /// // Register once on first wrapper-method invocation.
 /// gc_register_root_scanner(scan_my_roots);
 /// ```
+#[deprecated(
+    note = "copy-only GC root scanners force fallback/full collection; use gc_register_mutable_root_scanner for low-pause GC"
+)]
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
     {
         let mut scanners = ROOT_SCANNERS

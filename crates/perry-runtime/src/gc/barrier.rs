@@ -374,6 +374,14 @@ pub(super) unsafe fn scan_dirty_object_slots(
 // HashSet behavior.
 
 thread_local! {
+    /// Active full-incremental mark barrier state.
+    ///
+    /// The valid pointer set is owned by the current `GcCycleState`. This raw
+    /// pointer is installed only after that set has been built and is cleared
+    /// before sweep/reclaim or if the cycle is dropped.
+    pub(super) static INCREMENTAL_MARK_BARRIER_VALID_PTRS: Cell<*const ValidPointerSet> =
+        const { Cell::new(std::ptr::null()) };
+
     /// Dirty old-generation pages that have received a YOUNG-gen
     /// pointer since the last collection. This is Perry's compact
     /// modbuf: barriers log bounded page regions, and minor GC scans
@@ -415,6 +423,132 @@ thread_local! {
 }
 
 pub(super) static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
+
+pub(super) fn incremental_mark_barrier_enable(valid_ptrs: &ValidPointerSet) {
+    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
+        cell.set(valid_ptrs as *const ValidPointerSet);
+    });
+}
+
+pub(super) fn incremental_mark_barrier_disable() {
+    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
+        cell.set(std::ptr::null());
+    });
+}
+
+#[inline]
+pub(super) fn incremental_mark_barrier_active() -> bool {
+    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| !cell.get().is_null())
+}
+
+#[inline]
+pub(super) fn heap_word_candidate_addr(bits: u64) -> Option<usize> {
+    let tag = bits & TAG_MASK;
+    if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+        let ptr = (bits & POINTER_MASK) as usize;
+        return (ptr != 0).then_some(ptr);
+    }
+    if tag >= 0x7FF8_0000_0000_0000 {
+        return None;
+    }
+    if (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
+        Some(bits as usize)
+    } else {
+        None
+    }
+}
+
+#[inline]
+pub(super) unsafe fn plausible_arena_user_ptr_header(
+    header: *mut GcHeader,
+) -> Option<*mut GcHeader> {
+    if header.is_null() {
+        return None;
+    }
+    let obj_type = (*header).obj_type;
+    let size = (*header).size as usize;
+    if gc_type_info(obj_type).is_none()
+        || size < GC_HEADER_SIZE
+        || size > (1usize << 34)
+        || (*header).gc_flags & GC_FLAG_ARENA == 0
+        || (*header).gc_flags & GC_FLAG_FORWARDED != 0
+    {
+        None
+    } else {
+        Some(header)
+    }
+}
+
+pub(super) fn current_heap_header_for_user_ptr(
+    user_ptr: usize,
+    valid_ptrs: Option<&ValidPointerSet>,
+) -> Option<*mut GcHeader> {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    if valid_ptrs.is_some_and(|ptrs| ptrs.contains(&user_ptr)) {
+        return Some(unsafe { header_from_user_ptr(user_ptr as *const u8) });
+    }
+
+    match crate::arena::classify_heap_generation(user_ptr) {
+        crate::arena::HeapGeneration::Unknown => {
+            let header = unsafe { header_from_user_ptr(user_ptr as *const u8) };
+            gc_malloc_header_is_tracked(header).then_some(header)
+        }
+        _ => unsafe {
+            plausible_arena_user_ptr_header(header_from_user_ptr(user_ptr as *const u8))
+        },
+    }
+}
+
+pub(super) fn current_heap_header_for_heap_word(
+    bits: u64,
+    valid_ptrs: Option<&ValidPointerSet>,
+) -> Option<(usize, *mut GcHeader)> {
+    let addr = heap_word_candidate_addr(bits)?;
+    let header = current_heap_header_for_user_ptr(addr, valid_ptrs)?;
+    Some((addr, header))
+}
+
+fn incremental_mark_barrier_value_with_valid_ptrs(
+    value_bits: u64,
+    valid_ptrs: &ValidPointerSet,
+) -> bool {
+    let Some((_addr, header)) = current_heap_header_for_heap_word(value_bits, Some(valid_ptrs))
+    else {
+        return false;
+    };
+    unsafe {
+        let flags = (*header).gc_flags;
+        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED) != 0 {
+            return false;
+        }
+        (*header).gc_flags = flags | GC_FLAG_MARKED;
+        push_mark_seed(header);
+    }
+    true
+}
+
+pub(super) fn incremental_mark_barrier_value(value_bits: u64) -> bool {
+    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
+        let ptr = cell.get();
+        if ptr.is_null() {
+            return false;
+        }
+        let valid_ptrs = unsafe { &*ptr };
+        incremental_mark_barrier_value_with_valid_ptrs(value_bits, valid_ptrs)
+    })
+}
+
+pub(super) fn drain_incremental_mark_barrier_seeds(valid_ptrs: &ValidPointerSet) {
+    loop {
+        let mut worklist = take_mark_seeds();
+        if worklist.is_empty() {
+            return;
+        }
+        drain_trace_worklist(&mut worklist, valid_ptrs);
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn js_gc_write_barriers_emitted(active: u32) {
@@ -532,6 +666,7 @@ pub(super) fn write_barrier_slot_inner(
     external_slot: bool,
 ) {
     bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
+    incremental_mark_barrier_value(child);
 
     // Decode child first: primitive stores are the most common skip.
     let child_addr = decode_heap_addr(child);
@@ -707,6 +842,7 @@ pub(super) fn mark_dirty_external_slot_page(header_addr: usize, page: usize) -> 
 
 pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
     if !write_barriers_enabled() {
+        incremental_mark_barrier_value(child_bits);
         return;
     }
     js_write_barrier_slot(parent_addr as u64, slot_addr as u64, child_bits);
@@ -732,6 +868,7 @@ pub(crate) fn runtime_write_barrier_external_slot(
     child_bits: u64,
 ) {
     if !write_barriers_enabled() {
+        incremental_mark_barrier_value(child_bits);
         return;
     }
     write_barrier_slot_inner(
@@ -744,6 +881,7 @@ pub(crate) fn runtime_write_barrier_external_slot(
 
 pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
     if !write_barriers_enabled() {
+        incremental_mark_barrier_value(child_bits);
         return;
     }
     let parent_is_malloc_gc = matches!(
@@ -756,6 +894,86 @@ pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize
         child_bits,
         parent_is_malloc_gc,
     );
+}
+
+#[inline]
+pub(crate) fn runtime_write_barrier_root_heap_word(value_bits: u64) {
+    incremental_mark_barrier_value(value_bits);
+}
+
+#[inline]
+pub(crate) fn runtime_write_barrier_root_nanbox(value_bits: u64) {
+    incremental_mark_barrier_value(value_bits);
+}
+
+#[inline]
+pub(crate) fn runtime_write_barrier_root_raw_ptr<T>(ptr: *const T) {
+    if !ptr.is_null() {
+        incremental_mark_barrier_value(ptr as u64);
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn runtime_store_root_nanbox_f64_raw_slot(slot: *mut f64, value: f64) {
+    std::ptr::write(slot, value);
+    runtime_write_barrier_root_nanbox(value.to_bits());
+}
+
+#[inline]
+pub(crate) unsafe fn runtime_store_root_raw_mut_ptr_slot<T>(slot: *mut *mut T, value: *mut T) {
+    std::ptr::write(slot, value);
+    runtime_write_barrier_root_raw_ptr(value);
+}
+
+#[inline]
+pub(crate) unsafe fn runtime_store_root_usize_slot(slot: *mut usize, value: usize) {
+    std::ptr::write(slot, value);
+    runtime_write_barrier_root_heap_word(value as u64);
+}
+
+#[inline]
+pub(crate) fn runtime_store_root_atomic_nanbox_u64(
+    slot: &std::sync::atomic::AtomicU64,
+    value_bits: u64,
+    ordering: std::sync::atomic::Ordering,
+) {
+    slot.store(value_bits, ordering);
+    runtime_write_barrier_root_nanbox(value_bits);
+}
+
+#[inline]
+pub(crate) fn runtime_store_root_atomic_raw_i64(
+    slot: &std::sync::atomic::AtomicI64,
+    value: i64,
+    ordering: std::sync::atomic::Ordering,
+) {
+    slot.store(value, ordering);
+    runtime_write_barrier_root_heap_word(value as u64);
+}
+
+#[inline]
+pub(crate) fn runtime_compare_exchange_root_atomic_raw_i64(
+    slot: &std::sync::atomic::AtomicI64,
+    current: i64,
+    new: i64,
+    success: std::sync::atomic::Ordering,
+    failure: std::sync::atomic::Ordering,
+) -> Result<i64, i64> {
+    let result = slot.compare_exchange(current, new, success, failure);
+    if result.is_ok() {
+        runtime_write_barrier_root_heap_word(new as u64);
+    }
+    result
+}
+
+#[no_mangle]
+pub extern "C" fn js_write_barrier_root_heap_word(value_bits: u64) {
+    runtime_write_barrier_root_heap_word(value_bits);
+}
+
+#[no_mangle]
+pub extern "C" fn js_write_barrier_root_nanbox(value_bits: u64) {
+    runtime_write_barrier_root_nanbox(value_bits);
 }
 
 #[inline]

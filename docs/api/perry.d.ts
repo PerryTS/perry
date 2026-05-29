@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1520 entries across 84 modules
+// Coverage: 1523 entries across 84 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1846,6 +1846,8 @@ declare module "process" {
   /** stdlib */
   export function getActiveResourcesInfo(...args: any[]): any;
   /** stdlib */
+  export function getBuiltinModule(...args: any[]): any;
+  /** stdlib */
   export function getMaxListeners(...args: any[]): any;
   /** stdlib */
   export function getegid(...args: any[]): any;
@@ -1946,6 +1948,8 @@ declare module "querystring" {
   export function stringify(...args: any[]): any;
   /** stdlib */
   export function unescape(...args: any[]): any;
+  /** stdlib */
+  export function unescapeBuffer(...args: any[]): any;
 }
 
 declare module "rate-limiter-flexible" {
@@ -2145,9 +2149,13 @@ declare module "util" {
   /** stdlib */
   export function inspect(...args: any[]): any;
   /** stdlib */
+  export function isArray(value: any): boolean;
+  /** stdlib */
   export function isDeepStrictEqual(...args: any[]): any;
   /** stdlib */
   export function parseArgs(...args: any[]): any;
+  /** stdlib */
+  export function parseEnv(...args: any[]): any;
   /** stdlib */
   export function promisify(...args: any[]): any;
   /** stdlib */

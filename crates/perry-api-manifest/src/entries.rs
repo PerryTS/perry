@@ -2127,6 +2127,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "nextTick", false, None),
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
+    method("process", "getBuiltinModule", false, None),
     method("process", "loadEnvFile", false, None),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
@@ -2204,6 +2205,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // (deprecated since Node 11 but still imported by many npm pkgs).
     method("querystring", "escape", false, None),
     method("querystring", "unescape", false, None),
+    method("querystring", "unescapeBuffer", false, None),
     method("querystring", "parse", false, None),
     method("querystring", "stringify", false, None),
     // `decode` / `encode` are aliases the test_parity_querystring fixture
@@ -2379,6 +2381,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
     method("util", "getSystemErrorMap", false, None),
+    method("util", "parseEnv", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
@@ -2390,6 +2393,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "callbackify", false, None),
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
+    method_sig(
+        "util",
+        "isArray",
+        false,
+        None,
+        &[p_any("value")],
+        TypeSpec::Bool,
+    ),
     method("util", "isDeepStrictEqual", false, None),
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),

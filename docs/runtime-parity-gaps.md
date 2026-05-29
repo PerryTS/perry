@@ -1,16 +1,16 @@
 # Perry Runtime Parity Gap List
 
-This document is a structured gap analysis comparing the public Node.js + Bun runtime API surface (catalogued in `runtime-parity.md`) against the APIs Perry can dispatch at compile time. Coverage sources are: the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`, ~589 (module, method) entries), `Expr::*` HIR variants in `crates/perry-hir/src/ir.rs` that lower stdlib APIs directly to dedicated codegen arms (~301 stdlib-shaped variants), and `js_*` FFI exports across `perry-runtime` (~983), `perry-stdlib` (~631), and 35 `perry-ext-*` crates (~553). Output is intended for prioritizing which APIs to implement next.
+This document is a structured gap analysis comparing the public Node.js + Bun runtime API surface (catalogued in `runtime-parity.md`) against the APIs Perry can dispatch at compile time. Coverage sources are: the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`, ~590 (module, method) entries), `Expr::*` HIR variants in `crates/perry-hir/src/ir.rs` that lower stdlib APIs directly to dedicated codegen arms (~301 stdlib-shaped variants), and `js_*` FFI exports across `perry-runtime` (~984), `perry-stdlib` (~633), and 35 `perry-ext-*` crates (~553). Output is intended for prioritizing which APIs to implement next.
 
 ## Summary
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 20 | 484 | n/a |
+| Whole-module gaps (zero coverage) | 19 | 478 | n/a |
 | Partial-module gaps | 29 | 1647 | 370 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2413** |  |
+| **Total true gaps** |  | **2407** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -294,19 +294,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `consumers.bytes(stream)`
 - `consumers.json(stream)`
 - `consumers.text(stream)`
-
-### node:querystring
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `querystring.parse(str[, sep[, eq[, options]]])`
-- `querystring.stringify(obj[, sep[, eq[, options]]])`
-- `querystring.escape(str)`
-- `querystring.unescape(str)`
-- `querystring.decode(...)`
-- `querystring.encode(...)`
 
 ### node:string_decoder
 
@@ -2300,9 +2287,9 @@ High-visibility entries (full list in `runtime-parity.md`):
 
 **Sources consulted (in priority order):**
 
-1. **Manifest entries** — `crates/perry-api-manifest/src/entries.rs` lists ~588 `(module, method)` rows. A match on `(section_module, method_name)` counts as covered. Module aliases handled: `node:fs` → `fs`, `node:fs/promises` → `fs/promises`.
+1. **Manifest entries** — `crates/perry-api-manifest/src/entries.rs` lists ~590 `(module, method)` rows. A match on `(section_module, method_name)` counts as covered. Module aliases handled: `node:fs` → `fs`, `node:fs/promises` → `fs/promises`.
 2. **`Expr::*` HIR variants** — `crates/perry-hir/src/ir.rs` defines ~301 stdlib-shaped enum variants. APIs like `os.platform` map to `Expr::OsPlatform`; `path.join` to `Expr::PathJoin`; `crypto.randomUUID` to `Expr::CryptoRandomUUID`. The matcher Pascal-cases the section module and method name and checks set membership.
-3. **`js_*` FFI exports** — extracted via grep (catching both `pub extern "C"` and `pub unsafe extern "C"` patterns) across `perry-runtime/src/*.rs` (~983 fns), `perry-stdlib/src/**/*.rs` (~631), and the 35 `perry-ext-*` crates (~553). Match heuristics: `js_<module>_<method_snake>`, `js_<module>_<method>_sync`, and a class-instance variant `js_<module>_<class>_<method>`.
+3. **`js_*` FFI exports** — extracted via grep (catching both `pub extern "C"` and `pub unsafe extern "C"` patterns) across `perry-runtime/src/*.rs` (~984 fns), `perry-stdlib/src/**/*.rs` (~633), and the 35 `perry-ext-*` crates (~553). Match heuristics: `js_<module>_<method_snake>`, `js_<module>_<method>_sync`, and a class-instance variant `js_<module>_<class>_<method>`.
 4. **Web globals + builtin-globals overlay** — handled separately via a curated mapping from symbols like `fetch`, `new URL`, `crypto.subtle.digest`, `setTimeout`/`clearTimeout`, `console.error` to their backing implementation. Anything not in the overlay is reported as a gap.
 
 **Caveats:**

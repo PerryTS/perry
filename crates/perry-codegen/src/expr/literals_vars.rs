@@ -33,9 +33,9 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 #[allow(unused_imports)]
 use super::{
     buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -554,7 +554,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);
                         // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
-                        ctx.block().store(DOUBLE, &v_dbl, &g_ref);
+                        emit_root_nanbox_store_on_block(ctx.block(), &v_dbl, &g_ref);
                     }
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(id).copied() {
                         emit_shadow_slot_clear(ctx, slot_idx);
@@ -631,7 +631,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                 let g_ref = format!("@{}", global_name);
                 // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
-                ctx.block().store(DOUBLE, &v, &g_ref);
+                emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
             }
             super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             if ctx.buffer_view_slots.contains_key(id)
@@ -710,10 +710,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(if *prefix { new } else { old });
                 }
             }
-            let storage = if let Some(slot) = ctx.locals.get(id).cloned() {
-                slot
+            let (storage, storage_is_root) = if let Some(slot) = ctx.locals.get(id).cloned() {
+                (slot, false)
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                format!("@{}", global_name)
+                (format!("@{}", global_name), true)
             } else {
                 // Soft fallback: silently increment a throwaway value.
                 return Ok(double_literal(0.0));
@@ -724,8 +724,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 UpdateOp::Increment => blk.fadd(&old, "1.0"),
                 UpdateOp::Decrement => blk.fsub(&old, "1.0"),
             };
-            // GC_STORE_AUDIT(STACK): update writes a local alloca or registered module-global root slot.
-            blk.store(DOUBLE, &new, &storage);
+            // GC_STORE_AUDIT(STACK/ROOT): update writes a local alloca or registered module-global root slot.
+            if storage_is_root {
+                emit_root_nanbox_store_on_block(blk, &new, &storage);
+            } else {
+                blk.store(DOUBLE, &new, &storage);
+            }
             // Keep the parallel i32 counter slot in sync (if active).
             // This costs one `add i32, 1` per iteration but saves a
             // `fptosi double → i32` on every IndexGet/IndexSet use.

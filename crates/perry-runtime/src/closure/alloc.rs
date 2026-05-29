@@ -171,6 +171,7 @@ pub extern "C" fn js_closure_alloc_singleton(func_ptr: *const u8) -> *mut Closur
     SINGLETON_CLOSURES.with(|s| {
         s.borrow_mut().insert(func_ptr as usize, allocated);
     });
+    crate::gc::runtime_write_barrier_root_heap_word(allocated as u64);
     allocated
 }
 
@@ -378,6 +379,10 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
             std::ptr::copy_nonoverlapping(rewritten_captures.as_ptr(), dest, n);
             rebuild_closure_layout_and_barriers(allocated, n);
         }
+    }
+    crate::gc::runtime_write_barrier_root_heap_word(allocated as u64);
+    for &bits in &rewritten_captures {
+        crate::gc::runtime_write_barrier_root_heap_word(bits);
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();

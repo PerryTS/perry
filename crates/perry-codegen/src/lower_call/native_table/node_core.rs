@@ -166,6 +166,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "getBuiltinModule",
+        class_filter: None,
+        runtime: "js_process_get_builtin_module",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // #2135 (Node process parity): process.loadEnvFile(path?) — HIR
     // defaults the missing path to ".env" so this row always sees a
     // single string argument.
@@ -962,6 +971,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "util",
         has_receiver: false,
+        method: "isArray",
+        class_filter: None,
+        runtime: "js_array_is_array",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
         method: "isDeepStrictEqual",
         class_filter: None,
         runtime: "js_util_is_deep_strict_equal",
@@ -1003,6 +1021,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_util_get_system_error_map",
         args: &[],
+        ret: NR_F64,
+    },
+    // #2514: util.parseEnv(content) → object.
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "parseEnv",
+        class_filter: None,
+        runtime: "js_util_parse_env",
+        args: &[NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

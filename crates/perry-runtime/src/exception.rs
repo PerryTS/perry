@@ -119,7 +119,7 @@ pub extern "C" fn js_throw(value: f64) -> ! {
     // on this thread; in practice UnsafeCell tolerates it but the
     // shorter scope keeps things tidy).
     let jb_ptr: *mut i32 = with_exception_state(|s| unsafe {
-        (*s).current_exception = value;
+        crate::gc::runtime_store_root_nanbox_f64_raw_slot(&raw mut (*s).current_exception, value);
         (*s).has_exception = true;
 
         if (*s).in_finally {
@@ -168,7 +168,7 @@ pub extern "C" fn js_has_exception() -> i32 {
 pub extern "C" fn js_clear_exception() {
     with_exception_state(|s| unsafe {
         (*s).has_exception = false;
-        (*s).current_exception = 0.0;
+        crate::gc::runtime_store_root_nanbox_f64_raw_slot(&raw mut (*s).current_exception, 0.0);
     });
 }
 
@@ -313,7 +313,7 @@ pub fn scan_exception_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
 #[cfg(test)]
 pub(crate) fn test_set_exception(value: f64) {
     with_exception_state(|s| unsafe {
-        (*s).current_exception = value;
+        crate::gc::runtime_store_root_nanbox_f64_raw_slot(&raw mut (*s).current_exception, value);
         (*s).has_exception = true;
     });
 }
