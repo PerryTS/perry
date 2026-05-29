@@ -1217,6 +1217,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // `expr.rs::Expr::NetCreateServer`, matching the
     // `js_node_http_create_server` (`I64, &[I64]`) convention.
     module.declare_function("js_net_create_server", I64, &[I64, I64]);
+    module.declare_function("js_net_normalize_args", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_net_create_server_handle_stub",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     // #2013: Node argument validation for the net surface. The createServer
     // options check takes the first positional arg as a NaN-boxed `DOUBLE`;
     // setTimeout takes (socket handle, msecs:DOUBLE, callback:I64).

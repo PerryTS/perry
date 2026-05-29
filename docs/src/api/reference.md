@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1524 entries across 84 modules.
+Total: 1530 entries across 84 modules.
 
 ## Modules
 
@@ -1108,7 +1108,10 @@ Total: 1524 entries across 84 modules.
 
 ### Methods
 
+- `Server` — module
 - `Socket` — module
+- `_createServerHandle` — module
+- `_normalizeArgs` — module
 - `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
 - `address` — instance *(class: `Socket`)*
@@ -1118,6 +1121,7 @@ Total: 1524 entries across 84 modules.
 - `connect` — instance *(class: `Socket`)*
 - `cork` — instance *(class: `Socket`)*
 - `createConnection` — module
+- `createServer` — module
 - `destroy` — instance *(class: `Socket`)*
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
@@ -2017,8 +2021,10 @@ Total: 1524 entries across 84 modules.
 - `getSystemErrorName` — module
 - `inherits` — module
 - `inspect` — module
+- `isArray` — module
 - `isDeepStrictEqual` — module
 - `parseArgs` — module
+- `parseEnv` — module
 - `promisify` — module
 - `stripVTControlCharacters` — module
 

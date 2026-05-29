@@ -37,7 +37,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let obj_name = obj_ident.sym.as_ref();
             let is_net_module =
                 obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");
-            if is_net_module && prop_ident.sym.as_ref() == "Socket" {
+            if is_net_module && matches!(prop_ident.sym.as_ref(), "Socket" | "Server") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -52,7 +52,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     module: "net".to_string(),
                     class_name: None,
                     object: None,
-                    method: "Socket".to_string(),
+                    method: prop_ident.sym.to_string(),
                     args,
                 });
             }

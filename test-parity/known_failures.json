@@ -266,12 +266,6 @@
     "category": "bug-open",
     "reason": "node:stream: Duplex.from(asyncIterable) \u2014 async-gen \u2192 Duplex form not yet wired. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/events/finish-end-close-order": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex with finish/end/close event ordering \u2014 fails to compile (this/method context inside arrow callback). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/duplex/from-object-form": {
     "issue": "1532",
     "added": "2026-05-24",

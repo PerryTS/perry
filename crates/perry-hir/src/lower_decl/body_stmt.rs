@@ -329,13 +329,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         ..
                     } = s
                     {
-                        let socket_class = match (mod_name.as_str(), method.as_str()) {
+                        let native_class = match (mod_name.as_str(), method.as_str()) {
                             ("net", "createConnection" | "connect") => Some(("net", "Socket")),
                             ("tls", "connect") => Some(("net", "Socket")),
                             ("net", "Socket") => Some(("net", "Socket")),
+                            ("net", "Server") => Some(("net", "Server")),
                             _ => None,
                         };
-                        if let Some((m, c)) = socket_class {
+                        if let Some((m, c)) = native_class {
                             ctx.register_native_instance(
                                 name.clone(),
                                 m.to_string(),

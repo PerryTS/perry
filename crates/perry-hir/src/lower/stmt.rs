@@ -704,6 +704,7 @@ pub(crate) fn lower_stmt(
                                     // arm registers the binding so `sock.connect/...`
                                     // dispatches via the class-filtered entries.
                                     ("net", "Socket") => Some("Socket"),
+                                    ("net", "Server") => Some("Server"),
                                     _ => None,
                                 };
                                 if let Some(cn) = class_name {
