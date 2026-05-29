@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1488 entries across 82 modules
+// Coverage: 1490 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -58,6 +58,8 @@ declare module "assert" {
   /** stdlib */
   export function ok(...args: any[]): any;
   /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
   export function strict(...args: any[]): any;
@@ -100,6 +102,8 @@ declare module "assert/strict" {
   export function notStrictEqual(...args: any[]): any;
   /** stdlib */
   export function ok(...args: any[]): any;
+  /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
   /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
