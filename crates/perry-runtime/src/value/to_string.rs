@@ -143,6 +143,27 @@ unsafe fn call_method_for_primitive(
     }
 }
 
+/// Read an object's own/inherited property by name and coerce it to an owned
+/// `String`, or `None` when the property is absent (undefined/null). Used by
+/// the Error-subclass `toString` path (#2135).
+unsafe fn object_field_to_owned_string(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> Option<String> {
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let v = crate::object::js_object_get_field_by_name(obj, key_ptr);
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    let s_ptr = js_jsvalue_to_string(f64::from_bits(v.bits()));
+    if s_ptr.is_null() {
+        return None;
+    }
+    let len = (*s_ptr).byte_len as usize;
+    let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
+}
+
 /// Convert a NaN-boxed f64 value to a string pointer.
 /// Handles all value types: strings (extract pointer), numbers (convert), JS handles, etc.
 #[no_mangle]
@@ -263,6 +284,33 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
                     return crate::error::js_error_to_string(ptr as *mut crate::error::ErrorHeader);
+                }
+                // #2135: an Error *subclass* (`class X extends Error`) is a
+                // plain class instance, not a `GC_TYPE_ERROR` ErrorHeader, so
+                // it reaches here. `Error.prototype.toString` reads the `name`
+                // and `message` properties (own or inherited) — resolve them
+                // and format `name`/`message`/`"name: message"` rather than
+                // falling through to `"[object Object]"`. `extends_builtin_error`
+                // walks the class-id chain (the same check that backs
+                // `instanceof Error`); its registry lookup never dereferences
+                // `class_id`, so it is safe even for non-class pointers.
+                let obj = ptr as *const crate::object::ObjectHeader;
+                let class_id = (*obj).class_id;
+                if class_id != 0 && crate::object::extends_builtin_error(class_id) {
+                    let name = object_field_to_owned_string(obj, b"name")
+                        .unwrap_or_else(|| "Error".to_string());
+                    let message = object_field_to_owned_string(obj, b"message").unwrap_or_default();
+                    let result = if name.is_empty() {
+                        message
+                    } else if message.is_empty() {
+                        name
+                    } else {
+                        format!("{name}: {message}")
+                    };
+                    return crate::string::js_string_from_bytes(
+                        result.as_ptr(),
+                        result.len() as u32,
+                    );
                 }
             }
         }
@@ -410,4 +458,28 @@ pub extern "C" fn js_ensure_string_ptr(value: f64) -> i64 {
 
     // Otherwise, treat the f64 bits directly as a pointer (raw string literal)
     bits as i64
+}
+
+#[cfg(test)]
+mod error_subclass_tostring_tests {
+    use super::*;
+
+    #[test]
+    fn object_field_to_owned_string_reads_and_misses() {
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 2);
+            let key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
+            let val = crate::string::js_string_from_bytes(b"hi".as_ptr(), 2);
+            crate::object::js_object_set_field_by_name(
+                obj,
+                key,
+                crate::value::js_nanbox_string(val as i64),
+            );
+            assert_eq!(
+                object_field_to_owned_string(obj, b"message").as_deref(),
+                Some("hi")
+            );
+            assert_eq!(object_field_to_owned_string(obj, b"missing"), None);
+        }
+    }
 }
