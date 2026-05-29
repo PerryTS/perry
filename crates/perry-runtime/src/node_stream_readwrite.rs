@@ -1442,6 +1442,22 @@ pub(super) fn maybe_emit_default_read_error(stream: f64) {
     destroy_stream(stream, readable_default_read_error());
 }
 
+/// Test helper: make `stream` behave like a manually-driven Readable that was
+/// constructed with a (no-op) `_read`. #2441 made a *bare* Readable (one with
+/// no `_read`) raise `ERR_METHOD_NOT_IMPLEMENTED` and self-destroy on the first
+/// read — which is Node-correct (Node requires a `_read`). Tests that drive a
+/// stream purely via `push()` clear that marker so they exercise their intended
+/// push/flow/end lifecycle without tripping the error, exactly as real code
+/// would by passing `{ read() {} }` to the constructor.
+#[cfg(test)]
+pub(crate) fn test_install_manual_read(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_default_read_error_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+}
+
 pub(super) fn is_single_chunk_value(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_any_string() {
