@@ -538,6 +538,27 @@ pub(crate) fn set_builtin_accessor_descriptor(
     });
 }
 
+/// Install a built-in *reflection-only* data-property descriptor for (obj, key)
+/// WITHOUT flipping the process-wide `GLOBAL_DESCRIPTORS_IN_USE` /
+/// `PROPERTY_ATTRS_IN_USE` hot-path gates — the data-property analogue of
+/// [`set_builtin_accessor_descriptor`].
+///
+/// Built-in prototype methods are spec'd as `{ writable: true,
+/// enumerable: false, configurable: true }`, but `install_proto_method`
+/// stores them via the ordinary field-set path (default all-true), so
+/// `Object.getOwnPropertyDescriptor(Array.prototype, "map").enumerable` and a
+/// `for (k in Array.prototype)` scan both reported them as enumerable —
+/// failing Test262's pervasive `verifyProperty` checks. Recording a
+/// non-enumerable descriptor here fixes all three observation paths
+/// (`getOwnPropertyDescriptor`, `Object.keys`, `for-in`), each of which reads
+/// `PROPERTY_DESCRIPTORS` per-object and unconditionally. The gate stays
+/// down, so the object get/set hot path is unaffected for every program.
+pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    PROPERTY_DESCRIPTORS.with(|m| {
+        m.borrow_mut().insert((obj, key), attrs);
+    });
+}
+
 /// Walk the keys array of `obj` and apply the given attribute mask AND filter to every existing key.
 /// Used by `Object.freeze` (drops `writable` + `configurable`) and `Object.seal` (drops `configurable`).
 unsafe fn mark_all_keys(
