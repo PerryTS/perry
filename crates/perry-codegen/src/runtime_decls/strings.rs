@@ -1519,6 +1519,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // body iteration that queues a chained `.then` callback and the
     // next body iteration's microtask drain.
     module.declare_function("js_microtasks_pending", I32, &[]);
+    // #2013 — validate setTimeout/setInterval/setImmediate's first arg
+    // (callback), returning the unboxed pointer for the valid case and
+    // throwing TypeError ERR_INVALID_ARG_TYPE for everything else.
+    module.declare_function("js_timer_validate_callback", I64, &[DOUBLE, I32]);
     module.declare_function("js_set_timeout_callback", I64, &[I64, DOUBLE]);
     // Refs #665: `setTimeout(fn, delay, ...args)` with trailing args. The
     // args are packed into a stack buffer of doubles at the call site and
