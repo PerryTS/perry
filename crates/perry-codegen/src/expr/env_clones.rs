@@ -297,7 +297,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::BufferAllocUnsafe(size) => {
             let size_box = lower_expr(ctx, size)?;
             let blk = ctx.block();
-            let size_i32 = blk.fptosi(DOUBLE, &size_box, I32);
+            // #2013: validate `size` (number, in [0, kMaxLength]) and recover
+            // the truncated i32 in one runtime call instead of a bare fptosi.
+            let size_i32 = blk.call(I32, "js_buffer_validate_size", &[(DOUBLE, &size_box)]);
             let buf_handle = blk.call(I64, "js_buffer_alloc_unsafe", &[(I32, &size_i32)]);
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
@@ -333,7 +335,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // so downstream BUFFER_REGISTRY checks + `.length` paths
             // can use it. Missing fill defaults to 0.
             let size_box = lower_expr(ctx, size)?;
-            let size_i32 = ctx.block().fptosi(DOUBLE, &size_box, I32);
+            // #2013: validate `size` (number, in [0, kMaxLength]) and recover
+            // the truncated i32 in one runtime call instead of a bare fptosi.
+            let size_i32 = ctx
+                .block()
+                .call(I32, "js_buffer_validate_size", &[(DOUBLE, &size_box)]);
             let buf_handle = if let Some(fill_expr) = fill {
                 let fill_box = lower_expr(ctx, fill_expr)?;
                 let enc_tag_i32 = if let Some(enc_expr) = encoding {

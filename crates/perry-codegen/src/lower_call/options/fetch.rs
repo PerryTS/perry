@@ -487,10 +487,15 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         );
         match method {
             "getReader" => {
+                let options = if !args.is_empty() {
+                    lower_expr(ctx, &args[0])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
                 let h = ctx.block().call(
                     DOUBLE,
-                    "js_readable_stream_get_reader",
-                    &[(DOUBLE, &recv_handle)],
+                    "js_readable_stream_get_reader_with_options",
+                    &[(DOUBLE, &recv_handle), (DOUBLE, &options)],
                 );
                 return Ok(Some(h));
             }
@@ -520,6 +525,11 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
+                let options = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
                 // Issue #562: `dest` may be a subclass instance — unwrap.
                 let dest =
                     ctx.block()
@@ -528,7 +538,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let promise = blk.call(
                     I64,
                     "js_readable_stream_pipe_to",
-                    &[(DOUBLE, &recv_handle), (DOUBLE, &dest)],
+                    &[(DOUBLE, &recv_handle), (DOUBLE, &dest), (DOUBLE, &options)],
                 );
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }

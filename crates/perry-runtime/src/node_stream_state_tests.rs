@@ -28,6 +28,7 @@ fn fresh_streams_expose_destroyed_false() {
 #[test]
 fn readable_lifecycle_flags_reflect_ended_state() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    test_install_manual_read(stream);
     let handle = raw_ptr_from_value(stream) as i64;
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
 

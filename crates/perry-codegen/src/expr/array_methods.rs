@@ -139,7 +139,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::BufferConcat(operand) => {
             let arr_box = lower_expr(ctx, operand)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            // #2013: `list` must be an Array — validate before treating the
+            // value as an ArrayHeader. Returns the (still NaN-boxed) bits,
+            // which `js_buffer_concat` strips itself.
+            let arr_handle = blk.call(I64, "js_buffer_validate_concat_list", &[(DOUBLE, &arr_box)]);
             let buf_handle = blk.call(I64, "js_buffer_concat", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
@@ -147,7 +150,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let arr_box = lower_expr(ctx, list)?;
             let total_box = lower_expr(ctx, total_length)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            // #2013: validate `list` is an Array (see BufferConcat above).
+            let arr_handle = blk.call(I64, "js_buffer_validate_concat_list", &[(DOUBLE, &arr_box)]);
             let buf_handle = blk.call(
                 I64,
                 "js_buffer_concat_with_length",

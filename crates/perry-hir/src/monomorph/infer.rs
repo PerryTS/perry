@@ -235,26 +235,155 @@ pub(crate) fn infer_type_args(
 
     let mut bindings: HashMap<String, Type> = HashMap::new();
 
-    // Try to unify each parameter with its corresponding argument
-    for (param, arg) in func.params.iter().zip(args.iter()) {
+    // Try to unify each parameter with its corresponding argument. Rest
+    // parameters bind to the whole trailing argument list, not only the first
+    // trailing scalar.
+    for (param_idx, param) in func.params.iter().enumerate() {
         // Skip if parameter type doesn't contain type variables
         if !type_contains_type_var(&param.ty) {
             continue;
         }
 
-        // Try to infer the argument's type
-        if let Some(arg_ty) = infer_expr_type(arg, module, idx) {
-            // Unify parameter type with argument type
-            if !unify_types(&param.ty, &arg_ty, &mut bindings) {
-                // Unification failed - can't infer
-                return None;
+        if param.is_rest {
+            let arg_tys: Option<Vec<Type>> = args
+                .iter()
+                .skip(param_idx)
+                .map(|arg| infer_expr_type(arg, module, idx))
+                .collect();
+            if let Some(arg_tys) = arg_tys {
+                if !unify_rest_param_types(&param.ty, &arg_tys, &mut bindings) {
+                    return None;
+                }
             }
+            break;
+        }
+
+        if let Some(arg) = args.get(param_idx) {
+            // Try to infer the argument's type
+            if let Some(arg_ty) = infer_expr_type(arg, module, idx) {
+                // Unify parameter type with argument type
+                if !unify_types(&param.ty, &arg_ty, &mut bindings) {
+                    // Unification failed - can't infer
+                    return None;
+                }
+            }
+        } else {
+            break;
         }
     }
 
     // Check if all type parameters were inferred
     let mut inferred_args = Vec::new();
     for type_param in &func.type_params {
+        if let Some(ty) = bindings.get(&type_param.name) {
+            inferred_args.push(ty.clone());
+        } else if let Some(ref default) = type_param.default {
+            // Use default type if available
+            inferred_args.push((**default).clone());
+        } else {
+            // Could not infer this type parameter
+            return None;
+        }
+    }
+
+    Some(inferred_args)
+}
+
+/// Unify a rest parameter's declared type with the trailing call argument
+/// types. `...items: T[]` should infer `T` from each item, while
+/// `...params: Params` should infer `Params` as the whole rest tuple.
+pub(crate) fn unify_rest_param_types(
+    param_ty: &Type,
+    arg_tys: &[Type],
+    bindings: &mut HashMap<String, Type>,
+) -> bool {
+    match param_ty {
+        Type::Array(elem) => arg_tys
+            .iter()
+            .all(|arg_ty| unify_types(elem, arg_ty, bindings)),
+        Type::Generic { base, type_args }
+            if is_array_like_generic(base) && type_args.len() == 1 =>
+        {
+            arg_tys
+                .iter()
+                .all(|arg_ty| unify_types(&type_args[0], arg_ty, bindings))
+        }
+        Type::Tuple(elems) => {
+            elems.len() == arg_tys.len()
+                && elems
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .all(|(param_elem, arg_ty)| unify_types(param_elem, arg_ty, bindings))
+        }
+        Type::TypeVar(_) => {
+            let rest_ty = Type::Tuple(arg_tys.to_vec());
+            unify_types(param_ty, &rest_ty, bindings)
+        }
+        _ => {
+            let rest_ty = Type::Tuple(arg_tys.to_vec());
+            unify_types(param_ty, &rest_ty, bindings)
+        }
+    }
+}
+
+pub(crate) fn is_array_like_generic(base: &str) -> bool {
+    matches!(base, "Array" | "ReadonlyArray")
+}
+
+/// Infer type arguments for a generic class instantiation from constructor args.
+/// Returns None if inference fails.
+pub(crate) fn infer_type_args_for_class(
+    class: &Class,
+    constructor: &Function,
+    args: &[Expr],
+    module: &Module,
+    idx: &ModuleIndex,
+) -> Option<Vec<Type>> {
+    if class.type_params.is_empty() {
+        return None; // Not a generic class
+    }
+
+    let mut bindings: HashMap<String, Type> = HashMap::new();
+
+    // Try to unify each constructor parameter with its corresponding argument.
+    // Rest parameters consume the whole trailing argument list.
+    for (param_idx, param) in constructor.params.iter().enumerate() {
+        // Skip if parameter type doesn't contain type variables
+        if !type_contains_type_var(&param.ty) {
+            continue;
+        }
+
+        if param.is_rest {
+            let arg_tys: Option<Vec<Type>> = args
+                .iter()
+                .skip(param_idx)
+                .map(|arg| infer_expr_type(arg, module, idx))
+                .collect();
+            if let Some(arg_tys) = arg_tys {
+                if !unify_rest_param_types(&param.ty, &arg_tys, &mut bindings) {
+                    return None;
+                }
+            }
+            break;
+        }
+
+        if let Some(arg) = args.get(param_idx) {
+            // Try to infer the argument's type
+            if let Some(arg_ty) = infer_expr_type(arg, module, idx) {
+                // Unify parameter type with argument type
+                if !unify_types(&param.ty, &arg_ty, &mut bindings) {
+                    // Unification failed - can't infer
+                    return None;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Check if all class type parameters were inferred
+    let mut inferred_args = Vec::new();
+    for type_param in &class.type_params {
         if let Some(ty) = bindings.get(&type_param.name) {
             inferred_args.push(ty.clone());
         } else if let Some(ref default) = type_param.default {
@@ -284,53 +413,4 @@ pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
         }
         _ => false,
     }
-}
-
-/// Infer type arguments for a generic class instantiation from constructor args.
-/// Returns None if inference fails.
-pub(crate) fn infer_type_args_for_class(
-    class: &Class,
-    constructor: &Function,
-    args: &[Expr],
-    module: &Module,
-    idx: &ModuleIndex,
-) -> Option<Vec<Type>> {
-    if class.type_params.is_empty() {
-        return None; // Not a generic class
-    }
-
-    let mut bindings: HashMap<String, Type> = HashMap::new();
-
-    // Try to unify each constructor parameter with its corresponding argument
-    for (param, arg) in constructor.params.iter().zip(args.iter()) {
-        // Skip if parameter type doesn't contain type variables
-        if !type_contains_type_var(&param.ty) {
-            continue;
-        }
-
-        // Try to infer the argument's type
-        if let Some(arg_ty) = infer_expr_type(arg, module, idx) {
-            // Unify parameter type with argument type
-            if !unify_types(&param.ty, &arg_ty, &mut bindings) {
-                // Unification failed - can't infer
-                return None;
-            }
-        }
-    }
-
-    // Check if all class type parameters were inferred
-    let mut inferred_args = Vec::new();
-    for type_param in &class.type_params {
-        if let Some(ty) = bindings.get(&type_param.name) {
-            inferred_args.push(ty.clone());
-        } else if let Some(ref default) = type_param.default {
-            // Use default type if available
-            inferred_args.push((**default).clone());
-        } else {
-            // Could not infer this type parameter
-            return None;
-        }
-    }
-
-    Some(inferred_args)
 }
