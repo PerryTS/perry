@@ -297,6 +297,28 @@ unsafe fn read_bytes_from_chunk(chunk_bits: u64) -> Option<Vec<u8>> {
     Some(std::slice::from_raw_parts(data, len).to_vec())
 }
 
+unsafe fn raw_pointer_addr(bits: u64) -> Option<usize> {
+    let top = bits >> 48;
+    if top == 0x7FFD || top == 0x7FFF {
+        Some((bits & POINTER_MASK) as usize)
+    } else if top == 0 && bits >= 0x10000 {
+        Some(bits as usize)
+    } else {
+        None
+    }
+}
+
+unsafe fn is_byte_stream_enqueue_chunk(chunk_bits: u64) -> bool {
+    let Some(addr) = raw_pointer_addr(chunk_bits) else {
+        return false;
+    };
+    perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some()
+        || perry_runtime::buffer::is_data_view(addr)
+        || perry_runtime::buffer::is_uint8array_buffer(addr)
+        || (perry_runtime::buffer::is_registered_buffer(addr)
+            && !perry_runtime::buffer::is_any_array_buffer(addr))
+}
+
 unsafe fn make_error_with_message(msg: &str) -> u64 {
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(s);
@@ -942,6 +964,15 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
 ) -> f64 {
     let id = stream_handle as usize;
     let chunk_bits = chunk.to_bits();
+    let is_byte_stream = {
+        let g = READABLE_STREAMS.lock().unwrap();
+        g.get(&id).map(|s| s.is_byte_stream).unwrap_or(false)
+    };
+    if is_byte_stream && !is_byte_stream_enqueue_chunk(chunk_bits) {
+        throw_invalid_arg_type(
+            "The \"buffer\" argument must be an instance of Buffer, TypedArray, or DataView",
+        );
+    }
     let (popped, strategy_size_cb) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {

@@ -1,5 +1,5 @@
 import { ReadableStream } from "node:stream/web";
-// A type:"bytes" ReadableStream can only enqueue ArrayBuffer/views — string throws.
+// A type:"bytes" ReadableStream can only enqueue Buffer/TypedArray/DataView chunks.
 let caught: string | null = null;
 const rs = new ReadableStream({
   type: "bytes",
@@ -7,7 +7,7 @@ const rs = new ReadableStream({
     try {
       c.enqueue("not-a-buffer" as any);
     } catch (e: any) {
-      caught = e && e.name;
+      caught = e && `${e.name}:${e.code}`;
     }
   },
 } as any);
