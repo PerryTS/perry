@@ -330,6 +330,15 @@ pub unsafe extern "C" fn js_timer_validate_callback(value: f64, fn_name_idx: i32
             return ptr as i64;
         }
     }
+    // Promise executor resolve/reject callbacks are passed through this runtime
+    // as raw closure pointer bits rather than NaN-boxed pointers. They are still
+    // callable JS functions, so accept them after proving the candidate is a
+    // Perry-managed closure. Do not call `is_closure_ptr` on arbitrary JS bits:
+    // short strings and doubles can otherwise look pointer-ish enough to
+    // segfault during validation.
+    if let Some(ptr) = raw_closure_pointer(bits) {
+        return ptr as i64;
+    }
     // 0 = setTimeout, 1 = setInterval, 2 = setImmediate, anything
     // else falls back to the generic "callback" wording.
     let fn_name: &str = match fn_name_idx {
@@ -347,6 +356,45 @@ pub unsafe extern "C" fn js_timer_validate_callback(value: f64, fn_name_idx: i32
     // varies a touch but the code does not.
     let _ = fn_name;
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn raw_closure_pointer(bits: u64) -> Option<usize> {
+    const RAW_PTR_MAX: u64 = 0x0000_FFFF_FFFF_FFFF;
+    if !(0x10000..=RAW_PTR_MAX).contains(&bits) || bits & 0x7 != 0 {
+        return None;
+    }
+    let ptr = bits as usize;
+    if ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header_addr = ptr - crate::gc::GC_HEADER_SIZE;
+    let header = header_addr as *const crate::gc::GcHeader;
+    let tracked_malloc = crate::gc::gc_malloc_header_is_tracked(header);
+    let arena_payload = !matches!(
+        crate::arena::classify_heap_space(ptr),
+        crate::arena::HeapSpace::Unknown
+    );
+    let arena_header = !matches!(
+        crate::arena::classify_heap_space(header_addr),
+        crate::arena::HeapSpace::Unknown
+    );
+    if !tracked_malloc && !(arena_payload && arena_header) {
+        return None;
+    }
+    unsafe {
+        if (*header).obj_type != crate::gc::GC_TYPE_CLOSURE {
+            return None;
+        }
+        let size = (*header).size as usize;
+        if size < crate::gc::GC_HEADER_SIZE || size > (1usize << 34) {
+            return None;
+        }
+        let is_arena = (*header).gc_flags & crate::gc::GC_FLAG_ARENA != 0;
+        if tracked_malloc == is_arena {
+            return None;
+        }
+    }
+    crate::closure::is_closure_ptr(ptr).then_some(ptr)
 }
 
 /// JS-style setTimeout that takes a callback function and delay
