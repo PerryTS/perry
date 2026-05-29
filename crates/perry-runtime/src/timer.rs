@@ -161,9 +161,17 @@ pub extern "C" fn js_sleep_ms(ms: f64) {
 }
 
 /// A scheduled timer with a callback
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CallbackTimerKind {
+    Timeout,
+    Immediate,
+}
+
 struct CallbackTimer {
     /// Unique ID for this timer
     id: i64,
+    /// Whether this callback came from `setTimeout` or `setImmediate`.
+    kind: CallbackTimerKind,
     /// When this timer should fire
     deadline: Instant,
     /// Original delay (preserved so `refresh()` can reschedule with the
@@ -354,15 +362,33 @@ pub unsafe extern "C" fn js_timer_validate_callback(value: f64, fn_name_idx: i32
 /// Returns a timer ID
 #[no_mangle]
 pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
-    schedule_callback_timer(callback, delay_ms, Vec::new(), "Timeout")
+    schedule_callback_timer(
+        callback,
+        delay_ms,
+        Vec::new(),
+        "Timeout",
+        CallbackTimerKind::Timeout,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
-    schedule_callback_timer(callback, 0.0, Vec::new(), "Immediate")
+    schedule_callback_timer(
+        callback,
+        0.0,
+        Vec::new(),
+        "Immediate",
+        CallbackTimerKind::Immediate,
+    )
 }
 
-fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_name: &str) -> i64 {
+fn schedule_callback_timer(
+    callback: i64,
+    delay_ms: f64,
+    args: Vec<f64>,
+    type_name: &str,
+    kind: CallbackTimerKind,
+) -> i64 {
     ensure_initialized();
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -382,6 +408,7 @@ fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_na
 
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id,
+        kind,
         deadline,
         delay_ms,
         callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
@@ -418,7 +445,13 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-    schedule_callback_timer(callback, delay_ms, args, "Timeout")
+    schedule_callback_timer(
+        callback,
+        delay_ms,
+        args,
+        "Timeout",
+        CallbackTimerKind::Timeout,
+    )
 }
 
 #[no_mangle]
@@ -432,7 +465,13 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-    schedule_callback_timer(callback, 0.0, args, "Immediate")
+    schedule_callback_timer(
+        callback,
+        0.0,
+        args,
+        "Immediate",
+        CallbackTimerKind::Immediate,
+    )
 }
 
 /// Process any expired callback timers
@@ -567,16 +606,15 @@ pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
         .unwrap_or(-1.0)
 }
 
-/// Clear a callback timer by ID. Also clears the interval queue so
-/// Node's interchangeable `clearTimeout(intervalHandle)` shape works.
-/// The shared id pool means at most one of the two queues actually holds
-/// the id, so cross-queue cancellation is safe.
+/// Clear a Timeout by ID. Also clears the interval queue so Node's
+/// interchangeable `clearTimeout(intervalHandle)` shape works. Immediate
+/// handles are distinct and are only canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearTimeout(timer_id: i64) {
     {
         let mut timers = CALLBACK_TIMERS.lock().unwrap();
         for timer in timers.iter_mut() {
-            if timer.id == timer_id {
+            if timer.id == timer_id && timer.kind == CallbackTimerKind::Timeout {
                 timer.cleared = true;
                 break;
             }
@@ -593,12 +631,18 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
     intervals.retain(|t| !t.cleared);
 }
 
-/// Clear an immediate by ID. Node tolerates cross-clears between timeout and
-/// immediate handles, so this shares the callback timer queue with
-/// `clearTimeout`.
+/// Clear an Immediate by ID. Timeout/Interval handles are distinct and are not
+/// canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearImmediate(timer_id: i64) {
-    clearTimeout(timer_id);
+    let mut timers = CALLBACK_TIMERS.lock().unwrap();
+    for timer in timers.iter_mut() {
+        if timer.id == timer_id && timer.kind == CallbackTimerKind::Immediate {
+            timer.cleared = true;
+            break;
+        }
+    }
+    timers.retain(|t| !t.cleared);
 }
 
 /// Resolve a `clearTimeout`/`clearInterval` argument to a timer id. Accepts
@@ -721,9 +765,9 @@ pub unsafe extern "C" fn js_set_interval_callback_args(
     schedule_interval_timer(callback, interval_ms, args)
 }
 
-/// Clear an interval timer by ID. Also clears the callback-timer queue
-/// so Node's interchangeable `clearInterval(timeoutHandle)` shape works
-/// (see `clearTimeout` doc for the symmetric rationale).
+/// Clear an interval timer by ID. Also clears Timeout callback timers so
+/// Node's interchangeable `clearInterval(timeoutHandle)` shape works.
+/// Immediate handles are distinct and are only canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearInterval(interval_id: i64) {
     {
@@ -738,7 +782,7 @@ pub extern "C" fn clearInterval(interval_id: i64) {
     }
     let mut callbacks = CALLBACK_TIMERS.lock().unwrap();
     for timer in callbacks.iter_mut() {
-        if timer.id == interval_id {
+        if timer.id == interval_id && timer.kind == CallbackTimerKind::Timeout {
             timer.cleared = true;
             break;
         }
