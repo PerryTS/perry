@@ -2,6 +2,41 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1036 — node:http/https: emit default `Connection` / `Keep-Alive` response headers (#2132)
+
+Perry's `node:http` / `node:https` server serializes responses through hyper,
+which omits `Connection` and `Keep-Alive` headers on HTTP/1.1 (where keep-alive
+is implicit on the wire). Node, by contrast, surfaces them explicitly:
+`Connection: keep-alive` + `Keep-Alive: timeout=<keepAliveTimeout/1000>` on a
+kept-alive connection, and `Connection: close` when the connection is closing.
+Clients reading `res.headers.connection` / `res.headers['keep-alive']` (the
+`test-http-agent-keep-alive-*` family in #2132's diff bucket) therefore saw
+them missing.
+
+Fix: a new `HyperResponseShape::apply_default_connection_headers` (in
+`crates/perry-ext-http-server/src/response.rs`) injects the Node-compatible
+defaults just before the shape is handed to hyper, applied from both the http
+(`server.rs`) and https (`https_server.rs`) dispatch sites. Behavior mirrors
+Node:
+
+- HTTP/1.1 defaults to keep-alive unless the client sent `Connection: close`;
+  HTTP/1.0 keep-alives only when the client explicitly requested it.
+- When keep-alive is active and `server.keepAliveTimeout > 0`, append
+  `Connection: keep-alive` and `Keep-Alive: timeout=<secs>`; otherwise append
+  `Connection: close` with no `Keep-Alive`.
+- A handler-set `Connection` header is respected and never overridden.
+- HTTP/2 manages connection reuse at the protocol level and gets neither
+  header.
+
+Regression test: `test-parity/node-suite/http/server/default-connection-headers.ts`
+(byte-identical to Node across the default, client-`close`, and explicit-close
+paths).
+
+Out of scope (separate hyper-serialization clusters, follow-up): hyper emits
+lowercase header names and places its auto-`Date` last, so full raw-byte
+parity (header casing + ordering) still differs from Node; this change fixes
+the semantic header *presence* that the parsed-`res.headers` assertions check.
+
 ## v0.5.1035 — regression test: console.log(new Date(NaN)) → `Invalid Date` (#2371)
 
 Adds `test-files/test_gap_2371_console_invalid_date.ts`, locking in correct

@@ -11,10 +11,12 @@ use super::*;
 
 mod array_buffer;
 mod boxed_primitives;
+mod collection_equality;
 pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 mod collections;
 mod identity_equality;
 mod strip_vt;
+mod typed_array_equality;
 
 pub use strip_vt::js_util_strip_vt_control_characters;
 
@@ -1997,42 +1999,51 @@ fn looks_like_raw_heap_pointer(value: f64) -> bool {
     (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
 }
 
-#[no_mangle]
-pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
+fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
+    if depth > 64 {
+        return format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0);
+    }
     let left_value = crate::value::JSValue::from_bits(left.to_bits());
     let right_value = crate::value::JSValue::from_bits(right.to_bits());
     let left_boxed = boxed_primitives::boxed_primitive_payload(left);
     let right_boxed = boxed_primitives::boxed_primitive_payload(right);
     if left_boxed.is_some() || right_boxed.is_some() {
-        let equal = match (left_boxed, right_boxed) {
+        return match (left_boxed, right_boxed) {
             (Some((left_class, left_payload)), Some((right_class, right_payload)))
                 if left_class == right_class =>
             {
-                let payload_equal = js_util_is_deep_strict_equal(left_payload, right_payload);
-                crate::value::js_is_truthy(payload_equal) != 0
+                js_util_deep_strict_equal_bool(left_payload, right_payload, depth + 1)
             }
             _ => false,
         };
+    }
+    if let Some(equal) = collection_equality::deep_strict_collection_equal(left, right, depth) {
+        return equal;
+    }
+    if let Some(equal) = typed_array_equality::deep_strict_typed_array_equal(left, right) {
         return f64::from_bits(crate::value::JSValue::bool(equal).bits());
     }
     if identity_equality::is_identity_only_deep_equal_value(left)
         || identity_equality::is_identity_only_deep_equal_value(right)
     {
-        return f64::from_bits(
-            crate::value::JSValue::bool(left.to_bits() == right.to_bits()).bits(),
-        );
+        return left.to_bits() == right.to_bits();
     }
     let has_tagged_heap_operand = left_value.is_pointer() || right_value.is_pointer();
     let has_raw_heap_operand =
         looks_like_raw_heap_pointer(left) || looks_like_raw_heap_pointer(right);
-    let equal = if has_raw_heap_operand {
+    if has_raw_heap_operand {
         false
     } else if has_tagged_heap_operand {
         format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
     } else {
         crate::value::js_jsvalue_equals(left, right) != 0
             || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
-    };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
+    let equal = js_util_deep_strict_equal_bool(left, right, 0);
     f64::from_bits(crate::value::JSValue::bool(equal).bits())
 }
 

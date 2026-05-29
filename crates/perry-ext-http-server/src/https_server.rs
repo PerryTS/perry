@@ -279,6 +279,9 @@ async fn handle_https_request(
             raw_headers.push((n.to_string(), vs.to_string()));
         }
     }
+    // #2132 — capture before `req` / `headers_lower` are consumed below.
+    let http_version = req.version();
+    let req_connection = headers_lower.get("connection").cloned();
     let body = match req.collect().await {
         Ok(c) => c.to_bytes().to_vec(),
         Err(_) => Vec::new(),
@@ -294,13 +297,15 @@ async fn handle_https_request(
     ));
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
     let sr_handle = alloc_server_response(response_tx);
-    let (request_listeners, handler) = match get_handle::<HttpsServer>(server_handle) {
-        Some(s) => (
-            s.base.listeners.get("request").cloned().unwrap_or_default(),
-            s.handler,
-        ),
-        None => (Vec::new(), 0),
-    };
+    let (request_listeners, handler, keep_alive_timeout) =
+        match get_handle::<HttpsServer>(server_handle) {
+            Some(s) => (
+                s.base.listeners.get("request").cloned().unwrap_or_default(),
+                s.handler,
+                s.base.keep_alive_timeout,
+            ),
+            None => (Vec::new(), 0, 5_000.0),
+        };
     let pending = HttpPendingRequest {
         server_handle,
         request_handle: im_handle,
@@ -316,7 +321,14 @@ async fn handle_https_request(
     }
     perry_ffi::notify_main_thread();
     match response_rx.await {
-        Ok(shape) => Ok(shape.into_hyper()),
+        Ok(mut shape) => {
+            shape.apply_default_connection_headers(
+                http_version,
+                req_connection.as_deref(),
+                keep_alive_timeout,
+            );
+            Ok(shape.into_hyper())
+        }
         Err(_) => Ok(Response::builder()
             .status(500)
             .body(Full::new(Bytes::from("Handler error")).boxed())
