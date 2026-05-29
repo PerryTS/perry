@@ -11,6 +11,13 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
     if arr.is_null() {
         return;
     }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        crate::typedarray::js_typed_array_for_each(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            callback,
+        );
+        return;
+    }
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -37,6 +44,14 @@ pub extern "C" fn js_array_map(
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
+    }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        // Typed-array receiver: read elements per element-kind and return a
+        // same-kind TypedArray (mirrors the sort/at/findLast delegation).
+        return crate::typedarray::js_typed_array_map(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            callback,
+        ) as *mut ArrayHeader;
     }
     unsafe {
         let length = (*arr).length;
@@ -127,6 +142,12 @@ pub extern "C" fn js_array_filter(
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_filter(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            callback,
+        ) as *mut ArrayHeader;
+    }
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -166,6 +187,12 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_find(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            callback,
+        );
+    }
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -203,6 +230,12 @@ pub extern "C" fn js_array_findIndex(
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return -1;
+    }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_find_index(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            callback,
+        ) as i32;
     }
     unsafe {
         let length = (*arr).length;
@@ -366,6 +399,12 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
     if arr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_some(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            callback,
+        );
+    }
     unsafe {
         let length = (*arr).length;
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -400,6 +439,12 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return f64::from_bits(TAG_TRUE);
+    }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_every(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            callback,
+        );
     }
     unsafe {
         let length = (*arr).length;
