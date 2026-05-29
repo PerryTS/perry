@@ -704,6 +704,22 @@ fn ensure_export_singleton(
     allocated
 }
 
+pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return false;
+    }
+    let ptr = js_value.as_pointer::<ClosureHeader>() as *mut ClosureHeader;
+    let Some(submod) = find_submodule("diagnostics_channel") else {
+        return false;
+    };
+    let Some(export) = find_export(submod, "Channel") else {
+        return false;
+    };
+    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
+    EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
+}
+
 fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHeader {
     let key = submod.key.as_ptr() as usize;
     if let Some(cached) = NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {

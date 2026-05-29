@@ -142,6 +142,12 @@ pub(crate) fn validate_path_or_fd(arg_name: &str, value: f64, syscall: &'static 
     if is_path_like(value) {
         return;
     }
+    if let Some(fd) = crate::fs::filehandle_object_fd(value) {
+        if !crate::fs::fd_is_registered(fd) {
+            throw_ebadf(syscall);
+        }
+        return;
+    }
     let jv = JSValue::from_bits(value.to_bits());
     if is_numeric(jv) {
         // A numeric first argument is a file descriptor. Perry's readers and

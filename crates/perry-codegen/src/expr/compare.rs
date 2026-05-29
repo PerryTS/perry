@@ -367,6 +367,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(blk.bitcast_i64_to_double(&result_bits));
             }
 
+            // #2089: an ordered relational compare (`<`, `<=`, `>`, `>=`)
+            // whose operands aren't statically numeric may be Date values —
+            // NaN-boxed `DateCell` pointers whose raw bits are NaN, so a bare
+            // `fcmp` would be unordered (always false). Coerce each operand to
+            // its ms timestamp via `js_date_coerce_number` first; plain numbers
+            // pass through unchanged, so the statically-numeric case keeps its
+            // bare `fcmp` fast path (no call emitted).
+            let coerce_relational_dates = matches!(
+                op,
+                CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+            ) && !(is_numeric_expr(ctx, left)
+                && is_numeric_expr(ctx, right));
             let l = lower_expr(ctx, left)?;
             let r = lower_expr(ctx, right)?;
             let pred = match op {
@@ -384,6 +396,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 CompareOp::LooseEq | CompareOp::LooseNe => unreachable!(),
             };
             let blk = ctx.block();
+            let (l, r) = if coerce_relational_dates {
+                let lc = blk.call(DOUBLE, "js_date_coerce_number", &[(DOUBLE, &l)]);
+                let rc = blk.call(DOUBLE, "js_date_coerce_number", &[(DOUBLE, &r)]);
+                (lc, rc)
+            } else {
+                (l, r)
+            };
             let bit = blk.fcmp(pred, &l, &r);
             let tag_true_i64 = crate::nanbox::TAG_TRUE_I64;
             let tag_false_i64 = crate::nanbox::TAG_FALSE_I64;

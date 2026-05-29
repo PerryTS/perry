@@ -1038,9 +1038,15 @@ pub(super) fn try_module_static_methods(
                         }
                         "concat" => {
                             if !args.is_empty() {
-                                return Ok(Ok(Expr::BufferConcat(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
+                                let mut args_iter = args.into_iter();
+                                let list = args_iter.next().unwrap();
+                                if let Some(total_length) = args_iter.next() {
+                                    return Ok(Ok(Expr::BufferConcatWithLength {
+                                        list: Box::new(list),
+                                        total_length: Box::new(total_length),
+                                    }));
+                                }
+                                return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                             }
                         }
                         "of" => {
@@ -1309,9 +1315,15 @@ pub(super) fn try_module_static_methods(
                         return Ok(Ok(Expr::UrlCanParse(Box::new(input))));
                     }
                     if method_name == "parse" && !args.is_empty() {
-                        return Ok(Ok(Expr::UrlParse(Box::new(
-                            args.into_iter().next().unwrap(),
-                        ))));
+                        let mut iter = args.into_iter();
+                        let input = iter.next().unwrap();
+                        if let Some(base) = iter.next() {
+                            return Ok(Ok(Expr::UrlParseWithBase {
+                                input: Box::new(input),
+                                base: Box::new(base),
+                            }));
+                        }
+                        return Ok(Ok(Expr::UrlParse(Box::new(input))));
                     }
                     // Issue #1211: `URL.createObjectURL(blob)` /
                     // `URL.revokeObjectURL(url)` route to the
