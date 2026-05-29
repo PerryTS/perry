@@ -1021,6 +1021,21 @@ pub(crate) fn lower_stmt(
         }
         ast::Stmt::Labeled(labeled_stmt) => {
             let label = labeled_stmt.label.sym.to_string();
+            // #2383: a labeled *block* — `a: { ... break a; ... }` — exits the
+            // block via `break a`. Desugar to a labeled run-once do-while so the
+            // existing loop-based labeled-break codegen has an exit block to
+            // target. See the matching comment in lower_decl/body_stmt.rs.
+            if let ast::Stmt::Block(block) = &*labeled_stmt.body {
+                let body = lower_block_stmt_scoped(ctx, block)?;
+                module.init.push(Stmt::Labeled {
+                    label,
+                    body: Box::new(Stmt::DoWhile {
+                        body,
+                        condition: Expr::Bool(false),
+                    }),
+                });
+                return Ok(());
+            }
             let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
             if inner.len() == 1 {
                 let body = inner.into_iter().next().unwrap();

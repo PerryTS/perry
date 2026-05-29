@@ -2403,9 +2403,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isArrayBufferView", false, None),
     method("util/types", "isTypedArray", false, None),
     method("util/types", "isUint8Array", false, None),
+    method("util/types", "isInt8Array", false, None),
+    method("util/types", "isInt16Array", false, None),
     method("util/types", "isUint16Array", false, None),
     method("util/types", "isInt32Array", false, None),
+    method("util/types", "isUint32Array", false, None),
+    method("util/types", "isFloat32Array", false, None),
     method("util/types", "isFloat64Array", false, None),
+    method("util/types", "isUint8ClampedArray", false, None),
     method("util/types", "isMap", false, None),
     method("util/types", "isMapIterator", false, None),
     method("util/types", "isProxy", false, None),
@@ -2413,6 +2418,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isSetIterator", false, None),
     method("util/types", "isDate", false, None),
     method("util/types", "isRegExp", false, None),
+    method("util/types", "isNativeError", false, None),
     // Boxed primitive introspection (PR #1257). The `util/types` import form
     // and the `util.types` namespace-access form both lower to this canonical
     // module key.
@@ -2430,6 +2436,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert", "deepEqual", false, None),
     method("assert", "notDeepEqual", false, None),
     method("assert", "deepStrictEqual", false, None),
+    method("assert", "partialDeepStrictEqual", false, None),
     method("assert", "notDeepStrictEqual", false, None),
     method("assert", "match", false, None),
     method("assert", "doesNotMatch", false, None),
@@ -2451,6 +2458,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert/strict", "deepEqual", false, None),
     method("assert/strict", "notDeepEqual", false, None),
     method("assert/strict", "deepStrictEqual", false, None),
+    method("assert/strict", "partialDeepStrictEqual", false, None),
     method("assert/strict", "notDeepStrictEqual", false, None),
     method("assert/strict", "match", false, None),
     method("assert/strict", "doesNotMatch", false, None),
@@ -2571,6 +2579,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1539: push() backpressure return + readable/writableHighWaterMark
     // property getters on typed stream instances.
     method("stream", "push", true, None),
+    method("stream", "unshift", true, None),
     method("stream", "readableFlowing", true, None),
     method("stream", "readableHighWaterMark", true, None),
     method("stream", "readableLength", true, None),
@@ -2674,6 +2683,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),
+    // Issue #800: WHATWG base64 aliases exposed from node:buffer.
+    method("buffer", "atob", false, None),
+    method("buffer", "btoa", false, None),
     // Buffer module-level encoding probes added in PR #1257.
     method("buffer", "isAscii", false, None),
     method("buffer", "isUtf8", false, None),
