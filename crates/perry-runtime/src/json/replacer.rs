@@ -119,9 +119,15 @@ unsafe fn dispatch_pointer_with_replacer(
     depth: usize,
 ) {
     // Buffer / Uint8Array have no GcHeader — detect before gc_obj_type so the
-    // tag read doesn't deref unrelated memory (issue #639 pattern).
+    // tag read doesn't deref unrelated memory (issue #639 pattern). This
+    // dispatch serves both compact (indent == "") and pretty replacer walks,
+    // so pick the matching buffer serializer.
     if crate::buffer::is_registered_buffer(ptr as usize) {
-        stringify_buffer(ptr, buf);
+        if indent.is_empty() {
+            stringify_buffer(ptr, buf);
+        } else {
+            stringify_buffer_pretty(ptr, buf, indent, depth);
+        }
         return;
     }
     match gc_obj_type(ptr) {
@@ -482,18 +488,19 @@ pub(crate) unsafe fn stringify_value_pretty(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
-        // Map / Set / Error have non-ObjectHeader layouts; detect them before
-        // the `is_object_pointer` probes below, which would deref their
-        // internals as a `keys_array` and segfault. Node serializes all three
-        // as "{}" (no enumerable own props). Buffers are excluded from the
-        // `gc_obj_type` read (they carry no GcHeader) and left to fall through
-        // to the existing path, which pretty-prints their `toJSON` form.
-        if !crate::buffer::is_registered_buffer(ptr as usize)
-            && matches!(
-                gc_obj_type(ptr),
-                crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_ERROR
-            )
-        {
+        // Buffer / Map / Set / Error have non-ObjectHeader layouts; detect them
+        // before the `is_object_pointer` probes below, which would deref their
+        // internals as a `keys_array` and segfault. Buffers (no GcHeader, so
+        // checked first) pretty-print their `{type,data}` / index form; Map/
+        // Set/Error serialize as "{}" in Node (no enumerable own props).
+        if crate::buffer::is_registered_buffer(ptr as usize) {
+            stringify_buffer_pretty(ptr, buf, indent, depth);
+            return;
+        }
+        if matches!(
+            gc_obj_type(ptr),
+            crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_ERROR
+        ) {
             buf.push_str("{}");
             return;
         }

@@ -60,6 +60,90 @@ pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
     }
 }
 
+/// Pretty-printed (`space`-indented) form of `stringify_buffer`. Emits the
+/// same `{type,data}` (Buffer) / `{index:byte}` (plain Uint8Array) shape as
+/// the compact version but with newlines + indentation, matching Node's
+/// `JSON.stringify(buf, null, n)`. `depth` is the indent level of the value
+/// itself (content sits at `depth + 1`, the closing brace at `depth`),
+/// mirroring `stringify_object_pretty`.
+pub(crate) unsafe fn stringify_buffer_pretty(
+    ptr: *const u8,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
+    let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+    if buf_ptr.is_null() {
+        buf.push_str("null");
+        return;
+    }
+    let len = (*buf_ptr).length as usize;
+    let data = (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+
+    let push_indent = |buf: &mut String, levels: usize| {
+        for _ in 0..levels {
+            buf.push_str(indent);
+        }
+    };
+
+    if len == 0 {
+        // Empty Uint8Array -> "{}"; empty Buffer -> {"type":"Buffer","data":[]}.
+        if crate::buffer::is_uint8array_buffer(ptr as usize) {
+            buf.push_str("{}");
+        } else {
+            buf.push_str("{\n");
+            push_indent(buf, depth + 1);
+            buf.push_str("\"type\": \"Buffer\",\n");
+            push_indent(buf, depth + 1);
+            buf.push_str("\"data\": []\n");
+            push_indent(buf, depth);
+            buf.push('}');
+        }
+        return;
+    }
+
+    if crate::buffer::is_uint8array_buffer(ptr as usize) {
+        // Plain Uint8Array: { "0": b0, "1": b1, ... }
+        buf.push_str("{\n");
+        for (i, b) in bytes.iter().enumerate() {
+            push_indent(buf, depth + 1);
+            let mut idx_buf = itoa::Buffer::new();
+            buf.push('"');
+            buf.push_str(idx_buf.format(i));
+            buf.push_str("\": ");
+            let mut byte_buf = itoa::Buffer::new();
+            buf.push_str(byte_buf.format(*b));
+            if i + 1 < len {
+                buf.push(',');
+            }
+            buf.push('\n');
+        }
+        push_indent(buf, depth);
+        buf.push('}');
+    } else {
+        // Buffer: { "type": "Buffer", "data": [ b0, b1, ... ] }
+        buf.push_str("{\n");
+        push_indent(buf, depth + 1);
+        buf.push_str("\"type\": \"Buffer\",\n");
+        push_indent(buf, depth + 1);
+        buf.push_str("\"data\": [\n");
+        for (i, b) in bytes.iter().enumerate() {
+            push_indent(buf, depth + 2);
+            let mut byte_buf = itoa::Buffer::new();
+            buf.push_str(byte_buf.format(*b));
+            if i + 1 < len {
+                buf.push(',');
+            }
+            buf.push('\n');
+        }
+        push_indent(buf, depth + 1);
+        buf.push_str("]\n");
+        push_indent(buf, depth);
+        buf.push('}');
+    }
+}
+
 #[inline]
 pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     let obj = ptr as *const crate::ObjectHeader;
