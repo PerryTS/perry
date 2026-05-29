@@ -935,14 +935,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
         }
+        ("util", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
+        }
         ("util", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
         }
         ("util", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+        }
+        ("util", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
         ("util", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
@@ -978,14 +993,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
         }
+        ("util.types", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util.types", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
+        }
         ("util.types", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
         }
         ("util.types", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util.types", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util.types", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util.types", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+        }
+        ("util.types", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
         ("util.types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util.types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
@@ -1037,14 +1067,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
         }
+        ("util/types", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util/types", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
+        }
         ("util/types", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
         }
         ("util/types", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util/types", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util/types", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util/types", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+        }
+        ("util/types", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
         ("util/types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util/types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),

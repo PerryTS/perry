@@ -127,6 +127,16 @@ pub extern "C" fn js_util_types_is_uint8_array(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_int8_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_INT8))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_int16_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_INT16))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_uint16_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT16))
 }
@@ -137,8 +147,23 @@ pub extern "C" fn js_util_types_is_int32_array(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_uint32_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT32))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_float32_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT32))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_float64_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_uint8_clamped_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
 }
 
 #[no_mangle]
