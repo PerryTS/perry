@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1488 entries across 82 modules
+// Coverage: 1493 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2071,9 +2071,15 @@ declare module "util/types" {
   /** stdlib */
   export function isDate(...args: any[]): any;
   /** stdlib */
+  export function isFloat32Array(...args: any[]): any;
+  /** stdlib */
   export function isFloat64Array(...args: any[]): any;
   /** stdlib */
+  export function isInt16Array(...args: any[]): any;
+  /** stdlib */
   export function isInt32Array(...args: any[]): any;
+  /** stdlib */
+  export function isInt8Array(...args: any[]): any;
   /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
@@ -2099,7 +2105,11 @@ declare module "util/types" {
   /** stdlib */
   export function isUint16Array(...args: any[]): any;
   /** stdlib */
+  export function isUint32Array(...args: any[]): any;
+  /** stdlib */
   export function isUint8Array(...args: any[]): any;
+  /** stdlib */
+  export function isUint8ClampedArray(...args: any[]): any;
 }
 
 declare module "uuid" {
