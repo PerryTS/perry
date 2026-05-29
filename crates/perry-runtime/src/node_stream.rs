@@ -1166,6 +1166,11 @@ fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
 }
 
 fn emit_writable_chunk(stream: f64, chunk: f64) {
+    // Custom Duplex sinks own readable output by calling push(); the generic
+    // Perry fallback auto-echoes only when there is no user write sink.
+    if has_truthy_hidden(stream, hidden_key(b"writableCustomSink")) {
+        return;
+    }
     if has_truthy_hidden(stream, hidden_readable_flag_key()) {
         mark_disturbed(stream);
         if readable_is_flowing(stream) {

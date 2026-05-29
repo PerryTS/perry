@@ -212,12 +212,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose() composite Duplex doesn't forward data through the chain, so the joined output never arrives. Shape sub-tests pass; reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/subclass/extends-duplex": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: class extends Duplex + _read/_write doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/subclass/extends-transform": {
     "issue": "1532",
     "added": "2026-05-23",

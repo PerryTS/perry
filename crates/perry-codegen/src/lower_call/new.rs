@@ -19,6 +19,7 @@ fn node_stream_parent_kind(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<
     while let Some(name) = cur {
         match name {
             "Readable" => return Some("readable"),
+            "Duplex" => return Some("duplex"),
             _ => {}
         }
         if ctx.imported_class_ctors.contains_key(name) {
@@ -462,6 +463,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     let builtin_parent_runtime = if !has_own_ctor && !has_imported_ctor {
         match class.extends_name.as_deref() {
             Some("Writable") => Some("js_node_stream_writable_subclass_init"),
+            Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
             _ => None,
         }
     } else {
@@ -601,6 +603,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     .unwrap_or_else(|| undef_lit.clone());
                 let runtime_fn = match kind {
                     "readable" => "js_node_stream_readable_subclass_init",
+                    "duplex" => "js_node_stream_duplex_subclass_init",
                     _ => unreachable!("node stream parent kind {}", kind),
                 };
                 ctx.block().call(
