@@ -147,6 +147,14 @@ pub(crate) fn test_clear_small_int_cache_root(index: usize) {
 pub extern "C" fn js_number_to_fixed(value: f64, decimals: f64) -> *mut StringHeader {
     let dp = decimals as usize;
 
+    // ECMA-262 §21.1.3.3 step 9: if |x| >= 10^21, the result is ToString(x)
+    // (which switches to exponential form), NOT a zero-padded fixed string.
+    // `format!("{:.prec$}", 1e21)` would emit "1000000000000000000000.00";
+    // Node emits "1e+21".
+    if !value.is_nan() && !value.is_infinite() && value.abs() >= 1e21 {
+        return js_number_to_string(value);
+    }
+
     // Fast path: pure integer arithmetic + manual digit emission.
     // Conditions: finite, magnitude < 1e15 (so value * 10^dp fits safely
     // in i64), dp <= 6 (limits 10^dp to 1_000_000 — `value * 10^dp` then
@@ -174,22 +182,41 @@ fn fmt_fixed_int(value: f64, dp: usize) -> Option<*mut StringHeader> {
     static POW10: [u64; 7] = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000];
     let scale = POW10[dp];
 
-    // The multiplication `value * scale` can lose precision when the
-    // true result is near a half-integer — e.g. `0.015 * 100` rounds
-    // to exactly 1.5 in f64 (the original value is 0.01499999...), so
-    // a naïve `.round()` produces "0.02" while Node's Grisu-based
-    // formatter produces "0.01" (the spec-correct value for the actual
-    // IEEE 754 representation). Detect this by checking whether the
-    // scaled value's fractional part is suspiciously close to 0.5; if
-    // so, fall back to Rust's `format!` (which uses the same Grisu
-    // algorithm Node does and produces the spec-correct answer).
-    let scaled_raw = value * scale as f64;
+    // The multiplication `value * scale` can land on a half-integer in
+    // two very different ways, which `toFixed` must round oppositely:
+    //
+    //   * Genuine half (e.g. `2.5`, `1234.5`, `0.5`): the exact real
+    //     product `value * scale` IS k + 0.5. ECMA-262 §21.1.3.3 picks
+    //     the larger n on a tie — i.e. round half away from zero — so
+    //     `(2.5).toFixed(0)` is "3", not "2".
+    //   * Precision artifact (e.g. `0.015 * 100`): the f64 product
+    //     rounds to exactly 1.5, but the true value is 1.499999… (the
+    //     IEEE-754 value of 0.015 is 0.01499999…). Here Node's Grisu
+    //     formatter rounds the *true* value down to "0.01".
+    //
+    // Rust's `f64::round` is round-half-away-from-zero, so the genuine
+    // case is handled by `scaled_raw.round()` below. Only the artifact
+    // case must defer to `format!` (Grisu, operating on the true value).
+    //
+    // Distinguish them by testing whether the multiply was *exact*: an
+    // FMA computes `value*scale - scaled_raw` at infinite precision, so
+    // a zero error means `scaled_raw` is the exact product and a 0.5
+    // fractional part is a genuine tie. A non-zero error means the half
+    // is a rounding artifact — let `format!` decide on the true value.
+    let s = scale as f64;
+    let scaled_raw = value * s;
     let frac = scaled_raw - scaled_raw.floor();
     // 1e-9 catches any plausible f64-precision artifact: the relative
     // error of one f64 mul on values < 1e15 is bounded by ~1e-15, and
     // we're working with values whose fractional part is in [0, 1).
     if (frac - 0.5).abs() < 1e-9 {
-        return None;
+        let err = value.mul_add(s, -scaled_raw);
+        if err != 0.0 {
+            // Inexact product → artifact half. Defer to Grisu.
+            return None;
+        }
+        // Exact product → genuine half. Fall through; `round()` rounds
+        // away from zero, matching V8 / the spec's larger-n tiebreak.
     }
     let scaled = scaled_raw.round();
     if !scaled.is_finite() {
