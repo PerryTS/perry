@@ -2140,6 +2140,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "seteuid", false, None),
     method("process", "setgid", false, None),
     method("process", "setegid", false, None),
+    method("process", "setgroups", false, None),
+    method("process", "initgroups", false, None),
     method("process", "emitWarning", false, None),
     method("process", "on", false, None),
     method("process", "addListener", false, None),
@@ -2383,6 +2385,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method("util", "isDeepStrictEqual", false, None),
+    method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
@@ -2400,9 +2403,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isArrayBufferView", false, None),
     method("util/types", "isTypedArray", false, None),
     method("util/types", "isUint8Array", false, None),
+    method("util/types", "isInt8Array", false, None),
+    method("util/types", "isInt16Array", false, None),
     method("util/types", "isUint16Array", false, None),
     method("util/types", "isInt32Array", false, None),
+    method("util/types", "isUint32Array", false, None),
+    method("util/types", "isFloat32Array", false, None),
     method("util/types", "isFloat64Array", false, None),
+    method("util/types", "isUint8ClampedArray", false, None),
     method("util/types", "isMap", false, None),
     method("util/types", "isMapIterator", false, None),
     method("util/types", "isProxy", false, None),
@@ -2568,6 +2576,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1539: push() backpressure return + readable/writableHighWaterMark
     // property getters on typed stream instances.
     method("stream", "push", true, None),
+    method("stream", "unshift", true, None),
     method("stream", "readableFlowing", true, None),
     method("stream", "readableHighWaterMark", true, None),
     method("stream", "readableLength", true, None),
@@ -2931,6 +2940,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- perry/system — auto-derivable from PERRY_SYSTEM_TABLE. ---
     method("perry/system", "isDarkMode", false, None),
     method("perry/system", "getDeviceIdiom", false, None),
+    method("perry/system", "getSafeAreaInsets", false, None),
     method("perry/system", "getDeviceModel", false, None),
     // Bug-report-flow utility: stable OS-version string per
     // platform (e.g. `"15.2"`, `"macOS 14.5"`, `"Android 14"`).

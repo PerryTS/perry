@@ -602,6 +602,19 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_process_hrtime(prior: f64) -> f64 {
     use crate::value::JSValue;
+    // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
+    // is supplied but isn't an Array (e.g. `process.hrtime('abc')`).
+    // Undefined falls through to the no-prior baseline read; an array
+    // with NaN-y entries is silently zeroed by `extract_hrtime_prior`,
+    // matching Node's lenient numeric coercion inside the array.
+    let prior_jv = JSValue::from_bits(prior.to_bits());
+    if !prior_jv.is_undefined() && !crate::process::is_array_value(prior_jv) {
+        let message = format!(
+            "The \"time\" argument must be an instance of Array. Received {}",
+            crate::fs::validate::describe_received(prior)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
     let elapsed = get_hrtime_start().elapsed();
     let total_ns = elapsed.as_nanos() as u64 + 1_000_000_000;
     let mut secs = (total_ns / 1_000_000_000) as i64;
@@ -866,6 +879,17 @@ pub extern "C" fn js_process_prepend_once_listener(
     register_process_listener(event_ptr, handler, true, true)
 }
 
+/// Emit the synthetic `beforeExit` event with the would-be exit code as a
+/// numeric argument. Called from the codegen-emitted event-loop epilogue
+/// once the loop has drained all real work (#2135). Node's semantics fire
+/// this hook *only* when the event loop is exiting on its own; an explicit
+/// `process.exit()` skips it. Perry's `js_process_exit` calls `libc::_exit`
+/// directly without going through this hook, so that contract is preserved.
+#[no_mangle]
+pub extern "C" fn js_process_emit_before_exit(code: f64) {
+    let _ = emit_process_event("beforeExit", &[code]);
+}
+
 #[no_mangle]
 pub extern "C" fn js_process_emit(event_ptr: *const StringHeader, args: *const ArrayHeader) -> f64 {
     let Some(event) = read_event_name(event_ptr) else {
@@ -1038,71 +1062,36 @@ pub extern "C" fn js_process_next_tick(callback: *const crate::closure::ClosureH
     crate::builtins::js_queue_next_tick(callback as i64);
 }
 
-/// process.chdir(directory) — change working directory. Throws a Node-shaped
-/// `Error` (`code`/`syscall`/`path` populated) when the target can't be entered,
-/// matching `ENOENT: no such file or directory, chdir '<cwd>' -> '<target>'`.
-/// Refs #2135 (process parity, chdir error message gap).
-#[no_mangle]
-pub extern "C" fn js_process_chdir(dir_ptr: *const StringHeader) {
-    unsafe {
-        if dir_ptr.is_null() {
-            return;
-        }
-        let len = (*dir_ptr).byte_len as usize;
-        let data = (dir_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, len);
-        let Ok(target) = std::str::from_utf8(bytes) else {
-            return;
-        };
-        if let Err(err) = std::env::set_current_dir(target) {
-            throw_chdir_error(&err, target);
-        }
-    }
-}
-
-/// libuv-style POSIX `ERR_*` for an `io::Error`, scoped to the kinds
-/// `chdir(2)` can return.
-fn chdir_error_code(err: &std::io::Error) -> &'static str {
-    use std::io::ErrorKind;
-    match err.kind() {
-        ErrorKind::NotFound => "ENOENT",
-        ErrorKind::PermissionDenied => "EACCES",
-        ErrorKind::NotADirectory => "ENOTDIR",
-        _ => "EIO",
-    }
-}
-
-/// Human-readable description matching Node's libuv `chdir` error strings.
-/// Node hardcodes these in its libuv error table; `io::Error::to_string()`
-/// uses Rust's text (e.g. "entity not found"), which would diverge from
-/// Node's output byte-for-byte.
-fn chdir_error_description(code: &str) -> &'static str {
-    match code {
-        "ENOENT" => "no such file or directory",
-        "EACCES" => "permission denied",
-        "ENOTDIR" => "not a directory",
-        _ => "i/o error",
-    }
-}
-
-unsafe fn throw_chdir_error(err: &std::io::Error, target: &str) -> ! {
-    let code = chdir_error_code(err);
-    let desc = chdir_error_description(code);
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    let message = format!("{code}: {desc}, chdir '{cwd}' -> '{target}'");
-    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg_ptr, code);
-    crate::node_submodules::register_error_syscall(msg_ptr, "chdir");
-    crate::node_submodules::register_error_path(msg_ptr, target.to_string());
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
-}
+// `process.chdir()` + its Node-shaped error live in the `chdir` submodule
+// (#2135); split out to keep this file under the 2000-line gate.
+mod chdir;
+pub use chdir::js_process_chdir;
 
 /// process.kill(pid, signal?) — send signal to process. signal=0 means existence check.
 #[no_mangle]
 pub extern "C" fn js_process_kill(pid: f64, signal: f64) {
+    // #2013 — pid must be a number (`validateInteger(pid, 'pid')`); a
+    // non-numeric pid throws TypeError ERR_INVALID_ARG_TYPE before any
+    // syscall runs. Signal must be a string-or-number; an object/array
+    // throws TypeError ERR_UNKNOWN_SIGNAL (Node's specific shape — the
+    // signal-name lookup table runs before the numeric coercion).
+    use crate::fs::validate::{describe_received, is_numeric, throw_type_error_with_code};
+    let pid_jv = crate::value::JSValue::from_bits(pid.to_bits());
+    if !is_numeric(pid_jv) {
+        let message = format!(
+            "The \"pid\" argument must be of type number. Received {}",
+            describe_received(pid)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let sig_jv = crate::value::JSValue::from_bits(signal.to_bits());
+    if !sig_jv.is_undefined() && !is_numeric(sig_jv) && !sig_jv.is_any_string() {
+        // Match Node's "Unknown signal: <stringify>" message for the
+        // object/array/boolean shapes that don't reach the numeric path.
+        let received = describe_received(signal);
+        let message = format!("Unknown signal: {}", received);
+        throw_type_error_with_code(&message, "ERR_UNKNOWN_SIGNAL");
+    }
     let pid_i = pid as i32;
     let sig_i = if signal.is_nan() || signal == 0.0 {
         0

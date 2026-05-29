@@ -134,7 +134,13 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
     // `Symbol.toString()` / `is_symbol` can transiently return wrong
     // results. Lock order matches `js_symbol_for` below: cache → side
     // tables, never the reverse.
-    record_registered_symbol_description(sym_ptr as usize, short_name);
+    // Spec: a well-known symbol's `[[Description]]` is the qualified name
+    // `"Symbol.iterator"`, not the bare `"iterator"`. This is what
+    // `Symbol.iterator.description`, `.toString()`, `String(sym)`, and
+    // `console.log` all report. The cache key stays the short name so callers
+    // (`well_known_symbol("iterator")`) and pointer-identity property lookups
+    // are unaffected.
+    record_registered_symbol_description(sym_ptr as usize, &format!("Symbol.{short_name}"));
     register_symbol_pointer(sym_ptr as usize);
     cache.insert(short_name.to_string(), sym_ptr as usize);
     drop(guard);
@@ -717,6 +723,22 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
+    // Buffer extends Uint8Array in Node, so Buffer values must expose
+    // @@iterator as values(). Perry's direct Buffer.from() paths often
+    // materialize through array-clone fast paths, but runtime-produced
+    // Buffers can reach generic iterator lookup first.
+    let raw_ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
+    if raw_ptr >= 0x10000 && crate::buffer::is_registered_buffer(raw_ptr) {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let mname = b"values";
+                return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
     // #36 / #321: the receiver is a closure whose OWN symbol props miss — walk
     // its static prototype chain (`Object.setPrototypeOf(closure, protoObj)`).
     // effect's `TagClass[TagTypeId]` / `isTag(TagClass)` read symbols off
@@ -781,6 +803,26 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                         );
                     }
                 }
+            }
+        }
+    }
+    // Buffers inherit TypedArray iteration semantics in Node: the default
+    // iterator is `values()`, yielding numeric bytes.
+    let raw_addr = if (bits >> 48) >= 0x7FF8 {
+        (bits & POINTER_MASK) as usize
+    } else {
+        bits as usize
+    };
+    if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(raw_addr as i64).to_bits());
+                let mname = b"values";
+                return crate::object::js_class_method_bind(this_f64, mname.as_ptr(), mname.len());
             }
         }
     }
@@ -1155,5 +1197,25 @@ pub unsafe extern "C" fn js_symbol_equals(a: f64, b: f64) -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod wellknown_desc_tests {
+    use super::*;
+
+    #[test]
+    fn well_known_symbols_use_qualified_description() {
+        // Spec: `Symbol.iterator.description === "Symbol.iterator"` (qualified),
+        // which is also what `console.log` / `String(sym)` report.
+        for short in ["iterator", "asyncIterator", "hasInstance", "toPrimitive"] {
+            let ptr = well_known_symbol(short) as usize;
+            let desc = registered_symbol_description(ptr);
+            assert_eq!(
+                desc.as_deref(),
+                Some(format!("Symbol.{short}").as_str()),
+                "well-known symbol {short} should have qualified description"
+            );
+        }
     }
 }

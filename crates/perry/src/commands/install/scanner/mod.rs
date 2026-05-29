@@ -146,6 +146,9 @@ pub fn scan_package(pkg: &ScannedPackage) -> Vec<Finding> {
 /// Convenience wrapper around [`discover_packages`] + [`scan_packages`]
 /// for callers that don't need the package list afterwards. Phase 9
 /// (lifecycle execution) uses the split form so it can reuse the walk.
+// #854: convenience wrapper over discover_packages + scan_packages; callers
+// currently use the split form, but this is the documented one-shot entry.
+#[allow(dead_code)]
 pub fn scan_tree(
     node_modules: &Path,
     allow_risky: &[String],

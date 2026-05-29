@@ -492,7 +492,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_promisify", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_callbackify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_deprecate", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_util_parse_args", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
@@ -503,9 +505,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_array_buffer_view", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_typed_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint8_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_int8_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_int16_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint16_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_int32_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_uint32_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_float32_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_float64_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_uint8_clamped_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
@@ -560,6 +567,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_title", DOUBLE, &[]);
     module.declare_function("js_process_set_title", VOID, &[DOUBLE]);
     module.declare_function("js_process_chdir", VOID, &[I64]);
+    // #2013 — f64-taking variant that validates type before dispatch.
+    module.declare_function("js_process_chdir_jsv", VOID, &[DOUBLE]);
     module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_abort", VOID, &[]);
@@ -571,6 +580,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_prepend_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_prepend_once_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_emit", DOUBLE, &[I64, I64]);
+    module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_remove_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_off", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_remove_all_listeners", DOUBLE, &[I64]);
@@ -681,12 +691,21 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_get_utc_milliseconds", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_value_of", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_timezone_offset", DOUBLE, &[DOUBLE]);
+    // #2089: deref a Date (NaN-boxed DateCell pointer) to its ms timestamp for
+    // ordered relational compares; a plain number passes through unchanged.
+    module.declare_function("js_date_coerce_number", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_date_to_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string_or_throw", I64, &[DOUBLE]);
     module.declare_function("js_date_new_from_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_new_from_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_indexOf_f64", I32, &[I64, DOUBLE]);
     module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_array_last_index_of_jsvalue",
+        I32,
+        &[I64, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function("js_array_includes_f64", I32, &[I64, DOUBLE]);
     module.declare_function("js_array_includes_jsvalue", I32, &[I64, DOUBLE]);
     module.declare_function("js_map_size", I32, &[I64]);
@@ -1023,6 +1042,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Uint8Array constructor wrapper that flags the resulting buffer so the
     // formatter prints `Uint8Array(N) [ ... ]` instead of `<Buffer ...>`.
     module.declare_function("js_uint8array_from_array", I64, &[I64]);
+    // `new Uint8Array(length)` — zero-filled BufferHeader marked as Uint8Array.
+    module.declare_function("js_uint8array_alloc", I64, &[I32]);
     // `new Uint8Array(x)` runtime dispatch — handles the non-literal case
     // where `x` could be a number (length) or an array (source data).
     module.declare_function("js_uint8array_new", I64, &[DOUBLE]);
@@ -1164,6 +1185,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_from_char_code", I64, &[I32]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
+    module.declare_function(
+        "js_string_last_index_of_from",
+        I32,
+        &[I64, I64, DOUBLE, I32],
+    );
     module.declare_function("js_string_locale_compare", DOUBLE, &[I64, I64]);
     module.declare_function("js_string_normalize", I64, &[I64, I64]);
     module.declare_function("js_string_pad_start", I64, &[I64, DOUBLE, I64]);
@@ -1516,6 +1542,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // body iteration that queues a chained `.then` callback and the
     // next body iteration's microtask drain.
     module.declare_function("js_microtasks_pending", I32, &[]);
+    // #2013 — validate setTimeout/setInterval/setImmediate's first arg
+    // (callback), returning the unboxed pointer for the valid case and
+    // throwing TypeError ERR_INVALID_ARG_TYPE for everything else.
+    module.declare_function("js_timer_validate_callback", I64, &[DOUBLE, I32]);
     module.declare_function("js_set_timeout_callback", I64, &[I64, DOUBLE]);
     // Refs #665: `setTimeout(fn, delay, ...args)` with trailing args. The
     // args are packed into a stack buffer of doubles at the call site and

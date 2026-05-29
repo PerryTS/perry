@@ -361,6 +361,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "seteuid")
             | ("process", "setgid")
             | ("process", "setegid")
+            | ("process", "setgroups")
+            | ("process", "initgroups")
             | ("process", "emitWarning")
             | ("process", "on")
             | ("process", "addListener")
@@ -632,6 +634,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "promisify")
             | ("util", "callbackify")
+            | ("util", "parseArgs")
             | ("util", "deprecate")
             | ("util", "inherits")
             | ("util", "isDeepStrictEqual")
@@ -656,9 +659,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util.types", "isArrayBufferView")
             | ("util.types", "isTypedArray")
             | ("util.types", "isUint8Array")
+            | ("util.types", "isInt8Array")
+            | ("util.types", "isInt16Array")
             | ("util.types", "isUint16Array")
             | ("util.types", "isInt32Array")
+            | ("util.types", "isUint32Array")
+            | ("util.types", "isFloat32Array")
             | ("util.types", "isFloat64Array")
+            | ("util.types", "isUint8ClampedArray")
             | ("util.types", "isMap")
             | ("util.types", "isMapIterator")
             | ("util.types", "isProxy")
@@ -686,9 +694,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isArrayBufferView")
             | ("util/types", "isTypedArray")
             | ("util/types", "isUint8Array")
+            | ("util/types", "isInt8Array")
+            | ("util/types", "isInt16Array")
             | ("util/types", "isUint16Array")
             | ("util/types", "isInt32Array")
+            | ("util/types", "isUint32Array")
+            | ("util/types", "isFloat32Array")
             | ("util/types", "isFloat64Array")
+            | ("util/types", "isUint8ClampedArray")
             | ("util/types", "isMap")
             | ("util/types", "isMapIterator")
             | ("util/types", "isProxy")
@@ -1356,9 +1369,9 @@ pub(crate) unsafe fn get_native_module_constant(
     };
 
     // `zlib.constants` — the Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
-    // table Node exposes on `require('node:zlib').constants`. Values
-    // are taken straight from `node-internal/zlib/constants.h` (the
-    // upstream lib snapshots) so reads are byte-identical to Node.
+    // table Node exposes on `require('node:zlib').constants`. Match the
+    // JavaScript-visible table rather than blindly mirroring every zlib.h
+    // macro: modern Node exposes ZLIB_VERNUM but omits Z_TREES.
     // Required by axios for its stream wiring.
     let zlib_const = |prop: &str| -> Option<f64> {
         let v: i64 = match prop {
@@ -1373,6 +1386,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "Z_RLE" => 3,
             "Z_FIXED" => 4,
             "Z_DEFAULT_STRATEGY" => 0,
+            "ZLIB_VERNUM" => 0x1310,
             // Flush values
             "Z_NO_FLUSH" => 0,
             "Z_PARTIAL_FLUSH" => 1,
@@ -1380,7 +1394,6 @@ pub(crate) unsafe fn get_native_module_constant(
             "Z_FULL_FLUSH" => 3,
             "Z_FINISH" => 4,
             "Z_BLOCK" => 5,
-            "Z_TREES" => 6,
             // Return codes
             "Z_OK" => 0,
             "Z_STREAM_END" => 1,
@@ -1641,6 +1654,7 @@ pub(crate) unsafe fn get_native_module_constant(
             // packages feature-detect the Buffer surface without falling over.
             "kMaxLength" => Some(4294967296.0),
             "kStringMaxLength" => Some(536870888.0),
+            "INSPECT_MAX_BYTES" => Some(50.0),
             _ => None,
         },
         "buffer.constants" => match property {
@@ -1927,6 +1941,8 @@ unsafe fn http_methods_array() -> f64 {
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.
+// #854: fs.constants object builder retained for the native fs module
+#[allow(dead_code)]
 unsafe fn create_fs_constants_object() -> f64 {
     let cached = FS_CONSTANTS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {

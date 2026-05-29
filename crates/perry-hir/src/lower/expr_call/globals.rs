@@ -835,7 +835,10 @@ pub(super) fn try_global_builtins(
         }
     }
 
-    let callee_expr = lower_expr(ctx, expr)?;
+    // #854: lower the callee for its side effects (registration/tagging done
+    // inside `lower_expr`) even though the resulting value is unused on the
+    // fall-through path that hands the args back to the generic dispatcher.
+    let _callee_expr = lower_expr(ctx, expr)?;
 
     Ok(Err(args))
 }

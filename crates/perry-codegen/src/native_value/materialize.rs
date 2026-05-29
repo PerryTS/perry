@@ -12,10 +12,16 @@ use super::rep::{LoweredValue, NativeRep, SemanticKind};
 pub(crate) enum MaterializationReason {
     FunctionAbi,
     ReturnAbi,
+    // #854: materialization-reason variants not yet emitted by any
+    // materialization site; kept as part of the serialized reason taxonomy.
+    #[allow(dead_code)]
     GenericCall,
+    #[allow(dead_code)]
     DynamicPropertyAccess,
+    #[allow(dead_code)]
     ExceptionPath,
     RuntimeApi,
+    #[allow(dead_code)]
     DebugLogging,
     UnknownAlias,
     UnknownBounds,

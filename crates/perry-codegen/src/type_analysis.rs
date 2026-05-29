@@ -145,6 +145,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // Date string-returning methods all produce real string handles
         // via js_date_to_*_string. Refining the local lets `dateStr.includes("2024")`
         // hit the string .includes fast path.
+        | Expr::DateToString(_)
         | Expr::DateToDateString(_)
         | Expr::DateToTimeString(_)
         | Expr::DateToLocaleString(_)
@@ -230,6 +231,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::BufferAlloc { .. }
         | Expr::BufferAllocUnsafe(_)
         | Expr::BufferConcat(_)
+        | Expr::BufferConcatWithLength { .. }
         | Expr::CryptoRandomBytes(_) => Some(HirType::Named("Uint8Array".into())),
         // Compare results are now NaN-boxed booleans (TAG_TRUE/FALSE).
         // Type-refining the local as Boolean lets is_numeric_expr
@@ -1130,6 +1132,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::RegExpSource(_)
         | Expr::RegExpFlags(_)
         // Date.prototype.to*String() → string
+        | Expr::DateToString(_)
         | Expr::DateToDateString(_)
         | Expr::DateToTimeString(_)
         | Expr::DateToLocaleString(_)

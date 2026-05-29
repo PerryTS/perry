@@ -18,6 +18,8 @@ pub struct FixableIssue {
     /// Type of issue
     pub kind: FixableKind,
     /// Original source text
+    // #854: captured for diagnostics/preview; not read on the current path.
+    #[allow(dead_code)]
     pub original: String,
     /// Suggested replacement
     pub replacement: String,
@@ -33,6 +35,8 @@ pub enum FixableKind {
     /// `any` type that should be replaced
     AnyType {
         /// Inferred type if available, otherwise None (will use `unknown`)
+        // #854: carried on the AnyType fix variant; not read on the current path.
+        #[allow(dead_code)]
         inferred: Option<String>,
     },
     /// Template literal that needs conversion to concatenation
@@ -40,6 +44,8 @@ pub enum FixableKind {
 }
 
 /// Confidence level for fixes
+// #854: `Low` is part of the confidence scale but not yet emitted by any rule.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Confidence {
     /// Safe to apply automatically

@@ -155,6 +155,7 @@ pub fn try_lower_property_get_method_call(
                     "base64url" => 3,
                     "latin1" | "binary" => 4,
                     "ascii" => 5,
+                    "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => 6,
                     _ => 0,
                 };
                 tag.to_string()
@@ -663,11 +664,16 @@ pub fn try_lower_property_get_method_call(
         if is_url_search_params_expr(ctx, object) {
             let p_box = lower_expr(ctx, object)?;
             let cb_box = lower_expr(ctx, &args[0])?;
+            let this_arg = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let p_handle = unbox_to_i64(blk, &p_box);
             blk.call_void(
                 "js_url_search_params_for_each",
-                &[(I64, &p_handle), (DOUBLE, &cb_box)],
+                &[(I64, &p_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
             );
             return Ok(Some(double_literal(0.0)));
         }
