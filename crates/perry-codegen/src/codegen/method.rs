@@ -430,21 +430,6 @@ pub(super) fn compile_method(
                     }
                 }
             }
-            // Apply self field initializers AFTER the parent body chain has
-            // run, so they can read state set by the parent body (e.g. drizzle's
-            // PgText.enumValues = this.config.enumValues — this.config is set
-            // in Column body via super-chain). Refs #420.
-            crate::lower_call::apply_field_initializers_recursive(
-                &mut ctx,
-                &class.name,
-                crate::lower_call::FieldInitMode::SelfOnly,
-            )
-            .with_context(|| {
-                format!(
-                    "applying self field initializers for '{}' constructor",
-                    class.name
-                )
-            })?;
             if let Some(runtime_fn) = builtin_parent_runtime {
                 let undef_lit =
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -463,6 +448,22 @@ pub(super) fn compile_method(
                 ctx.block()
                     .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
             }
+
+            // Apply self field initializers AFTER the parent body chain has
+            // run, so they can read state set by the parent body (e.g. drizzle's
+            // PgText.enumValues = this.config.enumValues — this.config is set
+            // in Column body via super-chain). Refs #420.
+            crate::lower_call::apply_field_initializers_recursive(
+                &mut ctx,
+                &class.name,
+                crate::lower_call::FieldInitMode::SelfOnly,
+            )
+            .with_context(|| {
+                format!(
+                    "applying self field initializers for '{}' constructor",
+                    class.name
+                )
+            })?;
         }
     }
 
