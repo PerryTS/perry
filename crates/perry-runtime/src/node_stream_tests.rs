@@ -230,6 +230,8 @@ fn readable_set_encoding_emits_buffer_chunks_as_strings() {
     let _ = js_node_stream_method_push(handle, buffer_value(b"hello"));
     let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
 
+    let _ = crate::promise::js_promise_run_microtasks();
+
     READABLE_DATA_STRING_FLAGS.with(|flags| {
         assert_eq!(flags.borrow().as_slice(), &[true, true]);
     });

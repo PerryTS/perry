@@ -4083,11 +4083,22 @@ fn drain_readable_from_events(stream: f64) {
         if !values.is_empty() {
             mark_disturbed(stream);
         }
+        let mut emit_destroyed_tail = false;
         for chunk in values {
             if !readable_is_flowing(stream) {
                 return;
             }
+            if stream_destroyed(stream) {
+                if !emit_destroyed_tail {
+                    return;
+                }
+                emit_readable_data_unchecked(stream, chunk);
+                return;
+            }
             emit_readable_data_unchecked(stream, chunk);
+            if stream_destroyed(stream) {
+                emit_destroyed_tail = true;
+            }
         }
     }
     if !stream_destroyed(stream) {

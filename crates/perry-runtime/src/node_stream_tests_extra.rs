@@ -410,11 +410,14 @@ fn readable_push_emits_data_with_stream_this_and_deferred_end() {
     let _ = js_node_stream_method_on(handle, string_value("end"), end_listener);
 
     READABLE_DATA_CAPTURED.with(|captured| {
-        assert_eq!(captured.borrow().as_slice(), &[b"x".to_vec()]);
+        assert!(captured.borrow().is_empty());
     });
     READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
 
     let _ = crate::promise::js_promise_run_microtasks();
+    READABLE_DATA_CAPTURED.with(|captured| {
+        assert_eq!(captured.borrow().as_slice(), &[b"x".to_vec()]);
+    });
     READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
     READABLE_THIS_MATCHES.with(|matches| {
         assert_eq!(matches.borrow().as_slice(), &[true, true]);
