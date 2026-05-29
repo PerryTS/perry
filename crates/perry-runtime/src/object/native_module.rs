@@ -123,6 +123,9 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        // Deprecated path alias enumerable on the top-level and style
+        // sub-namespaces, matching Node's `Object.keys(...).includes`.
+        "path" | "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "querystring" => Some(&[
             b"unescapeBuffer",
             b"unescape",
@@ -2023,6 +2026,10 @@ pub(crate) unsafe fn get_native_module_constant(
                     Some(str_val(":"))
                 }
             }
+            "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                "path",
+                "toNamespacedPath",
+            )),
             "posix" => Some(create_sub_namespace("path.posix")),
             "win32" => Some(create_sub_namespace("path.win32")),
             _ => None,
@@ -2030,11 +2037,19 @@ pub(crate) unsafe fn get_native_module_constant(
         "path.posix" => match property {
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
+            "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                "path.posix",
+                "toNamespacedPath",
+            )),
             _ => None,
         },
         "path.win32" => match property {
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
+            "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                "path.win32",
+                "toNamespacedPath",
+            )),
             _ => None,
         },
         "fs" => match property {

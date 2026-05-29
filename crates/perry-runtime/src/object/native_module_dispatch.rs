@@ -839,6 +839,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
+        ("path", "toNamespacedPath") => {
+            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
+        }
+        ("path", "_makeLong") => {
+            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
+        }
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -867,6 +873,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path.win32", "toNamespacedPath") => str_to_f64(
             crate::path::js_path_win32_to_namespaced_path(arg_str_ptr(0)),
         ),
+        ("path.win32", "_makeLong") => str_to_f64(crate::path::js_path_win32_to_namespaced_path(
+            arg_str_ptr(0),
+        )),
         ("path.win32", "isAbsolute") => bool_to_f64(crate::path::js_path_win32_is_absolute(
             require_path_str_ptr(0),
         )),
@@ -896,6 +905,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
             require_path_str_ptr(1),
         )),
         ("path.posix", "toNamespacedPath") => {
+            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
+        }
+        ("path.posix", "_makeLong") => {
             str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
         }
         ("path.posix", "isAbsolute") => {

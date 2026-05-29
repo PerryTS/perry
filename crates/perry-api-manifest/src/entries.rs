@@ -2152,6 +2152,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("path", "parse", false, None),
     method("path", "format", false, None),
     method("path", "toNamespacedPath", false, None),
+    method("path", "_makeLong", false, None),
     method("path", "matchesGlob", false, None),
     property("path", "sep"),
     property("path", "delimiter"),

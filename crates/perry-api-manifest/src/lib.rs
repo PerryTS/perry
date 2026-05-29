@@ -284,6 +284,19 @@ mod tests {
     }
 
     #[test]
+    fn path_make_long_is_manifest_method() {
+        let entry = module_has_symbol("node:path", "_makeLong")
+            .expect("node:path._makeLong should be in the manifest");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: false,
+                class_filter: None
+            }
+        ));
+    }
+
+    #[test]
     fn known_modules_consistent_with_manifest() {
         // Every entry's module must appear in NATIVE_MODULES.
         // Catches typos and entries on un-registered modules.

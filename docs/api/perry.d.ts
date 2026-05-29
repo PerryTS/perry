@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1546 entries across 85 modules
+// Coverage: 1547 entries across 85 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1082,6 +1082,8 @@ declare module "path" {
   export const sep: any;
   /** stdlib */
   export const win32: any;
+  /** stdlib */
+  export function _makeLong(...args: any[]): any;
   /** stdlib */
   export function basename(...args: any[]): any;
   /** stdlib */
