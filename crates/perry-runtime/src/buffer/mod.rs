@@ -40,9 +40,8 @@ pub use from::{
     js_array_buffer_new, js_buffer_alloc, js_buffer_alloc_fill_value, js_buffer_alloc_unsafe,
     js_buffer_concat, js_buffer_concat_with_length, js_buffer_fill, js_buffer_fill_range,
     js_buffer_fill_value_range, js_buffer_from_array, js_buffer_from_arraybuffer_slice,
-    js_buffer_from_string,
-    js_buffer_from_value, js_data_view_new, js_encoding_tag_from_value, js_shared_array_buffer_new,
-    js_uint8array_alloc, js_uint8array_from_array, js_uint8array_new,
+    js_buffer_from_string, js_buffer_from_value, js_data_view_new, js_encoding_tag_from_value,
+    js_shared_array_buffer_new, js_uint8array_alloc, js_uint8array_from_array, js_uint8array_new,
 };
 
 // ---- Re-exports: predicates / byteLength (FFI) ----
