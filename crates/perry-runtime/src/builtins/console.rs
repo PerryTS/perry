@@ -165,6 +165,23 @@ pub fn scan_console_log_singleton_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_console_log_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     visitor.visit_atomic_i64_slot(&CONSOLE_LOG_SINGLETON, Ordering::Acquire, Ordering::Release);
+    let mut moved = Vec::new();
+    CONSOLE_INSTANCES.with(|instances| {
+        let mut instances = instances.borrow_mut();
+        for (&owner, state) in instances.iter_mut() {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved.push((owner, new_owner));
+            }
+            visitor.visit_nanbox_f64_slot(&mut state.stdout);
+            visitor.visit_nanbox_f64_slot(&mut state.stderr);
+        }
+        for (old_owner, new_owner) in moved.drain(..) {
+            if let Some(state) = instances.remove(&old_owner) {
+                instances.insert(new_owner, state);
+            }
+        }
+    });
 }
 
 /// Print a number to stdout (optimized path for known numbers)
@@ -426,6 +443,17 @@ use std::time::Instant;
 thread_local! {
     static CONSOLE_TIMERS: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
     static CONSOLE_COUNTERS: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+    static CONSOLE_INSTANCES: RefCell<HashMap<usize, ConsoleInstanceState>> = RefCell::new(HashMap::new());
+}
+
+pub(crate) const CONSOLE_INSTANCE_CLASS_ID: u32 = 0xFFFF_0081;
+
+struct ConsoleInstanceState {
+    stdout: f64,
+    stderr: f64,
+    counters: HashMap<String, u64>,
+    indent: usize,
+    _ignore_errors: bool,
 }
 
 unsafe fn label_from_str_ptr(ptr: *const StringHeader) -> String {
@@ -488,6 +516,207 @@ fn console_label_from_value(value: f64) -> *const StringHeader {
         }
     }
     js_string_coerce(value) as *const StringHeader
+}
+
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn null_or_undefined(value: f64) -> bool {
+    matches!(
+        value.to_bits(),
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+    )
+}
+
+fn object_property(value: f64, name: &[u8]) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return undefined_value();
+    }
+    let obj = jsval.as_pointer::<crate::object::ObjectHeader>();
+    if obj.is_null() {
+        return undefined_value();
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
+}
+
+#[cold]
+fn throw_console_writable_stream() -> ! {
+    let msg = b"Console expects a writable stream instance";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_CONSOLE_WRITABLE_STREAM");
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_new(options: f64) -> f64 {
+    let stdout = object_property(options, b"stdout");
+    if null_or_undefined(stdout) {
+        throw_console_writable_stream();
+    }
+    let stderr_candidate = object_property(options, b"stderr");
+    let stderr = if null_or_undefined(stderr_candidate) {
+        stdout
+    } else {
+        stderr_candidate
+    };
+    let ignore_errors = unsafe { decode_dir_bool_option(options, "ignoreErrors") }.unwrap_or(true);
+
+    let obj = crate::object::js_object_alloc(CONSOLE_INSTANCE_CLASS_ID, 0);
+    let value = crate::value::js_nanbox_pointer(obj as i64);
+    CONSOLE_INSTANCES.with(|instances| {
+        instances.borrow_mut().insert(
+            obj as usize,
+            ConsoleInstanceState {
+                stdout,
+                stderr,
+                counters: HashMap::new(),
+                indent: 0,
+                _ignore_errors: ignore_errors,
+            },
+        );
+    });
+    value
+}
+
+enum ConsoleInstanceAction {
+    Write {
+        stream: f64,
+        line: String,
+        stderr: bool,
+    },
+    Noop,
+}
+
+fn format_console_instance_args(args: &[f64]) -> String {
+    let arr = crate::array::js_array_alloc(args.len() as u32);
+    for arg in args {
+        crate::array::js_array_push_f64(arr, *arg);
+    }
+    jsvalue_string_content(js_util_format(arr)).unwrap_or_default()
+}
+
+fn console_instance_label(args: &[f64]) -> String {
+    let label_value = args.first().copied().unwrap_or_else(undefined_value);
+    unsafe { label_from_str_ptr(console_label_from_value(label_value)) }
+}
+
+fn console_instance_write(stream: f64, line: &str, stderr: bool) {
+    if null_or_undefined(stream) {
+        if stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+        return;
+    }
+
+    let mut chunk = String::with_capacity(line.len() + 1);
+    chunk.push_str(line);
+    chunk.push('\n');
+    let chunk_ptr = crate::string::js_string_from_bytes(chunk.as_ptr(), chunk.len() as u32);
+    let chunk_value = f64::from_bits(JSValue::string_ptr(chunk_ptr).bits());
+    let args = [chunk_value];
+    unsafe {
+        let _ = crate::object::js_native_call_method(
+            stream,
+            b"write".as_ptr() as *const i8,
+            5,
+            args.as_ptr(),
+            args.len(),
+        );
+    }
+}
+
+pub(crate) unsafe fn try_console_instance_method_dispatch(
+    obj: *const crate::object::ObjectHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if obj.is_null() || (*obj).class_id != CONSOLE_INSTANCE_CLASS_ID {
+        return None;
+    }
+    let args = if args_ptr.is_null() || args_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+
+    let action = CONSOLE_INSTANCES.with(|instances| {
+        let mut instances = instances.borrow_mut();
+        let state = instances.get_mut(&(obj as usize))?;
+        let indent = "  ".repeat(state.indent);
+        match method_name {
+            "log" | "info" | "debug" | "dir" | "dirxml" => Some(ConsoleInstanceAction::Write {
+                stream: state.stdout,
+                line: format!("{indent}{}", format_console_instance_args(args)),
+                stderr: false,
+            }),
+            "error" | "warn" => Some(ConsoleInstanceAction::Write {
+                stream: state.stderr,
+                line: format!("{indent}{}", format_console_instance_args(args)),
+                stderr: true,
+            }),
+            "count" => {
+                let label = console_instance_label(args);
+                let count = state.counters.entry(label.clone()).or_insert(0);
+                *count += 1;
+                Some(ConsoleInstanceAction::Write {
+                    stream: state.stdout,
+                    line: format!("{indent}{label}: {count}"),
+                    stderr: false,
+                })
+            }
+            "countReset" => {
+                let label = console_instance_label(args);
+                if state.counters.remove(&label).is_none() {
+                    Some(ConsoleInstanceAction::Write {
+                        stream: state.stderr,
+                        line: format!("Warning: Count for '{label}' does not exist"),
+                        stderr: true,
+                    })
+                } else {
+                    Some(ConsoleInstanceAction::Noop)
+                }
+            }
+            "group" | "groupCollapsed" => {
+                let line = if args.is_empty() {
+                    None
+                } else {
+                    Some(format!("{indent}{}", format_console_instance_args(args)))
+                };
+                state.indent += 1;
+                line.map(|line| ConsoleInstanceAction::Write {
+                    stream: state.stdout,
+                    line,
+                    stderr: false,
+                })
+                .or(Some(ConsoleInstanceAction::Noop))
+            }
+            "groupEnd" => {
+                if state.indent > 0 {
+                    state.indent -= 1;
+                }
+                Some(ConsoleInstanceAction::Noop)
+            }
+            "clear" | "profile" | "profileEnd" | "timeStamp" => Some(ConsoleInstanceAction::Noop),
+            _ => None,
+        }
+    })?;
+
+    match action {
+        ConsoleInstanceAction::Write {
+            stream,
+            line,
+            stderr,
+        } => console_instance_write(stream, &line, stderr),
+        ConsoleInstanceAction::Noop => {}
+    }
+    Some(undefined_value())
 }
 
 #[no_mangle]

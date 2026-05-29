@@ -194,6 +194,21 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_target_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "Console" => {
+            let opts = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_console_new",
+                &[(DOUBLE, &opts)],
+            )))
+        }
         // node:perf_hooks — `new PerformanceObserver(cb)` registers the
         // observer and returns its `perf_observer` namespace object (already
         // NaN-boxed). `cb` is passed through so the runtime can invoke it on

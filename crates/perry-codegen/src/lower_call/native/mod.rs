@@ -27,7 +27,7 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 // Re-export parent items so siblings can pick them up via `use super::*;`.
 // `pub(super)` is the visibility-tightest form that still lets the glob
@@ -1657,6 +1657,52 @@ pub(crate) fn lower_native_method_call(
             blk.call(DOUBLE, "js_util_format", &[(I64, &current_arr)])
         };
         return Ok(result);
+    }
+
+    // `new Console({ stdout, stderr }).log(...)` reaches HIR as an instance
+    // `NativeMethodCall` on module "console" / class "Console", not as a
+    // generic `PropertyGet` call. Preserve the receiver and route through the
+    // runtime's method dispatcher so per-instance streams, indentation, and
+    // counters are used instead of the process-global console helpers.
+    if module == "console" && class_name == Some("Console") {
+        if let Some(recv) = object {
+            let recv_box = lower_expr(ctx, recv)?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                {
+                    let blk = ctx.block();
+                    for (i, value) in lowered_args.iter().enumerate() {
+                        let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                        blk.store(DOUBLE, value, &slot);
+                    }
+                }
+                (buf, n.to_string())
+            };
+
+            let method_idx = ctx.strings.intern(method);
+            let entry = ctx.strings.entry(method_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len = entry.byte_len.to_string();
+            return Ok(ctx.block().call(
+                DOUBLE,
+                "js_native_call_method",
+                &[
+                    (DOUBLE, &recv_box),
+                    (PTR, &bytes_global),
+                    (I64, &name_len),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            ));
+        }
     }
 
     // Receiver-less native method calls (e.g. plugin::setConfig(...)
