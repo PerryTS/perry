@@ -584,6 +584,108 @@ pub extern "C" fn js_string_match_all(
 }
 
 /// Replace matches in a string
+/// Expand a JS replacement string against one match, supporting the full set
+/// of `String.prototype.replace` special patterns that the Rust `regex`
+/// crate's own `$`-expansion does NOT cover: `$&` (matched substring),
+/// `` $` `` (text before the match), `$'` (text after the match), plus the
+/// shared `$$`, `$n`/`$nn` (numbered groups, largest-valid-group rule), and
+/// `$<name>` (named groups). An unmatched group expands to the empty string;
+/// an invalid `$`-sequence is emitted literally — both matching Node.
+fn expand_js_replacement(repl: &str, caps: &regex::Captures, subject: &str) -> String {
+    let m0 = match caps.get(0) {
+        Some(m) => m,
+        None => return String::new(),
+    };
+    let (mstart, mend) = (m0.start(), m0.end());
+    let ngroups = caps.len(); // valid group indices are 1..ngroups
+    let b = repl.as_bytes();
+    let mut out = String::with_capacity(repl.len() + 16);
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'$' {
+            // Copy the run of non-`$` bytes in one go ('$' is ASCII, so the
+            // slice boundaries are always on UTF-8 char boundaries).
+            let start = i;
+            while i < b.len() && b[i] != b'$' {
+                i += 1;
+            }
+            out.push_str(&repl[start..i]);
+            continue;
+        }
+        if i + 1 >= b.len() {
+            out.push('$');
+            i += 1;
+            continue;
+        }
+        match b[i + 1] {
+            b'$' => {
+                out.push('$');
+                i += 2;
+            }
+            b'&' => {
+                out.push_str(&subject[mstart..mend]);
+                i += 2;
+            }
+            b'`' => {
+                out.push_str(&subject[..mstart]);
+                i += 2;
+            }
+            b'\'' => {
+                out.push_str(&subject[mend..]);
+                i += 2;
+            }
+            b'0'..=b'9' => {
+                let d1 = (b[i + 1] - b'0') as usize;
+                // JS tries the two-digit group first when it's valid, else
+                // the single digit, else emits the `$` literally.
+                let (group, consumed) = if i + 2 < b.len() && b[i + 2].is_ascii_digit() {
+                    let two = d1 * 10 + (b[i + 2] - b'0') as usize;
+                    if two >= 1 && two < ngroups {
+                        (Some(two), 2)
+                    } else if d1 >= 1 && d1 < ngroups {
+                        (Some(d1), 1)
+                    } else {
+                        (None, 0)
+                    }
+                } else if d1 >= 1 && d1 < ngroups {
+                    (Some(d1), 1)
+                } else {
+                    (None, 0)
+                };
+                match group {
+                    Some(g) => {
+                        if let Some(m) = caps.get(g) {
+                            out.push_str(m.as_str());
+                        }
+                        i += 1 + consumed;
+                    }
+                    None => {
+                        out.push('$');
+                        i += 1;
+                    }
+                }
+            }
+            b'<' => {
+                if let Some(rel) = repl[i + 2..].find('>') {
+                    let name = &repl[i + 2..i + 2 + rel];
+                    if let Some(m) = caps.name(name) {
+                        out.push_str(m.as_str());
+                    }
+                    i += 2 + rel + 1;
+                } else {
+                    out.push('$');
+                    i += 1;
+                }
+            }
+            _ => {
+                out.push('$');
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 /// string.replace(regex, replacement) -> string
 #[no_mangle]
 pub extern "C" fn js_string_replace_regex(
@@ -611,12 +713,21 @@ pub extern "C" fn js_string_replace_regex(
         let regex = &*(*re).regex_ptr;
         let global = (*re).global;
 
+        // Route through a JS-aware expander (closure form) so `$&` / `` $` `` /
+        // `$'` — which the regex crate's native `$` syntax doesn't support —
+        // are substituted per match. `$$`, `$n`, and `$<name>` are handled too.
         let result = if global {
-            // Global flag: replace all occurrences
-            regex.replace_all(str_data, repl_str).to_string()
+            regex
+                .replace_all(str_data, |caps: &regex::Captures| {
+                    expand_js_replacement(repl_str, caps, str_data)
+                })
+                .to_string()
         } else {
-            // Non-global: replace first occurrence only
-            regex.replace(str_data, repl_str).to_string()
+            regex
+                .replace(str_data, |caps: &regex::Captures| {
+                    expand_js_replacement(repl_str, caps, str_data)
+                })
+                .to_string()
         };
 
         js_string_from_str(&result)
@@ -1338,6 +1449,33 @@ mod tests {
 
     fn make_string(s: &str) -> *mut StringHeader {
         js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    }
+
+    #[test]
+    fn js_replacement_expands_special_patterns() {
+        let re = regex::Regex::new(r"(\w+)\s(\w+)").unwrap();
+        let subj = "John Smith";
+        let caps = re.captures(subj).unwrap();
+        assert_eq!(expand_js_replacement("$2 $1", &caps, subj), "Smith John");
+        assert_eq!(expand_js_replacement("[$&]", &caps, subj), "[John Smith]");
+
+        // $` (before) / $' (after) with a mid-string single-char match.
+        let re2 = regex::Regex::new("b").unwrap();
+        let s2 = "abc";
+        let c2 = re2.captures(s2).unwrap();
+        assert_eq!(expand_js_replacement("$`", &c2, s2), "a");
+        assert_eq!(expand_js_replacement("$'", &c2, s2), "c");
+        assert_eq!(expand_js_replacement("$&", &c2, s2), "b");
+        assert_eq!(expand_js_replacement("$$", &c2, s2), "$"); // escaped literal
+        assert_eq!(expand_js_replacement("$z", &c2, s2), "$z"); // invalid → literal
+        assert_eq!(expand_js_replacement("end$", &c2, s2), "end$"); // trailing $
+
+        // Numbered groups: two-digit-then-one-digit fallback + unmatched → "".
+        let re3 = regex::Regex::new(r"(a)(x)?(b)").unwrap();
+        let s3 = "ab";
+        let c3 = re3.captures(s3).unwrap();
+        assert_eq!(expand_js_replacement("$1$2$3", &c3, s3), "ab"); // $2 unmatched → ""
+        assert_eq!(expand_js_replacement("$10", &c3, s3), "a0"); // no group 10 → $1 then '0'
     }
 
     #[test]
