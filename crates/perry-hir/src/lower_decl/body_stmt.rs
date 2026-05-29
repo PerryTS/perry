@@ -634,6 +634,26 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         }
         ast::Stmt::Labeled(labeled_stmt) => {
             let label = labeled_stmt.label.sym.to_string();
+            // #2383: a labeled *block* — `a: { ... break a; ... }` — exits the
+            // block via `break a` (valid JS/TS; heavily used by minified React).
+            // It is NOT a loop, so the loop-based labeled-break codegen has
+            // nothing to bind the label to. Desugar to a labeled run-once
+            // do-while: `a: do { ... } while (false)`. The do-while's exit block
+            // becomes the labeled-break target, the body runs exactly once, and
+            // the `while (false)` falls straight through to the exit. `continue
+            // a` against a block label is a JS early SyntaxError, so it never
+            // reaches here.
+            if let ast::Stmt::Block(block) = &*labeled_stmt.body {
+                let body = lower_block_stmt_scoped(ctx, block)?;
+                result.push(Stmt::Labeled {
+                    label,
+                    body: Box::new(Stmt::DoWhile {
+                        body,
+                        condition: Expr::Bool(false),
+                    }),
+                });
+                return Ok(result);
+            }
             let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
             // If the body lowered to a single statement, wrap it directly.
             // Otherwise wrap the first statement (preserving any hoisted lets before it).

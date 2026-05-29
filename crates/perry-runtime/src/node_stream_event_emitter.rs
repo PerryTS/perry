@@ -459,7 +459,7 @@ fn prune_event_if_empty(stream: f64, event: f64) {
     }
 }
 
-fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64) -> bool {
+pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64) -> bool {
     let Some((listeners, once_flags)) = listener_storage(stream, event) else {
         return false;
     };

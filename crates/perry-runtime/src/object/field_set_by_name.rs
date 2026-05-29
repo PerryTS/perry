@@ -395,6 +395,19 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
+        if !key.is_null()
+            && (key as usize) > 0x10000
+            && key_to_str_for_diag(key) == "href"
+            && crate::url::is_url_object_shape(obj)
+        {
+            let value_string = crate::value::js_jsvalue_to_string(value);
+            let value_string_handle = scope.root_string_ptr(value_string);
+            let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            let value_string = value_string_handle.get_raw_mut_ptr::<crate::StringHeader>();
+            crate::url::js_url_set_href(obj, value_string);
+            return;
+        }
+
         // Check Object.freeze/seal/preventExtensions flags
         let obj_flags = (*gc_header)._reserved;
         let is_frozen = obj_flags & crate::gc::OBJ_FLAG_FROZEN != 0;

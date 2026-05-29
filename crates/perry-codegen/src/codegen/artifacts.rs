@@ -39,6 +39,27 @@ struct OptsView<'a> {
 }
 use super::string_pool::emit_string_pool;
 
+fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
+    let has_gen_state = body
+        .iter()
+        .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "__gen_state"));
+    if !has_gen_state {
+        return false;
+    }
+    body.iter().any(|stmt| match stmt {
+        perry_hir::Stmt::Return(Some(perry_hir::Expr::Object(props))) => {
+            props.len() == 3
+                && props[0].0 == "next"
+                && props[1].0 == "return"
+                && props[2].0 == "throw"
+                && props
+                    .iter()
+                    .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. }))
+        }
+        _ => false,
+    })
+}
+
 /// All the data computed by the prelude of `compile_module` that the
 /// tail half (this file) needs. Bundled so the call from
 /// `compile_module` stays a single line; field names mirror the
@@ -1185,6 +1206,25 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         })
         .collect();
 
+    let mut user_fn_wrapper_generator: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter(|f| !f.was_plain_async && function_body_returns_generator_object(&f.body))
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| format!("__perry_wrap_{}", name))
+        })
+        .collect();
+    for (func_id, expr) in closures {
+        if let perry_hir::Expr::Closure { body, is_async, .. } = expr {
+            if !*is_async && function_body_returns_generator_object(body) {
+                user_fn_wrapper_generator
+                    .insert(format!("perry_closure_{}__{}", module_prefix, func_id));
+            }
+        }
+    }
+
     // Display names so `console.log` / `util.inspect` print `[Function:
     // <name>]` instead of `[Function (anonymous)]` (#1202). Two kinds:
     //   (a) Top-level `function name() {}` declarations — keyed against
@@ -1273,6 +1313,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
         &user_fn_wrapper_arity,
+        &user_fn_wrapper_generator,
         &user_fn_display_names,
     );
 

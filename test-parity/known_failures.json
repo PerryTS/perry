@@ -32,12 +32,6 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). #422 closed (net.Socket connect/error events + factory). The test passes locally with an echo server running but fails on Linux CI because no echo fixture server runs. Environmental \u2014 needs a CI-side fixture, not a Perry fix."
   },
-  "test_issue_561_sigv4_chain": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "bug-stale",
-    "reason": "#561 (Web Crypto subtle.digest/sign for HMAC-SHA-256) closed but the SigV4 chain test still regresses on Linux CI. Bisect needed for crypto/HMAC ordering on Linux; file a Linux-specific tracking issue once the divergence is identified."
-  },
   "test_issue_685_nested_class_static_param": {
     "issue": "793",
     "added": "2026-05-15",
@@ -206,18 +200,6 @@
     "category": "bug-open",
     "reason": "node:stream EventEmitter wiring incomplete \u2014 re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS. Real Perry gap (not ci-env); rolled under the open stream-events tracker #1532."
   },
-  "node-suite/stream/pipeline/basic": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline() callback never fires (depends on stream event delivery). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/set-encoding": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding + data event chain doesn't deliver decoded chunks. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/unshift-chunk": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -236,12 +218,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(generator) \u2192 data event chain doesn't deliver. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipeline/three-stream-chain": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline with intermediate transform doesn't propagate data \u2192 end. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/finished/with-options-signal": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -254,53 +230,11 @@
     "category": "bug-open",
     "reason": "node:stream: Readable() with no read() option should emit error on read(); error event doesn't deliver. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/options/construct-callback": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: construct() constructor option is never invoked. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/options/destroy-callback": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() constructor option callback not invoked on destroy(). Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/options/final-callback": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: final() constructor option not invoked before finish. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/pipeline/async-function": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline with async-generator middle stage doesn't deliver. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipeline/error-callback": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline error path doesn't invoke callback with Error. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/subclass/extends-readable": {
     "issue": "1532",
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: class extends Readable with _read() doesn't deliver data via push. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/encoding/base64": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding(base64) + data delivery doesn't fire. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/encoding/hex": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding(hex) + data delivery doesn't fire. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/events/readable-event": {
     "issue": "1532",
@@ -314,23 +248,11 @@
     "category": "bug-open",
     "reason": "node:stream: readable.wrap(oldStream) bridge doesn't deliver data events. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/options/auto-destroy": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy default behavior doesn't fire close after end. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/multiple-transforms": {
     "issue": "1539",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: stream.compose() composite Duplex doesn't forward data through the chain, so the joined output never arrives. Shape sub-tests pass; reopened #1539 for pipeline execution."
-  },
-  "node-suite/stream/pipeline/already-ended": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline for already-ended source doesn't invoke callback. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/finished/options-config": {
     "issue": "1532",
@@ -356,12 +278,6 @@
     "category": "bug-open",
     "reason": "node:stream: class extends Writable + _write doesn't deliver finish. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/encoding/latin1": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: setEncoding(latin1) + data delivery doesn't fire. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/unshift-after-read": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -373,18 +289,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
-  },
-  "node-suite/stream/pipe/repipe-after-unpipe": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: re-piping after unpipe does not flow / sink does not end. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/options/construct-cb-error": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: construct() callback receiving Error does not propagate via error event. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/single-transform": {
     "issue": "1532",
@@ -458,12 +362,6 @@
     "category": "bug-open",
     "reason": "node:stream: readable.unshift(chunk, encoding) \u2014 second-arg encoding form not honored. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/pipeline/premature-close-code": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline() does not set err.code=ERR_STREAM_PREMATURE_CLOSE on mid-chain destroy. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/events/finish-end-close-order": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -475,18 +373,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Duplex.from({readable, writable}) \u2014 combine-form not yet wired. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/pipe-twice-same-dest": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() called twice with same destination duplicates writes (should be no-op for second call). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/end-false-option": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe(dst, {end: false}) \u2014 destination still ended when source ends. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/finished/with-cleanup-option": {
     "issue": "1532",
@@ -542,12 +428,6 @@
     "category": "bug-open",
     "reason": "node:stream: objectMode Readable.read() does not return single object per call. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipeline/async-fn-sink": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline(src, async fn) \u2014 fn-as-sink form not yet wired (cb not called, collected is empty). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/unshift-after-end": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -589,12 +469,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw \u2014 composite does not emit 'error'. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/options/auto-destroy-true-default": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: autoDestroy:true default \u2014 stream not destroyed after 'end', 'close' may not fire. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/custom-strategy-nan-size": {
     "issue": "1545",
@@ -698,35 +572,11 @@
     "category": "bug-open",
     "reason": "node:stream/web: bytes-typed RS \u2014 enqueue(string) does not throw TypeError. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/pipe/end-false-then-write": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe(dst,{end:false}) then manual dst.write \u2014 output order/count wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipeline/async-fn-rejection-propagates": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline async-fn throwing \u2014 cb does not receive the error. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/from-async-iter-mixed-values": {
     "issue": "1532",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) \u2014 types lost or wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/pipe-autodestroy-default": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() autoDestroy default \u2014 src or dst not destroyed after pipe. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipe/three-stage-mid-error": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline 3-stage mid-error \u2014 src/sink destroy flags or err wrong. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/destroyed-during-data-flow": {
     "issue": "1532",
@@ -776,12 +626,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: TS readable.cancel \u2014 writable.write does not reject after. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/iter-helpers/for-each-await-each": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: forEach(asyncFn) \u2014 does not await each call sequentially. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/readable/from-async-iter-nested": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -794,12 +638,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: pipeTo with pre-aborted signal \u2014 does not reject immediately. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/pipe/pipe-adds-listener-on-dst": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() does not add 'unpipe' listener on destination. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/readable-mode-only": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -811,18 +649,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: WritableStream({type:'bytes'}) \u2014 handling differs from Node (accept-and-ignore or throw). Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/pipe/cleanup-state-after-end": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: post-pipe-end destroyed flags wrong on source or destination. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipeline/error-middle-aborts-all": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline middle-stream error \u2014 does not destroy source AND sink. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/from-promise-iterable": {
     "issue": "1545",
@@ -841,18 +667,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(transform).toArray() \u2014 chain produces wrong result. Flips to PASS when #1558 lands."
-  },
-  "node-suite/stream/pipeline/three-async-fns": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline with multiple async-gen stages \u2014 fails to deliver final collected output. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/pipeline/null-cb-error-form": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline cb on success \u2014 err arg not null/undefined or wrong type. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/destroy/_destroy-user-impl": {
     "issue": "1532",
@@ -884,12 +698,6 @@
     "category": "bug-open",
     "reason": "node:stream: for-await break \u2014 custom iterator.return() not invoked. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/pipeline/async-iter-source": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline(asyncIterable, dst, cb) \u2014 async-iterable source not handled. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/destroyed-after-finish": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -914,23 +722,11 @@
     "category": "bug-open",
     "reason": "node:stream: detached instance method called without `this` \u2014 wrong behavior (Perry should throw). Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/pipe/dst-write-returns-false-pauses-src": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipe() src pause/resume events on backpressure \u2014 wrong order/missing. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/three-stages-order": {
     "issue": "1531",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src,t1,t2) \u2014 output transformation order wrong. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/pipeline/async-source-throws-mid": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline(asyncGen src throws mid, dst, cb) \u2014 error not received in cb. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/compose-non-stream-throws": {
     "issue": "1531",
@@ -955,12 +751,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) \u2014 chain produces wrong output. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/pipeline/sync-iterable-source": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pipeline(array, dst, cb) \u2014 sync iterable source not wired. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/transform-stream-instanceof-check": {
     "issue": "1545",
@@ -992,12 +782,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src) \u2014 only source given, Duplex output empty. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/iter-helpers/map-async-with-concurrency": {
-    "issue": "1558",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: map(asyncFn, {concurrency}) \u2014 toArray output wrong. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/readable/from-gen-with-early-return": {
     "issue": "1532",
     "added": "2026-05-25",
@@ -1015,23 +799,5 @@
     "added": "2026-05-25",
     "category": "bug-open",
     "reason": "node:stream: composite 'end' event does not fire after src exhausts. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/promises/pipeline-five-stages": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: 5-stage promises-pipeline \u2014 final sink doesn't receive chunks. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/promises/pipeline-array-source-promise": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: promises.pipeline(array, dst) \u2014 sync iterable source not collected. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/promises/pipeline-with-transform-collect": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream/promises: pipeline(src, transform, asyncFnSink) \u2014 collected output wrong/empty. Flips to PASS when #1532 lands."
   }
 }

@@ -13,6 +13,8 @@ pub const TYPED_ARRAY_KIND_FLOAT32: u8 = 6;
 pub const TYPED_ARRAY_KIND_FLOAT64: u8 = 7;
 /// Uint8ClampedArray: 1-byte elements, stores via ToUint8Clamp (not truncate-wrap).
 pub const TYPED_ARRAY_KIND_UINT8_CLAMPED: u8 = 8;
+pub const TYPED_ARRAY_KIND_BIGINT64: u8 = 9;
+pub const TYPED_ARRAY_KIND_BIGUINT64: u8 = 10;
 
 /// Map a class name (e.g. "Int32Array") to its `TYPED_ARRAY_KIND_*` tag.
 pub fn typed_array_kind_for_name(name: &str) -> Option<u8> {
@@ -26,6 +28,8 @@ pub fn typed_array_kind_for_name(name: &str) -> Option<u8> {
         "Uint32Array" => Some(TYPED_ARRAY_KIND_UINT32),
         "Float32Array" => Some(TYPED_ARRAY_KIND_FLOAT32),
         "Float64Array" => Some(TYPED_ARRAY_KIND_FLOAT64),
+        "BigInt64Array" => Some(TYPED_ARRAY_KIND_BIGINT64),
+        "BigUint64Array" => Some(TYPED_ARRAY_KIND_BIGUINT64),
         _ => None,
     }
 }

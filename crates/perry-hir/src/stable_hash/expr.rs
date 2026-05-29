@@ -458,6 +458,7 @@ impl SH for Expr {
             Expr::UrlSetPort { url, value } => { tag(h, 467); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSetUsername { url, value } => { tag(h, 468); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSetPassword { url, value } => { tag(h, 469); url.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::UrlSetHref { url, value } => { tag(h, 701); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSearchParamsNew(e) => { tag(h, 372); e.hash(h); }
             Expr::UrlSearchParamsGet { params, name } => { tag(h, 373); params.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::UrlSearchParamsHas { params, name, value, } => { tag(h, 374); params.as_ref().hash(h); name.as_ref().hash(h); match value { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
