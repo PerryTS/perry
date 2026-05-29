@@ -106,7 +106,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // stdlib build drops the entire module and the link fails on every
     // `js_readable_stream_*` reference — the #835/#846 follow-up bug.
     ("js_readable_stream_new",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_new_with_source_type",     OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_get_reader",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_get_reader_with_options",  OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_locked",                   OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_cancel",                   OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_tee",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
@@ -120,6 +122,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_readable_stream_controller_error",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_controller_desired_size",  OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_new",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writable_stream_new_with_sink_type",       OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_get_writer",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_locked",                   OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_close",                    OwnerKind::Stdlib { feature: Some("bundled-streams") }),

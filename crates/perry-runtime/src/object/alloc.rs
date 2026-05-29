@@ -659,6 +659,18 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     let target = tgt_raw as *mut ObjectHeader;
     let src = src_raw as *const ObjectHeader;
 
+    // #2439: When the target is an array, an integer-keyed source property
+    // (e.g. `Object.assign([1,2], {2:3})`) must grow the array's length, not
+    // land as an inert object expando. `js_array_set_string_key` parses the
+    // key as a canonical array index and routes through `js_array_set_f64_extend`
+    // (which extends length + fills holes); non-numeric keys fall back to the
+    // object-property path on the array's expando map. Detect array-ness once.
+    let target_is_array = {
+        let gc_header =
+            (target as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+    };
+
     // 1) Copy own string-keyed enumerable properties from source to target,
     //    in source insertion order. Mirrors `js_object_copy_own_fields`.
     let src_keys = (*src).keys_array;
@@ -688,7 +700,20 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
                 let v = js_object_get_field(src, i as u32);
                 f64::from_bits(v.bits())
             };
-            js_object_set_field_by_name(target, key_ptr, field_f64);
+            if target_is_array {
+                // Routes integer-index keys to array element-set (extending
+                // length); non-numeric keys fall back to the object setter.
+                // The array may reallocate on growth, but #233 forwarding
+                // means the original `target_f64` still resolves to the new
+                // head, so we keep returning it for object identity.
+                crate::array::js_array_set_string_key(
+                    target as *mut crate::array::ArrayHeader,
+                    key_ptr,
+                    field_f64,
+                );
+            } else {
+                js_object_set_field_by_name(target, key_ptr, field_f64);
+            }
         }
     }
 

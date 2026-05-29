@@ -1,6 +1,6 @@
 import { Readable, finished } from "node:stream";
-// finished(stream, { error: false }, cb) — should NOT fire the callback
-// when the stream emits an error (only on normal completion).
+// `{ error: false }` skips the extra error listener, but Node still calls the
+// callback from `close` with the stream's stored destroy error.
 const r = new Readable({ read() {} });
 r.on("error", () => {});
 let fired = false;
