@@ -2754,6 +2754,35 @@ fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader 
     obj
 }
 
+fn install_methods_on_existing_object(
+    obj: *mut ObjectHeader,
+    this_value: f64,
+    methods: &[(&str, StubFn)],
+    skip_names: &[&str],
+) {
+    register_stub_arities();
+    let this_bits = this_value.to_bits();
+    let mut on_method: Option<f64> = None;
+    for (name, func) in methods {
+        if skip_names.iter().any(|skip| skip == name) {
+            continue;
+        }
+        if *name == "addListener" {
+            if let Some(val) = on_method {
+                js_object_set_field_by_name(obj, hidden_key(name.as_bytes()), val);
+                continue;
+            }
+        }
+        let closure = js_closure_alloc(*func as *const u8, 1);
+        crate::closure::js_closure_set_capture_ptr(closure, 0, this_bits as i64);
+        let val = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
+        if *name == "on" {
+            on_method = Some(val);
+        }
+        js_object_set_field_by_name(obj, hidden_key(name.as_bytes()), val);
+    }
+}
+
 fn register_stub_arities() {
     let register = |func: *const u8, arity: u32| {
         crate::closure::js_register_closure_arity(func, arity);
@@ -5307,6 +5336,61 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     install_stream_async_dispose_symbol(writable);
     invoke_construct_callback(writable, opts);
     writable
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_writable_subclass_init(this: f64, opts: f64) -> f64 {
+    let obj = {
+        let bits = this.to_bits();
+        let top16 = bits >> 48;
+        let raw = if top16 >= 0x7FF8 {
+            if top16 == 0x7FFC {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
+            (bits & crate::value::POINTER_MASK) as usize
+        } else {
+            bits as usize
+        };
+        if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        raw as *mut ObjectHeader
+    };
+    let this = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    unsafe {
+        if gc_type_for_ptr(obj as usize) != Some(crate::gc::GC_TYPE_OBJECT) {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+
+    let subclass_write = js_object_get_field_by_name_f64(obj, hidden_key(b"_write"));
+    let subclass_writev = js_object_get_field_by_name_f64(obj, hidden_key(b"_writev"));
+    let methods = writable_methods();
+    install_methods_on_existing_object(obj, this, &methods, &["_write"]);
+
+    if let Some(write) = write_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, this));
+    } else if is_callable_value(subclass_write) {
+        js_object_set_field_by_name(obj, hidden_write_key(), subclass_write);
+    }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), rebind_callback_this(writev, this));
+    } else if is_callable_value(subclass_writev) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), subclass_writev);
+    }
+
+    init_lifecycle_state(this, opts);
+    init_constructor(this, "Writable");
+    init_writable_state(this, opts);
+    install_common_lifecycle_callbacks(this, opts);
+    install_writable_lifecycle_callbacks(this, opts);
+    init_abort_signal_state(this, opts);
+    install_stream_async_dispose_symbol(this);
+    invoke_construct_callback(this, opts);
+    this
 }
 
 #[no_mangle]

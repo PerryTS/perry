@@ -265,7 +265,15 @@ pub(super) fn compile_method(
         // args. The walk skips empty-bodied parents (matching the JS spec
         // chain semantics).
         if class.constructor.is_none() && class.extends_name.is_some() {
-            let mut effective_parent: Option<&str> = class.extends_name.as_deref();
+            let builtin_parent_runtime = match class.extends_name.as_deref() {
+                Some("Writable") => Some("js_node_stream_writable_subclass_init"),
+                _ => None,
+            };
+            let mut effective_parent: Option<&str> = if builtin_parent_runtime.is_some() {
+                None
+            } else {
+                class.extends_name.as_deref()
+            };
             while let Some(pname) = effective_parent {
                 let Some(pc) = ctx.classes.get(pname).copied() else {
                     break;
@@ -381,6 +389,24 @@ pub(super) fn compile_method(
                     class.name
                 )
             })?;
+            if let Some(runtime_fn) = builtin_parent_runtime {
+                let undef_lit =
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let opts = method
+                    .params
+                    .first()
+                    .and_then(|param| ctx.locals.get(&param.id).cloned())
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| undef_lit.clone());
+                let this_box = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| undef_lit.clone());
+                ctx.block()
+                    .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
+            }
         }
     }
 
