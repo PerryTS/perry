@@ -487,10 +487,15 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         );
         match method {
             "getReader" => {
+                let options = if !args.is_empty() {
+                    lower_expr(ctx, &args[0])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
                 let h = ctx.block().call(
                     DOUBLE,
-                    "js_readable_stream_get_reader",
-                    &[(DOUBLE, &recv_handle)],
+                    "js_readable_stream_get_reader_with_options",
+                    &[(DOUBLE, &recv_handle), (DOUBLE, &options)],
                 );
                 return Ok(Some(h));
             }

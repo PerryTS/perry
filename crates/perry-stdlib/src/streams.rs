@@ -68,6 +68,7 @@ struct ReadableStreamData {
     pull_cb: i64,
     cancel_cb: i64,
     high_water_mark: f64,
+    is_byte_stream: bool,
     pulling: bool,
     started: bool,
     reader_handle: Option<usize>,
@@ -324,6 +325,16 @@ unsafe fn throw_invalid_arg_type(message: &str) -> ! {
 }
 
 fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usize {
+    alloc_readable_with_type(start_cb, pull_cb, cancel_cb, hwm, false)
+}
+
+fn alloc_readable_with_type(
+    start_cb: i64,
+    pull_cb: i64,
+    cancel_cb: i64,
+    hwm: f64,
+    is_byte_stream: bool,
+) -> usize {
     let id = next_id(&NEXT_STREAM_ID);
     READABLE_STREAMS.lock().unwrap().insert(
         id,
@@ -335,6 +346,7 @@ fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usiz
             pull_cb,
             cancel_cb,
             high_water_mark: if hwm.is_nan() || hwm <= 0.0 { 1.0 } else { hwm },
+            is_byte_stream,
             pulling: false,
             started: false,
             reader_handle: None,
@@ -452,12 +464,30 @@ pub unsafe extern "C" fn js_readable_stream_new(
     cancel_bits: f64,
     hwm: f64,
 ) -> f64 {
+    js_readable_stream_new_with_source_type(
+        start_bits,
+        pull_bits,
+        cancel_bits,
+        hwm,
+        f64::from_bits(TAG_UNDEFINED),
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_new_with_source_type(
+    start_bits: f64,
+    pull_bits: f64,
+    cancel_bits: f64,
+    hwm: f64,
+    source_type: f64,
+) -> f64 {
     ensure_gc_registered();
-    let id = alloc_readable(
+    let id = alloc_readable_with_type(
         closure_from_bits(start_bits.to_bits()),
         closure_from_bits(pull_bits.to_bits()),
         closure_from_bits(cancel_bits.to_bits()),
         hwm,
+        value_string_equals(source_type, b"bytes"),
     );
     invoke_start(id);
     maybe_pull(id);
@@ -552,6 +582,26 @@ pub fn alloc_readable_from_bytes(bytes: Vec<u8>) -> usize {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_get_reader(stream_handle: f64) -> f64 {
+    js_readable_stream_get_reader_with_options(stream_handle, f64::from_bits(TAG_UNDEFINED))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
+    stream_handle: f64,
+    options: f64,
+) -> f64 {
+    let byob_requested = option_string_equals(options, b"mode", b"byob");
+    let id = stream_handle as usize;
+    if byob_requested {
+        let is_non_byte_stream = {
+            let g = READABLE_STREAMS.lock().unwrap();
+            g.get(&id).map(|s| !s.is_byte_stream).unwrap_or(false)
+        };
+        if is_non_byte_stream {
+            throw_type_error("ReadableStream BYOB reader requires a byte stream");
+        }
+    }
+
     ensure_gc_registered();
     let id = stream_handle as usize;
     let was_locked = {
@@ -586,6 +636,33 @@ pub unsafe extern "C" fn js_readable_stream_get_reader(stream_handle: f64) -> f6
         throw_type_error("ReadableStream is locked");
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+unsafe fn option_string_equals(options: f64, name: &[u8], expected: &[u8]) -> bool {
+    let value =
+        perry_runtime::value::js_get_property(options, name.as_ptr() as i64, name.len() as i64);
+    value_string_equals(value, expected)
+}
+
+unsafe fn value_string_equals(value: f64, expected: &[u8]) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        return false;
+    }
+
+    let ptr = perry_runtime::value::js_get_string_pointer_unified(value)
+        as *const perry_runtime::StringHeader;
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return false;
+    }
+
+    let len = (*ptr).byte_len as usize;
+    if len != expected.len() {
+        return false;
+    }
+
+    let data = (ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
+    std::slice::from_raw_parts(data, len) == expected
 }
 
 #[no_mangle]
@@ -1058,10 +1135,12 @@ pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *m
 pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
     let id = stream_handle as usize;
     let mut was_locked = false;
+    let mut is_byte_stream = false;
     let chunks: Vec<u64> = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
             Some(s) if s.reader_handle.is_none() => {
+                is_byte_stream = s.is_byte_stream;
                 let drained: Vec<u64> = s.chunks.drain(..).collect();
                 s.state = ReadableState::Closed;
                 drained
@@ -1092,6 +1171,7 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
                     pull_cb: 0,
                     cancel_cb: 0,
                     high_water_mark: 1.0,
+                    is_byte_stream,
                     pulling: false,
                     started: true,
                     reader_handle: None,
@@ -1740,7 +1820,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     let is_readable = READABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_readable {
         match method {
-            "getReader" => return Some(js_readable_stream_get_reader(handle)),
+            "getReader" => return Some(js_readable_stream_get_reader_with_options(handle, arg0)),
             "values" | "@@asyncIterator" => return Some(js_readable_stream_values(handle)),
             "cancel" => return Some(box_promise(js_readable_stream_cancel(handle, arg0))),
             "tee" => return Some(js_readable_stream_tee(handle)),
@@ -1945,6 +2025,7 @@ mod tests {
                     pull_cb: 0,
                     cancel_cb: 0,
                     high_water_mark: 1.0,
+                    is_byte_stream: false,
                     pulling: false,
                     started: false,
                     reader_handle: None,

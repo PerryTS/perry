@@ -757,6 +757,7 @@ pub(super) fn lower_builtin_new(
             let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut pull = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut cancel = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut source_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let mut hwm = double_literal(1.0);
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
@@ -770,6 +771,9 @@ pub(super) fn lower_builtin_new(
                             }
                             "cancel" => {
                                 cancel = lower_expr(ctx, vexpr)?;
+                            }
+                            "type" => {
+                                source_type = lower_expr(ctx, vexpr)?;
                             }
                             _ => {
                                 let _ = lower_expr(ctx, vexpr)?;
@@ -791,12 +795,13 @@ pub(super) fn lower_builtin_new(
             }
             let h = ctx.block().call(
                 DOUBLE,
-                "js_readable_stream_new",
+                "js_readable_stream_new_with_source_type",
                 &[
                     (DOUBLE, &start),
                     (DOUBLE, &pull),
                     (DOUBLE, &cancel),
                     (DOUBLE, &hwm),
+                    (DOUBLE, &source_type),
                 ],
             );
             Ok(Some(h))

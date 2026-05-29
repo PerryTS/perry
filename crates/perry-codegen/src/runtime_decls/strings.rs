@@ -1769,7 +1769,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_readable_stream_new_with_source_type",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_readable_stream_get_reader", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_readable_stream_get_reader_with_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // #1645: ReadableStream.from(iterable) — builds a pre-loaded stream.
     module.declare_function("js_readable_stream_from_iterable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_readable_stream_locked", DOUBLE, &[DOUBLE]);

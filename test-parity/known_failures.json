@@ -428,12 +428,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, asyncGenWithAwait) \u2014 async-await handler not iterated correctly. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/web/byob-reader-getReader": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: getReader({mode:'byob'}) on non-byte stream does not throw TypeError. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/compose/instance-chain": {
     "issue": "1531",
     "added": "2026-05-24",
