@@ -69,6 +69,10 @@ enum CpEvent {
     /// #1933: one IPC line (`process.send` on the child side) — raw JSON to be
     /// parsed + delivered as a `'message'` event on the main thread.
     Message { handle: u64, json: String },
+    /// #2130: one IPC frame under `serialization: 'advanced'` — the raw V8
+    /// structured-clone payload (header included, length prefix stripped) to be
+    /// deserialized + delivered as a `'message'` event on the main thread.
+    MessageAdvanced { handle: u64, bytes: Vec<u8> },
     /// #1933: the IPC channel closed (child disconnected or exited) — flip
     /// `connected`/`channel` and emit `'disconnect'`.
     IpcClosed { handle: u64 },
@@ -97,6 +101,9 @@ struct LiveChild {
     /// for `child.send()` / `child.disconnect()`; the reader thread owns
     /// another clone). `None` for plain `spawn`.
     ipc_send: Option<IpcStream>,
+    /// #2130: whether the IPC channel uses V8 structured-clone framing
+    /// (`serialization: 'advanced'`) rather than newline-delimited JSON.
+    ipc_advanced: bool,
 }
 
 static CP_LIVE: Mutex<Option<HashMap<u64, LiveChild>>> = Mutex::new(None);
@@ -171,9 +178,16 @@ fn cp_spawn_waiter(handle: u64, mut child: Child) {
 }
 
 /// IPC reader (#1933): read newline-delimited JSON from the parent socket and
-/// push each line for main-thread parse + `'message'` delivery.
+/// push each line for main-thread parse + `'message'` delivery. For
+/// `serialization: 'advanced'` (#2130) the framing is instead a 4-byte
+/// big-endian length prefix followed by that many V8-serialized payload bytes
+/// (Node's `parseChannelMessages` shape).
 #[cfg(unix)]
-fn cp_spawn_ipc_reader(handle: u64, sock: IpcStream) {
+fn cp_spawn_ipc_reader(handle: u64, sock: IpcStream, advanced: bool) {
+    if advanced {
+        cp_spawn_ipc_reader_advanced(handle, sock);
+        return;
+    }
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(sock);
         for line in reader.lines() {
@@ -184,6 +198,47 @@ fn cp_spawn_ipc_reader(handle: u64, sock: IpcStream) {
             }
         }
         // Channel closed (child disconnected / exited).
+        cp_push_event(CpEvent::IpcClosed { handle });
+    });
+}
+
+/// Advanced (#2130) IPC reader: accumulate bytes and emit one
+/// [`CpEvent::MessageAdvanced`] per `[u32 BE length][payload]` frame. Robust to
+/// a length field or payload split across socket reads (the
+/// `advanced-serialization-splitted-length-field` case).
+#[cfg(unix)]
+fn cp_spawn_ipc_reader_advanced(handle: u64, mut sock: IpcStream) {
+    std::thread::spawn(move || {
+        let mut acc: Vec<u8> = Vec::with_capacity(8192);
+        let mut chunk = [0u8; 8192];
+        loop {
+            let n = match sock.read(&mut chunk) {
+                Ok(0) => break, // EOF
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            acc.extend_from_slice(&chunk[..n]);
+            // Drain every complete frame currently buffered.
+            let mut consumed = 0;
+            while acc.len() - consumed >= 4 {
+                let len = u32::from_be_bytes([
+                    acc[consumed],
+                    acc[consumed + 1],
+                    acc[consumed + 2],
+                    acc[consumed + 3],
+                ]) as usize;
+                if acc.len() - consumed - 4 < len {
+                    break; // payload not fully arrived yet
+                }
+                let start = consumed + 4;
+                let bytes = acc[start..start + len].to_vec();
+                cp_push_event(CpEvent::MessageAdvanced { handle, bytes });
+                consumed = start + len;
+            }
+            if consumed > 0 {
+                acc.drain(..consumed);
+            }
+        }
         cp_push_event(CpEvent::IpcClosed { handle });
     });
 }
@@ -200,6 +255,7 @@ pub(super) fn cp_register_live_child(
     stdin_obj: f64,
     mut child: Child,
     ipc: Option<IpcStream>,
+    ipc_advanced: bool,
 ) -> u64 {
     let pid = child.id();
     cp_set_field(cp, b"pid", pid as f64);
@@ -242,6 +298,7 @@ pub(super) fn cp_register_live_child(
                 exited: None,
                 closed: false,
                 ipc_send,
+                ipc_advanced,
             },
         );
     }
@@ -257,7 +314,7 @@ pub(super) fn cp_register_live_child(
     #[cfg(unix)]
     {
         if let Some(sock) = ipc {
-            cp_spawn_ipc_reader(handle, sock);
+            cp_spawn_ipc_reader(handle, sock, ipc_advanced);
         }
     }
     // Wake the loop so 'spawn' fires on the next tick.
@@ -277,21 +334,43 @@ pub(super) fn cp_ipc_send(handle: u64, message: f64) -> bool {
 
     #[cfg(unix)]
     {
-        let sh = unsafe { crate::json::js_json_stringify(message, 0) };
-        if sh.is_null() {
-            return false;
-        }
-        let mut line = unsafe {
-            let len = (*sh).byte_len as usize;
-            let data = (sh as *const u8).add(std::mem::size_of::<StringHeader>());
-            std::slice::from_raw_parts(data, len).to_vec()
+        // Determine the channel's framing without holding the lock across the
+        // (potentially GC-triggering) serialization below.
+        let advanced = {
+            let guard = cp_live_lock();
+            guard
+                .as_ref()
+                .and_then(|map| map.get(&handle))
+                .map(|lc| lc.ipc_advanced)
+                .unwrap_or(false)
         };
-        line.push(b'\n');
+
+        let frame: Vec<u8> = if advanced {
+            // #2130: 4-byte big-endian length prefix + V8 structured-clone payload.
+            let payload = super::v8_serde::v8_serialize(message);
+            let mut f = Vec::with_capacity(payload.len() + 4);
+            f.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            f.extend_from_slice(&payload);
+            f
+        } else {
+            let sh = unsafe { crate::json::js_json_stringify(message, 0) };
+            if sh.is_null() {
+                return false;
+            }
+            let mut line = unsafe {
+                let len = (*sh).byte_len as usize;
+                let data = (sh as *const u8).add(std::mem::size_of::<StringHeader>());
+                std::slice::from_raw_parts(data, len).to_vec()
+            };
+            line.push(b'\n');
+            line
+        };
+
         let mut guard = cp_live_lock();
         if let Some(map) = guard.as_mut() {
             if let Some(lc) = map.get_mut(&handle) {
                 if let Some(sock) = lc.ipc_send.as_mut() {
-                    return sock.write_all(&line).is_ok();
+                    return sock.write_all(&frame).is_ok();
                 }
             }
         }
@@ -410,7 +489,7 @@ pub extern "C" fn js_child_process_spawn_streams(
 
     match command.spawn() {
         Ok(child) => {
-            cp_register_live_child(cp, stdout_obj, stderr_obj, stdin_obj, child, None);
+            cp_register_live_child(cp, stdout_obj, stderr_obj, stdin_obj, child, None, false);
         }
         Err(e) => {
             // Spawn failure (e.g. ENOENT): Node emits a single `error` event and
@@ -547,6 +626,15 @@ fn cp_reactor_pump_inner() {
                     let cp = f64::from_bits(cp_bits);
                     let sh = crate::string::js_string_from_bytes(json.as_ptr(), json.len() as u32);
                     let msg = f64::from_bits(unsafe { crate::json::js_json_parse(sh) }.bits());
+                    cp_emit(cp, "message", &[msg]);
+                }
+            }
+            CpEvent::MessageAdvanced { handle, bytes } => {
+                // #2130: deserialize the V8 structured-clone payload on the main
+                // thread and deliver it as a `'message'` event.
+                if let Some(cp_bits) = cp_lookup_cp_bits(handle) {
+                    let cp = f64::from_bits(cp_bits);
+                    let msg = super::v8_serde::v8_deserialize(&bytes);
                     cp_emit(cp, "message", &[msg]);
                 }
             }

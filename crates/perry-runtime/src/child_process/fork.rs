@@ -46,6 +46,14 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         })
         .unwrap_or_else(|| "node".to_string());
 
+    // serialization: 'advanced' switches the IPC channel from newline JSON to
+    // V8 structured-clone framing (#2130). Node reads NODE_CHANNEL_FD and
+    // NODE_CHANNEL_SERIALIZATION_MODE during bootstrap (then deletes them from
+    // process.env), so a node child honors the env var below.
+    let advanced = cp_value_to_string(cp_get_field(opts_val, b"serialization"))
+        .map(|s| s == "advanced")
+        .unwrap_or(false);
+
     // execArgv (defaults to `--experimental-strip-types` for a `.ts` module
     // under node, so TS workers run without extra config).
     let mut exec_argv = cp_args_from_value(cp_get_field(opts_val, b"execArgv"));
@@ -118,7 +126,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    let launched = fork_launch(cp, stdout_obj, stderr_obj, stdin_obj, command);
+    let launched = fork_launch(cp, stdout_obj, stderr_obj, stdin_obj, command, advanced);
     if !launched {
         // Spawn failure: emit a deferred `error`, leave `connected` false.
         let msg = format!("fork failed: {exec_path}");
@@ -147,6 +155,7 @@ fn fork_launch(
     stderr_obj: f64,
     stdin_obj: f64,
     mut command: Command,
+    advanced: bool,
 ) -> bool {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
@@ -163,6 +172,11 @@ fn fork_launch(
     // `process.send` / `process.on('message')`.
     let child_fd = child_sock.as_raw_fd();
     command.env("NODE_CHANNEL_FD", "3");
+    // #2130: tell a node child to use V8 structured-clone framing on the channel.
+    command.env(
+        "NODE_CHANNEL_SERIALIZATION_MODE",
+        if advanced { "advanced" } else { "json" },
+    );
     unsafe {
         command.pre_exec(move || {
             if libc::dup2(child_fd, 3) < 0 {
@@ -186,6 +200,7 @@ fn fork_launch(
                 stdin_obj,
                 child,
                 Some(parent_sock),
+                advanced,
             );
             true
         }
@@ -200,10 +215,14 @@ fn fork_launch(
     stderr_obj: f64,
     stdin_obj: f64,
     mut command: Command,
+    advanced: bool,
 ) -> bool {
+    let _ = advanced;
     match command.spawn() {
         Ok(child) => {
-            reactor::cp_register_live_child(cp, stdout_obj, stderr_obj, stdin_obj, child, None);
+            reactor::cp_register_live_child(
+                cp, stdout_obj, stderr_obj, stdin_obj, child, None, false,
+            );
             true
         }
         Err(_) => false,
