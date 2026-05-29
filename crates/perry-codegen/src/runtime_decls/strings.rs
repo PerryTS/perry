@@ -105,6 +105,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Map (Phase B.15). The runtime stores keys/values as NaN-boxed doubles.
     // js_map_alloc returns a *mut MapHeader (i64 pointer).
     module.declare_function("js_map_alloc", I64, &[I32]);
+    module.declare_function("js_text_encoder_encode_into_llvm", I64, &[DOUBLE, DOUBLE]);
     // typeof: returns a string handle ("number"/"string"/"boolean"/"undefined"/"object"/"function")
     module.declare_function("js_value_typeof", I64, &[DOUBLE]);
     module.declare_function("js_string_starts_with", I32, &[I64, I64]);

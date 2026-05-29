@@ -737,6 +737,11 @@ pub enum Expr {
     TextEncoderNew,
     /// encoder.encode(string) -> Buffer (Uint8Array of UTF-8 bytes)
     TextEncoderEncode(Box<Expr>),
+    /// encoder.encodeInto(string, Uint8Array) -> { read, written }
+    TextEncoderEncodeInto {
+        source: Box<Expr>,
+        dest: Box<Expr>,
+    },
     /// new TextDecoder() or new TextDecoder("utf-8") -> opaque handle
     TextDecoderNew,
     /// decoder.decode(buffer) -> string (UTF-8 decode)

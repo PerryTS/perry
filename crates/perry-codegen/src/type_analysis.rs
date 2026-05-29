@@ -98,6 +98,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // and the generic f64-stride indexing read 8 bytes-as-f64 instead
         // of one byte (issue #584).
         Expr::TextEncoderEncode(_) => Some(HirType::Named("Uint8Array".into())),
+        Expr::TextEncoderEncodeInto { .. } => Some(HirType::Object(Default::default())),
         // TextDecoder.decode(buf) always produces a string.
         Expr::TextDecoderDecode(_) => Some(HirType::String),
         // string.split(sep) → Array<string>

@@ -653,6 +653,22 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                             let obj_name = obj_ident.sym.as_ref();
                             let prop_name = prop_ident.sym.as_ref();
+                            if matches!(prop_name, "encode" | "encodeInto")
+                                && ctx
+                                    .lookup_local_type(obj_name)
+                                    .map(|ty| matches!(ty, Type::Named(name) if name == "TextEncoder"))
+                                    .unwrap_or(false)
+                            {
+                                return Ok(Expr::String("function".to_string()));
+                            }
+                            if prop_name == "decode"
+                                && ctx
+                                    .lookup_local_type(obj_name)
+                                    .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
+                                    .unwrap_or(false)
+                            {
+                                return Ok(Expr::String("function".to_string()));
+                            }
                             // #2143: `typeof Promise.resolve`, `typeof Math.min`,
                             // `typeof JSON.parse`, etc. — namespace static methods
                             // that Perry implements as codegen direct-call
@@ -831,6 +847,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                                 )
                                         }
                                         "Boolean" => is_obj_proto,
+                                        "TextEncoder" => {
+                                            is_obj_proto
+                                                || matches!(prop_name, "encode" | "encodeInto")
+                                        }
+                                        "TextDecoder" => is_obj_proto || prop_name == "decode",
                                         _ => false,
                                     };
                                     if is_fn {

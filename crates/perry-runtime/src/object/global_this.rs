@@ -946,6 +946,14 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(proto_obj, &[("catch", 1), ("finally", 1), ("then", 2)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        "TextEncoder" => {
+            install_noop_proto_methods(proto_obj, &[("encode", 1), ("encodeInto", 2)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "TextDecoder" => {
+            install_noop_proto_methods(proto_obj, &[("decode", 1)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
         "Map" => {
             install_noop_proto_methods(
                 proto_obj,

@@ -520,6 +520,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let arr_ptr = blk.call(I64, "js_text_encoder_encode_llvm", &[(DOUBLE, &v)]);
             Ok(nanbox_pointer_inline(blk, &arr_ptr))
         }
+        Expr::TextEncoderEncodeInto { source, dest } => {
+            let source = lower_expr(ctx, source)?;
+            let dest = lower_expr(ctx, dest)?;
+            let blk = ctx.block();
+            let obj_ptr = blk.call(
+                I64,
+                "js_text_encoder_encode_into_llvm",
+                &[(DOUBLE, &source), (DOUBLE, &dest)],
+            );
+            Ok(nanbox_pointer_inline(blk, &obj_ptr))
+        }
         Expr::TextDecoderDecode(o) => {
             // decoder.decode(bufOrArr) — runtime returns an i64 string
             // pointer. Handles both ArrayHeader-backed values from

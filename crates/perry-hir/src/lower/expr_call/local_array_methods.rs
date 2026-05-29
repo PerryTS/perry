@@ -761,6 +761,16 @@ pub(super) fn try_local_array_methods(
                                     ))));
                                 }
                             }
+                            if method_name == "encodeInto" {
+                                let mut args = args.into_iter();
+                                let source =
+                                    args.next().unwrap_or_else(|| Expr::String(String::new()));
+                                let dest = args.next().unwrap_or(Expr::Undefined);
+                                return Ok(Ok(Expr::TextEncoderEncodeInto {
+                                    source: Box::new(source),
+                                    dest: Box::new(dest),
+                                }));
+                            }
                         }
 
                         // TextDecoder methods
