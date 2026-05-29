@@ -1336,29 +1336,51 @@ fn prepare_readable_for_iteration(stream: f64) {
 }
 
 /// Resolve a callback result that may be a Promise (an async mapper /
-/// predicate) by draining microtasks until it settles, then reading the
-/// fulfilled value or preserving the rejection reason.
+/// predicate) by driving Perry's await pump until it settles, then
+/// reading the fulfilled value or preserving the rejection reason.
 fn settle_result(value: f64) -> Result<f64, f64> {
     if crate::promise::js_value_is_promise(value) == 0 {
         return Ok(value);
     }
-    let p = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
-    if p.is_null() {
-        return Ok(value);
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
     for _ in 0..10_000 {
-        if unsafe { (*p).state } != crate::promise::PromiseState::Pending {
+        let current = value_handle.get_nanbox_f64();
+        if crate::promise::js_value_is_promise(current) == 0 {
+            return Ok(current);
+        }
+        let p = crate::value::js_nanbox_get_pointer(current) as *mut crate::promise::Promise;
+        if p.is_null() {
+            return Ok(current);
+        }
+        unsafe {
+            match (*p).state {
+                crate::promise::PromiseState::Fulfilled => return Ok((*p).value),
+                crate::promise::PromiseState::Rejected => return Err((*p).reason),
+                crate::promise::PromiseState::Pending => {}
+            }
+        }
+
+        crate::event_pump::perry_poll();
+        let _ = crate::timer::js_timer_tick();
+        let _ = crate::timer::js_callback_timer_tick();
+        let _ = crate::timer::js_interval_timer_tick();
+        if crate::event_pump::perry_has_work() == 0 {
             break;
         }
-        if crate::promise::js_promise_run_microtasks() == 0 {
-            break;
-        }
+        crate::event_pump::js_wait_for_event();
+    }
+
+    let current = value_handle.get_nanbox_f64();
+    let p = crate::value::js_nanbox_get_pointer(current) as *mut crate::promise::Promise;
+    if p.is_null() {
+        return Ok(current);
     }
     unsafe {
         match (*p).state {
             crate::promise::PromiseState::Fulfilled => Ok((*p).value),
             crate::promise::PromiseState::Rejected => Err((*p).reason),
-            crate::promise::PromiseState::Pending => Ok(value),
+            crate::promise::PromiseState::Pending => Ok(current),
         }
     }
 }
