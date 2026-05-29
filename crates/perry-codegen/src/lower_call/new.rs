@@ -13,6 +13,32 @@ use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
+fn node_stream_parent_kind(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<&'static str> {
+    let mut cur = class.extends_name.as_deref();
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        match name {
+            "Readable" => return Some("readable"),
+            _ => {}
+        }
+        if ctx.imported_class_ctors.contains_key(name) {
+            return None;
+        }
+        let Some(parent) = ctx.classes.get(name).copied() else {
+            return None;
+        };
+        if parent.constructor.is_some() {
+            return None;
+        }
+        cur = parent.extends_name.as_deref();
+        depth += 1;
+        if depth > 32 {
+            break;
+        }
+    }
+    None
+}
+
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
 /// Strategy: allocate an anonymous object via `js_object_alloc(0, N)`
@@ -563,6 +589,26 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 parent_name = parent_class.extends_name.as_deref();
             } else {
                 break;
+            }
+        }
+        if !found_inherited_ctor {
+            if let Some(kind) = node_stream_parent_kind(ctx, class) {
+                let undef_lit =
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let opts_box = lowered_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| undef_lit.clone());
+                let runtime_fn = match kind {
+                    "readable" => "js_node_stream_readable_subclass_init",
+                    _ => unreachable!("node stream parent kind {}", kind),
+                };
+                ctx.block().call(
+                    DOUBLE,
+                    runtime_fn,
+                    &[(DOUBLE, &obj_box), (DOUBLE, &opts_box)],
+                );
+                found_inherited_ctor = true;
             }
         }
         // Issue #573: if the parent walk reached an Error-like built-in

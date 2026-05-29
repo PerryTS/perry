@@ -129,6 +129,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "URIError"
                             | "EvalError"
                             | "AggregateError"
+                            | "Readable"
                             | "Writable"
                             | "ReadableStream"
                             | "WritableStream"
@@ -257,6 +258,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // see uninitialized slots. Mirrors the equivalent
                         // call in the user-class super branch below
                         // (line ~4521). Refs #562.
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(result);
+                    }
+                    let node_stream_kind = match parent_name.as_str() {
+                        "Readable" => Some("readable"),
+                        _ => None,
+                    };
+                    if let Some(kind) = node_stream_kind {
+                        let result = lower_node_stream_super_init(ctx, kind, super_args)?;
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(

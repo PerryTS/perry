@@ -15,6 +15,29 @@ use crate::types::{LlvmType, DOUBLE, I64};
 use super::helpers::sanitize;
 use super::opts::CrossModuleCtx;
 
+fn node_stream_parent_kind(
+    classes: &HashMap<String, &perry_hir::Class>,
+    class: &perry_hir::Class,
+) -> Option<&'static str> {
+    let mut cur = class.extends_name.as_deref();
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        match name {
+            "Readable" => return Some("readable"),
+            _ => {}
+        }
+        cur = classes
+            .get(name)
+            .copied()
+            .and_then(|parent| parent.extends_name.as_deref());
+        depth += 1;
+        if depth > 32 {
+            break;
+        }
+    }
+    None
+}
+
 /// Compile a class instance method as a top-level LLVM function with the
 /// signature `perry_method_<class>_<name>(this_box: double, args: double…)
 /// -> double`. The first parameter (`this`) is stored in a slot whose
@@ -287,91 +310,123 @@ pub(super) fn compile_method(
             }
             if let Some(pname) = effective_parent {
                 let pname_owned = pname.to_string();
-                // Resolve the standalone-ctor symbol name. Prefer the
-                // local class table (same module) for an inline call;
-                // fall back to imported_class_ctors for cross-module.
-                let (ctor_sym, param_count) = if let Some(pclass) =
-                    ctx.classes.get(&pname_owned).copied()
-                {
-                    if pclass.constructor.is_some() {
-                        // Local class with own ctor — use the per-module-prefix
-                        // standalone symbol, same one compile_method emits.
-                        let module_prefix = ctx.strings.module_prefix().to_string();
-                        let sym = format!("{}__{}_constructor", module_prefix, pname_owned);
-                        let pcount = pclass
-                            .constructor
-                            .as_ref()
-                            .map(|c| c.params.len())
-                            .unwrap_or(0);
-                        (sym, pcount)
+                let node_stream_kind = if pname_owned == "Readable" {
+                    node_stream_parent_kind(ctx.classes, class)
+                } else {
+                    None
+                };
+                if let Some(kind) = node_stream_kind {
+                    let undef_lit =
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let opts_box = method
+                        .params
+                        .first()
+                        .and_then(|param| ctx.locals.get(&param.id).cloned())
+                        .map(|slot| ctx.block().load(DOUBLE, &slot))
+                        .unwrap_or_else(|| undef_lit.clone());
+                    let this_box = match ctx.this_stack.last().cloned() {
+                        Some(slot) => ctx.block().load(DOUBLE, &slot),
+                        None => undef_lit.clone(),
+                    };
+                    let runtime_fn = match kind {
+                        "readable" => "js_node_stream_readable_subclass_init",
+                        _ => unreachable!("node stream parent kind {}", kind),
+                    };
+                    ctx.block().call(
+                        DOUBLE,
+                        runtime_fn,
+                        &[(DOUBLE, &this_box), (DOUBLE, &opts_box)],
+                    );
+                } else {
+                    // Resolve the standalone-ctor symbol name. Prefer the
+                    // local class table (same module) for an inline call;
+                    // fall back to imported_class_ctors for cross-module.
+                    let (ctor_sym, param_count) = if let Some(pclass) =
+                        ctx.classes.get(&pname_owned).copied()
+                    {
+                        if pclass.constructor.is_some() {
+                            // Local class with own ctor — use the per-module-prefix
+                            // standalone symbol, same one compile_method emits.
+                            let module_prefix = ctx.strings.module_prefix().to_string();
+                            let sym = format!("{}__{}_constructor", module_prefix, pname_owned);
+                            let pcount = pclass
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.len())
+                                .unwrap_or(0);
+                            (sym, pcount)
+                        } else if let Some((sym, n)) =
+                            ctx.imported_class_ctors.get(&pname_owned).cloned()
+                        {
+                            (sym, n)
+                        } else {
+                            // No callable ctor symbol — bail.
+                            stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
+                                format!("lowering body of method '{}::{}'", class.name, method.name)
+                            })?;
+                            // Fall through to the default ret at end.
+                            if !ctx.block().is_terminated() {
+                                let undef = crate::nanbox::double_literal(f64::from_bits(
+                                    crate::nanbox::TAG_UNDEFINED,
+                                ));
+                                ctx.block().ret(DOUBLE, &undef);
+                            }
+                            let _ = std::mem::take(&mut ctx.ic_globals);
+                            let _ = std::mem::take(&mut ctx.typed_parse_rodata);
+                            let _ = std::mem::take(&mut ctx.pending_declares);
+                            return Ok(());
+                        }
                     } else if let Some((sym, n)) =
                         ctx.imported_class_ctors.get(&pname_owned).cloned()
                     {
                         (sym, n)
                     } else {
-                        // No callable ctor symbol — bail.
-                        stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
-                            format!("lowering body of method '{}::{}'", class.name, method.name)
-                        })?;
-                        // Fall through to the default ret at end.
-                        if !ctx.block().is_terminated() {
-                            let undef = crate::nanbox::double_literal(f64::from_bits(
-                                crate::nanbox::TAG_UNDEFINED,
-                            ));
-                            ctx.block().ret(DOUBLE, &undef);
+                        ("".to_string(), 0)
+                    };
+                    if !ctor_sym.is_empty() {
+                        let undef_lit = crate::nanbox::double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ));
+                        // Forward this method's params, padding with undefined if
+                        // the parent expects more.
+                        let mut forwarded: Vec<String> = Vec::with_capacity(param_count);
+                        for (i, p) in method.params.iter().enumerate() {
+                            if i >= param_count {
+                                break;
+                            }
+                            let slot = ctx.locals.get(&p.id).cloned();
+                            if let Some(slot) = slot {
+                                forwarded.push(ctx.block().load(DOUBLE, &slot));
+                            } else {
+                                forwarded.push(undef_lit.clone());
+                            }
                         }
-                        let _ = std::mem::take(&mut ctx.ic_globals);
-                        let _ = std::mem::take(&mut ctx.typed_parse_rodata);
-                        let _ = std::mem::take(&mut ctx.pending_declares);
-                        return Ok(());
-                    }
-                } else if let Some((sym, n)) = ctx.imported_class_ctors.get(&pname_owned).cloned() {
-                    (sym, n)
-                } else {
-                    ("".to_string(), 0)
-                };
-                if !ctor_sym.is_empty() {
-                    let undef_lit =
-                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    // Forward this method's params, padding with undefined if
-                    // the parent expects more.
-                    let mut forwarded: Vec<String> = Vec::with_capacity(param_count);
-                    for (i, p) in method.params.iter().enumerate() {
-                        if i >= param_count {
-                            break;
-                        }
-                        let slot = ctx.locals.get(&p.id).cloned();
-                        if let Some(slot) = slot {
-                            forwarded.push(ctx.block().load(DOUBLE, &slot));
-                        } else {
+                        while forwarded.len() < param_count {
                             forwarded.push(undef_lit.clone());
                         }
+                        // Load `this` from the this_stack.
+                        let this_slot = ctx.this_stack.last().cloned();
+                        let this_box = if let Some(slot) = this_slot {
+                            ctx.block().load(DOUBLE, &slot)
+                        } else {
+                            undef_lit.clone()
+                        };
+                        let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
+                            .chain(forwarded.iter().map(|_| DOUBLE))
+                            .collect();
+                        let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
+                            Vec::with_capacity(1 + forwarded.len());
+                        ctor_args.push((DOUBLE, &this_box));
+                        for la in &forwarded {
+                            ctor_args.push((DOUBLE, la.as_str()));
+                        }
+                        ctx.pending_declares.push((
+                            ctor_sym.clone(),
+                            crate::types::VOID,
+                            ctor_param_types,
+                        ));
+                        ctx.block().call_void(&ctor_sym, &ctor_args);
                     }
-                    while forwarded.len() < param_count {
-                        forwarded.push(undef_lit.clone());
-                    }
-                    // Load `this` from the this_stack.
-                    let this_slot = ctx.this_stack.last().cloned();
-                    let this_box = if let Some(slot) = this_slot {
-                        ctx.block().load(DOUBLE, &slot)
-                    } else {
-                        undef_lit.clone()
-                    };
-                    let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
-                        .chain(forwarded.iter().map(|_| DOUBLE))
-                        .collect();
-                    let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
-                        Vec::with_capacity(1 + forwarded.len());
-                    ctor_args.push((DOUBLE, &this_box));
-                    for la in &forwarded {
-                        ctor_args.push((DOUBLE, la.as_str()));
-                    }
-                    ctx.pending_declares.push((
-                        ctor_sym.clone(),
-                        crate::types::VOID,
-                        ctor_param_types,
-                    ));
-                    ctx.block().call_void(&ctor_sym, &ctor_args);
                 }
             }
             // Apply self field initializers AFTER the parent body chain has

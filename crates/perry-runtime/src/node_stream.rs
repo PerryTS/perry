@@ -5404,6 +5404,41 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_stream_readable_subclass_init(this: f64, opts: f64) -> f64 {
+    register_iter_helper_arities();
+    let raw = raw_ptr_from_value(this);
+    if raw == 0 {
+        return this;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return this;
+    }
+
+    let obj = raw as *mut ObjectHeader;
+    let subclass_read =
+        js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"_read"));
+
+    let methods = readable_methods();
+    install_methods_on_existing_object(obj, this, &methods, &[]);
+
+    if let Some(read) = read_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, this));
+    } else if is_callable_value(subclass_read) {
+        js_object_set_field_by_name(obj, hidden_read_key(), subclass_read);
+    }
+
+    init_lifecycle_state(this, opts);
+    init_constructor(this, "Readable");
+    init_readable_state(this, opts);
+    install_common_lifecycle_callbacks(this, opts);
+    init_abort_signal_state(this, opts);
+    async_iterator::install_readable_async_iterator_symbol(this);
+    install_stream_async_dispose_symbol(this);
+    invoke_construct_callback(this, opts);
+    this
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     let methods = writable_methods();
     let obj = build_object(&methods, WRITABLE_SHAPE_ID + methods.len() as u32);
