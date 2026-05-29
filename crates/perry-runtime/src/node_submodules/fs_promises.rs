@@ -103,6 +103,14 @@ pub(crate) extern "C" fn thunk_fs_promises_lchmod(
     path: f64,
     mode: f64,
 ) -> f64 {
+    if !crate::fs::lchmod_is_callable_on_this_platform() {
+        let _ = (path, mode);
+        let message = "The lchmod() method is not implemented";
+        let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        crate::node_submodules::register_error_code_pub(msg, "ERR_METHOD_NOT_IMPLEMENTED");
+        let err = crate::error::js_error_new_with_message(msg);
+        return promise_rejected(crate::value::js_nanbox_pointer(err as i64));
+    }
     let _ = crate::fs::js_fs_lchmod_sync(path, mode);
     promise_undefined()
 }

@@ -241,7 +241,12 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
         let pkg = super::audit_manifest::package_name_for_path(&path.to_string_lossy())
             .map(|s| format!(" [{}]", s))
             .unwrap_or_default();
-        detail.push_str(&format!("\n  - {}{}", path.display(), pkg));
+        let declaration = ctx
+            .declaration_sidecars
+            .get(path)
+            .map(|p| format!(" (declarations: {})", p.display()))
+            .unwrap_or_default();
+        detail.push_str(&format!("\n  - {}{}{}", path.display(), pkg, declaration));
     }
     if importers.len() > limit {
         detail.push_str(&format!("\n  ... and {} more", importers.len() - limit));
@@ -265,6 +270,26 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
             packages.join(", ")
         )
     };
+    let mut declaration_packages: Vec<String> = importers
+        .iter()
+        .filter(|path| ctx.declaration_sidecars.contains_key(*path))
+        .filter_map(|path| super::audit_manifest::package_name_for_path(&path.to_string_lossy()))
+        .filter(|pkg| !ctx.compile_packages.contains(pkg))
+        .collect();
+    declaration_packages.sort();
+    declaration_packages.dedup();
+    let declaration_hint = if declaration_packages.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nDeclaration hint: Perry found `.d.ts` sidecar metadata for: {}. \
+             Declarations describe the API shape, but compiling a dependency's \
+             JavaScript implementation into native code still requires the host \
+             trust opt-in: add the package to both `perry.compilePackages` and \
+             `perry.allow.compilePackages` after review.",
+            declaration_packages.join(", ")
+        )
+    };
     anyhow::bail!(
         "JavaScript runtime (V8) support has been removed. This build of \
          Perry compiles TypeScript ahead-of-time only and cannot evaluate \
@@ -273,7 +298,7 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
          \n\
          Port the offending module(s) to TypeScript, add the owning package \
          to `perry.compilePackages` so it is compiled natively, or replace \
-         it with a native Perry stdlib equivalent.{package_hint}"
+         it with a native Perry stdlib equivalent.{package_hint}{declaration_hint}"
     );
 }
 
@@ -313,6 +338,24 @@ mod js_runtime_gate_tests {
             .to_string();
 
         assert!(!message.contains("Package hint:"));
+    }
+
+    #[test]
+    fn diagnostic_mentions_declaration_sidecar_for_typed_js_package() {
+        let mut ctx = CompilationContext::new(PathBuf::from("/repo"));
+        let implementation = PathBuf::from("/repo/node_modules/typed-js/dist/index.js");
+        let declaration = PathBuf::from("/repo/node_modules/typed-js/dist/index.d.ts");
+        ctx.js_runtime_importers.push(implementation.clone());
+        ctx.declaration_sidecars
+            .insert(implementation, declaration.clone());
+
+        let message = enforce_js_runtime_gate(&ctx)
+            .expect_err("runtime JS importer must fail the V8-free gate")
+            .to_string();
+
+        assert!(message.contains(&format!("declarations: {}", declaration.display())));
+        assert!(message.contains("Declaration hint:"));
+        assert!(message.contains("typed-js"));
     }
 }
 

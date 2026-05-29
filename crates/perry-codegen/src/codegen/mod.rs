@@ -1061,6 +1061,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         needs_geisterhand: opts.needs_geisterhand,
         geisterhand_port: opts.geisterhand_port,
         compile_time_constants,
+        target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
         clamp3_functions: hir
             .functions

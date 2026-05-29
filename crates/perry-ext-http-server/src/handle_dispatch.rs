@@ -22,8 +22,10 @@
 //!
 //! Issue #2153.
 
-use perry_ffi::{get_handle, JsValue, StringHeader};
+use perry_ffi::{alloc_string, get_handle, JsValue, StringHeader};
 
+use crate::request::IncomingMessage;
+use crate::response::ServerResponse;
 use crate::server::HttpServer;
 use crate::types::{POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
 
@@ -42,6 +44,48 @@ extern "C" {
     /// payload into the `{ port, address, family }` object Node returns.
     /// Returns the JSValue bits as u64 (NaN-boxed value).
     fn js_json_parse(text_ptr: *const StringHeader) -> u64;
+    fn js_class_method_bind(
+        instance: f64,
+        method_name_ptr: *const u8,
+        method_name_len: usize,
+    ) -> f64;
+
+    fn js_node_http_im_method(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_url(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_headers_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_raw_headers_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_im_complete(handle: i64) -> i32;
+    fn js_node_http_im_aborted(handle: i64) -> i32;
+    fn js_node_http_im_destroyed(handle: i64) -> i32;
+    fn js_node_http_im_pause(handle: i64);
+    fn js_node_http_im_resume(handle: i64);
+    fn js_node_http_im_destroy(handle: i64);
+    fn js_node_http_im_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
+    fn js_node_http_im_read(handle: i64) -> f64;
+
+    fn js_node_http_res_set_status(handle: i64, code: f64);
+    fn js_node_http_res_get_status(handle: i64) -> f64;
+    fn js_node_http_res_set_status_message(handle: i64, msg_ptr: *const StringHeader);
+    fn js_node_http_res_set_header(
+        handle: i64,
+        name_ptr: *const StringHeader,
+        value_ptr: *const StringHeader,
+    );
+    fn js_node_http_res_get_header(handle: i64, name_ptr: *const StringHeader) -> f64;
+    fn js_node_http_res_remove_header(handle: i64, name_ptr: *const StringHeader);
+    fn js_node_http_res_has_header(handle: i64, name_ptr: *const StringHeader) -> i32;
+    fn js_node_http_res_headers_sent(handle: i64) -> i32;
+    fn js_node_http_res_writable_ended(handle: i64) -> i32;
+    fn js_node_http_res_writable_finished(handle: i64) -> i32;
+    fn js_node_http_res_write_head(handle: i64, status: f64, arg2: i64, arg3: i64);
+    fn js_node_http_res_write(handle: i64, chunk: f64) -> i32;
+    fn js_node_http_res_add_trailers(handle: i64, headers_value: f64);
+    fn js_node_http_res_end(handle: i64, chunk: f64);
+    fn js_node_http_res_flush_headers(handle: i64);
+    fn js_node_http_res_write_continue(handle: i64);
+    fn js_node_http_res_write_processing(handle: i64);
+    fn js_node_http_res_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
 }
 
 /// Probe: is `handle` a live `HttpServer`?
@@ -52,6 +96,26 @@ extern "C" {
 #[no_mangle]
 pub extern "C" fn js_ext_http_server_is_handle(handle: i64) -> i32 {
     if get_handle::<HttpServer>(handle).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Probe: is `handle` a live server-side `IncomingMessage`?
+#[no_mangle]
+pub extern "C" fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32 {
+    if get_handle::<IncomingMessage>(handle).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Probe: is `handle` a live server-side `ServerResponse`?
+#[no_mangle]
+pub extern "C" fn js_ext_http_server_response_is_handle(handle: i64) -> i32 {
+    if get_handle::<ServerResponse>(handle).is_some() {
         1
     } else {
         0
@@ -167,6 +231,368 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
         // bound through this dispatcher would be `.listening()` — Node doesn't
         // expose it as a method, so fall through to undef.
         _ => undef,
+    }
+}
+
+/// Dispatch a method on a registered server-side `IncomingMessage` handle.
+///
+/// # Safety
+/// FFI entry; pointers must be valid for their stated lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
+    handle: i64,
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let method = method_name(method_ptr, method_len);
+    if method.is_empty() {
+        return undef;
+    }
+    let args = args_slice(args_ptr, args_len);
+    let self_ref = handle_to_pointer_f64(handle);
+
+    match method.as_str() {
+        "on" | "addListener" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            js_node_http_im_on(handle, event_ptr, closure_arg(Some(args[1])));
+            self_ref
+        }
+        "pause" => {
+            js_node_http_im_pause(handle);
+            self_ref
+        }
+        "resume" => {
+            js_node_http_im_resume(handle);
+            self_ref
+        }
+        "destroy" => {
+            js_node_http_im_destroy(handle);
+            self_ref
+        }
+        "read" => js_node_http_im_read(handle),
+        "method" | "__get_method" => string_ptr_value(js_node_http_im_method(handle)),
+        "url" | "__get_url" => string_ptr_value(js_node_http_im_url(handle)),
+        "httpVersion" | "__get_httpVersion" => {
+            string_ptr_value(js_node_http_im_http_version(handle))
+        }
+        "__get_complete" => bool_value(js_node_http_im_complete(handle) != 0),
+        "__get_aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
+        "__get_destroyed" => bool_value(js_node_http_im_destroyed(handle) != 0),
+        _ => undef,
+    }
+}
+
+/// Dispatch a method on a registered server-side `ServerResponse` handle.
+///
+/// # Safety
+/// FFI entry; pointers must be valid for their stated lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
+    handle: i64,
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let method = method_name(method_ptr, method_len);
+    if method.is_empty() {
+        return undef;
+    }
+    let args = args_slice(args_ptr, args_len);
+    let self_ref = handle_to_pointer_f64(handle);
+
+    match method.as_str() {
+        "setHeader" if args.len() >= 2 => {
+            let name = string_value_arg(args[0]);
+            if !name.is_null() {
+                js_node_http_res_set_header(handle, name, string_value_arg(args[1]));
+            }
+            undef
+        }
+        "getHeader" if !args.is_empty() => {
+            let name = string_value_arg(args[0]);
+            if name.is_null() {
+                undef
+            } else {
+                js_node_http_res_get_header(handle, name)
+            }
+        }
+        "removeHeader" if !args.is_empty() => {
+            let name = string_value_arg(args[0]);
+            if !name.is_null() {
+                js_node_http_res_remove_header(handle, name);
+            }
+            undef
+        }
+        "hasHeader" if !args.is_empty() => {
+            let name = string_value_arg(args[0]);
+            bool_value(!name.is_null() && js_node_http_res_has_header(handle, name) != 0)
+        }
+        "writeHead" if !args.is_empty() => {
+            js_node_http_res_write_head(
+                handle,
+                number_arg(Some(args[0]), 200.0),
+                raw_arg(args.get(1).copied()),
+                raw_arg(args.get(2).copied()),
+            );
+            self_ref
+        }
+        "write" if !args.is_empty() => bool_value(js_node_http_res_write(handle, args[0]) != 0),
+        "addTrailers" if !args.is_empty() => {
+            js_node_http_res_add_trailers(handle, args[0]);
+            undef
+        }
+        "end" => {
+            js_node_http_res_end(handle, args.first().copied().unwrap_or(undef));
+            self_ref
+        }
+        "flushHeaders" => {
+            js_node_http_res_flush_headers(handle);
+            undef
+        }
+        "writeContinue" => {
+            js_node_http_res_write_continue(handle);
+            undef
+        }
+        "writeProcessing" => {
+            js_node_http_res_write_processing(handle);
+            undef
+        }
+        "on" | "addListener" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            js_node_http_res_on(handle, event_ptr, closure_arg(Some(args[1])));
+            self_ref
+        }
+        "setStatus" | "__set_statusCode" if !args.is_empty() => {
+            js_node_http_res_set_status(handle, number_arg(Some(args[0]), 200.0));
+            undef
+        }
+        "getStatus" | "__get_statusCode" => js_node_http_res_get_status(handle),
+        "__set_statusMessage" if !args.is_empty() => {
+            let msg = string_value_arg(args[0]);
+            if !msg.is_null() {
+                js_node_http_res_set_status_message(handle, msg);
+            }
+            undef
+        }
+        "__get_headersSent" => bool_value(js_node_http_res_headers_sent(handle) != 0),
+        "__get_writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
+        "__get_writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
+        _ => undef,
+    }
+}
+
+/// Dispatch a property read on a registered server-side `IncomingMessage`.
+///
+/// # Safety
+/// FFI entry; pointers must be valid for their stated lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
+    handle: i64,
+    property_ptr: *const u8,
+    property_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let property = method_name(property_ptr, property_len);
+    if property.is_empty() {
+        return undef;
+    }
+
+    if let Some(name) = incoming_method_bytes(&property) {
+        return bind_handle_method(handle, name);
+    }
+
+    match property.as_str() {
+        "method" => string_ptr_value(js_node_http_im_method(handle)),
+        "url" => string_ptr_value(js_node_http_im_url(handle)),
+        "httpVersion" => string_ptr_value(js_node_http_im_http_version(handle)),
+        "headers" => json_string_value(js_node_http_im_headers_json(handle)),
+        "rawHeaders" => json_string_value(js_node_http_im_raw_headers_json(handle)),
+        "complete" => bool_value(js_node_http_im_complete(handle) != 0),
+        "aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
+        "destroyed" => bool_value(js_node_http_im_destroyed(handle) != 0),
+        _ => undef,
+    }
+}
+
+/// Dispatch a property read on a registered server-side `ServerResponse`.
+///
+/// # Safety
+/// FFI entry; pointers must be valid for their stated lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
+    handle: i64,
+    property_ptr: *const u8,
+    property_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let property = method_name(property_ptr, property_len);
+    if property.is_empty() {
+        return undef;
+    }
+
+    if let Some(name) = server_response_method_bytes(&property) {
+        return bind_handle_method(handle, name);
+    }
+
+    match property.as_str() {
+        "statusCode" => js_node_http_res_get_status(handle),
+        "headersSent" => bool_value(js_node_http_res_headers_sent(handle) != 0),
+        "writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
+        "writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
+        _ => undef,
+    }
+}
+
+/// Dispatch a property write on a registered server-side `ServerResponse`.
+///
+/// Returns 1 when the property was claimed.
+///
+/// # Safety
+/// FFI entry; pointers must be valid for their stated lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property_set(
+    handle: i64,
+    property_ptr: *const u8,
+    property_len: usize,
+    value: f64,
+) -> i32 {
+    let property = method_name(property_ptr, property_len);
+    match property.as_str() {
+        "statusCode" => {
+            js_node_http_res_set_status(handle, number_arg(Some(value), 200.0));
+            1
+        }
+        "statusMessage" => {
+            let msg = string_value_arg(value);
+            if !msg.is_null() {
+                js_node_http_res_set_status_message(handle, msg);
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+#[inline]
+unsafe fn method_name(ptr: *const u8, len: usize) -> String {
+    if ptr.is_null() || len == 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
+    }
+}
+
+#[inline]
+unsafe fn args_slice<'a>(args_ptr: *const f64, args_len: usize) -> &'a [f64] {
+    if args_len > 0 && !args_ptr.is_null() {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    } else {
+        &[]
+    }
+}
+
+#[inline]
+fn handle_to_pointer_f64(handle: i64) -> f64 {
+    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+}
+
+#[inline]
+fn string_ptr_value(ptr: *mut StringHeader) -> f64 {
+    if ptr.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(JsValue::from_string_ptr(ptr).bits())
+    }
+}
+
+#[inline]
+fn json_string_value(ptr: *mut StringHeader) -> f64 {
+    if ptr.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        unsafe { f64::from_bits(js_json_parse(ptr)) }
+    }
+}
+
+#[inline]
+fn bool_value(value: bool) -> f64 {
+    f64::from_bits(JsValue::from_bool(value).bits())
+}
+
+#[inline]
+fn number_arg(value: Option<f64>, fallback: f64) -> f64 {
+    let Some(value) = value else { return fallback };
+    let v = JsValue::from_bits(value.to_bits());
+    if v.is_number() {
+        v.to_number()
+    } else {
+        fallback
+    }
+}
+
+#[inline]
+fn raw_arg(value: Option<f64>) -> i64 {
+    value
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+        .to_bits() as i64
+}
+
+#[inline]
+fn string_value_arg(value: f64) -> *const StringHeader {
+    let v = JsValue::from_bits(value.to_bits());
+    if v.is_string() {
+        return v.as_string_ptr();
+    }
+    match crate::types::jsvalue_to_owned_string(value) {
+        Some(s) => alloc_string(&s).as_raw(),
+        None => std::ptr::null(),
+    }
+}
+
+#[inline]
+fn bind_handle_method(handle: i64, name: &'static [u8]) -> f64 {
+    unsafe { js_class_method_bind(handle_to_pointer_f64(handle), name.as_ptr(), name.len()) }
+}
+
+fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "on" => Some(b"on"),
+        "addListener" => Some(b"addListener"),
+        "pause" => Some(b"pause"),
+        "resume" => Some(b"resume"),
+        "destroy" => Some(b"destroy"),
+        "read" => Some(b"read"),
+        _ => None,
+    }
+}
+
+fn server_response_method_bytes(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "setHeader" => Some(b"setHeader"),
+        "getHeader" => Some(b"getHeader"),
+        "removeHeader" => Some(b"removeHeader"),
+        "hasHeader" => Some(b"hasHeader"),
+        "writeHead" => Some(b"writeHead"),
+        "write" => Some(b"write"),
+        "addTrailers" => Some(b"addTrailers"),
+        "end" => Some(b"end"),
+        "flushHeaders" => Some(b"flushHeaders"),
+        "writeContinue" => Some(b"writeContinue"),
+        "writeProcessing" => Some(b"writeProcessing"),
+        "on" => Some(b"on"),
+        "addListener" => Some(b"addListener"),
+        _ => None,
     }
 }
 
