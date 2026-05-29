@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1507 entries across 82 modules
+// Coverage: 1512 entries across 83 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1854,6 +1854,19 @@ declare module "process" {
   export function umask(...args: any[]): any;
   /** stdlib */
   export function uptime(...args: any[]): any;
+}
+
+declare module "punycode" {
+  /** stdlib */
+  export const version: any;
+  /** stdlib */
+  export function decode(...args: any[]): any;
+  /** stdlib */
+  export function encode(...args: any[]): any;
+  /** stdlib */
+  export function toASCII(...args: any[]): any;
+  /** stdlib */
+  export function toUnicode(...args: any[]): any;
 }
 
 declare module "querystring" {

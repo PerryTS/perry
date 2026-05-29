@@ -284,17 +284,12 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:punycode
 
-**Total APIs: 7** · Perry covers: 0 · Gap: 7
+**Total APIs: 7** · Perry covers: 5 · Gap: 2
 
-Selected highlights (full list in `runtime-parity.md`):
+Remaining (the `ucs2` sub-namespace array helpers, #2513 follow-up):
 
-- `punycode.decode(string)`
-- `punycode.encode(string)`
-- `punycode.toASCII(domain)`
-- `punycode.toUnicode(domain)`
 - `punycode.ucs2.decode(string)`
 - `punycode.ucs2.encode(codePoints)`
-- `punycode.version`
 
 ### node:stream/consumers
 

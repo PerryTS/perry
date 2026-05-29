@@ -60,6 +60,7 @@ pub mod perf_hooks;
 pub mod pointer_event;
 pub mod process;
 pub mod promise;
+pub mod punycode;
 pub mod regex;
 pub mod safe_area;
 pub mod set;
