@@ -2021,7 +2021,7 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
         return equal;
     }
     if let Some(equal) = typed_array_equality::deep_strict_typed_array_equal(left, right) {
-        return f64::from_bits(crate::value::JSValue::bool(equal).bits());
+        return equal;
     }
     if identity_equality::is_identity_only_deep_equal_value(left)
         || identity_equality::is_identity_only_deep_equal_value(right)
