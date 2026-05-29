@@ -24,7 +24,8 @@ use perry_ffi::{
 
 use crate::ensure_gc_scanner_registered;
 use crate::request::{
-    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, IncomingMessage,
+    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
+    IncomingMessage,
 };
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody, ServerResponse};
 use crate::types::{
@@ -432,16 +433,24 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         });
     });
 
-    // Fire `'listening'` listeners + the optional `cb` argument.
+    // Fire `'listening'` listeners + the optional `cb` argument. Node
+    // invokes both with `this` bound to the server, so the canonical
+    // `server.listen(0, function() { this.address().port })` idiom works
+    // (#2132). Set the implicit-`this` cell to the server's JS value
+    // (POINTER_TAG-boxed handle, identical to what `createServer`
+    // returned) for the duration of each callback, then restore.
+    let this_val = handle_to_pointer_f64(server_handle);
     let listening_listeners = get_handle::<HttpServer>(server_handle)
         .and_then(|s| s.listeners.get("listening").cloned())
         .unwrap_or_default();
-    emit_no_arg_to_listeners(&listening_listeners);
+    with_implicit_this(this_val, || emit_no_arg_to_listeners(&listening_listeners));
     if callback != 0 {
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call0();
+            with_implicit_this(this_val, || {
+                let _ = closure.call0();
+            });
         }
     }
 

@@ -327,8 +327,16 @@ pub(crate) fn validate_function(arg_name: &str, value: f64) {
 }
 
 pub fn throw_range_error_with_code(message: &str) -> ! {
+    throw_range_error_named(message, "ERR_OUT_OF_RANGE")
+}
+
+/// Throw a `RangeError` carrying an explicit Node error `code`. Most callers
+/// want [`throw_range_error_with_code`] (which fixes `code` to
+/// `ERR_OUT_OF_RANGE`); this variant lets the `net` port validators raise
+/// `ERR_SOCKET_BAD_PORT` with the same machinery (#2013).
+pub fn throw_range_error_named(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg, "ERR_OUT_OF_RANGE");
+    crate::node_submodules::register_error_code_pub(msg, code);
     let err = crate::error::js_rangeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }

@@ -1215,6 +1215,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // `expr.rs::Expr::NetCreateServer`, matching the
     // `js_node_http_create_server` (`I64, &[I64]`) convention.
     module.declare_function("js_net_create_server", I64, &[I64, I64]);
+    // #2013: Node argument validation for the net surface. The createServer
+    // options check takes the first positional arg as a NaN-boxed `DOUBLE`;
+    // setTimeout takes (socket handle, msecs:DOUBLE, callback:I64).
+    module.declare_function("js_net_validate_create_server_options", VOID, &[DOUBLE]);
+    module.declare_function("js_net_socket_set_timeout", I64, &[I64, DOUBLE, I64]);
     // Issue #1123 followup — `net.Server` instance method FFIs. The
     // NA_PTR slot for callbacks is `I64` here (closures arrive as raw
     // pointer-bits after the codegen's `unbox_to_i64` lowering); ports
