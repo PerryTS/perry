@@ -935,3 +935,26 @@ fn test_array_splice_grow_realloc() {
     }
     assert_eq!(js_array_get_f64(out_arr, 11), 2.0);
 }
+
+#[test]
+fn join_routes_objects_and_nested_arrays_through_tostring() {
+    // #800/#2135: a POINTER_TAG element that is an object/array (not a string)
+    // must go through the spec ToString — a nested array joins recursively, a
+    // plain object becomes "[object Object]" — instead of being mis-read as a
+    // StringHeader (which produced corrupted/empty output).
+    unsafe {
+        let inner = js_array_push_f64(js_array_push_f64(js_array_alloc(2), 1.0), 2.0);
+        let inner_v = f64::from_bits(crate::value::JSValue::pointer(inner as *const u8).bits());
+        let obj = crate::object::js_object_alloc(0, 0);
+        let obj_v = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+        let mut arr = js_array_alloc(2);
+        arr = js_array_push_f64(arr, inner_v);
+        arr = js_array_push_f64(arr, obj_v);
+        let sep = crate::string::js_string_from_bytes(b";".as_ptr(), 1);
+        let out = js_array_join(arr, sep);
+        let len = (*out).byte_len as usize;
+        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
+        assert_eq!(s, "1,2;[object Object]");
+    }
+}

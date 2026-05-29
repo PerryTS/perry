@@ -612,15 +612,40 @@ pub extern "C" fn js_array_join(
                 let s = std::str::from_utf8_unchecked(&scratch[..n]);
                 result.push_str(s);
             } else if jsvalue.is_pointer() {
-                // POINTER_TAG — may be a string stored with the wrong tag (cross-module)
-                let ptr = (element_bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-                if !ptr.is_null() && (ptr as usize) >= 0x1000 {
-                    let str_len = (*ptr).byte_len as usize;
-                    let str_data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                    let s = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-                        str_data, str_len,
-                    ));
-                    result.push_str(s);
+                // POINTER_TAG. Two cases:
+                //  1. A genuine string NaN-boxed with POINTER_TAG instead of
+                //     STRING_TAG (a cross-module mis-tag) — read its bytes.
+                //  2. A real heap object/array/error/buffer — these must go
+                //     through the spec `ToString` (`js_jsvalue_to_string`):
+                //     Array→nested join, Error→"name: message" (#2135), an
+                //     object with a custom `toString`→that result, buffers,
+                //     etc. The old code read *every* pointer as a
+                //     `StringHeader`, so a non-string's garbage `byte_len`
+                //     produced corrupted output (`[err].join()` → empty).
+                //     Distinguish via the GcHeader type tag, excluding the
+                //     headerless buffer/symbol pointers first.
+                let ptr_addr = (element_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+                if ptr_addr >= 0x1000 {
+                    let is_string_obj = !crate::buffer::is_registered_buffer(ptr_addr)
+                        && !crate::symbol::is_registered_symbol(ptr_addr)
+                        && {
+                            let gc_header = (ptr_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                                as *const crate::gc::GcHeader;
+                            (*gc_header).obj_type == crate::gc::GC_TYPE_STRING
+                        };
+                    let s_ptr = if is_string_obj {
+                        ptr_addr as *const StringHeader
+                    } else {
+                        crate::value::js_jsvalue_to_string(f64::from_bits(element_bits))
+                    };
+                    if !s_ptr.is_null() {
+                        let str_len = (*s_ptr).byte_len as usize;
+                        let str_data =
+                            (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                        result.push_str(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                            str_data, str_len,
+                        )));
+                    }
                 } else {
                     result.push_str("[object Object]");
                 }
