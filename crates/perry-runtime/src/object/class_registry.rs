@@ -21,6 +21,29 @@ pub use super::class_handles::{
 };
 use super::*;
 
+pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: f64) {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        m.borrow_mut()
+            .entry(class_id)
+            .or_insert_with(std::collections::HashMap::new)
+            .insert(name, value);
+    });
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+}
+
+pub(crate) fn class_prototype_method_value_cache_root_store(
+    class_id: u32,
+    method_name: String,
+    value_bits: u64,
+) {
+    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert((class_id, method_name), value_bits);
+    });
+    crate::gc::runtime_write_barrier_root_nanbox(value_bits);
+}
+
 // ============================================================================
 // Class method vtable registry — enables runtime dispatch for interface-typed
 // and dynamically-typed method calls.  Each class registers its methods and
