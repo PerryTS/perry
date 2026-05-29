@@ -10,6 +10,7 @@ use super::println;
 use super::*;
 
 mod boxed_primitives;
+mod identity_equality;
 
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
@@ -1848,35 +1849,6 @@ fn looks_like_raw_heap_pointer(value: f64) -> bool {
     (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
 }
 
-#[inline]
-fn is_weak_collection_value(value: f64) -> bool {
-    let js_value = crate::value::JSValue::from_bits(value.to_bits());
-    if !js_value.is_pointer() {
-        return false;
-    }
-    let ptr = js_value.as_pointer::<u8>();
-    let addr = ptr as usize;
-    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return false;
-    }
-    unsafe {
-        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return false;
-        }
-        let obj = ptr as *const crate::object::ObjectHeader;
-        matches!(
-            (*obj).class_id,
-            crate::weakref::CLASS_ID_WEAKMAP | crate::weakref::CLASS_ID_WEAKSET
-        )
-    }
-}
-
-#[inline]
-fn is_identity_only_deep_equal_value(value: f64) -> bool {
-    crate::promise::js_value_is_promise(value) != 0 || is_weak_collection_value(value)
-}
-
 #[no_mangle]
 pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
     let left_value = crate::value::JSValue::from_bits(left.to_bits());
@@ -1895,7 +1867,9 @@ pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
         };
         return f64::from_bits(crate::value::JSValue::bool(equal).bits());
     }
-    if is_identity_only_deep_equal_value(left) || is_identity_only_deep_equal_value(right) {
+    if identity_equality::is_identity_only_deep_equal_value(left)
+        || identity_equality::is_identity_only_deep_equal_value(right)
+    {
         return f64::from_bits(
             crate::value::JSValue::bool(left.to_bits() == right.to_bits()).bits(),
         );
