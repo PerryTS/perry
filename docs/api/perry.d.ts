@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1496 entries across 82 modules
+// Coverage: 1505 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -58,6 +58,8 @@ declare module "assert" {
   /** stdlib */
   export function ok(...args: any[]): any;
   /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
   export function strict(...args: any[]): any;
@@ -100,6 +102,8 @@ declare module "assert/strict" {
   export function notStrictEqual(...args: any[]): any;
   /** stdlib */
   export function ok(...args: any[]): any;
+  /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
   /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
@@ -183,6 +187,10 @@ declare module "buffer" {
   export function allocUnsafe(...args: any[]): any;
   /** stdlib */
   export function allocUnsafeSlow(...args: any[]): any;
+  /** stdlib */
+  export function atob(...args: any[]): any;
+  /** stdlib */
+  export function btoa(...args: any[]): any;
   /** stdlib */
   export function byteLength(...args: any[]): any;
   /** stdlib */
@@ -2069,6 +2077,10 @@ declare module "util/types" {
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
   /** stdlib */
+  export function isBigInt64Array(...args: any[]): any;
+  /** stdlib */
+  export function isBigUint64Array(...args: any[]): any;
+  /** stdlib */
   export function isBooleanObject(...args: any[]): any;
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
@@ -2079,6 +2091,10 @@ declare module "util/types" {
   /** stdlib */
   export function isFloat64Array(...args: any[]): any;
   /** stdlib */
+  export function isGeneratorFunction(...args: any[]): any;
+  /** stdlib */
+  export function isGeneratorObject(...args: any[]): any;
+  /** stdlib */
   export function isInt16Array(...args: any[]): any;
   /** stdlib */
   export function isInt32Array(...args: any[]): any;
@@ -2088,6 +2104,8 @@ declare module "util/types" {
   export function isMap(...args: any[]): any;
   /** stdlib */
   export function isMapIterator(...args: any[]): any;
+  /** stdlib */
+  export function isNativeError(...args: any[]): any;
   /** stdlib */
   export function isNumberObject(...args: any[]): any;
   /** stdlib */

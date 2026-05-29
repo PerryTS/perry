@@ -312,7 +312,7 @@ fn native_arena_kind_from_expr(expr: &ast::Expr) -> Option<u8> {
         }
         ast::Expr::Lit(ast::Lit::Num(n)) if n.value.fract() == 0.0 => {
             let raw = n.value as i64;
-            (0..=crate::ir::TYPED_ARRAY_KIND_UINT8_CLAMPED as i64)
+            (0..=crate::ir::TYPED_ARRAY_KIND_BIGUINT64 as i64)
                 .contains(&raw)
                 .then_some(raw as u8)
         }

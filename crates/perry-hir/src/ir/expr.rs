@@ -1618,6 +1618,11 @@ pub enum Expr {
         url: Box<Expr>,
         value: Box<Expr>,
     },
+    /// `urlInstance.href = value` — reparses the full URL or throws.
+    UrlSetHref {
+        url: Box<Expr>,
+        value: Box<Expr>,
+    },
 
     // URLSearchParams operations
     /// new URLSearchParams(init?)

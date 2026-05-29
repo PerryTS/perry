@@ -166,6 +166,9 @@ static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 =
 #[used]
 static KEEP_NS_COMPOSE: extern "C" fn(f64) -> f64 = super::js_node_stream_compose;
 #[used]
+static KEEP_NS_PIPELINE: extern "C" fn(*const crate::array::ArrayHeader) -> f64 =
+    super::js_node_stream_pipeline;
+#[used]
 static KEEP_NS_DUPLEX_PAIR: extern "C" fn(f64) -> f64 = super::js_node_stream_duplex_pair;
 #[used]
 static KEEP_NS_TO_WEB: extern "C" fn(f64) -> f64 = super::js_node_stream_to_web;

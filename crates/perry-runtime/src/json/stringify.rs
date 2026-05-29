@@ -1346,7 +1346,23 @@ pub(crate) unsafe fn try_emit_shape_element(
 
 /// Depth-aware variant of stringify_array for recursive calls.
 pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, depth: u32) {
-    let arr = ptr as *const crate::ArrayHeader;
+    // Issue #2021: an array that has grown past its initial inline capacity
+    // (16) was reallocated to a new block, leaving a GC_FLAG_FORWARDED stub
+    // at the old address. Callers (and element decoders) hand us whatever
+    // pointer the NaN-boxed value held, which for a grown array is that
+    // stale stub — reading its first 8 bytes as (length, capacity) yields
+    // the forwarding pointer reinterpreted as a huge length and walks off
+    // into garbage (Bus error in stringify, the original #2021 crash).
+    // `clean_arr_ptr` follows the forwarding chain exactly as every other
+    // array accessor does (#233); element reads via js_array_get already do
+    // this, which is why field access worked while whole-array stringify
+    // crashed. Resolving here is the single chokepoint for the top-level,
+    // nested-array, and object-field-array paths.
+    let arr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
+    if arr.is_null() {
+        buf.push_str("[]");
+        return;
+    }
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
 
