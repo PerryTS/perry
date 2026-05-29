@@ -362,12 +362,6 @@
     "category": "bug-open",
     "reason": "node:stream: r.compose(t1).compose(t2) \u2014 chained compose() returns Duplex but pipeline breaks. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/read-in-readable-listener": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read() inside 'readable' listener \u2014 while-loop drain pattern produces wrong output. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/flow/sequential-reads": {
     "issue": "1532",
     "added": "2026-05-24",
