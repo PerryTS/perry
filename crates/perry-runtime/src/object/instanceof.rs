@@ -50,6 +50,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "perf_hooks" {
+            let class_id = match method.as_str() {
+                "PerformanceEntry" => crate::perf_hooks::CLASS_ID_PERFORMANCE_ENTRY,
+                "PerformanceMark" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MARK,
+                "PerformanceMeasure" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MEASURE,
+                _ => 0,
+            };
+            if class_id != 0 {
+                return js_instanceof(value, class_id);
+            }
+        }
     }
     f64::from_bits(TAG_FALSE)
 }
@@ -396,6 +407,14 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 }
                 _ => false_val,
             };
+        }
+
+        if gc_type == crate::gc::GC_TYPE_OBJECT {
+            if let Some(matches) =
+                crate::perf_hooks::is_perf_entry_object_instance_of(obj_ptr, class_id)
+            {
+                return if matches { true_val } else { false_val };
+            }
         }
 
         // For user-defined classes that extend Error: `myErr instanceof Error` should be true.

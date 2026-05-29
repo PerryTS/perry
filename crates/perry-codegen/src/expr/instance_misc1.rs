@@ -105,6 +105,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `rs.pipeThrough(ts) instanceof ReadableStream`, …).
                 "ReadableStream" => 0xFFFF0060u32,
                 "WritableStream" => 0xFFFF0061u32,
+                // node:perf_hooks entry classes. Runtime classifies the
+                // shaped entry objects returned by performance.mark/measure.
+                "PerformanceEntry" => 0xFFFF0080u32,
+                "PerformanceMark" => 0xFFFF0081u32,
+                "PerformanceMeasure" => 0xFFFF0082u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
