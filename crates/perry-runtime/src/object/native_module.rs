@@ -1620,9 +1620,11 @@ pub(crate) unsafe fn get_native_module_constant(
     };
 
     match module_name {
-        // node:punycode (deprecated, #2513) — the bundled punycode.js version.
+        // node:punycode (deprecated, #2513) — the bundled punycode.js version
+        // and the `ucs2` code-point helper sub-namespace (#2607).
         "punycode" => match property {
             "version" => Some(str_val(crate::punycode::PUNYCODE_VERSION)),
+            "ucs2" => Some(create_sub_namespace("punycode.ucs2")),
             _ => None,
         },
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)

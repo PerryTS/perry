@@ -370,6 +370,27 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // punycode.ucs2 sub-namespace (#2607): decode(string)->code-point array,
+    // encode(code-point array)->string. The array arg/return ride as a
+    // NaN-boxed pointer in the NA_F64 slot.
+    NativeModSig {
+        module: "punycode.ucs2",
+        has_receiver: false,
+        method: "decode",
+        class_filter: None,
+        runtime: "js_punycode_ucs2_decode",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "punycode.ucs2",
+        has_receiver: false,
+        method: "encode",
+        class_filter: None,
+        runtime: "js_punycode_ucs2_encode",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node console ==========
     NativeModSig {
         module: "console",

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1512 entries across 83 modules
+// Coverage: 1515 entries across 84 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -1858,6 +1858,8 @@ declare module "process" {
 
 declare module "punycode" {
   /** stdlib */
+  export const ucs2: any;
+  /** stdlib */
   export const version: any;
   /** stdlib */
   export function decode(...args: any[]): any;
@@ -1867,6 +1869,13 @@ declare module "punycode" {
   export function toASCII(...args: any[]): any;
   /** stdlib */
   export function toUnicode(...args: any[]): any;
+}
+
+declare module "punycode.ucs2" {
+  /** stdlib */
+  export function decode(...args: any[]): any;
+  /** stdlib */
+  export function encode(...args: any[]): any;
 }
 
 declare module "querystring" {

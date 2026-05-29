@@ -1159,6 +1159,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("punycode", "encode") => crate::punycode::js_punycode_encode(arg(0)),
         ("punycode", "toASCII") => crate::punycode::js_punycode_to_ascii(arg(0)),
         ("punycode", "toUnicode") => crate::punycode::js_punycode_to_unicode(arg(0)),
+        // ── punycode.ucs2 sub-namespace (#2607) ──
+        ("punycode.ucs2", "decode") => crate::punycode::js_punycode_ucs2_decode(arg(0)),
+        ("punycode.ucs2", "encode") => crate::punycode::js_punycode_ucs2_encode(arg(0)),
 
         // ── console module namespace (`node:console` / `console`) ──
         ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {

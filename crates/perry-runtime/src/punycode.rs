@@ -260,6 +260,44 @@ pub extern "C" fn js_punycode_to_unicode(value: f64) -> f64 {
     create_string_f64(&to_unicode(&get_string_content(value)))
 }
 
+/// `punycode.ucs2.decode(string)` — split a string into an array of Unicode
+/// code points (astral code points become a single number, combining the
+/// UTF-16 surrogate pair). Rust `char` is already a Unicode scalar value, so
+/// `chars()` yields code points directly.
+#[no_mangle]
+pub extern "C" fn js_punycode_ucs2_decode(value: f64) -> f64 {
+    let s = get_string_content(value);
+    let arr = crate::array::js_array_alloc(s.chars().count() as u32);
+    for c in s.chars() {
+        crate::array::js_array_push_f64(arr, c as u32 as f64);
+    }
+    f64::from_bits(crate::value::JSValue::array_ptr(arr).bits())
+}
+
+/// `punycode.ucs2.encode(codePoints)` — build a string from an array of code
+/// points (each astral code point is emitted as its character; `char::from_u32`
+/// handles the surrogate-pair recombination since Rust strings are UTF-8).
+#[no_mangle]
+pub extern "C" fn js_punycode_ucs2_encode(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return create_string_f64("");
+    }
+    let arr = jsval.as_pointer::<crate::array::ArrayHeader>();
+    if arr.is_null() {
+        return create_string_f64("");
+    }
+    let len = unsafe { crate::array::js_array_length(arr) } as u32;
+    let mut out = String::new();
+    for i in 0..len {
+        let v = unsafe { crate::array::js_array_get_f64(arr, i) };
+        if let Some(c) = char::from_u32(v as u32) {
+            out.push(c);
+        }
+    }
+    create_string_f64(&out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
