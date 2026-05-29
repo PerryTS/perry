@@ -85,6 +85,21 @@ static GC_REGISTERED: Once = Once::new();
 pub(crate) fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-http-server", scan_http_server_roots);
+        // #2532 — register the server pump + has-active with perry-runtime
+        // directly. In a workspace build perry-stdlib drains these via its
+        // `external-http-server-pump` arm, but an out-of-tree install links
+        // the prebuilt full stdlib with that arm compiled OUT — so without
+        // this the accepted requests would never be dispatched and the
+        // program would hang. Registration is idempotent on the runtime
+        // side, so the in-tree double-drain is a harmless no-op.
+        extern "C" {
+            fn js_register_aux_pump(f: extern "C" fn() -> i32);
+            fn js_register_aux_has_active(f: extern "C" fn() -> i32);
+        }
+        unsafe {
+            js_register_aux_pump(crate::server::js_node_http_server_process_pending);
+            js_register_aux_has_active(crate::server::js_node_http_server_has_active);
+        }
     });
 }
 

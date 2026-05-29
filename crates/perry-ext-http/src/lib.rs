@@ -104,6 +104,25 @@ static HTTP_GC_REGISTERED: Once = Once::new();
 pub(crate) fn ensure_gc_scanner_registered() {
     HTTP_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
+        // #2532 — register the client response/error pump with perry-runtime
+        // directly so `http.request` / `http.get` callbacks fire in an
+        // out-of-tree install (prebuilt full stdlib has the
+        // `external-http-client-pump` arm compiled out). No separate
+        // has-active is needed: the in-flight request is a perry-ffi async
+        // op, which `js_native_async_has_active` already keeps the loop alive
+        // for. Idempotent on the runtime side.
+        extern "C" {
+            fn js_register_aux_pump(f: extern "C" fn() -> i32);
+        }
+        // `js_http_process_pending` is an `unsafe extern "C" fn`; the
+        // registry takes a safe `extern "C" fn`, so route through a thin
+        // safe shim.
+        extern "C" fn client_pump() -> i32 {
+            unsafe { js_http_process_pending() }
+        }
+        unsafe {
+            js_register_aux_pump(client_pump);
+        }
     });
 }
 

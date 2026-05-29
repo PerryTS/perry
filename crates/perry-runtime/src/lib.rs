@@ -228,8 +228,82 @@ mod ext_pump {
 mod stdlib_pump {
     use std::ptr::null_mut;
     use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::Mutex;
 
     static STDLIB_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+    // #2532 — auxiliary pump / has-active registries.
+    //
+    // perry-stdlib owns the single `STDLIB_PUMP_FN` slot above and drains
+    // every in-tree module's pending queue from there. But the
+    // `perry-ext-*` wrapper crates (perry-ext-http-server's request queue,
+    // perry-ext-http's client response queue, …) are normally drained by
+    // `js_stdlib_process_pending`'s `#[cfg(feature = "external-*-pump")]`
+    // arms — which are only compiled in when the *workspace* auto-optimize
+    // rebuilds perry-stdlib with that feature.
+    //
+    // In an out-of-tree install there is no workspace to rebuild from, so
+    // the link uses the prebuilt full `libperry_stdlib.a` with those pump
+    // arms compiled OUT. The ext lib would then link but its queue would
+    // never be drained — a `node:http` server accepts connections that
+    // nobody dispatches and the program hangs.
+    //
+    // These registries let each linked ext crate register its own
+    // `*_process_pending` / `*_has_active` directly with the runtime, which
+    // drains them on every tick regardless of which perry-stdlib features
+    // are present. Registration is idempotent (a given fn pointer is only
+    // stored once), so the in-tree path's compile-time arm calling the same
+    // function is harmless — the second drain of an already-empty queue is
+    // a no-op.
+    static AUX_PUMPS: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
+    static AUX_HAS_ACTIVE: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
+
+    /// Register an auxiliary pump callback (a `perry-ext-*` crate's
+    /// `*_process_pending`). Idempotent — registering the same function
+    /// twice stores it once. Called the first time the ext crate's entry
+    /// point runs (e.g. `js_node_http_create_server`).
+    #[no_mangle]
+    pub extern "C" fn js_register_aux_pump(f: extern "C" fn() -> i32) {
+        if let Ok(mut pumps) = AUX_PUMPS.lock() {
+            if !pumps.iter().any(|&g| g == f) {
+                pumps.push(f);
+            }
+        }
+    }
+
+    /// Register an auxiliary has-active callback (a `perry-ext-*` crate's
+    /// `*_has_active`). Idempotent. Keeps the event loop alive while the
+    /// ext crate reports live handles (e.g. a listening HTTP server).
+    #[no_mangle]
+    pub extern "C" fn js_register_aux_has_active(f: extern "C" fn() -> i32) {
+        if let Ok(mut fns) = AUX_HAS_ACTIVE.lock() {
+            if !fns.iter().any(|&g| g == f) {
+                fns.push(f);
+            }
+        }
+    }
+
+    /// Drain every registered auxiliary pump, returning the total work done.
+    fn run_aux_pumps() -> i32 {
+        let fns: Vec<extern "C" fn() -> i32> = match AUX_PUMPS.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => return 0,
+        };
+        let mut count = 0i32;
+        for f in fns {
+            count = count.saturating_add(f());
+        }
+        count
+    }
+
+    /// True if any registered auxiliary has-active callback reports live work.
+    fn aux_has_active() -> bool {
+        let fns: Vec<extern "C" fn() -> i32> = match AUX_HAS_ACTIVE.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => return false,
+        };
+        fns.iter().any(|f| f() != 0)
+    }
 
     /// Register the stdlib's process_pending function pointer.
     /// Called by perry-stdlib during initialization.
@@ -261,6 +335,10 @@ mod stdlib_pump {
                 func();
             }
         }
+        // #2532 — drain any `perry-ext-*` pumps registered directly with
+        // the runtime (out-of-tree installs where perry-stdlib's
+        // compile-time `external-*-pump` arms aren't present).
+        run_aux_pumps();
         let _ = crate::gc::gc_runtime_safepoint();
     }
 
@@ -285,6 +363,12 @@ mod stdlib_pump {
         if crate::child_process::reactor::cp_reactor_has_live() {
             return 1;
         }
+        // #2532 — a live `perry-ext-*` handle (e.g. a listening HTTP
+        // server registered out-of-tree) keeps the loop alive even when
+        // perry-stdlib reports none.
+        if aux_has_active() {
+            return 1;
+        }
         let f = STDLIB_HAS_ACTIVE_FN.load(Ordering::Acquire);
         if !f.is_null() {
             unsafe {
@@ -293,6 +377,36 @@ mod stdlib_pump {
             }
         } else {
             0
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
+
+        static PUMP_CALLS: AtomicI32 = AtomicI32::new(0);
+        extern "C" fn counting_pump() -> i32 {
+            PUMP_CALLS.fetch_add(1, AtomicOrdering::SeqCst);
+            0
+        }
+
+        #[test]
+        fn aux_pump_registration_is_idempotent() {
+            // Registering the same fn pointer repeatedly stores it once,
+            // so the in-tree compile-time arm calling the same function
+            // can't multiply the per-tick drain count.
+            js_register_aux_pump(counting_pump);
+            js_register_aux_pump(counting_pump);
+            js_register_aux_pump(counting_pump);
+            let before = PUMP_CALLS.load(AtomicOrdering::SeqCst);
+            run_aux_pumps();
+            let after = PUMP_CALLS.load(AtomicOrdering::SeqCst);
+            assert_eq!(
+                after - before,
+                1,
+                "counting_pump must be invoked exactly once per run_aux_pumps despite triple registration"
+            );
         }
     }
 }
