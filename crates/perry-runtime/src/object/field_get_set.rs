@@ -724,6 +724,21 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         }
     }
     unsafe {
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(module_name) = read_native_module_name(obj) {
+                if let Some(keys) = native_module_enumerable_keys(&module_name) {
+                    let out = crate::array::js_array_alloc(keys.len() as u32);
+                    for key_bytes in keys {
+                        let key_str = crate::string::js_string_from_bytes(
+                            key_bytes.as_ptr(),
+                            key_bytes.len() as u32,
+                        );
+                        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
+                    }
+                    return out;
+                }
+            }
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             return crate::array::js_array_alloc(0);

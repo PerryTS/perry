@@ -120,6 +120,13 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
     }
 }
 
+pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
+    match module_name {
+        "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        _ => None,
+    }
+}
+
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(module_name, "util" | "util.types")
 }
@@ -1921,13 +1928,13 @@ pub(crate) unsafe fn get_native_module_constant(
             // Match Node's common 64-bit max Buffer length value. Perry won't
             // actually allocate buffers this large, but shape/value parity lets
             // packages feature-detect the Buffer surface without falling over.
-            "kMaxLength" => Some(4294967296.0),
+            "kMaxLength" => Some(9_007_199_254_740_991.0),
             "kStringMaxLength" => Some(536870888.0),
             "INSPECT_MAX_BYTES" => Some(50.0),
             _ => None,
         },
         "buffer.constants" => match property {
-            "MAX_LENGTH" => Some(4294967296.0),
+            "MAX_LENGTH" => Some(9_007_199_254_740_991.0),
             "MAX_STRING_LENGTH" => Some(536870888.0),
             _ => None,
         },
