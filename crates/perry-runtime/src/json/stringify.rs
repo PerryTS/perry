@@ -60,6 +60,90 @@ pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
     }
 }
 
+/// Pretty-printed (`space`-indented) form of `stringify_buffer`. Emits the
+/// same `{type,data}` (Buffer) / `{index:byte}` (plain Uint8Array) shape as
+/// the compact version but with newlines + indentation, matching Node's
+/// `JSON.stringify(buf, null, n)`. `depth` is the indent level of the value
+/// itself (content sits at `depth + 1`, the closing brace at `depth`),
+/// mirroring `stringify_object_pretty`.
+pub(crate) unsafe fn stringify_buffer_pretty(
+    ptr: *const u8,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
+    let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+    if buf_ptr.is_null() {
+        buf.push_str("null");
+        return;
+    }
+    let len = (*buf_ptr).length as usize;
+    let data = (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+
+    let push_indent = |buf: &mut String, levels: usize| {
+        for _ in 0..levels {
+            buf.push_str(indent);
+        }
+    };
+
+    if len == 0 {
+        // Empty Uint8Array -> "{}"; empty Buffer -> {"type":"Buffer","data":[]}.
+        if crate::buffer::is_uint8array_buffer(ptr as usize) {
+            buf.push_str("{}");
+        } else {
+            buf.push_str("{\n");
+            push_indent(buf, depth + 1);
+            buf.push_str("\"type\": \"Buffer\",\n");
+            push_indent(buf, depth + 1);
+            buf.push_str("\"data\": []\n");
+            push_indent(buf, depth);
+            buf.push('}');
+        }
+        return;
+    }
+
+    if crate::buffer::is_uint8array_buffer(ptr as usize) {
+        // Plain Uint8Array: { "0": b0, "1": b1, ... }
+        buf.push_str("{\n");
+        for (i, b) in bytes.iter().enumerate() {
+            push_indent(buf, depth + 1);
+            let mut idx_buf = itoa::Buffer::new();
+            buf.push('"');
+            buf.push_str(idx_buf.format(i));
+            buf.push_str("\": ");
+            let mut byte_buf = itoa::Buffer::new();
+            buf.push_str(byte_buf.format(*b));
+            if i + 1 < len {
+                buf.push(',');
+            }
+            buf.push('\n');
+        }
+        push_indent(buf, depth);
+        buf.push('}');
+    } else {
+        // Buffer: { "type": "Buffer", "data": [ b0, b1, ... ] }
+        buf.push_str("{\n");
+        push_indent(buf, depth + 1);
+        buf.push_str("\"type\": \"Buffer\",\n");
+        push_indent(buf, depth + 1);
+        buf.push_str("\"data\": [\n");
+        for (i, b) in bytes.iter().enumerate() {
+            push_indent(buf, depth + 2);
+            let mut byte_buf = itoa::Buffer::new();
+            buf.push_str(byte_buf.format(*b));
+            if i + 1 < len {
+                buf.push(',');
+            }
+            buf.push('\n');
+        }
+        push_indent(buf, depth + 1);
+        buf.push_str("]\n");
+        push_indent(buf, depth);
+        buf.push('}');
+    }
+}
+
 #[inline]
 pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     let obj = ptr as *const crate::ObjectHeader;
@@ -430,6 +514,14 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        // #2154 — see stringify_value_depth: skip native handle ids (small
+        // POINTER_TAG values) that aren't real heap objects, so JSON.stringify
+        // of an object holding e.g. an `http.Agent` emits `null` instead of
+        // segfaulting on a low-memory deref.
+        if (ptr as usize) < 0x1000 {
+            buf.push_str("null");
+            return;
+        }
         if type_hint == TYPE_OBJECT {
             stringify_object(ptr, buf);
             return;
@@ -506,6 +598,14 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
                 // Node's `JSON.stringify(new Error("x"))` returns "{}"
                 // because Error's intrinsic props (`message`, `name`,
                 // `stack`) are non-enumerable; mirror that.
+                buf.push_str("{}");
+            }
+            crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
+                // Map/Set have a `{size, capacity, entries/elements}` header,
+                // NOT the JSObject keys/values layout — routing them through
+                // the catch-all `is_object_pointer` path derefs their internals
+                // as a `keys_array` pointer and segfaults. Node serializes both
+                // as "{}" (their contents aren't enumerable own props).
                 buf.push_str("{}");
             }
             _ => {
@@ -602,6 +702,16 @@ pub(crate) unsafe fn stringify_value_depth(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        // #2154 — a POINTER_TAG value can carry a native *handle id* (a small
+        // integer like `2`, e.g. an `http.Agent` placed in an object literal)
+        // rather than a real heap pointer. Such values aren't JSON-serializable
+        // and dereferencing them (gc_obj_type → is_object_pointer / array probe)
+        // segfaults. Emit `null`, the same way closures are dropped. Real heap
+        // objects live far above this low-memory guard (matches gc_obj_type).
+        if (ptr as usize) < 0x1000 {
+            buf.push_str("null");
+            return;
+        }
         if type_hint == TYPE_OBJECT {
             stringify_object_inner(ptr, buf, depth);
             return;
@@ -629,6 +739,11 @@ pub(crate) unsafe fn stringify_value_depth(
             }
             crate::gc::GC_TYPE_ERROR => {
                 // Issue #928: see the matching branch in `stringify_value`.
+                buf.push_str("{}");
+            }
+            crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
+                // See the matching branch in `stringify_value` — Map/Set
+                // serialize as "{}" and must not reach the object catch-all.
                 buf.push_str("{}");
             }
             _ => {
@@ -794,7 +909,12 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             } else {
                 std::ptr::null()
             };
-            if !ptr_candidate.is_null() {
+            // #2154 — a POINTER_TAG field can be a native *handle id* (a small
+            // integer, e.g. an `http.Agent` stored in an object literal), not a
+            // real heap pointer. Reading the CLOSURE_MAGIC tag at offset 12 of
+            // such a value segfaults. Skip anything in the low-memory guard
+            // range (matches gc_obj_type); real closures live far above it.
+            if (ptr_candidate as usize) >= 0x1000 {
                 let type_tag = *(ptr_candidate.add(12) as *const u32);
                 if type_tag == crate::closure::CLOSURE_MAGIC {
                     found = true;
@@ -1321,6 +1441,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                     } else {
                         buf.push_str("null");
                     }
+                }
+                crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
+                    // See `stringify_value` — Map/Set serialize as "{}" and
+                    // must not reach the object catch-all (segfault).
+                    buf.push_str("{}");
                 }
                 _ => {
                     if is_object_pointer(elem_ptr) {

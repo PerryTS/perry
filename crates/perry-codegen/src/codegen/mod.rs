@@ -1240,6 +1240,48 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         if let Some(ctor) = &c.constructor {
             scan_body(&ctor.params, &ctor.body, &mut referenced_from_fn);
         }
+        // Issue #2310 — static methods, getters/setters, and
+        // (static) field initializers were missing here, so a
+        // module-level `let n = 0; class C { static bump() { return
+        // n++; } }` left `n` un-globalized — codegen routed `n++` to
+        // a local alloca whose value was never observed by anything
+        // outside the static method, and reads via
+        // `_cjs.C.bump()` came back 0 every call. Including these
+        // bodies in the reference scan lets the `referenced_from_fn`
+        // → `module_globals` promotion below catch the same pattern
+        // as instance methods.
+        for sm in &c.static_methods {
+            scan_body(&sm.params, &sm.body, &mut referenced_from_fn);
+        }
+        for (_, getter_fn) in &c.getters {
+            scan_body(&getter_fn.params, &getter_fn.body, &mut referenced_from_fn);
+        }
+        for (_, setter_fn) in &c.setters {
+            scan_body(&setter_fn.params, &setter_fn.body, &mut referenced_from_fn);
+        }
+        // Field initializers are evaluated inside the constructor —
+        // most carry module-global refs only when they're closures
+        // (already walked by the closure pass below). Wrap each init
+        // expression as a synthetic `Stmt::Expr` so direct refs (like
+        // `static seed = RANDOM_POOL_SIZE`) also surface here.
+        for field in &c.fields {
+            if let Some(init) = &field.init {
+                scan_body(
+                    &[],
+                    &[perry_hir::Stmt::Expr(init.clone())],
+                    &mut referenced_from_fn,
+                );
+            }
+        }
+        for field in &c.static_fields {
+            if let Some(init) = &field.init {
+                scan_body(
+                    &[],
+                    &[perry_hir::Stmt::Expr(init.clone())],
+                    &mut referenced_from_fn,
+                );
+            }
+        }
     }
     // Also walk every closure body. A self-referencing recursive
     // closure (`let f = (n) => f(n-1)`) needs `f` to be globalized

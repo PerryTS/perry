@@ -283,7 +283,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("buffer.Buffer", "concat") => {
             let arr = ptr_addr(arg(0)) as *const crate::array::ArrayHeader;
-            ptr_to_f64(crate::buffer::js_buffer_concat(arr) as *const u8)
+            let buf = if args_len >= 2 {
+                crate::buffer::js_buffer_concat_with_length(arr, arg(1))
+            } else {
+                crate::buffer::js_buffer_concat(arr)
+            };
+            ptr_to_f64(buf as *const u8)
         }
         ("buffer.Buffer", "of") => {
             let arr = pack_args();
@@ -905,7 +910,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_strip_vt_control_characters(arg(0))
         }
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
+        ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
+        ("util", "parseArgs") => crate::util_parse_args::js_util_parse_args(arg(0)),
 
         ("util", "isPromise") => {
             let v = JSValue::from_bits(arg(0).to_bits());

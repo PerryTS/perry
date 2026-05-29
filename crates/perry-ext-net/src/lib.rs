@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -61,6 +61,10 @@ mod tls;
 // the rest of the FFI surface.
 mod lifecycle;
 pub use lifecycle::*;
+// #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
+// over a socket produced by `agent.createConnection` (split out for the gate).
+mod raw_bridge;
+use raw_bridge::RawReadState;
 
 use crate::tls::do_tls_handshake;
 
@@ -192,6 +196,9 @@ static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 pub(crate) fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
+        // #2154 — publish the raw-consumer vtable for perry-ext-http (runs on
+        // the first net FFI entry, before http could reference a socket).
+        raw_bridge::register();
     });
 }
 
@@ -224,6 +231,10 @@ pub(crate) struct SocketState {
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
     pub(crate) local_addr: Option<SocketAddr>,
+    /// #2154 — raw-consumer mode (see `raw_bridge`). When `Some`,
+    /// `run_socket_task` buffers inbound bytes here for `perry-ext-http` to
+    /// drain instead of firing JS `'data'` events.
+    raw: Option<Arc<Mutex<RawReadState>>>,
 }
 
 pub(crate) enum SocketCommand {
@@ -653,6 +664,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             pending_rx: Some(rx),
             is_open: false,
             local_addr: None,
+            raw: None,
         },
     );
     statics::listeners()
@@ -900,6 +912,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                                         pending_rx: None,
                                         is_open: true,
                                         local_addr: accepted_local,
+                                        raw: None,
                                     },
                                 );
                                 statics::listeners()
@@ -1166,6 +1179,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             pending_rx: None,
             is_open: false,
             local_addr: None,
+            raw: None,
         },
     );
     statics::listeners()
@@ -1238,21 +1252,28 @@ async fn run_socket_task(
             read_result = t.read(&mut buf) => {
                 match read_result {
                     Ok(0) => {
-                        // Issue #1852 — peer sent FIN. Fire `'end'` first
-                        // (readable side ended) then `'close'`, matching
-                        // Node's default `allowHalfOpen: false` socket
-                        // teardown order.
-                        push_event(PendingNetEvent::End(id));
-                        push_event(PendingNetEvent::Close(id));
+                        // #2154 raw mode: signal EOF on the buffer, suppress
+                        // JS events. Else (#1852) fire 'end' then 'close' per
+                        // Node's default `allowHalfOpen: false` teardown order.
+                        if !raw_bridge::mark_terminal(id, None) {
+                            push_event(PendingNetEvent::End(id));
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
                     Ok(n) => {
-                        push_event(PendingNetEvent::Data(id, buf[..n].to_vec()));
+                        // #2154 raw mode buffers for `poll_read`; else 'data'.
+                        if !raw_bridge::route_data(id, &buf[..n]) {
+                            push_event(PendingNetEvent::Data(id, buf[..n].to_vec()));
+                        }
                     }
                     Err(e) => {
-                        push_event(PendingNetEvent::Error(id, format!("{}", e)));
-                        push_event(PendingNetEvent::Close(id));
+                        let msg = format!("{}", e);
+                        if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
+                            push_event(PendingNetEvent::Error(id, msg));
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }
@@ -1262,8 +1283,11 @@ async fn run_socket_task(
                 match cmd {
                     Some(SocketCommand::Write(bytes)) => {
                         if let Err(e) = t.write_all(&bytes).await {
-                            push_event(PendingNetEvent::Error(id, format!("{}", e)));
-                            push_event(PendingNetEvent::Close(id));
+                            let msg = format!("{}", e);
+                            if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
+                                push_event(PendingNetEvent::Error(id, msg));
+                                push_event(PendingNetEvent::Close(id));
+                            }
                             mark_closed(id);
                             break;
                         }
@@ -1272,7 +1296,9 @@ async fn run_socket_task(
                         let _ = t.shutdown().await;
                     }
                     Some(SocketCommand::Destroy) | None => {
-                        push_event(PendingNetEvent::Close(id));
+                        if !raw_bridge::mark_terminal(id, None) {
+                            push_event(PendingNetEvent::Close(id));
+                        }
                         mark_closed(id);
                         break;
                     }

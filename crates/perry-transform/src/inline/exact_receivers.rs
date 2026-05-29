@@ -5,6 +5,9 @@ use std::collections::{HashMap, HashSet};
 
 use super::*;
 
+// #854: receiver-class resolver for the exact-receiver inliner; retained as a
+// pub helper of this pass, not wired into a call site on the current path.
+#[allow(dead_code)]
 pub fn resolve_receiver_class(
     obj: &Expr,
     local_types: &HashMap<LocalId, String>,

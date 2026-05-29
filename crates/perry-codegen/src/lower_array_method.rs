@@ -470,6 +470,36 @@ pub(crate) fn lower_array_method(
             );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
+        "lastIndexOf" => {
+            if args.is_empty() || args.len() > 2 {
+                bail!(
+                    "perry-codegen: Array.lastIndexOf expects 1-2 args, got {}",
+                    args.len()
+                );
+            }
+            let val_box = lower_expr(ctx, &args[0])?;
+            // Optional fromIndex: with has_from=1 pass the lowered index;
+            // when absent pass has_from=0 (runtime defaults to length-1) and
+            // reuse `val_box` as an ignored placeholder DOUBLE operand.
+            let (from_box, has_from) = if args.len() == 2 {
+                (lower_expr(ctx, &args[1])?, "1")
+            } else {
+                (val_box.clone(), "0")
+            };
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let i32_v = blk.call(
+                I32,
+                "js_array_last_index_of_jsvalue",
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &val_box),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
+            );
+            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+        }
         "at" => {
             if args.len() != 1 {
                 bail!("perry-codegen: Array.at expects 1 arg, got {}", args.len());

@@ -1754,6 +1754,17 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
     unsafe { js_string_from_bytes(std::ptr::null(), 0) }
 }
 
+/// #1475 — safe-area insets. watchOS layout uses the system-provided safe
+/// area implicitly; no explicit inset query is exposed here, so report
+/// all-zero. Keeps the symbol present so `getSafeAreaInsets()` links.
+#[no_mangle]
+pub extern "C" fn perry_system_get_safe_area_insets() -> f64 {
+    extern "C" {
+        fn perry_safe_area_insets_make(top: f64, right: f64, bottom: f64, left: f64) -> f64;
+    }
+    unsafe { perry_safe_area_insets_make(0.0, 0.0, 0.0, 0.0) }
+}
+
 /// Load an image asset for Canvas.drawImage. watchOS currently has no real
 /// Canvas backend, so expose a proper rejected Promise rather than a bare 0.
 #[no_mangle]

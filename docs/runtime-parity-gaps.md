@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 20 | 484 | n/a |
-| Partial-module gaps | 29 | 1649 | 368 |
+| Partial-module gaps | 29 | 1648 | 369 |
 | Web-global gaps | — | 284 | 105 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2417** |  |
+| **Total true gaps** |  | **2416** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -19,7 +19,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:fs` — 139
 - `node:crypto` — 128
 - `node:process (and global `process`)` — 101
-- `node:util` — 98
+- `node:util` — 97
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:http` — 89
@@ -687,7 +687,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:util
 
-**Gap APIs: 98** · Already covered: 7
+**Gap APIs: 97** · Already covered: 8
 
 #### Missing from Perry
 
@@ -698,7 +698,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `util.getSystemErrorName(err)`
 - `util.getSystemErrorMap()`
 - `util.getSystemErrorMessage(err)`
-- `util.parseArgs([config])`
 - `util.parseEnv(content)`
 - `util.stripVTControlCharacters(str)`
 - `util.styleText(format, text[, options])`
