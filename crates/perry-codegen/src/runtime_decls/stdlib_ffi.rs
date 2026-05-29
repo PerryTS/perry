@@ -1380,6 +1380,15 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    // #2442: object-literal accessor installer for `{ get k(){}, set k(v){} }`.
+    // Emitted by the IIFE lowering of object literals containing getters/setters.
+    // Args: (obj, key, getter | undefined, setter | undefined). Merges a
+    // separate get/set for the same key and rebinds `this` to obj.
+    module.declare_function(
+        "js_object_define_accessor",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_to_primitive", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_register_class_has_instance", VOID, &[I32, I64]);
     module.declare_function("js_register_class_to_string_tag", VOID, &[I32, I64]);
