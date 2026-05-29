@@ -217,6 +217,7 @@ extern "C" fn ns_readable_resume_microtask(closure: *const ClosureHeader) -> f64
         let _ = emit_stream_event(stream, string_value(b"resume"), &[]);
         flush_pending_readable_chunks(stream);
         schedule_readable_from_drain(stream);
+        invoke_read_once(stream);
     }
     f64::from_bits(TAG_UNDEFINED)
 }

@@ -335,7 +335,6 @@ pub(super) fn readable_data_listener_added(stream: f64) {
     }
     set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
     schedule_readable_resume(stream);
-    invoke_read_once(stream);
 }
 
 pub(super) fn readable_listener_added(stream: f64) {
@@ -1774,8 +1773,17 @@ pub(crate) fn js_node_stream_hidden_error_after_read(stream: f64) -> Option<f64>
     readable_hidden_error(stream)
 }
 
+pub(crate) fn js_node_stream_hidden_error(stream: f64) -> Option<f64> {
+    readable_hidden_error(stream)
+}
+
+#[cfg(test)]
 pub(crate) fn js_node_stream_is_stub_ended_after_read(stream: f64) -> bool {
     probe_read_once(stream);
+    stream_hidden_ended(stream)
+}
+
+pub(crate) fn js_node_stream_is_stub_ended(stream: f64) -> bool {
     stream_hidden_ended(stream)
 }
 

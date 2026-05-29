@@ -195,9 +195,9 @@ extern "C" fn stream_promises_finished_done_listener(closure: *const ClosureHead
 extern "C" fn stream_promises_finished_close_listener(closure: *const ClosureHeader) -> f64 {
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
     let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
-    if let Some(err) = crate::node_stream::js_node_stream_hidden_error_after_read(stream) {
+    if let Some(err) = crate::node_stream::js_node_stream_hidden_error(stream) {
         crate::promise::js_promise_reject(promise, err);
-    } else if crate::node_stream::js_node_stream_is_stub_ended_after_read(stream) {
+    } else if crate::node_stream::js_node_stream_is_stub_ended(stream) {
         crate::promise::js_promise_resolve(promise, undefined_value());
     } else {
         crate::promise::js_promise_reject(promise, premature_close_error_value());
@@ -389,18 +389,18 @@ pub(crate) extern "C" fn thunk_streamP_finished(
         if signal_aborted(signal) {
             return promise_rejected(signal_reason(signal));
         }
-        if let Some(err) = crate::node_stream::js_node_stream_hidden_error_after_read(stream) {
+        if let Some(err) = crate::node_stream::js_node_stream_hidden_error(stream) {
             return promise_rejected(err);
         }
-        if crate::node_stream::js_node_stream_is_stub_ended_after_read(stream) {
+        if crate::node_stream::js_node_stream_is_stub_ended(stream) {
             return promise_undefined();
         }
         return pending_finished_promise(stream, Some(signal));
     }
 
-    if let Some(err) = crate::node_stream::js_node_stream_hidden_error_after_read(stream) {
+    if let Some(err) = crate::node_stream::js_node_stream_hidden_error(stream) {
         promise_rejected(err)
-    } else if crate::node_stream::js_node_stream_is_stub_ended_after_read(stream) {
+    } else if crate::node_stream::js_node_stream_is_stub_ended(stream) {
         promise_undefined()
     } else {
         pending_finished_promise(stream, None)
