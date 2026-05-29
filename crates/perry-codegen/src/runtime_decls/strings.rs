@@ -1156,6 +1156,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_object_literal_infer_computed_function_name",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_object_get_symbol_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_freeze", DOUBLE, &[DOUBLE]);

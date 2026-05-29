@@ -504,26 +504,45 @@ unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
     ptr as usize
 }
 
-/// `obj[sym] = value` where `sym` is a Symbol. Stores into the side table.
-/// Returns the value (NaN-boxed) for chained assignment semantics.
-#[no_mangle]
-pub unsafe extern "C" fn js_object_set_symbol_property(
-    obj_f64: f64,
-    sym_f64: f64,
-    value_f64: f64,
-) -> f64 {
+unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
+    let val_tag = val_bits & 0xFFFF_0000_0000_0000;
+    if val_tag != POINTER_TAG {
+        return;
+    }
+    let val_ptr = (val_bits & POINTER_MASK) as *const u8;
+    if val_ptr.is_null() || (val_ptr as usize) <= 0x10000 {
+        return;
+    }
+    let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
+        return;
+    }
+    let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
+    let func_ptr = (*closure_ptr).func_ptr;
+    if func_ptr.is_null() {
+        return;
+    }
+    let sym_ptr = sym_key as *const SymbolHeader;
+    let desc = registered_symbol_description(sym_ptr as usize)
+        .map(|s| s.as_ref().to_string())
+        .unwrap_or_else(|| str_from_header((*sym_ptr).description).unwrap_or_default());
+    let inferred = format!("[{}]", desc);
+    crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
+}
+
+unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    let val_bits = value_f64.to_bits();
     let mut guard = SYMBOL_PROPERTIES.lock().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
     let map = guard.as_mut().unwrap();
     let entries = map.entry(obj_key).or_default();
-    let val_bits = value_f64.to_bits();
     // Update existing entry if the symbol is already present.
     for entry in entries.iter_mut() {
         if entry.0 == sym_key {
@@ -532,34 +551,43 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
         }
     }
     entries.push((sym_key, val_bits));
-    drop(guard);
+    value_f64
+}
 
-    // Node-style name inference: `{ [sym]: fn }` makes `fn.name === "[<desc>]"`,
-    // which surfaces in `console.log(fn)` as `[Function: [<desc>]]`. We only
-    // tag anonymous closures here — closures created from `function f(){}` /
-    // method shorthand already have a name registered. Refs #1201.
-    let val_tag = val_bits & 0xFFFF_0000_0000_0000;
-    if val_tag == POINTER_TAG {
-        let val_ptr = (val_bits & POINTER_MASK) as *const u8;
-        if !val_ptr.is_null() && (val_ptr as usize) > 0x10000 {
-            let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE {
-                let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
-                let func_ptr = (*closure_ptr).func_ptr;
-                if !func_ptr.is_null() {
-                    let sym_ptr = sym_key as *const SymbolHeader;
-                    let desc = registered_symbol_description(sym_ptr as usize)
-                        .map(|s| s.as_ref().to_string())
-                        .unwrap_or_else(|| {
-                            str_from_header((*sym_ptr).description).unwrap_or_default()
-                        });
-                    let inferred = format!("[{}]", desc);
-                    crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
-                }
-            }
-        }
+/// `obj[sym] = value` where `sym` is a Symbol. Stores into the side table.
+/// Returns the value (NaN-boxed) for chained assignment semantics.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_set_symbol_property(
+    obj_f64: f64,
+    sym_f64: f64,
+    value_f64: f64,
+) -> f64 {
+    set_symbol_property(obj_f64, sym_f64, value_f64)
+}
+
+/// Computed-key object literal function-name inference. Storage stays on the
+/// normal IndexSet path, but object literals get Node's `[symbol.description]`
+/// name for anonymous functions assigned under symbol keys.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_literal_infer_computed_function_name(
+    key_f64: f64,
+    value_f64: f64,
+) -> f64 {
+    let sym_key = sym_key_from_f64(key_f64);
+    if sym_key != 0 {
+        infer_symbol_function_name(sym_key, value_f64.to_bits());
     }
     value_f64
+}
+
+unsafe fn js_object_set_symbol_property_infer_name(
+    obj_f64: f64,
+    sym_f64: f64,
+    value_f64: f64,
+) -> f64 {
+    let stored = set_symbol_property(obj_f64, sym_f64, value_f64);
+    js_object_literal_infer_computed_function_name(sym_f64, value_f64);
+    stored
 }
 
 /// Class-id-keyed side table for static Symbol-keyed properties.
@@ -1046,7 +1074,7 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
             }
         }
     }
-    js_object_set_symbol_property(obj_f64, sym_f64, closure_f64)
+    js_object_set_symbol_property_infer_name(obj_f64, sym_f64, closure_f64)
 }
 
 /// #809: string-key analog of [`js_object_set_symbol_method`]. Sets

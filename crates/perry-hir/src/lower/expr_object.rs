@@ -436,7 +436,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         //   })({})
         enum SpreadOp {
             /// `__o[key] = value` (key = `String(..)` or a dynamic expr).
-            Set { key: Expr, value: Expr },
+            Set {
+                key: Expr,
+                value: Expr,
+                infer_name: bool,
+            },
             /// Static-string method whose body uses `this`.
             MethodByName { key: String, closure: Expr },
             /// Computed-key method whose body uses `this`.
@@ -463,6 +467,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             ops.push(SpreadOp::Set {
                                 key: Expr::String(key),
                                 value,
+                                infer_name: false,
                             });
                         }
                         KeyResolution::Dynamic(key_expr) => {
@@ -470,6 +475,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             ops.push(SpreadOp::Set {
                                 key: key_expr,
                                 value,
+                                infer_name: true,
                             });
                         }
                     },
@@ -489,6 +495,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         ops.push(SpreadOp::Set {
                             key: Expr::String(name),
                             value,
+                            infer_name: false,
                         });
                     }
                     ast::Prop::Method(method) => {
@@ -507,6 +514,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                     ops.push(SpreadOp::Set {
                                         key: Expr::String(k),
                                         value: value_expr,
+                                        infer_name: false,
                                     });
                                 }
                             }
@@ -520,6 +528,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                     ops.push(SpreadOp::Set {
                                         key: ke,
                                         value: value_expr,
+                                        infer_name: true,
                                     });
                                 }
                             }
@@ -555,15 +564,52 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             args,
             type_args: Vec::new(),
         };
-        let mut body: Vec<Stmt> = Vec::with_capacity(ops.len() + 1);
+        let mut body: Vec<Stmt> = Vec::with_capacity(ops.len() * 4 + 1);
+        let mut inner_local_ids = vec![param_id];
         for op in ops {
             match op {
-                SpreadOp::Set { key, value } => {
-                    body.push(Stmt::Expr(Expr::IndexSet {
-                        object: Box::new(Expr::LocalGet(param_id)),
-                        index: Box::new(key),
-                        value: Box::new(value),
-                    }));
+                SpreadOp::Set {
+                    key,
+                    value,
+                    infer_name,
+                } => {
+                    if infer_name {
+                        let key_name = format!("__perry_obj_iife_key_{}", body.len());
+                        let key_id = ctx.define_local(key_name.clone(), Type::Any);
+                        inner_local_ids.push(key_id);
+                        body.push(Stmt::Let {
+                            id: key_id,
+                            name: key_name,
+                            ty: Type::Any,
+                            mutable: false,
+                            init: Some(key),
+                        });
+                        let value_name = format!("__perry_obj_iife_value_{}", body.len());
+                        let value_id = ctx.define_local(value_name.clone(), Type::Any);
+                        inner_local_ids.push(value_id);
+                        body.push(Stmt::Let {
+                            id: value_id,
+                            name: value_name,
+                            ty: Type::Any,
+                            mutable: false,
+                            init: Some(value),
+                        });
+                        body.push(Stmt::Expr(Expr::IndexSet {
+                            object: Box::new(Expr::LocalGet(param_id)),
+                            index: Box::new(Expr::LocalGet(key_id)),
+                            value: Box::new(Expr::LocalGet(value_id)),
+                        }));
+                        body.push(Stmt::Expr(extern_call(
+                            "js_object_literal_infer_computed_function_name",
+                            vec![Expr::LocalGet(key_id), Expr::LocalGet(value_id)],
+                        )));
+                    } else {
+                        body.push(Stmt::Expr(Expr::IndexSet {
+                            object: Box::new(Expr::LocalGet(param_id)),
+                            index: Box::new(key),
+                            value: Box::new(value),
+                        }));
+                    }
                 }
                 SpreadOp::MethodByName { key, closure } => {
                     body.push(Stmt::Expr(extern_call(
@@ -594,8 +640,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         for stmt in &body {
             collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
         }
-        let mut captures: Vec<LocalId> =
-            all_refs.into_iter().filter(|id| *id != param_id).collect();
+        let mut captures: Vec<LocalId> = all_refs
+            .into_iter()
+            .filter(|id| !inner_local_ids.contains(id))
+            .collect();
         captures.sort();
         captures.dedup();
         captures = ctx.filter_module_level_captures(captures);
@@ -705,11 +753,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     }
     // Has computed keys: synthesize an IIFE wrapper that builds the
     // object with static props, then runs IndexSet for each computed
-    // key, then returns the object. The IndexSet branch in the LLVM
-    // backend already runtime-dispatches to
-    // `js_object_set_symbol_property` when the key is a symbol — so
-    // `{ [symProp]: 42, x: 1 }` flows through the symbol side-table
-    // automatically.
+    // key, then applies literal-specific symbol-function name inference,
+    // then returns the object. Keeping storage on IndexSet preserves the
+    // existing string/number/symbol dispatch while avoiding name inference
+    // for later `obj[sym] = fn` assignments.
     //
     // Lowered shape:
     //   ((__o) => {
@@ -728,14 +775,44 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         decorators: Vec::new(),
         is_rest: false,
     };
-    let mut body: Vec<Stmt> = Vec::with_capacity(computed_post_init.len() + 1);
+    let mut body: Vec<Stmt> = Vec::with_capacity(computed_post_init.len() * 4 + 1);
+    let mut inner_local_ids = vec![param_id];
     for init in computed_post_init {
         match init {
             PostInit::SetValue { key, value } => {
+                let key_name = format!("__perry_obj_iife_key_{}", body.len());
+                let key_id = ctx.define_local(key_name.clone(), Type::Any);
+                inner_local_ids.push(key_id);
+                body.push(Stmt::Let {
+                    id: key_id,
+                    name: key_name,
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(key),
+                });
+                let value_name = format!("__perry_obj_iife_value_{}", body.len());
+                let value_id = ctx.define_local(value_name.clone(), Type::Any);
+                inner_local_ids.push(value_id);
+                body.push(Stmt::Let {
+                    id: value_id,
+                    name: value_name,
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(value),
+                });
                 body.push(Stmt::Expr(Expr::IndexSet {
                     object: Box::new(Expr::LocalGet(param_id)),
-                    index: Box::new(key),
-                    value: Box::new(value),
+                    index: Box::new(Expr::LocalGet(key_id)),
+                    value: Box::new(Expr::LocalGet(value_id)),
+                }));
+                body.push(Stmt::Expr(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_object_literal_infer_computed_function_name".to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: vec![Expr::LocalGet(key_id), Expr::LocalGet(value_id)],
+                    type_args: Vec::new(),
                 }));
             }
             PostInit::SetMethodWithThis { key, closure } => {
@@ -763,7 +840,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     for stmt in &body {
         collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
     }
-    let mut captures: Vec<LocalId> = all_refs.into_iter().filter(|id| *id != param_id).collect();
+    let mut captures: Vec<LocalId> = all_refs
+        .into_iter()
+        .filter(|id| !inner_local_ids.contains(id))
+        .collect();
     captures.sort();
     captures.dedup();
     captures = ctx.filter_module_level_captures(captures);
