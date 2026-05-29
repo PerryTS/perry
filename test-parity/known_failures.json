@@ -290,12 +290,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.prototype.compose(stream) instance method \u2014 not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/read-size-passed-to-_read": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: user _read(size) not invoked with the size hint from the read scheduler. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/events/finish-end-close-order": {
     "issue": "1532",
     "added": "2026-05-24",

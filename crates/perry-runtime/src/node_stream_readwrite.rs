@@ -1458,9 +1458,10 @@ fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
         return;
     }
     set_hidden_value(stream, hidden_read_invoked_key(), f64::from_bits(TAG_TRUE));
+    let size = get_hidden_value(stream, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
     let prev_this = crate::object::js_implicit_this_set(stream);
     unsafe {
-        let _ = crate::closure::js_native_call_value(read, std::ptr::null(), 0);
+        let _ = crate::closure::js_native_call_value(read, [size].as_ptr(), 1);
     }
     crate::object::js_implicit_this_set(prev_this);
 }
