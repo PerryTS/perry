@@ -300,6 +300,14 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(arg, ctx, lookup);
             }
         }
+        Expr::NativeMemoryFillU32 { view, value } => {
+            update_call_sites_in_expr(view, ctx, lookup);
+            update_call_sites_in_expr(value, ctx, lookup);
+        }
+        Expr::NativeMemoryCopy { dst, src } => {
+            update_call_sites_in_expr(dst, ctx, lookup);
+            update_call_sites_in_expr(src, ctx, lookup);
+        }
         Expr::FsReadFileSync(path) => update_call_sites_in_expr(path, ctx, lookup),
         Expr::FsWriteFileSync(path, content) => {
             update_call_sites_in_expr(path, ctx, lookup);

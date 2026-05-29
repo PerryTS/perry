@@ -368,6 +368,14 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(arg, ctx, module, idx);
             }
         }
+        Expr::NativeMemoryFillU32 { view, value } => {
+            collect_instantiations_in_expr(view, ctx, module, idx);
+            collect_instantiations_in_expr(value, ctx, module, idx);
+        }
+        Expr::NativeMemoryCopy { dst, src } => {
+            collect_instantiations_in_expr(dst, ctx, module, idx);
+            collect_instantiations_in_expr(src, ctx, module, idx);
+        }
         Expr::FsReadFileSync(path) => collect_instantiations_in_expr(path, ctx, module, idx),
         Expr::FsWriteFileSync(path, content) => {
             collect_instantiations_in_expr(path, ctx, module, idx);

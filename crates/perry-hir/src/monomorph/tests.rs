@@ -318,6 +318,72 @@ fn test_monomorphize_updates_call_sites() {
 }
 
 #[test]
+fn test_monomorphize_updates_native_memory_copy_operand_generic_calls() {
+    let packet_ty = Type::Named("Packet".to_string());
+    let mut module = Module::new("test");
+    module.functions.push(generic_view_function(1, "makeView"));
+    module.functions.push(generic_view_function(2, "other"));
+
+    module.init.push(Stmt::Expr(Expr::NativeMemoryCopy {
+        dst: Box::new(Expr::Call {
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![],
+            type_args: vec![packet_ty.clone()],
+        }),
+        src: Box::new(Expr::Call {
+            callee: Box::new(Expr::FuncRef(2)),
+            args: vec![],
+            type_args: vec![packet_ty],
+        }),
+    }));
+
+    monomorphize_module(&mut module);
+
+    assert!(module.functions.iter().any(|f| f.name == "makeView$Packet"));
+    assert!(module.functions.iter().any(|f| f.name == "other$Packet"));
+
+    let Stmt::Expr(Expr::NativeMemoryCopy { dst, src }) = &module.init[0] else {
+        panic!("Expected NativeMemory.copy expression");
+    };
+
+    assert_specialized_call(dst, &module, "makeView$Packet");
+    assert_specialized_call(src, &module, "other$Packet");
+}
+
+#[test]
+fn test_monomorphize_updates_native_memory_fill_u32_operand_generic_calls() {
+    let packet_ty = Type::Named("Packet".to_string());
+    let mut module = Module::new("test");
+    module.functions.push(generic_view_function(1, "makeView"));
+    module.functions.push(generic_number_function(2, "value"));
+
+    module.init.push(Stmt::Expr(Expr::NativeMemoryFillU32 {
+        view: Box::new(Expr::Call {
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![],
+            type_args: vec![packet_ty.clone()],
+        }),
+        value: Box::new(Expr::Call {
+            callee: Box::new(Expr::FuncRef(2)),
+            args: vec![],
+            type_args: vec![packet_ty],
+        }),
+    }));
+
+    monomorphize_module(&mut module);
+
+    assert!(module.functions.iter().any(|f| f.name == "makeView$Packet"));
+    assert!(module.functions.iter().any(|f| f.name == "value$Packet"));
+
+    let Stmt::Expr(Expr::NativeMemoryFillU32 { view, value }) = &module.init[0] else {
+        panic!("Expected NativeMemory.fillU32 expression");
+    };
+
+    assert_specialized_call(view, &module, "makeView$Packet");
+    assert_specialized_call(value, &module, "value$Packet");
+}
+
+#[test]
 fn test_type_inference_from_arguments() {
     // Create a generic identity function: function identity<T>(x: T): T { return x; }
     let identity_func = Function {
@@ -583,5 +649,84 @@ fn test_type_inference_rest_array_binds_element_type() {
     assert_eq!(
         specialized.params[0].ty,
         Type::Array(Box::new(Type::String))
+    );
+}
+
+fn generic_view_function(id: FuncId, name: &str) -> Function {
+    let view_ty = Type::Generic {
+        base: "PerryPodView".to_string(),
+        type_args: vec![Type::TypeVar("T".to_string())],
+    };
+
+    Function {
+        id,
+        name: name.to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }],
+        params: vec![],
+        return_type: view_ty.clone(),
+        body: vec![Stmt::Return(Some(Expr::NativePodView {
+            owner: Box::new(Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))),
+            byte_offset: Box::new(Expr::Integer(0)),
+            count: Box::new(Expr::Integer(1)),
+            view_type: Some(view_ty),
+        }))],
+        is_async: false,
+        is_generator: false,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+    }
+}
+
+fn generic_number_function(id: FuncId, name: &str) -> Function {
+    Function {
+        id,
+        name: name.to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }],
+        params: vec![],
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+        is_async: false,
+        is_generator: false,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+    }
+}
+
+fn assert_specialized_call(expr: &Expr, module: &Module, expected_name: &str) {
+    let Expr::Call {
+        callee, type_args, ..
+    } = expr
+    else {
+        panic!("Expected Call expression");
+    };
+
+    let Expr::FuncRef(func_id) = callee.as_ref() else {
+        panic!("Expected FuncRef callee");
+    };
+
+    let func = module
+        .functions
+        .iter()
+        .find(|f| f.id == *func_id)
+        .expect("Call should reference an existing function");
+
+    assert_eq!(func.name, expected_name);
+    assert!(
+        type_args.is_empty(),
+        "Type args should be cleared after monomorphization"
     );
 }
