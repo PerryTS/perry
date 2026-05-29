@@ -10,7 +10,10 @@
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use std::collections::HashMap;
 use std::os::raw::c_int;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use std::time::{Duration, Instant};
 
 /// A scheduled timer
@@ -54,7 +57,7 @@ pub extern "C" fn js_set_timeout(delay_ms: f64) -> *mut Promise {
     ensure_initialized();
 
     let promise = js_promise_new();
-    let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
+    let delay = Duration::from_millis(normalize_timer_delay(delay_ms));
     let deadline = Instant::now() + delay;
 
     TIMER_QUEUE.lock().unwrap().push(Timer {
@@ -72,7 +75,7 @@ pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promis
     ensure_initialized();
 
     let promise = js_promise_new();
-    let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
+    let delay = Duration::from_millis(normalize_timer_delay(delay_ms));
     let deadline = Instant::now() + delay;
 
     TIMER_QUEUE.lock().unwrap().push(Timer {
@@ -161,9 +164,17 @@ pub extern "C" fn js_sleep_ms(ms: f64) {
 }
 
 /// A scheduled timer with a callback
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CallbackTimerKind {
+    Timeout,
+    Immediate,
+}
+
 struct CallbackTimer {
     /// Unique ID for this timer
     id: i64,
+    /// Whether this callback came from `setTimeout` or `setImmediate`.
+    kind: CallbackTimerKind,
     /// When this timer should fire
     deadline: Instant,
     /// Original delay (preserved so `refresh()` can reschedule with the
@@ -199,6 +210,9 @@ static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
 // clobber an unrelated Timeout with the same numeric id.
 static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
+static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
+static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
+static WARNED_TIMER_TRACE_HINT: AtomicBool = AtomicBool::new(false);
 
 fn timer_handle_value(id: i64) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(id as *mut u8).bits())
@@ -225,6 +239,68 @@ fn next_timer_id() -> i64 {
     let current = *next;
     *next += 1;
     current
+}
+
+fn timer_delay_text(delay_ms: f64) -> String {
+    if delay_ms.is_infinite() && delay_ms.is_sign_positive() {
+        "Infinity".to_string()
+    } else if delay_ms.is_infinite() && delay_ms.is_sign_negative() {
+        "-Infinity".to_string()
+    } else {
+        delay_ms.to_string()
+    }
+}
+
+fn emit_timer_delay_warning(kind: &str, message: String) {
+    eprintln!("(node:{}) {}: {}", std::process::id(), kind, message);
+    if !WARNED_TIMER_TRACE_HINT.swap(true, Ordering::AcqRel) {
+        eprintln!("(Use `node --trace-warnings ...` to show where the warning was created)");
+    }
+}
+
+fn coerce_timer_delay(delay_value: f64) -> f64 {
+    let value = crate::value::JSValue::from_bits(delay_value.to_bits());
+    if value.is_undefined() {
+        1.0
+    } else {
+        crate::builtins::js_number_coerce(delay_value)
+    }
+}
+
+fn normalize_timer_delay(delay_value: f64) -> u64 {
+    const TIMEOUT_MAX: f64 = 2_147_483_647.0;
+    let delay_ms = coerce_timer_delay(delay_value);
+    if delay_ms > TIMEOUT_MAX {
+        emit_timer_delay_warning(
+            "TimeoutOverflowWarning",
+            format!(
+                "{} does not fit into a 32-bit signed integer.\nTimeout duration was set to 1.",
+                timer_delay_text(delay_ms)
+            ),
+        );
+        1
+    } else if delay_ms < 0.0 {
+        if !WARNED_NEGATIVE_TIMER_DELAY.swap(true, Ordering::AcqRel) {
+            emit_timer_delay_warning(
+                "TimeoutNegativeWarning",
+                format!(
+                    "{} is a negative number.\nTimeout duration was set to 1.",
+                    timer_delay_text(delay_ms)
+                ),
+            );
+        }
+        1
+    } else if delay_ms.is_nan() {
+        if !WARNED_NAN_TIMER_DELAY.swap(true, Ordering::AcqRel) {
+            emit_timer_delay_warning(
+                "TimeoutNaNWarning",
+                "NaN is not a number.\nTimeout duration was set to 1.".to_string(),
+            );
+        }
+        1
+    } else {
+        delay_ms.max(0.0) as u64
+    }
 }
 
 fn set_timer_ref_state(id: i64, has_ref: bool) {
@@ -330,6 +406,15 @@ pub unsafe extern "C" fn js_timer_validate_callback(value: f64, fn_name_idx: i32
             return ptr as i64;
         }
     }
+    // Promise executor resolve/reject callbacks are passed through this runtime
+    // as raw closure pointer bits rather than NaN-boxed pointers. They are still
+    // callable JS functions, so accept them after proving the candidate is a
+    // Perry-managed closure. Do not call `is_closure_ptr` on arbitrary JS bits:
+    // short strings and doubles can otherwise look pointer-ish enough to
+    // segfault during validation.
+    if let Some(ptr) = raw_closure_pointer(bits) {
+        return ptr as i64;
+    }
     // 0 = setTimeout, 1 = setInterval, 2 = setImmediate, anything
     // else falls back to the generic "callback" wording.
     let fn_name: &str = match fn_name_idx {
@@ -349,27 +434,84 @@ pub unsafe extern "C" fn js_timer_validate_callback(value: f64, fn_name_idx: i32
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
+fn raw_closure_pointer(bits: u64) -> Option<usize> {
+    const RAW_PTR_MAX: u64 = 0x0000_FFFF_FFFF_FFFF;
+    if !(0x10000..=RAW_PTR_MAX).contains(&bits) || bits & 0x7 != 0 {
+        return None;
+    }
+    let ptr = bits as usize;
+    if ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header_addr = ptr - crate::gc::GC_HEADER_SIZE;
+    let header = header_addr as *const crate::gc::GcHeader;
+    let tracked_malloc = crate::gc::gc_malloc_header_is_tracked(header);
+    let arena_payload = !matches!(
+        crate::arena::classify_heap_space(ptr),
+        crate::arena::HeapSpace::Unknown
+    );
+    let arena_header = !matches!(
+        crate::arena::classify_heap_space(header_addr),
+        crate::arena::HeapSpace::Unknown
+    );
+    if !tracked_malloc && !(arena_payload && arena_header) {
+        return None;
+    }
+    unsafe {
+        if (*header).obj_type != crate::gc::GC_TYPE_CLOSURE {
+            return None;
+        }
+        let size = (*header).size as usize;
+        if size < crate::gc::GC_HEADER_SIZE || size > (1usize << 34) {
+            return None;
+        }
+        let is_arena = (*header).gc_flags & crate::gc::GC_FLAG_ARENA != 0;
+        if tracked_malloc == is_arena {
+            return None;
+        }
+    }
+    crate::closure::is_closure_ptr(ptr).then_some(ptr)
+}
+
 /// JS-style setTimeout that takes a callback function and delay
 /// The callback is a closure pointer that will be called with no arguments
 /// Returns a timer ID
 #[no_mangle]
 pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
-    schedule_callback_timer(callback, delay_ms, Vec::new(), "Timeout")
+    schedule_callback_timer(
+        callback,
+        delay_ms,
+        Vec::new(),
+        "Timeout",
+        CallbackTimerKind::Timeout,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
-    schedule_callback_timer(callback, 0.0, Vec::new(), "Immediate")
+    schedule_callback_timer(
+        callback,
+        0.0,
+        Vec::new(),
+        "Immediate",
+        CallbackTimerKind::Immediate,
+    )
 }
 
-fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_name: &str) -> i64 {
+fn schedule_callback_timer(
+    callback: i64,
+    delay_ms: f64,
+    args: Vec<f64>,
+    type_name: &str,
+    kind: CallbackTimerKind,
+) -> i64 {
     ensure_initialized();
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let delay_ms = delay_ms.max(0.0) as u64;
+    let delay_ms = normalize_timer_delay(delay_ms);
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
     let id = next_timer_id();
@@ -382,6 +524,7 @@ fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_na
 
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id,
+        kind,
         deadline,
         delay_ms,
         callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
@@ -418,7 +561,13 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-    schedule_callback_timer(callback, delay_ms, args, "Timeout")
+    schedule_callback_timer(
+        callback,
+        delay_ms,
+        args,
+        "Timeout",
+        CallbackTimerKind::Timeout,
+    )
 }
 
 #[no_mangle]
@@ -432,7 +581,13 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-    schedule_callback_timer(callback, 0.0, args, "Immediate")
+    schedule_callback_timer(
+        callback,
+        0.0,
+        args,
+        "Immediate",
+        CallbackTimerKind::Immediate,
+    )
 }
 
 /// Process any expired callback timers
@@ -567,16 +722,15 @@ pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
         .unwrap_or(-1.0)
 }
 
-/// Clear a callback timer by ID. Also clears the interval queue so
-/// Node's interchangeable `clearTimeout(intervalHandle)` shape works.
-/// The shared id pool means at most one of the two queues actually holds
-/// the id, so cross-queue cancellation is safe.
+/// Clear a Timeout by ID. Also clears the interval queue so Node's
+/// interchangeable `clearTimeout(intervalHandle)` shape works. Immediate
+/// handles are distinct and are only canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearTimeout(timer_id: i64) {
     {
         let mut timers = CALLBACK_TIMERS.lock().unwrap();
         for timer in timers.iter_mut() {
-            if timer.id == timer_id {
+            if timer.id == timer_id && timer.kind == CallbackTimerKind::Timeout {
                 timer.cleared = true;
                 break;
             }
@@ -593,12 +747,18 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
     intervals.retain(|t| !t.cleared);
 }
 
-/// Clear an immediate by ID. Node tolerates cross-clears between timeout and
-/// immediate handles, so this shares the callback timer queue with
-/// `clearTimeout`.
+/// Clear an Immediate by ID. Timeout/Interval handles are distinct and are not
+/// canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearImmediate(timer_id: i64) {
-    clearTimeout(timer_id);
+    let mut timers = CALLBACK_TIMERS.lock().unwrap();
+    for timer in timers.iter_mut() {
+        if timer.id == timer_id && timer.kind == CallbackTimerKind::Immediate {
+            timer.cleared = true;
+            break;
+        }
+    }
+    timers.retain(|t| !t.cleared);
 }
 
 /// Resolve a `clearTimeout`/`clearInterval` argument to a timer id. Accepts
@@ -687,7 +847,7 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
 fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i64 {
     ensure_initialized();
 
-    let interval = interval_ms.max(0.0) as u64;
+    let interval = normalize_timer_delay(interval_ms);
     let next_deadline = Instant::now() + Duration::from_millis(interval);
 
     let id = next_timer_id();
@@ -721,9 +881,9 @@ pub unsafe extern "C" fn js_set_interval_callback_args(
     schedule_interval_timer(callback, interval_ms, args)
 }
 
-/// Clear an interval timer by ID. Also clears the callback-timer queue
-/// so Node's interchangeable `clearInterval(timeoutHandle)` shape works
-/// (see `clearTimeout` doc for the symmetric rationale).
+/// Clear an interval timer by ID. Also clears Timeout callback timers so
+/// Node's interchangeable `clearInterval(timeoutHandle)` shape works.
+/// Immediate handles are distinct and are only canceled by `clearImmediate`.
 #[no_mangle]
 pub extern "C" fn clearInterval(interval_id: i64) {
     {
@@ -738,7 +898,7 @@ pub extern "C" fn clearInterval(interval_id: i64) {
     }
     let mut callbacks = CALLBACK_TIMERS.lock().unwrap();
     for timer in callbacks.iter_mut() {
-        if timer.id == interval_id {
+        if timer.id == interval_id && timer.kind == CallbackTimerKind::Timeout {
             timer.cleared = true;
             break;
         }
@@ -939,6 +1099,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
     });
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id: TEST_CALLBACK_TIMER_ID,
+        kind: CallbackTimerKind::Timeout,
         deadline,
         delay_ms: 86_400_000,
         callback,

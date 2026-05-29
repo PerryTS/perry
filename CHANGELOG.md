@@ -2,6 +2,54 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1035 — regression test: console.log(new Date(NaN)) → `Invalid Date` (#2371)
+
+Adds `test-files/test_gap_2371_console_invalid_date.ts`, locking in correct
+output for `console.log(new Date(NaN))` (`Invalid Date`, not `NaN`) across
+top-level inline/variable forms, invalid-via-string, nested array/object,
+a genuine numeric `NaN` (must still print `NaN`), and valid dates. Output is
+byte-identical to `node --experimental-strip-types`.
+
+`#2371` was the last symptom of the old f64-timestamp Date model: the
+Invalid-Date sentinel was a quiet NaN (`0x7FF8_0000_0000_0DA7`) whose payload
+got canonicalized to `f64::NAN` when `console.log` bundled its argument into a
+fresh `RawF64`-numeric array (`js_array_push_f64` → `canonical_raw_f64`),
+leaving the formatter unable to tell a Date-NaN from a bare numeric NaN. The
+reference-type Date rework in `#2089` (Date is now a NaN-boxed pointer to a
+`GC_TYPE_DATE_CELL`, never a raw numeric slot) removed that path and fixed the
+behavior; this commit adds the regression coverage so it can't silently
+return.
+
+## v0.5.1034 — Number()/unary-+ applies ToPrimitive→ToString to arrays/objects (#2378)
+
+`Number(value)` (and unary `+`) returned `NaN` for every array and object
+because `js_number_coerce`'s pointer/array branch only consulted a custom
+`[Symbol.toPrimitive]("number")` and otherwise fell straight to `NaN` — it
+never completed OrdinaryToPrimitive's ToString step.
+
+Fix: in `crates/perry-runtime/src/builtins/numbers.rs`, when no custom
+`[Symbol.toPrimitive]` is present, stringify the object via
+`js_jsvalue_to_string` (arrays → `join(",")`, objects → own/inherited
+`toString`) and re-run `js_number_coerce` on the resulting string. Because the
+result is a string, the recursive call lands in the string branch (which now
+correctly maps `""` → 0), so there's no pointer-branch recursion.
+
+Now matches Node byte-for-byte:
+
+```
+Number([])      // 0      ([] -> "" -> 0)
+Number([5])     // 5      ([5] -> "5" -> 5)
+Number(["7"])   // 7
+Number([" 3 "]) // 3
+Number([1,2])   // NaN    ("1,2" -> NaN)
+Number({})      // NaN    ("[object Object]" -> NaN)
+Number([[]])    // 0
++[]             // 0
++[42]           // 42
+```
+
+Found while fixing Number() radix-prefix parsing (#2377 / #800); pre-existing.
+
 ## v0.5.1033 — allowlist class_registry.rs for the file-size lint gate
 
 `crates/perry-runtime/src/object/class_registry.rs` crossed the 2000-line

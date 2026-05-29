@@ -127,6 +127,16 @@ pub extern "C" fn js_util_types_is_uint8_array(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_int8_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_INT8))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_int16_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_INT16))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_uint16_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT16))
 }
@@ -137,8 +147,23 @@ pub extern "C" fn js_util_types_is_int32_array(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_uint32_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT32))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_float32_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT32))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_float64_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_uint8_clamped_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
 }
 
 #[no_mangle]
@@ -153,13 +178,38 @@ pub extern "C" fn js_util_types_is_set(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_date(value: f64) -> f64 {
-    nanbox_bool(crate::date::is_registered_date_bits(value.to_bits()))
+    nanbox_bool(crate::date::is_date_value(value))
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
     nanbox_bool(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_native_error(value: f64) -> f64 {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return nanbox_bool(false);
+    }
+    let ptr = v.as_pointer::<u8>();
+    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
+        return nanbox_bool(false);
+    }
+    let matches = unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        match (*gc_header).obj_type {
+            crate::gc::GC_TYPE_ERROR => true,
+            crate::gc::GC_TYPE_OBJECT => {
+                let obj = ptr as *const ObjectHeader;
+                let class_id = (*obj).class_id;
+                class_id != 0 && crate::object::extends_builtin_error(class_id)
+            }
+            _ => false,
+        }
+    };
+    nanbox_bool(matches)
 }
 
 #[no_mangle]

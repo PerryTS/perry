@@ -391,6 +391,134 @@ fn deep_equal_bool(actual: f64, expected: f64) -> bool {
     )) != 0
 }
 
+fn heap_value_type(value: f64) -> Option<(*const u8, u8)> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        Some((ptr, (*gc_header).obj_type))
+    }
+}
+
+fn partial_array_equal(
+    actual: *const crate::array::ArrayHeader,
+    expected: *const crate::array::ArrayHeader,
+) -> bool {
+    let actual_len = crate::array::js_array_length(actual);
+    let expected_len = crate::array::js_array_length(expected);
+    if expected_len > actual_len {
+        return false;
+    }
+
+    let expected_keys = crate::object::js_object_keys(expected as *const ObjectHeader);
+    let expected_key_count = crate::array::js_array_length(expected_keys);
+    for key_index in 0..expected_key_count {
+        let key_value = crate::array::js_array_get_f64(expected_keys, key_index);
+        let Some(element_index) = array_index_key(key_value) else {
+            return false;
+        };
+        if !array_has_index(actual, element_index) {
+            return false;
+        }
+        let actual_value = crate::array::js_array_get_f64(actual, element_index);
+        let expected_value = crate::array::js_array_get_f64(expected, element_index);
+        if !partial_deep_equal_bool(actual_value, expected_value) {
+            return false;
+        }
+    }
+    true
+}
+
+fn array_has_index(arr: *const crate::array::ArrayHeader, index: u32) -> bool {
+    if arr.is_null() || index >= crate::array::js_array_length(arr) {
+        return false;
+    }
+    unsafe {
+        let elements =
+            (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+        std::ptr::read(elements.add(index as usize)) != crate::value::TAG_HOLE
+    }
+}
+
+fn array_index_key(key_value: f64) -> Option<u32> {
+    let key = crate::JSValue::from_bits(key_value.to_bits());
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = unsafe { crate::string::js_string_key_bytes(key, &mut sso_buf)? };
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut index = 0u32;
+    for &byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        index = index.checked_mul(10)?;
+        index = index.checked_add((byte - b'0') as u32)?;
+    }
+    Some(index)
+}
+
+fn partial_object_equal(
+    actual_value: f64,
+    actual: *const ObjectHeader,
+    expected: *const ObjectHeader,
+) -> bool {
+    let expected_keys = crate::object::js_object_keys(expected);
+    let expected_key_count = crate::array::js_array_length(expected_keys);
+    for index in 0..expected_key_count {
+        let key_value = crate::array::js_array_get_f64(expected_keys, index);
+        if crate::value::js_is_truthy(crate::object::js_object_has_own(actual_value, key_value))
+            == 0
+        {
+            return false;
+        }
+        let key_ptr =
+            crate::value::js_get_string_pointer_unified(key_value) as *const crate::StringHeader;
+        if key_ptr.is_null() {
+            return false;
+        }
+        let actual_prop = crate::object::js_object_get_field_by_name_f64(actual, key_ptr);
+        let expected_prop = crate::object::js_object_get_field_by_name_f64(expected, key_ptr);
+        if !partial_deep_equal_bool(actual_prop, expected_prop) {
+            return false;
+        }
+    }
+    true
+}
+
+fn partial_deep_equal_bool(actual: f64, expected: f64) -> bool {
+    if deep_equal_bool(actual, expected) {
+        return true;
+    }
+    let Some((actual_ptr, actual_type)) = heap_value_type(actual) else {
+        return false;
+    };
+    let Some((expected_ptr, expected_type)) = heap_value_type(expected) else {
+        return false;
+    };
+    if actual_type != expected_type {
+        return false;
+    }
+    match expected_type {
+        crate::gc::GC_TYPE_ARRAY => partial_array_equal(
+            actual_ptr as *const crate::array::ArrayHeader,
+            expected_ptr as *const crate::array::ArrayHeader,
+        ),
+        crate::gc::GC_TYPE_OBJECT => partial_object_equal(
+            actual,
+            actual_ptr as *const ObjectHeader,
+            expected_ptr as *const ObjectHeader,
+        ),
+        _ => false,
+    }
+}
+
 fn assert_same_value(actual: f64, expected: f64) -> bool {
     #[inline(always)]
     fn numeric_value(raw: f64) -> Option<f64> {
@@ -528,6 +656,27 @@ pub extern "C" fn js_assert_deep_strict_equal(actual: f64, expected: f64, messag
         actual,
         expected,
         "deepStrictEqual",
+        is_null_or_undefined(message),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_assert_partial_deep_strict_equal(
+    actual: f64,
+    expected: f64,
+    message: f64,
+) -> f64 {
+    if partial_deep_equal_bool(actual, expected) {
+        return undefined_f64();
+    }
+    throw_assertion(
+        assertion_message(
+            message,
+            "Expected values to be partially deeply strictly equal",
+        ),
+        actual,
+        expected,
+        "partialDeepStrictEqual",
         is_null_or_undefined(message),
     )
 }

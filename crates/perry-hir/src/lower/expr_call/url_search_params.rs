@@ -70,10 +70,13 @@ pub(super) fn build_url_search_params_method_call(
         "values" => Ok(Expr::UrlSearchParamsValues(Box::new(recv))),
         "entries" => Ok(Expr::UrlSearchParamsEntries(Box::new(recv))),
         "forEach" if !args.is_empty() => {
-            let callback = args.into_iter().next().unwrap();
+            let mut iter = args.into_iter();
+            let callback = iter.next().unwrap();
+            let this_arg = iter.next().map(Box::new);
             Ok(Expr::UrlSearchParamsForEach {
                 params: Box::new(recv),
                 callback: Box::new(callback),
+                this_arg,
             })
         }
         "getAll" if !args.is_empty() => {

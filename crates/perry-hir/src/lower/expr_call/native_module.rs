@@ -1134,7 +1134,35 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            if let Some((module_name, _imported_method)) = ctx.lookup_native_module(&obj_name) {
+            if let Some((module_name, imported_method)) = ctx.lookup_native_module(&obj_name) {
+                if module_name == "url" && imported_method == Some("URL") {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.as_ref();
+                        if method_name == "canParse" && !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let input = iter.next().unwrap();
+                            if let Some(base) = iter.next() {
+                                return Ok(Ok(Expr::UrlCanParseWithBase {
+                                    input: Box::new(input),
+                                    base: Box::new(base),
+                                }));
+                            }
+                            return Ok(Ok(Expr::UrlCanParse(Box::new(input))));
+                        }
+                        if method_name == "parse" && !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let input = iter.next().unwrap();
+                            if let Some(base) = iter.next() {
+                                return Ok(Ok(Expr::UrlParseWithBase {
+                                    input: Box::new(input),
+                                    base: Box::new(base),
+                                }));
+                            }
+                            return Ok(Ok(Expr::UrlParse(Box::new(input))));
+                        }
+                    }
+                }
+
                 // Skip modules handled specifically below (path, fs, child_process, etc.)
                 // `net` used to be in this list back when its method calls
                 // were short-circuited into `Expr::NetCreateConnection` etc.
