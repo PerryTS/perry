@@ -78,28 +78,34 @@ pub(crate) fn parse_query_string(query: &str) -> Vec<(String, String)> {
 
 /// Simple URL decoding (handles %XX sequences and + as space)
 pub(crate) fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
+    let bytes = s.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
 
-    while let Some(c) = chars.next() {
-        match c {
-            '+' => result.push(' '),
-            '%' => {
-                let hex: String = chars.by_ref().take(2).collect();
-                if hex.len() == 2 {
-                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                        result.push(byte as char);
-                        continue;
-                    }
-                }
-                // Invalid escape, keep as-is
-                result.push('%');
-                result.push_str(&hex);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                decoded.push(b' ');
+                i += 1;
             }
-            _ => result.push(c),
+            b'%' if i + 2 < bytes.len() => {
+                let hex = &s[i + 1..i + 3];
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    decoded.push(byte);
+                    i += 3;
+                } else {
+                    decoded.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                decoded.push(b);
+                i += 1;
+            }
         }
     }
-    result
+
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 /// URL encode a string

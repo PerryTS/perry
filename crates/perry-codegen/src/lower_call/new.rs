@@ -432,6 +432,15 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // depends on Column's body running `this.config = config` first).
     let has_own_ctor = class.constructor.is_some();
     let has_extends = class.extends_name.is_some();
+    let has_imported_ctor = ctx.imported_class_ctors.contains_key(class_name);
+    let builtin_parent_runtime = if !has_own_ctor && !has_imported_ctor {
+        match class.extends_name.as_deref() {
+            Some("Writable") => Some("js_node_stream_writable_subclass_init"),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let inherited_ctor_class: Option<String> = if !has_own_ctor && has_extends {
         // Walk the inheritance chain to find the closest ancestor with
         // an explicit ctor — same logic as the body-inlining loop below.
@@ -655,6 +664,9 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 found_inherited_ctor = true; // skip the imported-ctor fallback below
             }
         }
+        if builtin_parent_runtime.is_some() {
+            found_inherited_ctor = true;
+        }
         // If no parent constructor was found (imported class with no
         // inlineable constructor body), call the cross-module constructor.
         // Refs #420: walk past empty-bodied ancestors with param_count==0
@@ -787,7 +799,6 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // super + applies SelfOnly) or has an explicit body. Drizzle's
     // `BetterSQLiteSession` (explicit ctor) and arrow-field cross-
     // module classes are both load-bearing. Refs #420 / #618 followup.
-    let has_imported_ctor = ctx.imported_class_ctors.contains_key(class_name);
     if !has_own_ctor && has_extends && !has_imported_ctor {
         if let Some(stop_at) = inherited_ctor_class {
             apply_field_initializers_recursive(
@@ -798,6 +809,21 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         } else {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
         }
+    }
+    if let Some(runtime_fn) = builtin_parent_runtime {
+        let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let opts = lowered_args
+            .first()
+            .cloned()
+            .unwrap_or_else(|| undef_lit.clone());
+        let this_box = ctx
+            .this_stack
+            .last()
+            .cloned()
+            .map(|slot| ctx.block().load(DOUBLE, &slot))
+            .unwrap_or_else(|| undef_lit.clone());
+        ctx.block()
+            .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
     }
 
     if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {

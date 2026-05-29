@@ -542,12 +542,6 @@
     "category": "bug-open",
     "reason": "node:stream: wrap(EE) + pipe(dst) \u2014 piped output empty or wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/destroy/destroy-during-read": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() inside _read() \u2014 readCalls count or close-event behavior wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/empty-pure-end": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -577,12 +571,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) \u2014 types lost or wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/destroyed-during-data-flow": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: destroy() inside 'data' listener \u2014 emits wrong data count. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/from-array-of-promises": {
     "issue": "1532",
@@ -661,12 +649,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: writer.write() Promise resolution timing \u2014 resolves before sink processes chunk. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/destroy/_destroy-user-impl": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: user _destroy(err, cb) \u2014 not invoked or receives wrong error. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/readable/readable-event-with-objectmode": {
     "issue": "1532",

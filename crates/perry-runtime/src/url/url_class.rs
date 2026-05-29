@@ -73,6 +73,20 @@ fn should_strip_url_ascii_whitespace(b: u8) -> bool {
     matches!(b, b'\t' | b'\n' | b'\r')
 }
 
+fn is_special_url_scheme(protocol: &str) -> bool {
+    matches!(
+        protocol,
+        "ftp:" | "file:" | "http:" | "https:" | "ws:" | "wss:"
+    )
+}
+
+fn should_percent_encode_search_byte(b: u8, special: bool) -> bool {
+    b <= 0x1F
+        || b >= 0x7F
+        || matches!(b, b' ' | b'"' | b'#' | b'<' | b'>')
+        || (special && b == b'\'')
+}
+
 fn should_percent_encode_path_byte(b: u8) -> bool {
     b <= 0x1F
         || b >= 0x7F
@@ -102,6 +116,10 @@ fn percent_encode_url_component(raw: &str, should_encode: impl Fn(u8) -> bool) -
         }
     }
     out
+}
+
+fn percent_encode_search(raw: &str, special: bool) -> String {
+    percent_encode_url_component(raw, |b| should_percent_encode_search_byte(b, special))
 }
 
 fn url_can_have_credentials(url: *mut ObjectHeader) -> bool {
@@ -269,9 +287,12 @@ pub extern "C" fn js_url_set_search(url: *mut ObjectHeader, value: *mut crate::S
         format!("?{}", raw)
     };
     unsafe {
-        js_object_set_field_f64(url, URL_SEARCH, create_string_f64(&normalized));
+        let protocol =
+            get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+        let encoded = percent_encode_search(&normalized, is_special_url_scheme(&protocol));
+        js_object_set_field_f64(url, URL_SEARCH, create_string_f64(&encoded));
         // Refresh the searchParams object's entries to match the new query.
-        let params_entries = parse_query_string(&normalized);
+        let params_entries = parse_query_string(&encoded);
         let new_params = create_url_search_params_object(params_entries);
         js_object_set_field_f64(
             new_params,

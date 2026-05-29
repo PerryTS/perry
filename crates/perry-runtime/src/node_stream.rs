@@ -196,7 +196,9 @@ extern "C" fn ns_readable_end_microtask(closure: *const ClosureHeader) -> f64 {
         hidden_end_scheduled_key(),
         f64::from_bits(TAG_FALSE),
     );
-    emit_readable_end_once(stream);
+    if pending_readable_chunk_count(stream) == 0 && !stream_destroyed(stream) {
+        emit_readable_end_once(stream);
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -377,7 +379,7 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
         push_readable_buffered_chunk(stream, chunk);
         mark_disturbed(stream);
         schedule_readable_event(stream);
-        if readable_is_flowing(stream) {
+        if readable_is_flowing(stream) && !should_defer_initial_data_emit(stream) {
             emit_readable_data(stream, chunk);
         } else {
             buffer_pending_readable_chunk(stream, chunk);
@@ -2818,6 +2820,35 @@ fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader 
     obj
 }
 
+fn install_methods_on_existing_object(
+    obj: *mut ObjectHeader,
+    this_value: f64,
+    methods: &[(&str, StubFn)],
+    skip_names: &[&str],
+) {
+    register_stub_arities();
+    let this_bits = this_value.to_bits();
+    let mut on_method: Option<f64> = None;
+    for (name, func) in methods {
+        if skip_names.iter().any(|skip| skip == name) {
+            continue;
+        }
+        if *name == "addListener" {
+            if let Some(val) = on_method {
+                js_object_set_field_by_name(obj, hidden_key(name.as_bytes()), val);
+                continue;
+            }
+        }
+        let closure = js_closure_alloc(*func as *const u8, 1);
+        crate::closure::js_closure_set_capture_ptr(closure, 0, this_bits as i64);
+        let val = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
+        if *name == "on" {
+            on_method = Some(val);
+        }
+        js_object_set_field_by_name(obj, hidden_key(name.as_bytes()), val);
+    }
+}
+
 fn register_stub_arities() {
     let register = |func: *const u8, arity: u32| {
         crate::closure::js_register_closure_arity(func, arity);
@@ -3390,6 +3421,14 @@ fn readable_is_paused(stream: f64) -> bool {
     readable_flowing_value(stream).to_bits() == TAG_FALSE
 }
 
+fn has_writable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+}
+
+fn should_defer_initial_data_emit(stream: f64) -> bool {
+    has_truthy_hidden(stream, hidden_readable_resume_scheduled_key()) && !has_writable_side(stream)
+}
+
 fn set_readable_flowing(stream: f64, value: f64) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
         set_hidden_value(stream, readable_flowing_key(), value);
@@ -3426,6 +3465,10 @@ fn emit_readable_data(stream: f64, chunk: f64) {
     if stream_destroyed(stream) {
         return;
     }
+    emit_readable_data_unchecked(stream, chunk);
+}
+
+fn emit_readable_data_unchecked(stream: f64, chunk: f64) {
     let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
     write_chunk_to_pipe_destinations(stream, chunk);
 }
@@ -3450,15 +3493,16 @@ fn flush_pending_readable_chunks(stream: f64) {
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
     for chunk in chunks {
-        if !readable_is_flowing(stream) || stream_destroyed(stream) {
+        if !readable_is_flowing(stream) {
             buffer_pending_readable_chunk(stream, chunk);
             continue;
         }
-        emit_readable_data(stream, chunk);
+        emit_readable_data_unchecked(stream, chunk);
     }
     if stream_hidden_ended(stream)
         && pending_readable_chunk_count(stream) == 0
         && !readable_is_paused(stream)
+        && !stream_destroyed(stream)
     {
         schedule_readable_end(stream);
     }
@@ -3470,8 +3514,8 @@ pub(super) fn readable_data_listener_added(stream: f64) {
         return;
     }
     set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-    flush_pending_readable_chunks(stream);
-    schedule_readable_from_drain(stream);
+    schedule_readable_resume(stream);
+    invoke_read_once(stream);
 }
 
 fn schedule_readable_resume(stream: f64) {
@@ -4132,11 +4176,27 @@ fn drain_readable_from_events(stream: f64) {
         if !values.is_empty() {
             mark_disturbed(stream);
         }
+        let mut emit_destroyed_tail = false;
         for chunk in values {
-            emit_readable_data(stream, chunk);
+            if !readable_is_flowing(stream) {
+                return;
+            }
+            if stream_destroyed(stream) {
+                if !emit_destroyed_tail {
+                    return;
+                }
+                emit_readable_data_unchecked(stream, chunk);
+                return;
+            }
+            emit_readable_data_unchecked(stream, chunk);
+            if stream_destroyed(stream) {
+                emit_destroyed_tail = true;
+            }
         }
     }
-    emit_readable_end_once(stream);
+    if !stream_destroyed(stream) {
+        emit_readable_end_once(stream);
+    }
 }
 
 fn is_array_like_value(value: f64) -> bool {
@@ -5371,6 +5431,61 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     install_stream_async_dispose_symbol(writable);
     invoke_construct_callback(writable, opts);
     writable
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_writable_subclass_init(this: f64, opts: f64) -> f64 {
+    let obj = {
+        let bits = this.to_bits();
+        let top16 = bits >> 48;
+        let raw = if top16 >= 0x7FF8 {
+            if top16 == 0x7FFC {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
+            (bits & crate::value::POINTER_MASK) as usize
+        } else {
+            bits as usize
+        };
+        if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        raw as *mut ObjectHeader
+    };
+    let this = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    unsafe {
+        if gc_type_for_ptr(obj as usize) != Some(crate::gc::GC_TYPE_OBJECT) {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+
+    let subclass_write = js_object_get_field_by_name_f64(obj, hidden_key(b"_write"));
+    let subclass_writev = js_object_get_field_by_name_f64(obj, hidden_key(b"_writev"));
+    let methods = writable_methods();
+    install_methods_on_existing_object(obj, this, &methods, &["_write"]);
+
+    if let Some(write) = write_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, this));
+    } else if is_callable_value(subclass_write) {
+        js_object_set_field_by_name(obj, hidden_write_key(), subclass_write);
+    }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), rebind_callback_this(writev, this));
+    } else if is_callable_value(subclass_writev) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), subclass_writev);
+    }
+
+    init_lifecycle_state(this, opts);
+    init_constructor(this, "Writable");
+    init_writable_state(this, opts);
+    install_common_lifecycle_callbacks(this, opts);
+    install_writable_lifecycle_callbacks(this, opts);
+    init_abort_signal_state(this, opts);
+    install_stream_async_dispose_symbol(this);
+    invoke_construct_callback(this, opts);
+    this
 }
 
 #[no_mangle]

@@ -229,3 +229,39 @@ pub(crate) fn lower_stream_super_init(
 
     Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
 }
+
+/// Initialize Node's classic `stream.Writable` base class on an existing
+/// subclass instance. Unlike `new Writable(opts)`, `super(opts)` must keep the
+/// object identity allocated for the derived class and attach stream state to it.
+pub(crate) fn lower_node_stream_super_init(
+    ctx: &mut FnCtx<'_>,
+    kind: &str,
+    super_args: &[Expr],
+) -> Result<String> {
+    let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let opts = if let Some(first) = super_args.first() {
+        lower_expr(ctx, first)?
+    } else {
+        undef_lit.clone()
+    };
+    for arg in super_args.iter().skip(1) {
+        let _ = lower_expr(ctx, arg)?;
+    }
+
+    let this_box = match ctx.this_stack.last().cloned() {
+        Some(slot) => ctx.block().load(DOUBLE, &slot),
+        None => undef_lit.clone(),
+    };
+
+    let runtime_fn = match kind {
+        "writable" => "js_node_stream_writable_subclass_init",
+        _ => unreachable!(
+            "lower_node_stream_super_init: unexpected Node stream kind {}",
+            kind
+        ),
+    };
+    ctx.block()
+        .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
+
+    Ok(undef_lit)
+}
