@@ -1079,6 +1079,39 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
         }
 
+        // String / array values have no `ObjectHeader.keys_array`; their own
+        // property names are the index names `"0".."len-1"` plus `"length"`.
+        // Reading a bogus `keys_array` off their header segfaulted (#800).
+        {
+            const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+            let jv = JSValue::from_bits(obj_value.to_bits());
+            let n: Option<u32> = if jv.is_any_string() {
+                let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                match crate::string::str_bytes_from_jsvalue(obj_value, &mut scratch) {
+                    Some((p, blen)) if !p.is_null() => {
+                        Some(crate::string::compute_utf16_len(p, blen))
+                    }
+                    _ => Some(0),
+                }
+            } else if crate::array::js_array_is_array(obj_value).to_bits() == TAG_TRUE_BITS {
+                let ap = extract_obj_ptr(obj_value) as *const crate::array::ArrayHeader;
+                Some(crate::array::js_array_length(ap))
+            } else {
+                None
+            };
+            if let Some(n) = n {
+                let result = crate::array::js_array_alloc(n + 1);
+                for i in 0..n {
+                    let s = i.to_string();
+                    let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                    crate::array::js_array_push(result, JSValue::string_ptr(k));
+                }
+                let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                crate::array::js_array_push(result, JSValue::string_ptr(lk));
+                return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
+            }
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
             let empty = crate::array::js_array_alloc(0);
@@ -1637,6 +1670,29 @@ pub extern "C" fn js_create_namespace(
 #[cfg(test)]
 mod sso_tests_1781 {
     use super::*;
+
+    #[test]
+    fn get_own_property_names_array_and_string_no_crash() {
+        // Regression: getOwnPropertyNames on an array/string read a bogus
+        // keys_array off the wrong header and segfaulted. Now returns the
+        // index names + "length".
+        let arr = crate::array::js_array_alloc(4);
+        for v in [10.0, 20.0, 30.0] {
+            crate::array::js_array_push_f64(arr, v);
+        }
+        let arr_val = crate::value::js_nanbox_pointer(arr as i64);
+        let names = js_object_get_own_property_names(arr_val);
+        let names_ptr =
+            (names.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader;
+        // 3 indices + "length".
+        assert_eq!(crate::array::js_array_length(names_ptr), 4);
+
+        let s = crate::string::js_string_from_bytes(b"ab".as_ptr(), 2);
+        let s_val = crate::value::js_nanbox_string(s as i64);
+        let s_names = js_object_get_own_property_names(s_val);
+        let s_ptr = (s_names.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader;
+        assert_eq!(crate::array::js_array_length(s_ptr), 3); // "0","1","length"
+    }
 
     /// #1781: `Object.is` content-compares strings only when both sides pass
     /// `is_string()` (STRING_TAG-only). Two SSO operands match via the
