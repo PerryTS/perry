@@ -3,7 +3,7 @@
 
 use std::fs;
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
 use super::*;
@@ -12,23 +12,79 @@ use super::*;
 //
 // Issue #631: `fs.readdirSync(path, { withFileTypes: true })` returns
 // `Dirent[]` instead of `string[]`. Each Dirent has a `name` field plus
-// `isFile()` / `isDirectory()` / `isSymbolicLink()` predicate methods —
-// same shape as Stats but populated per-entry from the OS directory
-// iterator's file type. Predicate closures capture the pre-computed
-// boolean so calling them is a single-slot read.
+// Node's seven `fs.Dirent` predicate methods. Predicate closures capture the
+// pre-computed boolean so calling them is a single-slot read.
 
-pub(crate) unsafe fn build_dirent_object(
-    name: &str,
-    parent_path: &str,
+#[derive(Clone, Copy)]
+pub(crate) struct DirentKind {
     is_file: bool,
     is_dir: bool,
     is_symlink: bool,
-) -> f64 {
+    is_block_device: bool,
+    is_character_device: bool,
+    is_fifo: bool,
+    is_socket: bool,
+}
+
+impl DirentKind {
+    pub(crate) fn from_file_type(ft: &fs::FileType) -> Self {
+        Self {
+            is_file: ft.is_file(),
+            is_dir: ft.is_dir(),
+            is_symlink: ft.is_symlink(),
+            is_block_device: dirent_is_block_device(ft),
+            is_character_device: dirent_is_character_device(ft),
+            is_fifo: dirent_is_fifo(ft),
+            is_socket: dirent_is_socket(ft),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn dirent_is_block_device(ft: &fs::FileType) -> bool {
+    ft.is_block_device()
+}
+
+#[cfg(not(unix))]
+fn dirent_is_block_device(_ft: &fs::FileType) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn dirent_is_character_device(ft: &fs::FileType) -> bool {
+    ft.is_char_device()
+}
+
+#[cfg(not(unix))]
+fn dirent_is_character_device(_ft: &fs::FileType) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn dirent_is_fifo(ft: &fs::FileType) -> bool {
+    ft.is_fifo()
+}
+
+#[cfg(not(unix))]
+fn dirent_is_fifo(_ft: &fs::FileType) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn dirent_is_socket(ft: &fs::FileType) -> bool {
+    ft.is_socket()
+}
+
+#[cfg(not(unix))]
+fn dirent_is_socket(_ft: &fs::FileType) -> bool {
+    false
+}
+
+pub(crate) unsafe fn build_dirent_object(name: &str, parent_path: &str, kind: DirentKind) -> f64 {
     use crate::string::js_string_from_bytes;
     use crate::value::js_nanbox_string;
 
-    // Field slots: name, parentPath, path, isFile, isDirectory, isSymbolicLink.
-    let obj = crate::object::js_object_alloc(0, 6);
+    let obj = crate::object::js_object_alloc(0, 10);
 
     let set = |field: &str, v: f64| {
         let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
@@ -45,9 +101,16 @@ pub(crate) unsafe fn build_dirent_object(
     set("parentPath", pp_nan);
     set("path", pp_nan);
 
-    set("isFile", make_stats_predicate(is_file));
-    set("isDirectory", make_stats_predicate(is_dir));
-    set("isSymbolicLink", make_stats_predicate(is_symlink));
+    set("isFile", make_stats_predicate(kind.is_file));
+    set("isDirectory", make_stats_predicate(kind.is_dir));
+    set("isSymbolicLink", make_stats_predicate(kind.is_symlink));
+    set("isBlockDevice", make_stats_predicate(kind.is_block_device));
+    set(
+        "isCharacterDevice",
+        make_stats_predicate(kind.is_character_device),
+    );
+    set("isFIFO", make_stats_predicate(kind.is_fifo));
+    set("isSocket", make_stats_predicate(kind.is_socket));
 
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     f64::from_bits(POINTER_TAG | (obj as u64 & 0x0000_FFFF_FFFF_FFFF))
@@ -246,7 +309,7 @@ pub(crate) fn collect_readdir_recursive_strings(
 
 pub(crate) fn collect_readdir_recursive_dirents(
     current: &Path,
-    out: &mut Vec<(String, String, bool, bool, bool)>,
+    out: &mut Vec<(String, String, DirentKind)>,
 ) {
     let Ok(entries) = fs::read_dir(current) else {
         return;
@@ -267,13 +330,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
             .unwrap_or(current)
             .to_string_lossy()
             .into_owned();
-        out.push((
-            name.to_string(),
-            parent,
-            ft.is_file(),
-            ft.is_dir(),
-            ft.is_symlink(),
-        ));
+        out.push((name.to_string(), parent, DirentKind::from_file_type(&ft)));
         if ft.is_dir() {
             dirs.push(path.clone());
         }
@@ -286,7 +343,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
 /// Read directory entries synchronously. By default returns an array of
 /// string filenames. With `{ withFileTypes: true }` as the second arg,
 /// returns an array of Dirent objects (each with `name`, `parentPath`
-/// and `isFile()` / `isDirectory()` / `isSymbolicLink()` methods),
+/// and Node's seven `fs.Dirent` predicate methods),
 /// matching Node's `fs.readdirSync(path, options)` shape (issue #631).
 /// Returns an empty array on error.
 #[no_mangle]
@@ -329,9 +386,8 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                         let mut items = Vec::new();
                         collect_readdir_recursive_dirents(Path::new(&path_str), &mut items);
                         let mut arr = js_array_alloc(items.len() as u32);
-                        for (name, parent, is_file, is_dir, is_symlink) in &items {
-                            let dirent =
-                                build_dirent_object(name, parent, *is_file, *is_dir, *is_symlink);
+                        for (name, parent, kind) in &items {
+                            let dirent = build_dirent_object(name, parent, *kind);
                             arr = js_array_push_f64(arr, dirent);
                         }
                         return f64::from_bits(i64::cast_unsigned(arr as i64));
@@ -350,13 +406,8 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
 
                     let mut arr = js_array_alloc(items.len() as u32);
                     for (name, ft) in &items {
-                        let dirent = build_dirent_object(
-                            name,
-                            &path_str,
-                            ft.is_file(),
-                            ft.is_dir(),
-                            ft.is_symlink(),
-                        );
+                        let dirent =
+                            build_dirent_object(name, &path_str, DirentKind::from_file_type(ft));
                         arr = js_array_push_f64(arr, dirent);
                     }
                     f64::from_bits(i64::cast_unsigned(arr as i64))

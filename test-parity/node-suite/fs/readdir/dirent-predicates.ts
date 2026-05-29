@@ -6,8 +6,12 @@ fs.mkdirSync(ROOT);
 fs.mkdirSync(ROOT + "/dir");
 fs.writeFileSync(ROOT + "/file.txt", "f");
 const entries = fs.readdirSync(ROOT, { withFileTypes: true }).slice().sort((a, b) => a.name.localeCompare(b.name));
-console.log("dir isFile:", entries[0].isFile());
-console.log("dir isDirectory:", entries[0].isDirectory());
-console.log("dir isSymbolicLink:", entries[0].isSymbolicLink());
-console.log("file isFile:", entries[1].isFile());
-console.log("file isDirectory:", entries[1].isDirectory());
+const predicates = ["isFile", "isDirectory", "isSymbolicLink", "isBlockDevice", "isCharacterDevice", "isFIFO", "isSocket"];
+
+for (const [label, entry] of [["dir", entries[0]], ["file", entries[1]]] as const) {
+  for (const predicate of predicates) {
+    const fn = (entry as any)[predicate];
+    console.log(`${label} ${predicate} type:`, typeof fn);
+    console.log(`${label} ${predicate}:`, fn.call(entry));
+  }
+}

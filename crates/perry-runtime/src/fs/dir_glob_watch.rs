@@ -26,9 +26,7 @@ pub extern "C" fn js_fs_opendir_sync(path_value: f64) -> f64 {
                 entries.push(build_dirent_object(
                     &name,
                     &path,
-                    ft.is_file(),
-                    ft.is_dir(),
-                    ft.is_symlink(),
+                    DirentKind::from_file_type(&ft),
                 ));
             }
         }
