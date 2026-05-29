@@ -855,7 +855,13 @@ pub(super) fn try_native_module_methods(
                                 }
                             }
                             let mut iter = args.into_iter();
-                            let obj = iter.next().unwrap_or(Expr::Undefined);
+                            let mut obj = iter.next().unwrap_or(Expr::Undefined);
+                            if matches!(
+                                call.args.first().map(|arg| unwrap_ts_wrappers(arg.expr.as_ref())),
+                                Some(ast::Expr::Ident(ident)) if ident.sym.as_ref() == "globalThis"
+                            ) {
+                                obj = Expr::GlobalThisExpr;
+                            }
                             let key = iter.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ObjectGetOwnPropertyDescriptor(
                                 Box::new(obj),

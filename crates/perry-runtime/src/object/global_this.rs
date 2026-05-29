@@ -154,6 +154,12 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
     &["console", "process", "Math", "JSON", "Reflect"];
 
+/// JS built-in global functions exposed as own properties of `globalThis`.
+/// These are real callable closures rather than constructor sentinels because
+/// feature-detection and rebinding patterns call them through the property
+/// value: `const clone = globalThis.structuredClone; clone(value)`.
+pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &["structuredClone", "atob", "btoa"];
+
 /// No-op thunk used as the function body for most singleton globalThis
 /// built-in constructor values. Lets `globalThis.Array` carry a real
 /// ClosureHeader (so `typeof globalThis.Array === "function"`) without
@@ -176,6 +182,30 @@ extern "C" fn global_this_string_thunk(
     value: f64,
 ) -> f64 {
     let string_ptr = crate::builtins::js_string_coerce(value);
+    crate::value::js_nanbox_string(string_ptr as i64)
+}
+
+extern "C" fn global_this_structured_clone_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    _options: f64,
+) -> f64 {
+    crate::builtins::js_structured_clone(value)
+}
+
+extern "C" fn global_this_atob_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let string_ptr = crate::string::js_atob(value);
+    crate::value::js_nanbox_string(string_ptr as i64)
+}
+
+extern "C" fn global_this_btoa_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let string_ptr = crate::string::js_btoa(value);
     crate::value::js_nanbox_string(string_ptr as i64)
 }
 
@@ -571,6 +601,27 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         js_object_set_field_by_name(singleton, name_key, ctor_value);
+    }
+    // Global functions: ClosureHeader-backed callable values with the Node
+    // observable `name` and `length` properties.
+    for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
+        let (func_ptr, arity) = match name {
+            "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2),
+            "atob" => (global_this_atob_thunk as *const u8, 1),
+            "btoa" => (global_this_btoa_thunk as *const u8, 1),
+            _ => continue,
+        };
+        let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
+        if closure_ptr.is_null() {
+            continue;
+        }
+        crate::closure::js_register_closure_arity(func_ptr, arity);
+        super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        let name_bytes = name.as_bytes();
+        let name_key =
+            crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+        let value = crate::value::js_nanbox_pointer(closure_ptr as i64);
+        js_object_set_field_by_name(singleton, name_key, value);
     }
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {

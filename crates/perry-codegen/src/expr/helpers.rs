@@ -245,15 +245,16 @@ pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
     blk.and(I64, &bits, POINTER_MASK_I64)
 }
 
-/// Built-in constructor / namespace names that the runtime pre-populates
-/// on the globalThis singleton (`populate_global_this_builtins` in
-/// crates/perry-runtime/src/object.rs). Used by codegen to decide whether
-/// `globalThis.<Name>` should route through `js_get_global_this`
-/// (returning the populated backing-object) or fall through to the `0.0`
-/// no-value placeholder. Keep this list in sync with
-/// `GLOBAL_THIS_BUILTIN_CONSTRUCTORS` + `GLOBAL_THIS_BUILTIN_NAMESPACES`
-/// in object.rs — the codegen check and the runtime population together
-/// implement the lodash `runInContext` blocker fix.
+/// Built-in constructor / global-function / namespace names that the runtime
+/// pre-populates on the globalThis singleton (`populate_global_this_builtins`
+/// in crates/perry-runtime/src/object/global_this.rs). Used by codegen to
+/// decide whether `globalThis.<Name>` should route through
+/// `js_get_global_this` (returning the populated backing-object) or fall
+/// through to the `0.0` no-value placeholder. Keep this list in sync with
+/// `GLOBAL_THIS_BUILTIN_CONSTRUCTORS`, `GLOBAL_THIS_BUILTIN_FUNCTIONS`, and
+/// `GLOBAL_THIS_BUILTIN_NAMESPACES` in object/global_this.rs — the codegen
+/// check and the runtime population together implement the lodash
+/// `runInContext` blocker fix.
 pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
     matches!(
         name,
@@ -311,6 +312,10 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            // Global functions (typeof === "function" in spec).
+            | "structuredClone"
+            | "atob"
+            | "btoa"
             // Namespaces (typeof === "object" in spec).
             | "console"
             | "Math"
@@ -322,10 +327,10 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
 }
 
 /// Subset of `is_global_this_builtin_name` whose `typeof` is `"function"`
-/// in spec (constructors). Used by the `Expr::TypeOf` short-circuit so
-/// `typeof globalThis.Array === "function"`. Math/JSON/Reflect are
-/// namespaces — they keep `typeof === "object"` via the existing match
-/// arms.
+/// in spec (constructors and global functions). Used by the `Expr::TypeOf`
+/// short-circuit so `typeof globalThis.Array === "function"`. Math/JSON/
+/// Reflect are namespaces — they keep `typeof === "object"` via the
+/// existing match arms.
 pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
     is_global_this_builtin_name(name)
         && !matches!(
