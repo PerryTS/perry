@@ -156,6 +156,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // another function.
     module.declare_function("js_register_closure_synthetic_arguments", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
+    module.declare_function("js_register_closure_function_kind", VOID, &[PTR, I32]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
@@ -514,6 +515,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boxed_primitive", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_async_function", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_generator_function", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_generator_object", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_native_error", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_proxy", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map_iterator", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set_iterator", DOUBLE, &[DOUBLE]);

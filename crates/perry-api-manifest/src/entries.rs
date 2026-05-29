@@ -2412,6 +2412,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isSetIterator", false, None),
     method("util/types", "isDate", false, None),
     method("util/types", "isRegExp", false, None),
+    method("util/types", "isAsyncFunction", false, None),
+    method("util/types", "isGeneratorFunction", false, None),
+    method("util/types", "isGeneratorObject", false, None),
+    method("util/types", "isNativeError", false, None),
     // Boxed primitive introspection (PR #1257). The `util/types` import form
     // and the `util.types` namespace-access form both lower to this canonical
     // module key.

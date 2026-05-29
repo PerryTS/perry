@@ -48,6 +48,12 @@ thread_local! {
     /// `responseHeaders.set(k, v)` then fails with a #510-class TypeError).
     static CLOSURE_ARITY_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    /// Side-table mapping closure body `func_ptr` -> original ECMAScript
+    /// function kind. The generator/async transforms rewrite bodies before
+    /// runtime, so Node's `util.types.is*Function` predicates need this
+    /// codegen-provided bit of source-level identity.
+    static CLOSURE_FUNCTION_KIND_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
     /// Unified dispatch lookup, populated lazily on first call to a func_ptr.
     /// Cuts the per-call cost from TWO RefCell::borrow + HashMap::get
@@ -63,6 +69,8 @@ thread_local! {
 /// Magic value stored in ClosureHeader._reserved to identify closures at runtime.
 /// Used by js_value_typeof to return "function" instead of "object" for closures.
 pub const CLOSURE_MAGIC: u32 = 0x434C_4F53; // "CLOS" in ASCII
+pub const CLOSURE_FUNCTION_KIND_ASYNC: u32 = 1;
+pub const CLOSURE_FUNCTION_KIND_GENERATOR: u32 = 2;
 
 /// Per-call dispatch strategy for a closure body. Decided once at first
 /// call, cached in `DISPATCH_CACHE` thereafter.
@@ -207,6 +215,21 @@ pub extern "C" fn js_register_closure_arity(func_ptr: *const u8, arity: u32) {
 #[inline(always)]
 pub fn lookup_closure_arity(func_ptr: *const u8) -> Option<u32> {
     CLOSURE_ARITY_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
+}
+
+#[no_mangle]
+pub extern "C" fn js_register_closure_function_kind(func_ptr: *const u8, kind: u32) {
+    if func_ptr.is_null() || kind == 0 {
+        return;
+    }
+    CLOSURE_FUNCTION_KIND_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, kind);
+    });
+}
+
+#[inline(always)]
+pub fn lookup_closure_function_kind(func_ptr: *const u8) -> Option<u32> {
+    CLOSURE_FUNCTION_KIND_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
 }
 
 /// Public helper: given a `*const ClosureHeader` pointer, return the

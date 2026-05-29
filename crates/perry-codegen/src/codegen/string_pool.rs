@@ -58,6 +58,10 @@ pub(super) fn emit_string_pool(
     // in `__perry_init_strings_<prefix>` so the registry is populated
     // before user code runs. See #1202.
     user_fn_display_names: &[(String, String)],
+    // `(wrapper_symbol, kind)` for wrappers whose original source kind must
+    // survive transforms for `util.types.isAsyncFunction` /
+    // `isGeneratorFunction`.
+    user_fn_wrapper_function_kinds: &[(String, u32)],
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -208,6 +212,16 @@ pub(super) fn emit_string_pool(
         blk.call_void(
             "js_register_function_name",
             &[(PTR, &wrapper_ref), (PTR, &name_ref), (I32, &len_str)],
+        );
+    }
+
+    let mut sorted_function_kinds: Vec<(String, u32)> = user_fn_wrapper_function_kinds.to_vec();
+    sorted_function_kinds.sort();
+    for (wrapper_sym, kind) in sorted_function_kinds {
+        let func_ref = format!("@{}", wrapper_sym);
+        blk.call_void(
+            "js_register_closure_function_kind",
+            &[(PTR, &func_ref), (I32, &kind.to_string())],
         );
     }
 

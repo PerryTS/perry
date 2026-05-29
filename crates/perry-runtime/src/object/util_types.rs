@@ -55,6 +55,64 @@ const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
 
+#[inline]
+fn closure_func_ptr(value: f64) -> Option<*const u8> {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return None;
+    }
+    let ptr = crate::closure::clean_closure_ptr(v.as_pointer::<crate::closure::ClosureHeader>());
+    let func_ptr = crate::closure::get_valid_func_ptr(ptr);
+    if func_ptr.is_null() {
+        None
+    } else {
+        Some(func_ptr)
+    }
+}
+
+#[inline]
+fn closure_kind(value: f64) -> Option<u32> {
+    closure_func_ptr(value).and_then(crate::closure::lookup_closure_function_kind)
+}
+
+#[inline]
+unsafe fn object_own_field_by_bytes(obj: *const ObjectHeader, key: &[u8]) -> Option<JSValue> {
+    if obj.is_null() || (obj as usize) < 0x10000 {
+        return None;
+    }
+    let keys = (*obj).keys_array;
+    let keys_ptr = keys as usize;
+    if keys.is_null() || (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+        return None;
+    }
+    let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    let key_count = crate::array::js_array_length(keys) as usize;
+    if key_count > 65536 {
+        return None;
+    }
+    let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+    for i in 0..key_count {
+        let key_val = crate::array::js_array_get(keys, i as u32);
+        if crate::string::js_string_key_matches_bytes(key_val, key) && i < alloc_limit {
+            return Some(js_object_get_field(obj, i as u32));
+        }
+    }
+    None
+}
+
+#[inline]
+fn is_closure_jsvalue(value: JSValue) -> bool {
+    if !value.is_pointer() {
+        return false;
+    }
+    let ptr =
+        crate::closure::clean_closure_ptr(value.as_pointer::<crate::closure::ClosureHeader>());
+    !crate::closure::get_valid_func_ptr(ptr).is_null()
+}
+
 #[no_mangle]
 pub extern "C" fn js_util_types_is_number_object(value: f64) -> f64 {
     nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_NUMBER))
@@ -89,6 +147,50 @@ pub extern "C" fn js_util_types_is_promise(value: f64) -> f64 {
                 ) != 0
             },
     )
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_async_function(value: f64) -> f64 {
+    nanbox_bool(closure_kind(value) == Some(crate::closure::CLOSURE_FUNCTION_KIND_ASYNC))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_generator_function(value: f64) -> f64 {
+    nanbox_bool(closure_kind(value) == Some(crate::closure::CLOSURE_FUNCTION_KIND_GENERATOR))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_generator_object(value: f64) -> f64 {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() || is_closure_jsvalue(v) {
+        return nanbox_bool(false);
+    }
+    let obj = v.as_pointer::<ObjectHeader>();
+    let has_generator_methods = unsafe {
+        [
+            b"next".as_slice(),
+            b"return".as_slice(),
+            b"throw".as_slice(),
+        ]
+        .iter()
+        .all(|key| object_own_field_by_bytes(obj, key).is_some_and(is_closure_jsvalue))
+    };
+    nanbox_bool(has_generator_methods)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_native_error(value: f64) -> f64 {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return nanbox_bool(false);
+    }
+    let ptr = v.as_pointer::<crate::error::ErrorHeader>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return nanbox_bool(false);
+    }
+    let header =
+        unsafe { (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    nanbox_bool(unsafe { (*header).obj_type == crate::gc::GC_TYPE_ERROR })
 }
 
 #[no_mangle]

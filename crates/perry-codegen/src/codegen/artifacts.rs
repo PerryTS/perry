@@ -23,6 +23,37 @@ use super::helpers::{sanitize, scoped_fn_name};
 use super::method::{compile_method, compile_static_method};
 use super::opts::CrossModuleCtx;
 
+const FUNCTION_KIND_ASYNC: u32 = 1;
+const FUNCTION_KIND_GENERATOR: u32 = 2;
+
+fn function_kind_for_util_types(f: &perry_hir::Function) -> Option<u32> {
+    if f.is_async || f.was_plain_async {
+        Some(FUNCTION_KIND_ASYNC)
+    } else if returns_generator_iterator_object(&f.body) {
+        Some(FUNCTION_KIND_GENERATOR)
+    } else {
+        None
+    }
+}
+
+fn returns_generator_iterator_object(stmts: &[perry_hir::Stmt]) -> bool {
+    let Some(perry_hir::Stmt::Return(Some(perry_hir::Expr::Object(fields)))) = stmts.last() else {
+        return false;
+    };
+    if fields.len() != 3 {
+        return false;
+    }
+    for name in ["next", "return", "throw"] {
+        let Some((_, value)) = fields.iter().find(|(field, _)| field == name) else {
+            return false;
+        };
+        if !matches!(value, perry_hir::Expr::Closure { .. }) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Read-only view of the `CompileOptions` fields that the artifact
 /// emission step references via `opts.X`. Bundled into a struct so the
 /// moved block (originally written against `let opts = …;` of type
@@ -1260,6 +1291,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         user_fn_display_names.push((sym, display.clone()));
     }
 
+    let mut user_fn_wrapper_function_kinds: Vec<(String, u32)> = Vec::new();
+    for f in &hir.functions {
+        if let Some(kind) = function_kind_for_util_types(f) {
+            let original_name = func_names.get(&f.id).cloned().unwrap();
+            user_fn_wrapper_function_kinds.push((format!("__perry_wrap_{}", original_name), kind));
+        }
+    }
+
     emit_string_pool(
         llmod,
         strings,
@@ -1274,6 +1313,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_wrapper_synthetic_arguments,
         &user_fn_wrapper_arity,
         &user_fn_display_names,
+        &user_fn_wrapper_function_kinds,
     );
 
     Ok(())
