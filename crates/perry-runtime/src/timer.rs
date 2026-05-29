@@ -983,6 +983,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
     });
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id: TEST_CALLBACK_TIMER_ID,
+        kind: CallbackTimerKind::Timeout,
         deadline,
         delay_ms: 86_400_000,
         callback,
