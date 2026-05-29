@@ -11,7 +11,7 @@ const rs = new ReadableStream(
       try {
         c.enqueue("x");
       } catch (e: any) {
-        enqueueErr = e && e.name;
+        enqueueErr = e && `${e.name}:${e.code}`;
       }
     },
   },

@@ -656,12 +656,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: pipeThrough().pipeThrough() \u2014 second transform output wrong. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/web/strategy-size-non-number": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: strategy.size returning non-number \u2014 doesn't throw on enqueue. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/compose/just-source-only": {
     "issue": "1531",
     "added": "2026-05-24",
