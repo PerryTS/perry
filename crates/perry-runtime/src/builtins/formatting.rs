@@ -1848,35 +1848,149 @@ fn looks_like_raw_heap_pointer(value: f64) -> bool {
     (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
 }
 
-#[no_mangle]
-pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
+fn heap_value_type(value: f64) -> Option<(*const u8, u8)> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        Some((ptr, (*gc_header).obj_type))
+    }
+}
+
+fn deep_strict_map_equal(
+    left: *const crate::map::MapHeader,
+    right: *const crate::map::MapHeader,
+    depth: usize,
+) -> bool {
+    let len = crate::map::js_map_size(left);
+    if len != crate::map::js_map_size(right) {
+        return false;
+    }
+    let mut matched = vec![false; len as usize];
+    for left_index in 0..len {
+        let left_key = crate::map::js_map_entry_key_at(left, left_index);
+        let left_value = crate::map::js_map_entry_value_at(left, left_index);
+        let mut found = false;
+        for right_index in 0..len {
+            if matched[right_index as usize] {
+                continue;
+            }
+            let right_key = crate::map::js_map_entry_key_at(right, right_index);
+            if !js_util_deep_strict_equal_bool(left_key, right_key, depth + 1) {
+                continue;
+            }
+            let right_value = crate::map::js_map_entry_value_at(right, right_index);
+            if js_util_deep_strict_equal_bool(left_value, right_value, depth + 1) {
+                matched[right_index as usize] = true;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return false;
+        }
+    }
+    true
+}
+
+fn deep_strict_set_equal(
+    left: *const crate::set::SetHeader,
+    right: *const crate::set::SetHeader,
+    depth: usize,
+) -> bool {
+    let len = crate::set::js_set_size(left);
+    if len != crate::set::js_set_size(right) {
+        return false;
+    }
+    let mut matched = vec![false; len as usize];
+    for left_index in 0..len {
+        let left_value = crate::set::js_set_value_at(left, left_index);
+        let mut found = false;
+        for right_index in 0..len {
+            if matched[right_index as usize] {
+                continue;
+            }
+            let right_value = crate::set::js_set_value_at(right, right_index);
+            if js_util_deep_strict_equal_bool(left_value, right_value, depth + 1) {
+                matched[right_index as usize] = true;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return false;
+        }
+    }
+    true
+}
+
+fn deep_strict_collection_equal(left: f64, right: f64, depth: usize) -> Option<bool> {
+    let left_heap = heap_value_type(left);
+    let right_heap = heap_value_type(right);
+    match (left_heap, right_heap) {
+        (Some((left_ptr, crate::gc::GC_TYPE_MAP)), Some((right_ptr, crate::gc::GC_TYPE_MAP))) => {
+            Some(deep_strict_map_equal(
+                left_ptr as *const crate::map::MapHeader,
+                right_ptr as *const crate::map::MapHeader,
+                depth,
+            ))
+        }
+        (Some((left_ptr, crate::gc::GC_TYPE_SET)), Some((right_ptr, crate::gc::GC_TYPE_SET))) => {
+            Some(deep_strict_set_equal(
+                left_ptr as *const crate::set::SetHeader,
+                right_ptr as *const crate::set::SetHeader,
+                depth,
+            ))
+        }
+        (Some((_, crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET)), _)
+        | (_, Some((_, crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET))) => Some(false),
+        _ => None,
+    }
+}
+
+fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
+    if depth > 64 {
+        return format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0);
+    }
     let left_value = crate::value::JSValue::from_bits(left.to_bits());
     let right_value = crate::value::JSValue::from_bits(right.to_bits());
     let left_boxed = boxed_primitives::boxed_primitive_payload(left);
     let right_boxed = boxed_primitives::boxed_primitive_payload(right);
     if left_boxed.is_some() || right_boxed.is_some() {
-        let equal = match (left_boxed, right_boxed) {
+        return match (left_boxed, right_boxed) {
             (Some((left_class, left_payload)), Some((right_class, right_payload)))
                 if left_class == right_class =>
             {
-                let payload_equal = js_util_is_deep_strict_equal(left_payload, right_payload);
-                crate::value::js_is_truthy(payload_equal) != 0
+                js_util_deep_strict_equal_bool(left_payload, right_payload, depth + 1)
             }
             _ => false,
         };
-        return f64::from_bits(crate::value::JSValue::bool(equal).bits());
+    }
+    if let Some(equal) = deep_strict_collection_equal(left, right, depth) {
+        return equal;
     }
     let has_tagged_heap_operand = left_value.is_pointer() || right_value.is_pointer();
     let has_raw_heap_operand =
         looks_like_raw_heap_pointer(left) || looks_like_raw_heap_pointer(right);
-    let equal = if has_raw_heap_operand {
+    if has_raw_heap_operand {
         false
     } else if has_tagged_heap_operand {
         format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
     } else {
         crate::value::js_jsvalue_equals(left, right) != 0
             || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
-    };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
+    let equal = js_util_deep_strict_equal_bool(left, right, 0);
     f64::from_bits(crate::value::JSValue::bool(equal).bits())
 }
 
