@@ -332,12 +332,6 @@
     "category": "bug-open",
     "reason": "node:stream: Duplex.from({readable, writable}) \u2014 combine-form not yet wired. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/finished/with-cleanup-option": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: finished({cleanup: true}) \u2014 temporary listeners not auto-removed after callback. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/compose-array-form": {
     "issue": "1531",
     "added": "2026-05-24",

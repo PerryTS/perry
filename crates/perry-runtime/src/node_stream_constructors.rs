@@ -748,6 +748,17 @@ pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callb
     );
 }
 
+pub(super) fn add_finished_cleanup_completion_listener(stream: f64, callback: f64) {
+    let listener = js_closure_alloc(ns_finished_error_false_close as *const u8, 3);
+    js_closure_set_capture_f64(listener, 0, stream);
+    js_closure_set_capture_f64(listener, 1, callback);
+    js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
+    let listener_value = box_pointer(listener as *const u8);
+    add_stream_listener_for_event(stream, string_value(b"end"), listener_value);
+    add_stream_listener_for_event(stream, string_value(b"finish"), listener_value);
+    add_stream_listener_for_event(stream, string_value(b"close"), listener_value);
+}
+
 /// `stream.finished(stream, [options], cb)` callback form. This slice covers
 /// Node's `{ error: false }` path: there is no dedicated `error` listener, but
 /// `close` still observes the stream's stored error and calls the callback.
@@ -772,6 +783,11 @@ pub extern "C" fn js_node_stream_finished(args: *const crate::array::ArrayHeader
     }
     if let Some(signal) = options_signal(options) {
         add_finished_signal_abort_listener(stream, signal, callback);
+    }
+    if get_hidden_value(options, hidden_key(b"cleanup"))
+        .is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+    {
+        add_finished_cleanup_completion_listener(stream, callback);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
