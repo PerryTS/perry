@@ -880,10 +880,6 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
-            // Date → unquoted ISO string / `Invalid Date` (before is_nan).
-            if let Some(s) = collections::date_inspect(value) {
-                return s;
-            }
             // Regular number — but first check for raw (non-NaN-boxed) heap
             // pointers. The codegen sometimes returns a raw
             // i64 buffer pointer bitcast directly to f64 (no POINTER_TAG), so
@@ -1453,10 +1449,6 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
-            // Date field → unquoted ISO string / `Invalid Date`.
-            if let Some(s) = collections::date_inspect(value) {
-                return s;
-            }
             // A TypedArray field is a RAW (non-NaN-boxed) heap pointer, so it
             // lands here, not in the pointer branch; redirect it (#800).
             if let Some(s) = collections::raw_heap_pointer_display(value, depth) {
