@@ -381,15 +381,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ObjectValues(obj) => {
             let obj_box = lower_expr(ctx, obj)?;
             let blk = ctx.block();
-            let obj_handle = unbox_to_i64(blk, &obj_box);
-            let arr_handle = blk.call(I64, "js_object_values", &[(I64, &obj_handle)]);
+            // Tagged value so a string/primitive receiver is handled safely.
+            let arr_handle = blk.call(I64, "js_object_values_value", &[(DOUBLE, &obj_box)]);
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
         Expr::ObjectEntries(obj) => {
             let obj_box = lower_expr(ctx, obj)?;
             let blk = ctx.block();
-            let obj_handle = unbox_to_i64(blk, &obj_box);
-            let arr_handle = blk.call(I64, "js_object_entries", &[(I64, &obj_handle)]);
+            let arr_handle = blk.call(I64, "js_object_entries_value", &[(DOUBLE, &obj_box)]);
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 

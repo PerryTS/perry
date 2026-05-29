@@ -889,7 +889,7 @@ pub extern "C" fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader {
     buf
 }
 
-fn throw_buffer_concat_invalid_arg_type(index: usize) -> ! {
+fn throw_buffer_concat_invalid_arg_type(index: usize, element: f64) -> ! {
     static REGISTER_TYPE_ERROR: std::sync::Once = std::sync::Once::new();
     REGISTER_TYPE_ERROR.call_once(|| {
         crate::object::js_register_class_extends_error(crate::error::CLASS_ID_TYPE_ERROR);
@@ -905,8 +905,10 @@ fn throw_buffer_concat_invalid_arg_type(index: usize) -> ! {
             let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
         };
-        let message =
-            format!("The \"list[{index}]\" argument must be an instance of Buffer or Uint8Array");
+        let message = format!(
+            "The \"list[{index}]\" argument must be an instance of Buffer or Uint8Array. Received {}",
+            crate::fs::validate::describe_received(element)
+        );
         set(b"name", str_val(b"TypeError"));
         set(b"code", str_val(b"ERR_INVALID_ARG_TYPE"));
         set(b"message", str_val(message.as_bytes()));
@@ -966,9 +968,10 @@ fn js_buffer_concat_impl(
 
         let mut actual_total_size: usize = 0;
         for i in 0..len {
-            let raw_bits = strip_nanbox((*arr_data.add(i)).to_bits());
+            let element = *arr_data.add(i);
+            let raw_bits = strip_nanbox(element.to_bits());
             if raw_bits < 0x1000 || !is_registered_buffer(raw_bits as usize) {
-                throw_buffer_concat_invalid_arg_type(i);
+                throw_buffer_concat_invalid_arg_type(i, element);
             }
             let buf_ptr = raw_bits as *const BufferHeader;
             actual_total_size = actual_total_size.saturating_add((*buf_ptr).length as usize);
@@ -1014,5 +1017,8 @@ pub extern "C" fn js_buffer_concat_with_length(
     arr_ptr: *const ArrayHeader,
     total_length: f64,
 ) -> *mut BufferHeader {
+    // #2013: a provided `totalLength` must be a non-negative integer; Node
+    // throws `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE` otherwise.
+    super::validate::validate_concat_length(total_length);
     js_buffer_concat_impl(arr_ptr, normalize_buffer_concat_total_length(total_length))
 }

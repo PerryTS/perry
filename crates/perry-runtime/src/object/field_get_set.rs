@@ -474,6 +474,115 @@ pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut Ar
     }
 }
 
+/// `Object.keys(value)` entry point that inspects the NaN-boxed *value* (not a
+/// raw pointer) so it handles primitives safely. A string yields its index
+/// keys `"0".."length-1"` (`Object.keys("abc") === ["0","1","2"]`); objects and
+/// arrays delegate to `js_object_keys` (which already handles both, #323/#893);
+/// other primitives (number/boolean/null/undefined) yield an empty array.
+/// Without this, the codegen unboxed the argument to a raw pointer and a string
+/// receiver (or an SSO inline value, which isn't a pointer at all) was
+/// dereferenced as an `ObjectHeader` → SIGSEGV.
+#[no_mangle]
+pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_any_string() {
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let len = match crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
+            Some((ptr, blen)) if !ptr.is_null() => unsafe {
+                crate::string::compute_utf16_len(ptr, blen)
+            },
+            _ => 0,
+        };
+        let arr = crate::array::js_array_alloc(len.max(1));
+        for i in 0..len {
+            let s = i.to_string();
+            let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            crate::array::js_array_push(arr, JSValue::string_ptr(k));
+        }
+        return arr;
+    }
+    if jv.is_pointer() {
+        return js_object_keys(jv.as_pointer::<ObjectHeader>());
+    }
+    crate::array::js_array_alloc(0)
+}
+
+/// Iterate a string value's characters, invoking `emit(index, char_str_value)`
+/// for each. Returns the character count, or `None` if the value isn't a
+/// valid string. Shared by `Object.values`/`Object.entries` on string args.
+fn for_each_string_char<F: FnMut(u32, f64)>(value: f64, mut emit: F) -> Option<u32> {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (ptr, blen) = crate::string::str_bytes_from_jsvalue(value, &mut scratch)?;
+    if ptr.is_null() {
+        return Some(0);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, blen as usize) };
+    let s = std::str::from_utf8(bytes).ok()?;
+    let mut i = 0u32;
+    for ch in s.chars() {
+        let mut buf = [0u8; 4];
+        let cs = ch.encode_utf8(&mut buf);
+        let k = crate::string::js_string_from_bytes(cs.as_ptr(), cs.len() as u32);
+        emit(i, f64::from_bits(JSValue::string_ptr(k).bits()));
+        i += 1;
+    }
+    Some(i)
+}
+
+/// Tag-dispatching `Object.values(value)` — see [`js_object_keys_value`].
+/// A string yields its characters (`Object.values("hi") === ["h","i"]`);
+/// objects/arrays delegate to `js_object_values`; primitives yield `[]`.
+#[no_mangle]
+pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_any_string() {
+        let arr = crate::array::js_array_alloc(1);
+        let mut out = arr;
+        if for_each_string_char(value, |_, ch| {
+            out = crate::array::js_array_push(out, JSValue::from_bits(ch.to_bits()));
+        })
+        .is_none()
+        {
+            return crate::array::js_array_alloc(0);
+        }
+        return out;
+    }
+    if jv.is_pointer() {
+        return js_object_values(jv.as_pointer::<ObjectHeader>());
+    }
+    crate::array::js_array_alloc(0)
+}
+
+/// Tag-dispatching `Object.entries(value)` — see [`js_object_keys_value`].
+/// A string yields `[[index, char], …]` (`Object.entries("hi") ===
+/// [["0","h"],["1","i"]]`); objects/arrays delegate to `js_object_entries`;
+/// primitives yield `[]`.
+#[no_mangle]
+pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_any_string() {
+        let outer = crate::array::js_array_alloc(1);
+        let mut out = outer;
+        if for_each_string_char(value, |idx, ch| {
+            let pair = crate::array::js_array_alloc(2);
+            let idx_s = idx.to_string();
+            let idx_key = crate::string::js_string_from_bytes(idx_s.as_ptr(), idx_s.len() as u32);
+            let p = crate::array::js_array_push(pair, JSValue::string_ptr(idx_key));
+            let p = crate::array::js_array_push(p, JSValue::from_bits(ch.to_bits()));
+            out = crate::array::js_array_push(out, JSValue::array_ptr(p));
+        })
+        .is_none()
+        {
+            return crate::array::js_array_alloc(0);
+        }
+        return out;
+    }
+    if jv.is_pointer() {
+        return js_object_entries(jv.as_pointer::<ObjectHeader>());
+    }
+    crate::array::js_array_alloc(0)
+}
+
 /// Get the keys of an object as an array of strings.
 /// If any key has a per-property descriptor with `enumerable: false`, that key is filtered out.
 /// Otherwise (the common case), this returns the stored keys array directly.
@@ -2519,6 +2628,26 @@ pub extern "C" fn js_object_get_field_ic_miss(
 #[cfg(test)]
 mod sso_tests_1781 {
     use super::*;
+
+    #[test]
+    fn object_keys_values_entries_on_string_do_not_crash() {
+        // Regression: Object.keys/values/entries on a string segfaulted
+        // (the value was deref'd as an ObjectHeader; SSO strings aren't even
+        // pointers). Now they yield index keys / chars / [index,char].
+        let heap = crate::string::js_string_from_bytes(b"abc".as_ptr(), 3);
+        let v = crate::value::js_nanbox_string(heap as i64);
+        assert_eq!(crate::array::js_array_length(js_object_keys_value(v)), 3);
+        assert_eq!(crate::array::js_array_length(js_object_values_value(v)), 3);
+        assert_eq!(crate::array::js_array_length(js_object_entries_value(v)), 3);
+        // SSO string (<= 5 bytes) — the non-pointer case that crashed hardest.
+        let sso = crate::value::JSValue::try_short_string(b"hi").unwrap();
+        assert_eq!(
+            crate::array::js_array_length(js_object_keys_value(f64::from_bits(sso.bits()))),
+            2
+        );
+        // Number / boolean primitives → empty array (no own enumerable keys).
+        assert_eq!(crate::array::js_array_length(js_object_keys_value(42.0)), 0);
+    }
 
     /// #1781: `"id" in obj` for a key <= 5 bytes — the lookup key arrives as
     /// an inline SSO value (tag 0x7FF9). `is_string()` (STRING_TAG-only)

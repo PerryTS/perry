@@ -407,6 +407,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_buffer_byte_length_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_buffer_concat", I64, &[I64]);
     module.declare_function("js_buffer_concat_with_length", I64, &[I64, DOUBLE]);
+    // #2013: Node argument validation for the Buffer factory methods.
+    module.declare_function("js_buffer_validate_size", I32, &[DOUBLE]);
+    module.declare_function("js_buffer_validate_concat_list", I64, &[DOUBLE]);
     module.declare_function("js_buffer_copy", I32, &[I64, I64, I32, I32, I32]);
     module.declare_function("js_buffer_equals", I32, &[I64, I64]);
     module.declare_function("js_buffer_fill", I64, &[I64, I32]);
@@ -919,6 +922,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // #1539: compose(...streams) -> new Duplex; duplexPair(opts) -> [Duplex, Duplex].
     module.declare_function("js_node_stream_compose", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_pipeline", DOUBLE, &[I64]);
+    module.declare_function("js_node_stream_finished", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_duplex_pair", DOUBLE, &[DOUBLE]);
     // #1540: Readable/Writable .toWeb / .fromWeb — return fresh Duplex stubs.
     module.declare_function("js_node_stream_to_web", DOUBLE, &[DOUBLE]);

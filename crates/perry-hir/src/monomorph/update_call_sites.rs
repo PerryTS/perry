@@ -480,15 +480,33 @@ fn infer_type_args_from_lookup(
 
     let mut bindings: HashMap<String, Type> = HashMap::new();
 
-    for (param, arg) in func_info.params.iter().zip(args.iter()) {
+    for (param_idx, param) in func_info.params.iter().enumerate() {
         if !type_contains_type_var(&param.ty) {
             continue;
         }
 
-        if let Some(arg_ty) = infer_expr_type_from_lookup(arg, lookup) {
-            if !unify_types(&param.ty, &arg_ty, &mut bindings) {
-                return None;
+        if param.is_rest {
+            let arg_tys: Option<Vec<Type>> = args
+                .iter()
+                .skip(param_idx)
+                .map(|arg| infer_expr_type_from_lookup(arg, lookup))
+                .collect();
+            if let Some(arg_tys) = arg_tys {
+                if !unify_rest_param_types(&param.ty, &arg_tys, &mut bindings) {
+                    return None;
+                }
             }
+            break;
+        }
+
+        if let Some(arg) = args.get(param_idx) {
+            if let Some(arg_ty) = infer_expr_type_from_lookup(arg, lookup) {
+                if !unify_types(&param.ty, &arg_ty, &mut bindings) {
+                    return None;
+                }
+            }
+        } else {
+            break;
         }
     }
 
@@ -520,15 +538,33 @@ fn infer_type_args_for_class_from_lookup(
 
     let mut bindings: HashMap<String, Type> = HashMap::new();
 
-    for (param, arg) in ctor_params.iter().zip(args.iter()) {
+    for (param_idx, param) in ctor_params.iter().enumerate() {
         if !type_contains_type_var(&param.ty) {
             continue;
         }
 
-        if let Some(arg_ty) = infer_expr_type_from_lookup(arg, lookup) {
-            if !unify_types(&param.ty, &arg_ty, &mut bindings) {
-                return None;
+        if param.is_rest {
+            let arg_tys: Option<Vec<Type>> = args
+                .iter()
+                .skip(param_idx)
+                .map(|arg| infer_expr_type_from_lookup(arg, lookup))
+                .collect();
+            if let Some(arg_tys) = arg_tys {
+                if !unify_rest_param_types(&param.ty, &arg_tys, &mut bindings) {
+                    return None;
+                }
             }
+            break;
+        }
+
+        if let Some(arg) = args.get(param_idx) {
+            if let Some(arg_ty) = infer_expr_type_from_lookup(arg, lookup) {
+                if !unify_types(&param.ty, &arg_ty, &mut bindings) {
+                    return None;
+                }
+            }
+        } else {
+            break;
         }
     }
 
