@@ -296,3 +296,14 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
         js_string_from_bytes(encoded.as_ptr(), encoded.len() as i64) as i64
     }
 }
+
+/// #1475 — safe-area insets. tvOS overscan safe area is not yet exposed here;
+/// report all-zero so the symbol links. (Follow-up can read the focus
+/// environment's safe-area layout guide.)
+#[no_mangle]
+pub extern "C" fn perry_system_get_safe_area_insets() -> f64 {
+    extern "C" {
+        fn perry_safe_area_insets_make(top: f64, right: f64, bottom: f64, left: f64) -> f64;
+    }
+    unsafe { perry_safe_area_insets_make(0.0, 0.0, 0.0, 0.0) }
+}

@@ -406,6 +406,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_buffer_byte_length", I32, &[I64]);
     module.declare_function("js_buffer_byte_length_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_buffer_concat", I64, &[I64]);
+    module.declare_function("js_buffer_concat_with_length", I64, &[I64, DOUBLE]);
     module.declare_function("js_buffer_copy", I32, &[I64, I64, I32, I32, I32]);
     module.declare_function("js_buffer_equals", I32, &[I64, I64]);
     module.declare_function("js_buffer_fill", I64, &[I64, I32]);
@@ -515,6 +516,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_can_parse", I32, &[I64]);
     module.declare_function("js_url_can_parse_with_base", I32, &[I64, I64]);
     module.declare_function("js_url_parse", I64, &[I64]);
+    module.declare_function("js_url_parse_with_base", I64, &[I64, I64]);
     // Issue #650: URL setters — mutate field + re-derive href.
     module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
     module.declare_function("js_url_set_search", VOID, &[I64, I64]);
@@ -547,13 +549,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_search_params_keys_arr", DOUBLE, &[I64]);
     module.declare_function("js_url_search_params_values_arr", DOUBLE, &[I64]);
     module.declare_function("js_url_search_params_sort", VOID, &[I64]);
-    module.declare_function("js_url_search_params_for_each", VOID, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_url_search_params_for_each",
+        VOID,
+        &[I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========
@@ -885,6 +891,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_transform_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_readable_from_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // #1534: static introspection helpers reflecting tracked stream state.
     module.declare_function("js_node_stream_is_disturbed", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);

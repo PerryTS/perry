@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Result of scanning a package for compatibility
+// #854: analysis record — `path`/`files_checked` are populated for
+// diagnostics but not consumed on the current report path.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PackageCompatibility {
     pub name: String,
@@ -26,6 +29,9 @@ pub struct CompatibilityIssue {
     pub message: String,
 }
 
+// #854: issue-classification enum; `DynamicPropertyAccess`/`UnsupportedSyntax`
+// are handled in `severity()` but not yet constructed by any scan rule.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueKind {
     /// eval() or new Function() usage
@@ -56,6 +62,9 @@ impl IssueKind {
 }
 
 /// Dependency resolver that tracks all imports and their resolution status
+// #854: `resolved_packages` is populated during resolution but not read back
+// on the current path; kept as part of the resolver state.
+#[allow(dead_code)]
 pub struct DependencyResolver {
     /// Root directory of the project
     project_root: PathBuf,

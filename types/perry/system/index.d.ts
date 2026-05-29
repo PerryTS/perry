@@ -12,6 +12,30 @@ export function isDarkMode(): boolean;
 /** Returns the device idiom (e.g. "phone", "pad", "mac", "tv"). */
 export function getDeviceIdiom(): string;
 
+/** The device's safe-area insets in points (status bar / Dynamic Island,
+ *  home indicator, system bars). Stable across rotation and device class. */
+export interface SafeAreaInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/**
+ * Returns the current safe-area insets in points — the distances from each
+ * screen edge that are obscured by system UI (status bar / Dynamic Island on
+ * top, home indicator on bottom on iOS; the equivalent system bars on Android).
+ * Returns all zeros on macOS / host. Use these instead of hardcoding magic
+ * numbers (e.g. `59` for Dynamic Island, `34` for the home indicator) so a
+ * custom top-of-screen or bottom-of-screen layout is correct on every device.
+ *
+ * ```ts
+ * import { getSafeAreaInsets } from "perry/system";
+ * const { top, right, bottom, left } = getSafeAreaInsets();
+ * ```
+ */
+export function getSafeAreaInsets(): SafeAreaInsets;
+
 /** Returns the device model identifier (e.g. "iPhone13,4"). */
 export function getDeviceModel(): string;
 

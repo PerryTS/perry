@@ -487,6 +487,8 @@ pub(super) fn copied_minor_malloc_sweep_due(trigger_kind: GcTriggerKind) -> bool
 /// 9 `test_json_*.ts` × 4 mode combos, 18 memory-stability tests)
 /// since C3b landed; flipping the default makes those gains apply
 
+// #854: part of GC full mark-sweep fallback path (PERRY_GEN_GC=0)
+#[allow(dead_code)]
 pub(super) fn sweep() -> u64 {
     sweep_with_age_bump(false).freed_bytes
 }

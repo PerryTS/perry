@@ -154,7 +154,30 @@ pub(crate) fn resolve_url(url_str: &str, base_str: &str) -> String {
         return url_str.to_string();
     }
 
-    let (base_protocol, base_host, _, _, base_pathname, _, _) = parse_url(base_str);
+    let (base_protocol, base_host, _, _, base_pathname, base_search, _) = parse_url(base_str);
+
+    if url_str.starts_with('?') {
+        if base_protocol == "file:" || base_host.is_empty() {
+            return format!("{}{}{}", base_protocol, base_pathname, url_str);
+        }
+        return format!(
+            "{}//{}{}{}",
+            base_protocol, base_host, base_pathname, url_str
+        );
+    }
+
+    if url_str.starts_with('#') {
+        if base_protocol == "file:" || base_host.is_empty() {
+            return format!(
+                "{}{}{}{}",
+                base_protocol, base_pathname, base_search, url_str
+            );
+        }
+        return format!(
+            "{}//{}{}{}{}",
+            base_protocol, base_host, base_pathname, base_search, url_str
+        );
+    }
 
     if url_str.starts_with("//") {
         // Protocol-relative URL
@@ -412,6 +435,17 @@ pub(crate) unsafe fn rebuild_url_href(url: *mut ObjectHeader) {
     js_object_set_field_f64(url, URL_HREF, create_string_f64(&href));
 }
 
+pub(crate) unsafe fn rebuild_url_origin(url: *mut ObjectHeader) {
+    let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+    let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
+    let origin = if protocol == "file:" || host.is_empty() {
+        "null".to_string()
+    } else {
+        format!("{}//{}", protocol, host)
+    };
+    js_object_set_field_f64(url, URL_ORIGIN, create_string_f64(&origin));
+}
+
 /// Recompose `host` (`hostname[:port]`) from the URL's `hostname` and `port`
 /// fields, stripping default ports for known hierarchical schemes.
 pub(crate) unsafe fn rebuild_url_host(url: *mut ObjectHeader) {
@@ -434,6 +468,7 @@ pub(crate) unsafe fn rebuild_url_host(url: *mut ObjectHeader) {
         format!("{}:{}", hostname, port)
     };
     js_object_set_field_f64(url, URL_HOST, create_string_f64(&host));
+    rebuild_url_origin(url);
 }
 
 /// Validate that `s` looks like a parseable absolute URL — has a scheme
@@ -481,12 +516,80 @@ pub(crate) fn is_valid_absolute_url(s: &str) -> bool {
         if !after_scheme.starts_with("//") {
             return false;
         }
-        // file:// is allowed to have an empty host, every other scheme needs one.
-        if scheme != "file" && after_scheme.len() <= 2 {
+        let authority = after_scheme[2..]
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default();
+        if !is_valid_url_authority(scheme, authority) {
             return false;
         }
     } else if after_scheme.is_empty() {
         return false;
     }
     true
+}
+
+fn is_valid_url_authority(scheme: &str, authority: &str) -> bool {
+    // file:// is allowed to have an empty host, every other special scheme
+    // needs one.
+    if scheme != "file" && authority.is_empty() {
+        return false;
+    }
+    if authority.bytes().any(|b| b <= 0x20 || b == 0x7f) {
+        return false;
+    }
+
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if scheme != "file" && host_port.is_empty() {
+        return false;
+    }
+
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        let Some(bracket_end) = rest.find(']') else {
+            return false;
+        };
+        let after_bracket = &rest[bracket_end + 1..];
+        if !after_bracket.is_empty()
+            && !after_bracket
+                .strip_prefix(':')
+                .is_some_and(|port| port.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return false;
+        }
+        &host_port[..=bracket_end + 1]
+    } else if let Some(port_idx) = host_port.rfind(':') {
+        let port = &host_port[port_idx + 1..];
+        if !port.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        &host_port[..port_idx]
+    } else {
+        host_port
+    };
+
+    if scheme != "file" && host.is_empty() {
+        return false;
+    }
+    !has_invalid_percent_escape(host)
+}
+
+fn has_invalid_percent_escape(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len()
+                || !bytes[i + 1].is_ascii_hexdigit()
+                || !bytes[i + 2].is_ascii_hexdigit()
+            {
+                return true;
+            }
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    false
 }

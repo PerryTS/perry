@@ -148,6 +148,15 @@ fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
     REGEX_POINTERS.with(|s| s.borrow().contains(&(p as usize)))
 }
 
+/// Public: is `addr` a RegExpHeader we allocated via `js_regexp_new`?
+/// Used by the console/`util.inspect` formatter to print regex literals
+/// as `/source/flags` instead of `{}` (they're GC_TYPE_OBJECT allocations
+/// with no enumerable string keys). Registry-gated so a generic object
+/// is never mis-read as a RegExpHeader.
+pub fn is_registered_regex(addr: usize) -> bool {
+    REGEX_POINTERS.with(|s| s.borrow().contains(&addr))
+}
+
 /// Internal helper: Get string data from StringHeader
 fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
     unsafe {

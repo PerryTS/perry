@@ -303,6 +303,14 @@ pub fn check_site(
     let classification = classify(surface, body_arg, source_file_path, span.lo.0);
     report(&classification);
     if classification.is_refused() && !eval_override_enabled() {
+        // #2309: when the tree-shake deferral sink is armed (a node_modules
+        // module being lowered under tree-shaking), record the refusal and
+        // fall through instead of erroring — the module may be pruned as
+        // unreachable, in which case this refusal never matters. The driver
+        // re-raises any deferred refusal that survives the prune.
+        if crate::deferral::try_defer_refusal(classification.refusal_message(), span.lo.0) {
+            return Ok(());
+        }
         return Err(anyhow::Error::new(crate::error::LowerError::new(
             classification.refusal_message(),
             span,

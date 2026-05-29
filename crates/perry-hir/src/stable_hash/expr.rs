@@ -274,6 +274,7 @@ impl SH for Expr {
             Expr::BufferAlloc { size, fill, encoding } => { tag(h, 216); size.as_ref().hash(h); fill.hash(h); encoding.hash(h); }
             Expr::BufferAllocUnsafe(e) => { tag(h, 217); e.as_ref().hash(h); }
             Expr::BufferConcat(e) => { tag(h, 218); e.as_ref().hash(h); }
+            Expr::BufferConcatWithLength { list, total_length } => { tag(h, 11222); list.as_ref().hash(h); total_length.as_ref().hash(h); }
             Expr::BufferIsBuffer(e) => { tag(h, 219); e.as_ref().hash(h); }
             Expr::BufferIsEncoding(e) => { tag(h, 11219); e.as_ref().hash(h); }
             Expr::BufferByteLength { data, encoding } => { tag(h, 220); data.as_ref().hash(h); encoding.hash(h); }
@@ -416,6 +417,7 @@ impl SH for Expr {
             Expr::DateSetMilliseconds { date, value } => { tag(h, 484); date.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::DateSetTime { date, value } => { tag(h, 485); date.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::DateValueOf(e) => { tag(h, 338); e.as_ref().hash(h); }
+            Expr::DateToString(e) => { tag(h, 1339); e.as_ref().hash(h); }
             Expr::DateToDateString(e) => { tag(h, 339); e.as_ref().hash(h); }
             Expr::DateToTimeString(e) => { tag(h, 340); e.as_ref().hash(h); }
             Expr::DateToLocaleDateString(e) => { tag(h, 341); e.as_ref().hash(h); }
@@ -445,6 +447,7 @@ impl SH for Expr {
             Expr::UrlCanParse(e) => { tag(h, 365); e.as_ref().hash(h); }
             Expr::UrlCanParseWithBase { input, base } => { tag(h, 700); input.as_ref().hash(h); base.as_ref().hash(h); }
             Expr::UrlParse(e) => { tag(h, 366); e.as_ref().hash(h); }
+            Expr::UrlParseWithBase { input, base } => { tag(h, 705); input.as_ref().hash(h); base.as_ref().hash(h); }
             Expr::UrlInstanceToString(e) => { tag(h, 367); e.as_ref().hash(h); }
             Expr::UrlInstanceToJSON(e) => { tag(h, 368); e.as_ref().hash(h); }
             Expr::UrlSetPathname { url, value } => { tag(h, 369); url.as_ref().hash(h); value.as_ref().hash(h); }
@@ -468,7 +471,7 @@ impl SH for Expr {
             Expr::UrlSearchParamsKeys(e) => { tag(h, 701); e.as_ref().hash(h); }
             Expr::UrlSearchParamsValues(e) => { tag(h, 702); e.as_ref().hash(h); }
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
-            Expr::UrlSearchParamsForEach { params, callback } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); }
+            Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
             Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, enclosing_class, is_async, is_generator, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); enclosing_class.hash(h); is_async.hash(h); is_generator.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
