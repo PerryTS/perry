@@ -1702,6 +1702,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_headers_append", DOUBLE, &[DOUBLE, I64, I64]);
     // headers.get(handle_f64, key_ptr) -> *mut StringHeader (i64)
     module.declare_function("js_headers_get", I64, &[DOUBLE, I64]);
+    // headers.getSetCookie(handle_f64) -> f64 (NaN-boxed POINTER_TAG to ArrayHeader)
+    module.declare_function("js_headers_get_set_cookie", DOUBLE, &[DOUBLE]);
     // headers.has(handle_f64, key_ptr) -> f64 (TAG_TRUE/FALSE)
     module.declare_function("js_headers_has", DOUBLE, &[DOUBLE, I64]);
     // headers.delete(handle_f64, key_ptr) -> f64 (undefined-tag)

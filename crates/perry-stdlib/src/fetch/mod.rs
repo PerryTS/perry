@@ -72,17 +72,14 @@ struct StreamState {
 struct FetchResponse {
     status: u16,
     status_text: String,
-    headers: HashMap<String, String>,
+    headers: HeadersStore,
     body: Vec<u8>,
     body_present: bool,
     body_used: bool,
     /// Cached Headers handle id, allocated on first `response.headers`
     /// access. None until a property/method dispatcher needs to expose
-    /// the headers as a Headers instance. The Vec form (insertion-ordered
-    /// HeadersStore) is what dispatch_headers_method reads, so we copy
-    /// the HashMap into a fresh HeadersStore the first time and cache
-    /// the resulting registry id; subsequent reads of `.headers` return
-    /// the same id (preserves `res.headers === res.headers`).
+    /// the headers as a Headers instance. Subsequent reads of `.headers`
+    /// return the same id (preserves `res.headers === res.headers`).
     cached_headers_id: Option<usize>,
     /// Cached ReadableStream handle id for `response.body`, allocated on
     /// first read so repeat `.body` reads return the same stream (the spec
@@ -213,12 +210,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                     .unwrap_or("")
                     .to_string();
 
-                let mut headers = HashMap::new();
-                for (key, value) in response.headers() {
-                    if let Ok(v) = value.to_str() {
-                        headers.insert(key.to_string(), v.to_string());
-                    }
-                }
+                let headers = headers_from_header_map(response.headers());
 
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
@@ -294,12 +286,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                     .unwrap_or("")
                     .to_string();
 
-                let mut headers = HashMap::new();
-                for (key, value) in response.headers() {
-                    if let Ok(v) = value.to_str() {
-                        headers.insert(key.to_string(), v.to_string());
-                    }
-                }
+                let headers = headers_from_header_map(response.headers());
 
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
@@ -376,12 +363,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                     .unwrap_or("")
                     .to_string();
 
-                let mut headers = HashMap::new();
-                for (key, value) in response.headers() {
-                    if let Ok(v) = value.to_str() {
-                        headers.insert(key.to_string(), v.to_string());
-                    }
-                }
+                let headers = headers_from_header_map(response.headers());
 
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
@@ -460,12 +442,7 @@ pub unsafe extern "C" fn js_fetch_post(
                     .unwrap_or("")
                     .to_string();
 
-                let mut headers = HashMap::new();
-                for (key, value) in response.headers() {
-                    if let Ok(v) = value.to_str() {
-                        headers.insert(key.to_string(), v.to_string());
-                    }
-                }
+                let headers = headers_from_header_map(response.headers());
 
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
@@ -564,12 +541,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
                     .unwrap_or("")
                     .to_string();
 
-                let mut headers = HashMap::new();
-                for (key, value) in response.headers() {
-                    if let Ok(v) = value.to_str() {
-                        headers.insert(key.to_string(), v.to_string());
-                    }
-                }
+                let headers = headers_from_header_map(response.headers());
 
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
@@ -1003,20 +975,18 @@ struct HeadersStore {
 impl HeadersStore {
     fn set(&mut self, key: &str, value: &str) {
         let lk = key.to_ascii_lowercase();
-        for entry in self.entries.iter_mut() {
-            if entry.0 == lk {
-                entry.1 = value.to_string();
-                return;
-            }
-        }
+        self.entries.retain(|(k, _)| *k != lk);
         self.entries.push((lk, value.to_string()));
     }
-    /// Web Fetch `Headers.append` — adds a value without clobbering an existing
-    /// one. Per spec, repeated values for the same name are combined with
-    /// `", "` so `get` returns the joined string (e.g. multiple `Set-Cookie`-
-    /// style appends become `a, b`).
+    /// Web Fetch `Headers.append` — combines repeated normal headers with
+    /// `", "`, but keeps `Set-Cookie` values as separate entries so
+    /// `getSetCookie()` can return them individually.
     fn append(&mut self, key: &str, value: &str) {
         let lk = key.to_ascii_lowercase();
+        if lk == "set-cookie" {
+            self.entries.push((lk, value.to_string()));
+            return;
+        }
         for entry in self.entries.iter_mut() {
             if entry.0 == lk {
                 entry.1.push_str(", ");
@@ -1026,12 +996,26 @@ impl HeadersStore {
         }
         self.entries.push((lk, value.to_string()));
     }
-    fn get(&self, key: &str) -> Option<&str> {
+    fn get(&self, key: &str) -> Option<String> {
         let lk = key.to_ascii_lowercase();
-        self.entries
-            .iter()
-            .find(|(k, _)| *k == lk)
-            .map(|(_, v)| v.as_str())
+        if lk == "set-cookie" {
+            let values: Vec<&str> = self
+                .entries
+                .iter()
+                .filter(|(k, _)| *k == lk)
+                .map(|(_, v)| v.as_str())
+                .collect();
+            if values.is_empty() {
+                None
+            } else {
+                Some(values.join(", "))
+            }
+        } else {
+            self.entries
+                .iter()
+                .find(|(k, _)| *k == lk)
+                .map(|(_, v)| v.clone())
+        }
     }
     fn has(&self, key: &str) -> bool {
         let lk = key.to_ascii_lowercase();
@@ -1041,13 +1025,23 @@ impl HeadersStore {
         let lk = key.to_ascii_lowercase();
         self.entries.retain(|(k, _)| *k != lk);
     }
-    fn from_hashmap(m: &HashMap<String, String>) -> Self {
-        let mut s = Self::default();
-        for (k, v) in m {
-            s.set(k, v);
-        }
-        s
+    fn set_cookie_values(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(k, _)| k == "set-cookie")
+            .map(|(_, v)| v.clone())
+            .collect()
     }
+}
+
+fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> HeadersStore {
+    let mut store = HeadersStore::default();
+    for (key, value) in headers {
+        if let Ok(v) = value.to_str() {
+            store.append(key.as_str(), v);
+        }
+    }
+    store
 }
 
 #[derive(Clone)]
@@ -1119,13 +1113,12 @@ fn alloc_response(
     let id = *id_guard;
     *id_guard += 1;
     drop(id_guard);
-    let hdr_map: HashMap<String, String> = headers.entries.iter().cloned().collect();
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
         FetchResponse {
             status,
             status_text,
-            headers: hdr_map,
+            headers,
             body,
             body_present,
             body_used: false,
@@ -1210,7 +1203,7 @@ pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
     let store = {
         let guard = FETCH_RESPONSES.lock().unwrap();
         match guard.get(&id) {
-            Some(resp) => HeadersStore::from_hashmap(&resp.headers),
+            Some(resp) => resp.headers.clone(),
             None => return f64::from_bits(TAG_UNDEFINED),
         }
     };
@@ -1304,12 +1297,7 @@ pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Pr
         let guard = FETCH_RESPONSES.lock().unwrap();
         guard
             .get(&id)
-            .and_then(|resp| {
-                resp.headers
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-                    .map(|(_, v)| v.clone())
-            })
+            .and_then(|resp| resp.headers.get("content-type"))
             .unwrap_or_default()
     };
     let body = match consume_response_body(handle) {

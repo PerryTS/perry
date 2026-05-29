@@ -81,6 +81,27 @@ fn is_map_method_name(name: &str) -> bool {
     )
 }
 
+fn is_headers_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
+    )
+}
+
+fn is_headers_instance_method(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
+    is_headers_method_name(property)
+        && matches!(receiver_class_name(ctx, object).as_deref(), Some("Headers"))
+}
+
 fn is_classic_stream_method_name(name: &str) -> bool {
     matches!(
         name,
@@ -173,6 +194,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     Some("function")
                 }
                 Expr::ClassRef(_) => Some("function"),
+                Expr::NativeMethodCall {
+                    module,
+                    class_name: None,
+                    object: Some(_),
+                    method,
+                    ..
+                } if module == "Headers" && is_headers_method_name(method) => Some("function"),
                 // Issue #623: native-module default-imports (`import process
                 // from "node:process"`) lower as `NativeModuleRef`, which the
                 // codegen represents as a `0.0` stub double. `js_value_typeof`
@@ -197,6 +225,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if (is_set_expr(ctx, object) && is_set_method_name(property))
                         || (is_map_expr(ctx, object) && is_map_method_name(property))
                     {
+                        Some("function")
+                    } else if is_headers_instance_method(ctx, object, property) {
                         Some("function")
                     } else if is_classic_stream_instance_method(ctx, object, property) {
                         Some("function")

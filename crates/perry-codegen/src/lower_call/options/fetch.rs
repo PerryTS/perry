@@ -159,6 +159,12 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let blk = ctx.block();
                 return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
             }
+            "getSetCookie" => {
+                let arr =
+                    ctx.block()
+                        .call(DOUBLE, "js_headers_get_set_cookie", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(arr));
+            }
             "has" => {
                 if args.is_empty() {
                     return Ok(Some(double_literal(f64::from_bits(

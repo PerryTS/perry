@@ -64,8 +64,79 @@ fn handle_id(value: f64) -> usize {
 struct FetchResponse {
     status: u16,
     status_text: String,
-    headers: HashMap<String, String>,
+    headers: HeadersStore,
     body: Vec<u8>,
+}
+
+#[derive(Clone, Default)]
+struct HeadersStore {
+    entries: Vec<(String, String)>,
+}
+
+impl HeadersStore {
+    fn set(&mut self, key: &str, value: &str) {
+        let lk = key.to_ascii_lowercase();
+        self.entries.retain(|(k, _)| *k != lk);
+        self.entries.push((lk, value.to_string()));
+    }
+
+    fn append(&mut self, key: &str, value: &str) {
+        let lk = key.to_ascii_lowercase();
+        if lk == "set-cookie" {
+            self.entries.push((lk, value.to_string()));
+            return;
+        }
+        for entry in self.entries.iter_mut() {
+            if entry.0 == lk {
+                entry.1.push_str(", ");
+                entry.1.push_str(value);
+                return;
+            }
+        }
+        self.entries.push((lk, value.to_string()));
+    }
+
+    fn get(&self, key: &str) -> Option<String> {
+        let lk = key.to_ascii_lowercase();
+        if lk == "set-cookie" {
+            let values: Vec<&str> = self
+                .entries
+                .iter()
+                .filter(|(k, _)| *k == lk)
+                .map(|(_, v)| v.as_str())
+                .collect();
+            if values.is_empty() {
+                None
+            } else {
+                Some(values.join(", "))
+            }
+        } else {
+            self.entries
+                .iter()
+                .find(|(k, _)| *k == lk)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    fn has(&self, key: &str) -> bool {
+        let lk = key.to_ascii_lowercase();
+        self.entries.iter().any(|(k, _)| *k == lk)
+    }
+
+    fn delete(&mut self, key: &str) -> bool {
+        let lk = key.to_ascii_lowercase();
+        let old_len = self.entries.len();
+        self.entries.retain(|(k, _)| *k != lk);
+        self.entries.len() != old_len
+    }
+
+    fn set_cookie_values(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(k, _)| k == "set-cookie")
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
 }
 
 lazy_static! {
@@ -73,7 +144,7 @@ lazy_static! {
         Mutex::new(HashMap::new());
     static ref NEXT_RESPONSE_ID: Mutex<usize> = Mutex::new(1);
 
-    static ref HEADERS_HANDLES: Mutex<HashMap<usize, HashMap<String, String>>> =
+    static ref HEADERS_HANDLES: Mutex<HashMap<usize, HeadersStore>> =
         Mutex::new(HashMap::new());
     static ref NEXT_HEADERS_ID: Mutex<usize> = Mutex::new(1);
 
@@ -133,13 +204,23 @@ fn store_response(resp: FetchResponse) -> usize {
     id
 }
 
-fn store_headers(headers: HashMap<String, String>) -> usize {
+fn store_headers(headers: HeadersStore) -> usize {
     let mut id_guard = NEXT_HEADERS_ID.lock().unwrap();
     let id = *id_guard;
     *id_guard += 1;
     drop(id_guard);
     HEADERS_HANDLES.lock().unwrap().insert(id, headers);
     id
+}
+
+fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> HeadersStore {
+    let mut store = HeadersStore::default();
+    for (key, value) in headers {
+        if let Ok(v) = value.to_str() {
+            store.append(key.as_str(), v);
+        }
+    }
+    store
 }
 
 fn store_blob(data: BlobData) -> usize {
@@ -198,12 +279,7 @@ fn do_fetch(
                         .canonical_reason()
                         .unwrap_or("")
                         .to_string();
-                    let mut headers = HashMap::new();
-                    for (key, value) in response.headers() {
-                        if let Ok(v) = value.to_str() {
-                            headers.insert(key.to_string(), v.to_string());
-                        }
-                    }
+                    let headers = headers_from_header_map(response.headers());
                     let body = response.bytes().await.unwrap_or_default().to_vec();
                     Ok(FetchResponse {
                         status,
@@ -582,7 +658,7 @@ pub extern "C" fn js_fetch_stream_close(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_headers_new() -> f64 {
-    store_headers(HashMap::new()) as f64
+    store_headers(HeadersStore::default()) as f64
 }
 
 /// # Safety
@@ -600,7 +676,7 @@ pub unsafe extern "C" fn js_headers_set(
     let value = read_str(value_ptr).unwrap_or_default();
     let mut g = HEADERS_HANDLES.lock().unwrap();
     if let Some(h) = g.get_mut(&id) {
-        h.insert(key.to_lowercase(), value);
+        h.set(&key, &value);
         1.0
     } else {
         0.0
@@ -622,12 +698,7 @@ pub unsafe extern "C" fn js_headers_append(
     let value = read_str(value_ptr).unwrap_or_default();
     let mut g = HEADERS_HANDLES.lock().unwrap();
     if let Some(h) = g.get_mut(&id) {
-        h.entry(key.to_lowercase())
-            .and_modify(|existing| {
-                existing.push_str(", ");
-                existing.push_str(&value);
-            })
-            .or_insert(value);
+        h.append(&key, &value);
         1.0
     } else {
         0.0
@@ -646,9 +717,27 @@ pub unsafe extern "C" fn js_headers_get(
         return std::ptr::null_mut();
     };
     let g = HEADERS_HANDLES.lock().unwrap();
-    match g.get(&id).and_then(|h| h.get(&key.to_lowercase())) {
-        Some(v) => alloc_string(v).as_raw(),
+    match g.get(&id).and_then(|h| h.get(&key)) {
+        Some(v) => alloc_string(&v).as_raw(),
         None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let values = HEADERS_HANDLES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(HeadersStore::set_cookie_values)
+        .unwrap_or_default();
+    unsafe {
+        let mut arr = perry_ffi::js_array_alloc(values.len() as u32);
+        for v in values {
+            arr = perry_ffi::js_array_push(arr, js_string_value(&v));
+        }
+        nanbox_array_ptr(arr)
     }
 }
 
@@ -661,10 +750,7 @@ pub unsafe extern "C" fn js_headers_has(handle: f64, key_ptr: *const StringHeade
         return 0.0;
     };
     let g = HEADERS_HANDLES.lock().unwrap();
-    if g.get(&id)
-        .map(|h| h.contains_key(&key.to_lowercase()))
-        .unwrap_or(false)
-    {
+    if g.get(&id).map(|h| h.has(&key)).unwrap_or(false) {
         1.0
     } else {
         0.0
@@ -681,7 +767,7 @@ pub unsafe extern "C" fn js_headers_delete(handle: f64, key_ptr: *const StringHe
     };
     let mut g = HEADERS_HANDLES.lock().unwrap();
     if let Some(h) = g.get_mut(&id) {
-        if h.remove(&key.to_lowercase()).is_some() {
+        if h.delete(&key) {
             return 1.0;
         }
     }
@@ -698,7 +784,7 @@ fn snapshot_sorted(handle: f64) -> Vec<(String, String)> {
         .lock()
         .unwrap()
         .get(&id)
-        .map(|h| h.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .map(|h| h.entries.clone())
         .unwrap_or_default();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
@@ -828,7 +914,7 @@ pub unsafe extern "C" fn js_response_new(
             .cloned()
             .unwrap_or_default()
     } else {
-        HashMap::new()
+        HeadersStore::default()
     };
     store_response(FetchResponse {
         status,
@@ -897,7 +983,6 @@ pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut Promise {
             let content_type = r
                 .headers
                 .get("content-type")
-                .cloned()
                 .unwrap_or_else(|| "application/octet-stream".to_string());
             let blob_id = store_blob(BlobData {
                 bytes: r.body,
@@ -934,8 +1019,8 @@ pub extern "C" fn js_response_body(handle: f64) -> f64 {
 pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
     let v = JsValue::from_bits(value.to_bits());
     let body = perry_ffi::json_stringify(v).unwrap_or_default();
-    let mut headers = HashMap::new();
-    headers.insert("content-type".to_string(), "application/json".to_string());
+    let mut headers = HeadersStore::default();
+    headers.set("content-type", "application/json");
     store_response(FetchResponse {
         status: 200,
         status_text: "OK".to_string(),
@@ -955,8 +1040,8 @@ pub unsafe extern "C" fn js_response_static_redirect(
 ) -> f64 {
     let url = read_str(url_ptr).unwrap_or_default();
     let status = status as u16;
-    let mut headers = HashMap::new();
-    headers.insert("location".to_string(), url);
+    let mut headers = HeadersStore::default();
+    headers.set("location", &url);
     store_response(FetchResponse {
         status,
         status_text: "Found".to_string(),

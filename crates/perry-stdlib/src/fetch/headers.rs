@@ -66,6 +66,25 @@ pub unsafe extern "C" fn js_headers_get(
     std::ptr::null_mut()
 }
 
+/// `headers.getSetCookie()` — returns all preserved Set-Cookie values.
+#[no_mangle]
+pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let values = HEADERS_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(HeadersStore::set_cookie_values)
+        .unwrap_or_default();
+    let mut arr = perry_runtime::js_array_alloc(values.len() as u32);
+    for v in values {
+        let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
+        let v_nan = JSValue::string_ptr(v_ptr).bits();
+        arr = perry_runtime::js_array_push_f64(arr, f64::from_bits(v_nan));
+    }
+    nanbox_array_pointer(arr)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_headers_has(handle: f64, key_ptr: *const StringHeader) -> f64 {
     let id = handle_id(handle);

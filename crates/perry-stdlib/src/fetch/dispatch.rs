@@ -145,11 +145,11 @@ pub fn dispatch_request_method(req_id: usize, method: &str, _args: &[f64]) -> Op
 #[doc(hidden)]
 pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
     // `response.headers` — lazily allocate a Headers registry entry
-    // backed by the response's stored header map and cache the id on the
+    // backed by the response's stored headers and cache the id on the
     // FetchResponse so repeat reads return the same handle (preserves
     // `res.headers === res.headers`). Hono's `#newResponse` mutates the
     // returned Headers object via `.set(k, v)`, but our snapshot is a
-    // copy of the response's header HashMap — mutations land on the
+    // copy of the response's HeadersStore — mutations land on the
     // Headers handle's HeadersStore, not back on the FetchResponse.
     // For the read-only case (the issue #486 acceptance) this is
     // sufficient; spec-perfect "live header view" would need the
@@ -165,7 +165,7 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
             None => {
                 let store = {
                     let guard = FETCH_RESPONSES.lock().unwrap();
-                    HeadersStore::from_hashmap(&guard.get(&resp_id)?.headers)
+                    guard.get(&resp_id)?.headers.clone()
                 };
                 let new_id = alloc_headers(store);
                 if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
@@ -211,12 +211,42 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
 }
 
 /// Try to read a property off a Headers handle by registry id.
-/// Returns `None` always today — Headers has no scalar properties exposed
-/// via property reads (`.get(k)` / `.has(k)` etc. are method calls that route
-/// through `HANDLE_METHOD_DISPATCH`).
+/// Headers exposes prototype methods as function-valued properties, so method
+/// feature checks such as `typeof headers.getSetCookie === "function"` work
+/// while call sites still route through `HANDLE_METHOD_DISPATCH`.
 #[doc(hidden)]
-pub fn dispatch_headers_property(_headers_id: usize, _prop: &str) -> Option<f64> {
-    None
+pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
+    {
+        let guard = HEADERS_REGISTRY.lock().unwrap();
+        guard.get(&headers_id)?;
+    }
+    let name_bytes: &'static [u8] = match prop {
+        "append" => b"append",
+        "delete" => b"delete",
+        "entries" => b"entries",
+        "forEach" => b"forEach",
+        "get" => b"get",
+        "getSetCookie" => b"getSetCookie",
+        "has" => b"has",
+        "keys" => b"keys",
+        "set" => b"set",
+        "values" => b"values",
+        _ => return None,
+    };
+    extern "C" {
+        fn js_class_method_bind(
+            instance: f64,
+            method_name_ptr: *const u8,
+            method_name_len: usize,
+        ) -> f64;
+    }
+    Some(unsafe {
+        js_class_method_bind(
+            handle_to_f64(headers_id),
+            name_bytes.as_ptr(),
+            name_bytes.len(),
+        )
+    })
 }
 
 /// Try to dispatch a method call on a Response handle. Returns `Some(result)`
@@ -317,6 +347,7 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
             "append" => Some(js_headers_append(h_f64, str_arg(0), str_arg(1))),
             "has" => Some(js_headers_has(h_f64, str_arg(0))),
             "delete" => Some(js_headers_delete(h_f64, str_arg(0))),
+            "getSetCookie" => Some(js_headers_get_set_cookie(h_f64)),
             "forEach" => {
                 let cb = args.first().copied().unwrap_or(f64::NAN);
                 Some(js_headers_for_each(h_f64, cb))
