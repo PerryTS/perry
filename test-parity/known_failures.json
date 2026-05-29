@@ -470,12 +470,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncIter with awaits) \u2014 wrong collected output. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/readable-mode-only": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: 'readable' event with read() drain \u2014 chunk order or count wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/from-promise-iterable": {
     "issue": "1545",
     "added": "2026-05-24",
