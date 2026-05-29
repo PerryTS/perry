@@ -532,21 +532,30 @@ pub extern "C" fn js_fs_is_directory(path_value: f64) -> i32 {
     }
 }
 
-/// Remove a file synchronously
-/// Returns 1 on success, 0 on failure
-/// Accepts NaN-boxed string path
+pub(crate) unsafe fn js_fs_unlink_result(path_value: f64) -> Result<(), f64> {
+    validate::validate_path("path", path_value);
+    let path_str = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    match fs::remove_file(&path_str) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(build_fs_error_value(&err, "unlink", &path_str)),
+    }
+}
+
+/// Remove a file synchronously.
+/// Returns 1 on success and throws a Node-shaped fs error on failure.
+/// Accepts NaN-boxed string path.
 #[no_mangle]
 pub extern "C" fn js_fs_unlink_sync(path_value: f64) -> i32 {
-    validate::validate_path("path", path_value);
     unsafe {
-        let path_str = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-
-        match fs::remove_file(path_str) {
-            Ok(_) => 1,
-            Err(_) => 0,
+        match js_fs_unlink_result(path_value) {
+            Ok(()) => 1,
+            Err(err_val) => {
+                crate::exception::js_throw(err_val);
+            }
         }
     }
 }

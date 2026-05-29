@@ -452,6 +452,16 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
 
+        // ── net module legacy/internal helpers ──
+        ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
+        ("net", "_createServerHandle") => crate::net_validate::js_net_create_server_handle_stub(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+        ),
+
         // ── perf_hooks module (performance.*) ──
         // Statically lowered at call sites (module_static.rs); these arms
         // also serve the generic namespace-object method-dispatch path.

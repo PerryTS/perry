@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1540 entries across 85 modules
+// Coverage: 1544 entries across 85 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -970,11 +970,19 @@ declare module "net" {
   /** stdlib */
   export class Socket { [key: string]: any; }
   /** stdlib */
+  export function Server(p0: any, p1: any): any;
+  /** stdlib */
   export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function _createServerHandle(p0: any, p1: any, p2: any, p3: any, p4: any): any;
+  /** stdlib */
+  export function _normalizeArgs(p0: any): any;
   /** stdlib */
   export function connect(p0: any, p1: any, p2: any): any;
   /** stdlib */
   export function createConnection(p0: any, p1: any, p2: any): any;
+  /** stdlib */
+  export function createServer(p0: any, p1: any): any;
   /** stdlib */
   export function getDefaultAutoSelectFamily(...args: any[]): any;
   /** stdlib */

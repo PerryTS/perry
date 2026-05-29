@@ -177,8 +177,10 @@ pub(crate) extern "C" fn thunk_fs_promises_unlink(
     _closure: *const ClosureHeader,
     path: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_unlink_sync(path);
-    promise_undefined()
+    match unsafe { crate::fs::js_fs_unlink_result(path) } {
+        Ok(()) => promise_undefined(),
+        Err(err_val) => promise_rejected(err_val),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_rename(

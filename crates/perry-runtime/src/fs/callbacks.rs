@@ -148,13 +148,14 @@ pub extern "C" fn js_fs_unlink_callback(path_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     let cb = last_callback(&[callback]);
     unsafe {
-        if let Some(err_val) = fs_callback_lstat_error(path_value, "unlink") {
-            call_cb_err1(cb, err_val);
-            return f64::from_bits(TAG_UNDEFINED);
+        match js_fs_unlink_result(path_value) {
+            Ok(()) => call_cb0(cb),
+            Err(err_val) => {
+                call_cb_err1(cb, err_val);
+                return f64::from_bits(TAG_UNDEFINED);
+            }
         }
     }
-    let _ = js_fs_unlink_sync(path_value);
-    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 

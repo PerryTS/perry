@@ -155,6 +155,28 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
+    // `net.createServer` and callable `net.Server` are normally rewritten to
+    // `Expr::NetCreateServer` so the one-arg listener shorthand is preserved.
+    // These rows cover less-static call sites that still reach the generic
+    // native-module dispatcher.
+    NativeModSig {
+        module: "net",
+        has_receiver: false,
+        method: "createServer",
+        class_filter: None,
+        runtime: "js_net_create_server",
+        args: &[NA_PTR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: false,
+        method: "Server",
+        class_filter: None,
+        runtime: "js_net_create_server",
+        args: &[NA_PTR, NA_PTR],
+        ret: NR_PTR,
+    },
     // Constructor: `new net.Socket()` allocates an unconnected socket
     // handle whose TCP connection is deferred until `sock.connect(port,
     // host)` runs. The HIR's `lower_new` arm rewrites `new net.Socket()`
@@ -171,6 +193,24 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_net_socket_alloc",
         args: &[],
         ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: false,
+        method: "_normalizeArgs",
+        class_filter: None,
+        runtime: "js_net_normalize_args",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: false,
+        method: "_createServerHandle",
+        class_filter: None,
+        runtime: "js_net_create_server_handle_stub",
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
     },
     // Issue #810/#811 — IP classification helpers + Happy-Eyeballs default
     // accessors. Pure string/global-flag functions, no sockets or I/O.
