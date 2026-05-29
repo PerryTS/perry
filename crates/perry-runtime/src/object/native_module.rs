@@ -335,6 +335,10 @@ pub(crate) fn set_bound_native_closure_name(
 /// builtin path at lower_call/builtin.rs that allocates a real
 /// `EventEmitterHandle`, so dispatch coherence is preserved.
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
+    if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
+        return crate::fs::lchmod_is_callable_on_this_platform();
+    }
+
     matches!(
         (module, prop),
         // #1533: node:stream `promises` namespace exports.
@@ -508,8 +512,6 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "link")
             | ("fs", "lchown")
             | ("fs", "lchownSync")
-            | ("fs", "lchmod")
-            | ("fs", "lchmodSync")
             | ("fs", "lutimes")
             | ("fs", "lutimesSync")
             | ("fs", "mkdir")
@@ -917,7 +919,13 @@ pub extern "C" fn js_native_module_bind_method(
         return js_val;
     }
 
-    // Not a constant — create a bound method closure
+    // Not a constant or JS-backed property. Only synthesize callables for
+    // exports that are actually callable on this platform; otherwise namespace
+    // reads such as Linux `fs.lchmodSync` must stay `undefined`.
+    if !is_native_module_callable_export(module_name, property_name) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
     let heap_name = unsafe {
         let layout = std::alloc::Layout::from_size_align(property_name_len, 1).unwrap();
         let ptr = std::alloc::alloc(layout);

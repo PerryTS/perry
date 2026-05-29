@@ -687,9 +687,29 @@ pub extern "C" fn js_fs_lchown_sync(path_value: f64, uid_value: f64, gid_value: 
 }
 
 /// `fs.lchmodSync(path, mode)` — chmod a symlink itself (not its target).
-/// Implemented via `lchmod(2)` on macOS/BSD; on Linux the syscall is absent so
-/// we surface failure (return 0) the same way the callback path then reports
-/// ENOSYS-equivalent. No-op success on non-unix.
+/// Implemented via `lchmod(2)` on macOS/BSD. On Linux, Node exposes the
+/// `fs.lchmodSync` property with value `undefined`, so attempted calls throw a
+/// plain TypeError before argument validation.
+pub(crate) fn lchmod_is_callable_on_this_platform() -> bool {
+    cfg!(all(
+        unix,
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "dragonfly"
+        )
+    ))
+}
+
+fn throw_plain_type_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 #[no_mangle]
 pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
     // Mode range validation is deliberately not done here: Node opens the
@@ -697,6 +717,10 @@ pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
     // would fire. Validating mode here would deviate from Node ordering on
     // paths that don't exist. The mode-validation gap on existing paths is
     // a separate follow-up.
+    if !lchmod_is_callable_on_this_platform() {
+        let _ = (path_value, mode);
+        throw_plain_type_error("fs.lchmodSync is not a function");
+    }
     crate::fs::validate::validate_path("path", path_value);
     #[cfg(all(
         unix,
@@ -741,13 +765,11 @@ pub extern "C" fn js_fs_lchmod_sync(path_value: f64, mode: f64) -> i32 {
         ))
     ))]
     {
-        let _ = (path_value, mode);
-        0
+        unreachable!("unsupported lchmod platforms throw before syscall dispatch")
     }
     #[cfg(not(unix))]
     {
-        let _ = (path_value, mode);
-        1
+        unreachable!("unsupported lchmod platforms throw before syscall dispatch")
     }
 }
 

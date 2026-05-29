@@ -670,6 +670,9 @@ pub(crate) struct FnCtx<'a> {
     /// may reference extern FFI functions that don't exist on the current
     /// target (e.g., iOS-only `hone_get_documents_dir` on macOS).
     pub compile_time_constants: &'a std::collections::HashMap<u32, f64>,
+    /// Effective LLVM target triple for this compile. Used by a few
+    /// platform-sensitive Node compatibility folds.
+    pub target_triple: &'a str,
     /// App metadata backing compile-time `perry/system` introspection APIs.
     pub app_metadata: &'a AppMetadata,
 

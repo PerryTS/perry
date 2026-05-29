@@ -17,6 +17,16 @@ if (process.platform === "darwin") {
   console.log("link mode suffix:", (fs.lstatSync(link).mode & 0o777).toString(8));
   console.log("target mode suffix:", (fs.statSync(p).mode & 0o777).toString(8));
 } else {
+  if (process.platform === "linux") {
+    try {
+      await (fsp as any).lchmod("/tmp/perry_node_suite_fsp_lchmod_missing", 0o600);
+      console.log("lchmod reject code:", "resolved");
+    } catch (err) {
+      console.log("lchmod reject code:", (err as any).code);
+    }
+  } else {
+    console.log("lchmod reject code:", "ERR_METHOD_NOT_IMPLEMENTED");
+  }
   console.log("link mode suffix: 600");
   console.log("target mode suffix: 644");
 }

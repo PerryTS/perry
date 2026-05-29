@@ -111,6 +111,17 @@ fn is_classic_stream_instance_method(ctx: &FnCtx<'_>, object: &Expr, property: &
     )
 }
 
+fn fs_lchmod_callable_on_target(target_triple: &str) -> bool {
+    let target = target_triple.to_ascii_lowercase();
+    target.contains("darwin")
+        || target.contains("macos")
+        || target.contains("ios")
+        || target.contains("freebsd")
+        || target.contains("netbsd")
+        || target.contains("openbsd")
+        || target.contains("dragonfly")
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Integer(i) => Ok(double_literal(*i as f64)),
@@ -236,17 +247,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // real, so the generic typeof already reports the right
                         // primitive/object kind (`process.pid` → "number",
                         // `os.EOL` → "string", `crypto.constants` → "object").
-                        match perry_api_manifest::module_has_symbol(module, property) {
-                            Some(e)
-                                if matches!(
-                                    e.kind,
-                                    perry_api_manifest::ApiKind::Method { .. }
-                                        | perry_api_manifest::ApiKind::Class
-                                ) =>
-                            {
-                                Some("function")
+                        if matches!(module.as_str(), "fs" | "node:fs")
+                            && matches!(property.as_str(), "lchmod" | "lchmodSync")
+                            && !fs_lchmod_callable_on_target(ctx.target_triple)
+                        {
+                            None
+                        } else {
+                            match perry_api_manifest::module_has_symbol(module, property) {
+                                Some(e)
+                                    if matches!(
+                                        e.kind,
+                                        perry_api_manifest::ApiKind::Method { .. }
+                                            | perry_api_manifest::ApiKind::Class
+                                    ) =>
+                                {
+                                    Some("function")
+                                }
+                                _ => None,
                             }
-                            _ => None,
                         }
                     } else {
                         // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
