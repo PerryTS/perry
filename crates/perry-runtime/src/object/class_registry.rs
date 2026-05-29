@@ -1717,6 +1717,18 @@ unsafe fn try_native_static_method_in_proto_chain(
     let mut cid = class_id;
     let mut depth = 0u32;
     while cid != 0 && depth < 64 {
+        if let Some(parent_addr) = class_parent_closure(cid) {
+            let parent_value = crate::value::js_nanbox_pointer(parent_addr as i64);
+            if is_buffer_constructor_value(parent_value) {
+                let module = b"buffer.Buffer";
+                let ns = js_create_native_module_namespace(module.as_ptr(), module.len());
+                let ns_obj = JSValue::from_bits(ns.to_bits()).as_pointer::<ObjectHeader>();
+                let result = dispatch_native_module_method(ns_obj, name, args_ptr, args_len);
+                if !JSValue::from_bits(result.to_bits()).is_undefined() {
+                    return Some(result);
+                }
+            }
+        }
         let proto_obj = class_prototype_object(cid);
         if !proto_obj.is_null() && (*proto_obj).class_id == NATIVE_MODULE_CLASS_ID {
             if read_native_module_name(proto_obj as *const ObjectHeader).as_deref()

@@ -62,6 +62,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             }
         }
     }
+    if is_buffer_constructor_value(type_ref) {
+        return js_instanceof(value, crate::buffer::BUFFER_TYPE_ID);
+    }
     if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
         return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
             f64::from_bits(crate::value::TAG_TRUE)

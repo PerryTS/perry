@@ -415,6 +415,13 @@ pub(crate) fn buffer_constructor_value() -> f64 {
     })
 }
 
+pub(crate) fn is_buffer_constructor_value(value: f64) -> bool {
+    BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
+        let cached = slot.get();
+        cached != 0 && cached == value.to_bits()
+    })
+}
+
 extern "C" fn util_debuglog_logger_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
