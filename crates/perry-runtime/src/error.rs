@@ -254,6 +254,39 @@ pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHead
     }
 }
 
+/// Read a `StringHeader`'s UTF-8 bytes into an owned `String` (lossy on
+/// invalid UTF-8). Empty on null.
+unsafe fn read_string_header_owned(ptr: *const StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// `Error.prototype.toString()` — ECMAScript §20.5.3.4. Returns `name` when
+/// `message` is empty, `message` when `name` is empty, otherwise
+/// `"{name}: {message}"`. Previously errors fell back to `Object.prototype`'s
+/// `"[object Object]"` for both explicit `e.toString()` and string coercion
+/// (`String(e)`, template literals), diverging from Node byte-for-byte (#2135).
+#[no_mangle]
+pub extern "C" fn js_error_to_string(error: *mut ErrorHeader) -> *mut StringHeader {
+    unsafe {
+        let name = read_string_header_owned(js_error_get_name(error));
+        let message = read_string_header_owned(js_error_get_message(error));
+        let result = if name.is_empty() {
+            message
+        } else if message.is_empty() {
+            name
+        } else {
+            format!("{name}: {message}")
+        };
+        js_string_from_bytes(result.as_ptr(), result.len() as u32)
+    }
+}
+
 /// Get the cause property of an Error (raw f64 NaN-boxed value)
 #[no_mangle]
 pub extern "C" fn js_error_get_cause(error: *mut ErrorHeader) -> f64 {
@@ -440,4 +473,34 @@ pub extern "C" fn js_throw_type_error_immutable_write(
 /// `#[no_mangle]` because callers are runtime modules, not codegen.
 pub(crate) fn throw_immutable_write(kind: u32, key: &str) -> ! {
     js_throw_type_error_immutable_write(kind, key.as_ptr(), key.len())
+}
+
+#[cfg(test)]
+mod tostring_tests {
+    use super::*;
+
+    fn s(bytes: &[u8]) -> *mut StringHeader {
+        js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+
+    #[test]
+    fn error_to_string_name_and_message() {
+        let e = js_error_new_with_message(s(b"boom"));
+        let out = unsafe { read_string_header_owned(js_error_to_string(e)) };
+        assert_eq!(out, "Error: boom");
+    }
+
+    #[test]
+    fn error_to_string_no_message_is_just_name() {
+        let e = js_error_new_with_message(s(b""));
+        let out = unsafe { read_string_header_owned(js_error_to_string(e)) };
+        assert_eq!(out, "Error");
+    }
+
+    #[test]
+    fn typed_error_to_string_uses_subclass_name() {
+        let e = js_error_new_with_name_message(b"TypeError", s(b"bad"));
+        let out = unsafe { read_string_header_owned(js_error_to_string(e)) };
+        assert_eq!(out, "TypeError: bad");
+    }
 }

@@ -256,6 +256,15 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     return js_jsvalue_to_string(primitive);
                 }
             }
+            // #2135: a built-in Error with no user-overridden `toString`
+            // resolves here. `Error.prototype.toString` is `name`/`message`/
+            // `"name: message"`, not Object.prototype's `"[object Object]"`.
+            unsafe {
+                let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
+                    return crate::error::js_error_to_string(ptr as *mut crate::error::ErrorHeader);
+                }
+            }
         }
         crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15)
     } else {
