@@ -46,34 +46,56 @@ pub(super) use native_library::{
 #[cfg(test)]
 use native_library::{split_module_spec, PERRY_FFI_ABI_VERSION};
 
+/// True when `dir` is the root of the Perry workspace (carries the
+/// marker crates the auto-optimize relink reaches for).
+fn is_perry_workspace_root(dir: &Path) -> bool {
+    dir.join("crates/perry-runtime").is_dir() && dir.join("crates/perry-ui-geisterhand").is_dir()
+}
+
+/// Locate the workspace root by walking up from the perry executable.
+///
+/// A `cargo`/dev install typically exposes `perry` as a **symlink**
+/// (e.g. `~/.cargo/bin/perry -> .../target/release/perry`).
+/// `std::env::current_exe()` returns that symlink path on macOS, so the
+/// `../../` walk would otherwise climb `~/.cargo/bin → ~/.cargo → ~` and
+/// never reach the workspace — silently dropping the per-feature
+/// `perry-ext-*` libs at link time (issue #2531; same class as #846,
+/// whose auto-optimize fix the symlink defeated). Canonicalize the exe
+/// first so the walk starts from the real `target/release/perry`.
+fn workspace_root_from_exe(exe: &Path) -> Option<PathBuf> {
+    let exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let dir = exe.parent()?;
+    // Binary in target/release/ → workspace is ../../
+    for ancestor in [
+        dir.to_path_buf(),
+        dir.join(".."),
+        dir.join("../.."),
+        dir.join("../../.."),
+    ] {
+        // A missing/uncanonicalizable ancestor must be skipped, not abort
+        // the whole search — otherwise the cwd fallback below never runs.
+        if let Ok(candidate) = std::fs::canonicalize(&ancestor) {
+            if is_perry_workspace_root(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Find the Perry workspace root by searching upward from the executable location.
 pub fn find_perry_workspace_root() -> Option<PathBuf> {
     // First try: relative to the perry executable
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            // Binary in target/release/ → workspace is ../../
-            for ancestor in [
-                dir,
-                &dir.join(".."),
-                &dir.join("../.."),
-                &dir.join("../../.."),
-            ] {
-                let candidate = std::fs::canonicalize(ancestor).ok()?;
-                if candidate.join("crates/perry-runtime").is_dir()
-                    && candidate.join("crates/perry-ui-geisterhand").is_dir()
-                {
-                    return Some(candidate);
-                }
-            }
+        if let Some(root) = workspace_root_from_exe(&exe) {
+            return Some(root);
         }
     }
     // Second try: current working directory or its ancestors
     if let Ok(cwd) = std::env::current_dir() {
         let mut dir = cwd.as_path();
         loop {
-            if dir.join("crates/perry-runtime").is_dir()
-                && dir.join("crates/perry-ui-geisterhand").is_dir()
-            {
+            if is_perry_workspace_root(dir) {
                 return Some(dir.to_path_buf());
             }
             dir = dir.parent()?;

@@ -1,5 +1,64 @@
 use super::*;
 
+/// Issue #2531 — a symlinked `perry` (the `cargo`/dev-install default,
+/// e.g. `~/.cargo/bin/perry -> .../target/release/perry`) must still
+/// locate the workspace root. Without canonicalizing the exe first, the
+/// `../../` walk climbs the symlink's own ancestors and misses the
+/// workspace, silently dropping the per-feature `perry-ext-*` libs.
+#[cfg(unix)]
+mod workspace_root_symlink_tests {
+    use super::super::workspace_root_from_exe;
+
+    #[test]
+    fn symlinked_exe_resolves_to_workspace_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+
+        // Lay out a fake workspace: <root>/target/release/perry plus the
+        // two marker crates the detector keys off of.
+        let real_dir = root.join("target/release");
+        std::fs::create_dir_all(&real_dir).expect("mkdir target/release");
+        let real_exe = real_dir.join("perry");
+        std::fs::write(&real_exe, b"#!/bin/true\n").expect("write exe");
+        std::fs::create_dir_all(root.join("crates/perry-runtime")).expect("mkdir runtime");
+        std::fs::create_dir_all(root.join("crates/perry-ui-geisterhand")).expect("mkdir gh");
+
+        // Install perry as a symlink under a sibling "bin" dir whose
+        // ancestors contain no workspace markers (mimics ~/.cargo/bin).
+        let bin_dir = root.join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
+        let link = bin_dir.join("perry");
+        std::os::unix::fs::symlink(&real_exe, &link).expect("symlink");
+
+        let found = workspace_root_from_exe(&link).expect("workspace root via symlink");
+        assert_eq!(
+            found,
+            std::fs::canonicalize(root).expect("canonicalize root")
+        );
+    }
+
+    #[test]
+    fn missing_ancestor_does_not_abort_before_match() {
+        // The real binary lives at <root>/target/release/perry; the
+        // deeper `../../../..` ancestor may climb above the tempdir but
+        // must not bail before the `../..` match at the workspace root.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let real_dir = root.join("target/release");
+        std::fs::create_dir_all(&real_dir).expect("mkdir target/release");
+        let real_exe = real_dir.join("perry");
+        std::fs::write(&real_exe, b"#!/bin/true\n").expect("write exe");
+        std::fs::create_dir_all(root.join("crates/perry-runtime")).expect("mkdir runtime");
+        std::fs::create_dir_all(root.join("crates/perry-ui-geisterhand")).expect("mkdir gh");
+
+        let found = workspace_root_from_exe(&real_exe).expect("workspace root");
+        assert_eq!(
+            found,
+            std::fs::canonicalize(root).expect("canonicalize root")
+        );
+    }
+}
+
 #[cfg(test)]
 mod abi_validation_tests {
     use super::*;
