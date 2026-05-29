@@ -1165,6 +1165,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "util/types",
         has_receiver: false,
+        method: "isAsyncFunction",
+        class_filter: None,
+        runtime: "js_util_types_is_async_function",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
         method: "isGeneratorFunction",
         class_filter: None,
         runtime: "js_util_types_is_generator_function",

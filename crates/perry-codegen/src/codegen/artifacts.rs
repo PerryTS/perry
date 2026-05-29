@@ -1206,6 +1206,17 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         })
         .collect();
 
+    let user_fn_wrapper_async: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter(|f| f.is_async || f.was_plain_async)
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| format!("__perry_wrap_{}", name))
+        })
+        .collect();
+
     let mut user_fn_wrapper_generator: std::collections::HashSet<String> = hir
         .functions
         .iter()
@@ -1313,6 +1324,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
         &user_fn_wrapper_arity,
+        &user_fn_wrapper_async,
         &user_fn_wrapper_generator,
         &user_fn_display_names,
     );

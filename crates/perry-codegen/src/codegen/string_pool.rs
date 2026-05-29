@@ -52,6 +52,10 @@ pub(super) fn emit_string_pool(
     // `user_fn_wrapper_rest` are skipped (those go through the rest
     // registry which already pins arity).
     user_fn_wrapper_arity: &[(String, u32)],
+    // Wrapper symbols for top-level async functions. Registered by function
+    // pointer so `util.types.isAsyncFunction` keeps working when the value is
+    // observed through a runtime alias instead of direct HIR.
+    user_fn_wrapper_async: &std::collections::HashSet<String>,
     // Wrapper/closure symbols whose original source form was a generator
     // function. Registered so util.types.isGeneratorFunction can distinguish
     // lowered generator state-machine closures from ordinary functions.
@@ -766,6 +770,13 @@ pub(super) fn emit_string_pool(
             "js_register_closure_arity",
             &[(PTR, &func_ref), (I32, &arity.to_string())],
         );
+    }
+
+    let mut sorted_async_wrappers: Vec<String> = user_fn_wrapper_async.iter().cloned().collect();
+    sorted_async_wrappers.sort();
+    for wrap_sym in sorted_async_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
     }
 
     let mut sorted_generator_wrappers: Vec<String> =

@@ -2049,6 +2049,15 @@ pub unsafe extern "C" fn js_native_call_method(
             return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
         }
 
+        if let Some(r) = crate::builtins::try_console_instance_method_dispatch(
+            obj,
+            method_name,
+            args_ptr,
+            args_len,
+        ) {
+            return r;
+        }
+
         // #1387: synthesized `PerformanceEntry#toJSON()`. Entry objects are
         // plain shaped objects with no stored `toJSON` field, so the
         // field-scan dispatch below would miss it. A bound-method read (from

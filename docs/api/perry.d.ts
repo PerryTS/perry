@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1505 entries across 82 modules
+// Coverage: 1506 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2076,6 +2076,8 @@ declare module "util/types" {
   export function isArrayBuffer(...args: any[]): any;
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
+  /** stdlib */
+  export function isAsyncFunction(...args: any[]): any;
   /** stdlib */
   export function isBigInt64Array(...args: any[]): any;
   /** stdlib */

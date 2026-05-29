@@ -49,6 +49,12 @@ thread_local! {
     static CLOSURE_ARITY_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// Side-table marking closure body `func_ptr`s that came from async
+    /// functions. `util.types.isAsyncFunction` uses this when the predicate
+    /// sees a runtime closure value instead of a statically-known HIR node.
+    static CLOSURE_ASYNC_FUNCTION_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, ()>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
     /// Side-table mapping closure body `func_ptr` -> true when the source
     /// function was a plain generator function. The generator transform clears
     /// HIR's `is_generator` flag after lowering to a state machine, so codegen
@@ -182,6 +188,24 @@ pub extern "C" fn js_register_closure_synthetic_arguments(func_ptr: *const u8, f
         r.borrow_mut()
             .insert(func_ptr as usize, (fixed_arity, true));
     });
+}
+
+#[no_mangle]
+pub extern "C" fn js_register_closure_async_function(func_ptr: *const u8) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_ASYNC_FUNCTION_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, ());
+    });
+}
+
+#[inline(always)]
+pub fn is_registered_async_function(func_ptr: *const u8) -> bool {
+    if func_ptr.is_null() {
+        return false;
+    }
+    CLOSURE_ASYNC_FUNCTION_REGISTRY.with(|r| r.borrow().contains_key(&(func_ptr as usize)))
 }
 
 #[inline(always)]

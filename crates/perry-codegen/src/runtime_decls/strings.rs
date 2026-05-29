@@ -156,6 +156,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // another function.
     module.declare_function("js_register_closure_synthetic_arguments", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
+    module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
@@ -520,6 +521,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_async_function", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_generator_function", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_generator_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_native_error", DOUBLE, &[DOUBLE]);
@@ -1606,6 +1608,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_console_count_reset", VOID, &[I64]);
     module.declare_function("js_console_count_value", VOID, &[DOUBLE]);
     module.declare_function("js_console_count_reset_value", VOID, &[DOUBLE]);
+    module.declare_function("js_console_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_console_group_begin", VOID, &[]);
     module.declare_function("js_console_group_end", VOID, &[]);
     module.declare_function("js_console_clear", VOID, &[]);

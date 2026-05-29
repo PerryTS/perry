@@ -11,6 +11,7 @@
 
 use anyhow::Result;
 use perry_hir::Expr;
+use perry_types::Type as HirType;
 
 use crate::expr::{
     emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
@@ -21,6 +22,26 @@ use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::try_emit_buffer_read_intrinsic;
+
+fn util_types_arg_is_async_function_static(ctx: &FnCtx<'_>, expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::FuncRef(fid) => Some(ctx.local_async_funcs.contains(fid)),
+        Expr::Closure { is_async, .. } => Some(*is_async),
+        Expr::LocalGet(id) => match ctx.local_types.get(id) {
+            Some(HirType::Function(ft)) => Some(ft.is_async),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn nanbox_bool_literal(value: bool) -> String {
+    double_literal(f64::from_bits(if value {
+        crate::nanbox::TAG_TRUE
+    } else {
+        crate::nanbox::TAG_FALSE
+    }))
+}
 
 fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
     let Expr::NativeMethodCall {
@@ -37,6 +58,24 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
     let is_direct_util_types_module = module == "util/types" && class_name.is_none();
     if !is_direct_util_types_module || object.is_some() {
         return Ok(None);
+    }
+    if method == "isAsyncFunction" {
+        if let Some(is_async) = args
+            .first()
+            .and_then(|arg| util_types_arg_is_async_function_static(ctx, arg))
+        {
+            return Ok(Some(nanbox_bool_literal(is_async)));
+        }
+        let value = if let Some(first) = args.first() {
+            lower_expr(ctx, first)?
+        } else {
+            double_literal(0.0)
+        };
+        return Ok(Some(ctx.block().call(
+            DOUBLE,
+            "js_util_types_is_async_function",
+            &[(DOUBLE, &value)],
+        )));
     }
     let Some(runtime) = (match method.as_str() {
         "isPromise" => Some("js_util_types_is_promise"),
@@ -63,6 +102,7 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isSetIterator" => Some("js_util_types_is_set_iterator"),
         "isDate" => Some("js_util_types_is_date"),
         "isRegExp" => Some("js_util_types_is_reg_exp"),
+        "isAsyncFunction" => Some("js_util_types_is_async_function"),
         "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
         "isGeneratorObject" => Some("js_util_types_is_generator_object"),
         "isNativeError" => Some("js_util_types_is_native_error"),

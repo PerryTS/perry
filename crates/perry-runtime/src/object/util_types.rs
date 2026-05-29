@@ -215,6 +215,21 @@ pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_async_function(value: f64) -> f64 {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return nanbox_bool(false);
+    }
+    let ptr = v.as_pointer::<u8>() as usize;
+    if !crate::closure::is_closure_ptr(ptr) {
+        return nanbox_bool(false);
+    }
+    let closure = ptr as *const crate::closure::ClosureHeader;
+    let is_async = unsafe { crate::closure::is_registered_async_function((*closure).func_ptr) };
+    nanbox_bool(is_async)
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_generator_function(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
     if !v.is_pointer() {

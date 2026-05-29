@@ -1043,6 +1043,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
         }
+        ("util.types", "isAsyncFunction") => crate::object::js_util_types_is_async_function(arg(0)),
         ("util.types", "isGeneratorFunction") => {
             crate::object::js_util_types_is_generator_function(arg(0))
         }
@@ -1128,6 +1129,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
         }
+        ("util/types", "isAsyncFunction") => crate::object::js_util_types_is_async_function(arg(0)),
         ("util/types", "isGeneratorFunction") => {
             crate::object::js_util_types_is_generator_function(arg(0))
         }

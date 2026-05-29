@@ -61,13 +61,15 @@ pub use console::{
     js_console_error_number, js_console_error_spread, js_console_group, js_console_group_begin,
     js_console_group_end, js_console_log, js_console_log_as_closure, js_console_log_dynamic,
     js_console_log_i32, js_console_log_i64, js_console_log_number, js_console_log_spread,
-    js_console_noop, js_console_time, js_console_time_end, js_console_time_end_value,
-    js_console_time_log, js_console_time_log_spread, js_console_time_log_value,
-    js_console_time_value, js_console_trace, js_console_trace_spread, js_console_warn_dynamic,
-    js_console_warn_i32, js_console_warn_number, js_console_warn_spread, perry_debug_trace_init,
-    perry_debug_trace_init_done, scan_console_log_singleton_roots,
+    js_console_new, js_console_noop, js_console_time, js_console_time_end,
+    js_console_time_end_value, js_console_time_log, js_console_time_log_spread,
+    js_console_time_log_value, js_console_time_value, js_console_trace, js_console_trace_spread,
+    js_console_warn_dynamic, js_console_warn_i32, js_console_warn_number, js_console_warn_spread,
+    perry_debug_trace_init, perry_debug_trace_init_done, scan_console_log_singleton_roots,
     scan_console_log_singleton_roots_mut,
 };
+
+pub(crate) use console::try_console_instance_method_dispatch;
 
 pub use formatting::{
     function_name_for_ptr, js_array_print, js_register_function_name, js_util_format,
