@@ -266,12 +266,6 @@
     "category": "bug-open",
     "reason": "node:stream: Duplex.from(asyncIterable) \u2014 async-gen \u2192 Duplex form not yet wired. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/compose/instance-method": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.prototype.compose(stream) instance method \u2014 not yet exposed (only free compose() works). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/events/finish-end-close-order": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -325,12 +319,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src, asyncGenWithAwait) \u2014 async-await handler not iterated correctly. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/compose/instance-chain": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: r.compose(t1).compose(t2) \u2014 chained compose() returns Duplex but pipeline breaks. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/compose/async-iter-handler-rejection": {
     "issue": "1531",
