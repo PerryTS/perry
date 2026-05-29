@@ -2379,6 +2379,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
     method("util", "getSystemErrorMap", false, None),
+    method("util", "parseEnv", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm

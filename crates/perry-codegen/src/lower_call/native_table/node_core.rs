@@ -1005,6 +1005,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // #2514: util.parseEnv(content) → object.
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "parseEnv",
+        class_filter: None,
+        runtime: "js_util_parse_env",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "util",
         has_receiver: false,

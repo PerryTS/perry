@@ -884,6 +884,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
             | ("util", "getSystemErrorMap")
+            | ("util", "parseEnv")
             | ("util", "isArray")
             | ("util", "promisify")
             | ("util", "callbackify")

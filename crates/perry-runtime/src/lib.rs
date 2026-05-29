@@ -143,6 +143,7 @@ mod ui_harmonyos_stubs;
 /// startup. See module docs for the ohos-napi gating story.
 pub mod ui_text_registry;
 pub mod util_parse_args;
+pub mod util_parse_env;
 pub mod util_promisify;
 pub mod util_syserr;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
