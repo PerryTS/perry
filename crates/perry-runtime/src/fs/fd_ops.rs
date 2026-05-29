@@ -502,30 +502,74 @@ pub(crate) fn writev_sync_inner(fd: i32, buffers_value: f64, position_value: f64
     })
 }
 
-pub(crate) unsafe fn build_statfs_object(
-    bsize: f64,
-    blocks: f64,
-    bfree: f64,
-    bavail: f64,
-    bigint: bool,
-) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 4);
+#[derive(Default, Clone, Copy)]
+struct StatFsFields {
+    fs_type: u64,
+    bsize: u64,
+    frsize: u64,
+    blocks: u64,
+    bfree: u64,
+    bavail: u64,
+    files: u64,
+    ffree: u64,
+}
+
+unsafe fn build_statfs_object(fields: StatFsFields, bigint: bool) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 8);
     let set = |name: &str, v: f64| {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(obj, key, v);
     };
-    if bigint {
-        set("bsize", bigint_u64_value(bsize as u64));
-        set("blocks", bigint_u64_value(blocks as u64));
-        set("bfree", bigint_u64_value(bfree as u64));
-        set("bavail", bigint_u64_value(bavail as u64));
-    } else {
-        set("bsize", bsize);
-        set("blocks", blocks);
-        set("bfree", bfree);
-        set("bavail", bavail);
+    for (name, value) in [
+        ("type", fields.fs_type),
+        ("bsize", fields.bsize),
+        ("frsize", fields.frsize),
+        ("blocks", fields.blocks),
+        ("bfree", fields.bfree),
+        ("bavail", fields.bavail),
+        ("files", fields.files),
+        ("ffree", fields.ffree),
+    ] {
+        if bigint {
+            set(name, bigint_u64_value(value));
+        } else {
+            set(name, value as f64);
+        }
     }
     f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "watchos"
+))]
+unsafe fn statfs_type(c_path: *const libc::c_char) -> u64 {
+    let mut stat: libc::statfs = std::mem::zeroed();
+    if libc::statfs(c_path, &mut stat) == 0 {
+        stat.f_type as u64
+    } else {
+        0
+    }
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "watchos"
+)))]
+unsafe fn statfs_type(_c_path: *const libc::c_char) -> u64 {
+    0
 }
 
 /// `fs.statfsSync(path)` — stable StatFs subset used by Node/Bun tests.
@@ -540,21 +584,27 @@ pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64)
     unsafe {
         let path = match decode_path_value(path_value) {
             Some(s) => s,
-            None => return build_statfs_object(0.0, 0.0, 0.0, 0.0, bigint),
+            None => return build_statfs_object(StatFsFields::default(), bigint),
         };
         #[cfg(unix)]
         {
             let c_path = match std::ffi::CString::new(path) {
                 Ok(s) => s,
-                Err(_) => return build_statfs_object(0.0, 0.0, 0.0, 0.0, bigint),
+                Err(_) => return build_statfs_object(StatFsFields::default(), bigint),
             };
             let mut stat: libc::statvfs = std::mem::zeroed();
             if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
                 return build_statfs_object(
-                    stat.f_bsize as f64,
-                    stat.f_blocks as f64,
-                    stat.f_bfree as f64,
-                    stat.f_bavail as f64,
+                    StatFsFields {
+                        fs_type: statfs_type(c_path.as_ptr()),
+                        bsize: stat.f_bsize as u64,
+                        frsize: stat.f_frsize as u64,
+                        blocks: stat.f_blocks as u64,
+                        bfree: stat.f_bfree as u64,
+                        bavail: stat.f_bavail as u64,
+                        files: stat.f_files as u64,
+                        ffree: stat.f_ffree as u64,
+                    },
                     bigint,
                 );
             }
@@ -563,7 +613,7 @@ pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64)
         {
             let _ = path;
         }
-        build_statfs_object(0.0, 0.0, 0.0, 0.0, bigint)
+        build_statfs_object(StatFsFields::default(), bigint)
     }
 }
 
