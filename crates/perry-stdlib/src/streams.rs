@@ -1118,7 +1118,11 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through(
     transform_writable_handle: f64,
     transform_readable_handle: f64,
 ) -> f64 {
-    let _ = js_readable_stream_pipe_to(readable_handle, transform_writable_handle);
+    let _ = js_readable_stream_pipe_to(
+        readable_handle,
+        transform_writable_handle,
+        f64::from_bits(TAG_UNDEFINED),
+    );
     transform_readable_handle
 }
 
@@ -1715,6 +1719,10 @@ pub(crate) unsafe fn dispatch_stream_method(
         .first()
         .copied()
         .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    let arg1 = args
+        .get(1)
+        .copied()
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
 
     // Probe each registry for membership first (dropping the guard before we
     // call the FFI, which re-locks the same registry).
@@ -1744,7 +1752,7 @@ pub(crate) unsafe fn dispatch_stream_method(
             "values" | "@@asyncIterator" => return Some(js_readable_stream_values(handle)),
             "cancel" => return Some(box_promise(js_readable_stream_cancel(handle, arg0))),
             "tee" => return Some(js_readable_stream_tee(handle)),
-            "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0))),
+            "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0, arg1))),
             // #1644: a readable handle is also its own controller. The
             // start/transform/flush callbacks receive it as `controller`, so
             // `controller.enqueue/close/error/terminate` dispatch here when the

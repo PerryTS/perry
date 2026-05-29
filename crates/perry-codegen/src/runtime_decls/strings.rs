@@ -1775,7 +1775,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_readable_stream_locked", DOUBLE, &[DOUBLE]);
     module.declare_function("js_readable_stream_cancel", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_readable_stream_tee", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_readable_stream_pipe_to", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_readable_stream_pipe_to", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function(
         "js_readable_stream_pipe_through",
         DOUBLE,
