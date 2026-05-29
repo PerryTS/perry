@@ -170,11 +170,12 @@ pub(super) fn try_global_builtins(
                 }
             }
             "queueMicrotask" => {
-                if !args.is_empty() {
-                    return Ok(Ok(Expr::QueueMicrotask(Box::new(args.remove(0)))));
+                let callback = if !args.is_empty() {
+                    args.remove(0)
                 } else {
-                    return Err(anyhow!("queueMicrotask requires one argument"));
-                }
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::QueueMicrotask(Box::new(callback))));
             }
             "Symbol" => {
                 // Symbol() / Symbol(description)

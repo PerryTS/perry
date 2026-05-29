@@ -505,7 +505,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::QueueMicrotask(cb) => {
             let cb_box = lower_expr(ctx, cb)?;
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, "-1")],
+            );
             blk.call_void("js_queue_microtask", &[(I64, &cb_handle)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
