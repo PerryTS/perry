@@ -54,6 +54,8 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isFloat32Array" => Some("js_util_types_is_float32_array"),
         "isFloat64Array" => Some("js_util_types_is_float64_array"),
         "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
+        "isBigInt64Array" => Some("js_util_types_is_big_int64_array"),
+        "isBigUint64Array" => Some("js_util_types_is_big_uint64_array"),
         "isMap" => Some("js_util_types_is_map"),
         "isMapIterator" => Some("js_util_types_is_map_iterator"),
         "isProxy" => Some("js_util_types_is_proxy"),

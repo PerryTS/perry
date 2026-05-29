@@ -167,6 +167,16 @@ pub extern "C" fn js_util_types_is_uint8_clamped_array(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_big_int64_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_BIGINT64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_big_uint64_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_BIGUINT64))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_map(value: f64) -> f64 {
     nanbox_bool(crate::map::is_registered_map(jsvalue_addr(value)))
 }

@@ -1027,6 +1027,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isUint8ClampedArray") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
+        ("util.types", "isBigInt64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGINT64))
+        }
+        ("util.types", "isBigUint64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGUINT64))
+        }
         ("util.types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util.types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
         ("util.types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
@@ -1099,6 +1105,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("util/types", "isUint8ClampedArray") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
+        }
+        ("util/types", "isBigInt64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGINT64))
+        }
+        ("util/types", "isBigUint64Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGUINT64))
         }
         ("util/types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util/types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),

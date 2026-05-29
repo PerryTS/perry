@@ -2411,6 +2411,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isFloat32Array", false, None),
     method("util/types", "isFloat64Array", false, None),
     method("util/types", "isUint8ClampedArray", false, None),
+    method("util/types", "isBigInt64Array", false, None),
+    method("util/types", "isBigUint64Array", false, None),
     method("util/types", "isMap", false, None),
     method("util/types", "isMapIterator", false, None),
     method("util/types", "isProxy", false, None),

@@ -513,6 +513,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_float32_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_float64_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint8_clamped_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_big_int64_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_big_uint64_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
