@@ -715,6 +715,17 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(array, out);
             walk(value, out);
         }
+        Expr::ArrayLastIndexOf {
+            array,
+            value,
+            from_index,
+        } => {
+            walk(array, out);
+            walk(value, out);
+            if let Some(fi) = from_index {
+                walk(fi, out);
+            }
+        }
         Expr::ArraySome { array, callback } | Expr::ArrayEvery { array, callback } => {
             walk(array, out);
             walk(callback, out);

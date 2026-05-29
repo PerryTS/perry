@@ -597,6 +597,17 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(array, candidates, classes, escaped);
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
+        Expr::ArrayLastIndexOf {
+            array,
+            value,
+            from_index,
+        } => {
+            check_escapes_in_expr(array, candidates, classes, escaped);
+            check_escapes_in_expr(value, candidates, classes, escaped);
+            if let Some(fi) = from_index {
+                check_escapes_in_expr(fi, candidates, classes, escaped);
+            }
+        }
         Expr::NewDynamic { callee, args } => {
             check_escapes_in_expr(callee, candidates, classes, escaped);
             for a in args {

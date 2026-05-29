@@ -457,6 +457,17 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(array, non_escaping_news, used);
             collect_used_new_fields_in_expr(value, non_escaping_news, used);
         }
+        Expr::ArrayLastIndexOf {
+            array,
+            value,
+            from_index,
+        } => {
+            collect_used_new_fields_in_expr(array, non_escaping_news, used);
+            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+            if let Some(fi) = from_index {
+                collect_used_new_fields_in_expr(fi, non_escaping_news, used);
+            }
+        }
         Expr::I18nString { params, .. } => {
             for (_, value) in params {
                 collect_used_new_fields_in_expr(value, non_escaping_news, used);

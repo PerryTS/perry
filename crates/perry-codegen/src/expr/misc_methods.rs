@@ -455,6 +455,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
 
+        // arr.lastIndexOf(value, fromIndex?) — mirrors ArrayIndexOf + the
+        // `lower_array_method::lastIndexOf` arm. Routed here (instead of the
+        // string `lastIndexOf`) for known-not-string / typed-array locals.
+        Expr::ArrayLastIndexOf {
+            array,
+            value,
+            from_index,
+        } => {
+            let arr_box = lower_expr(ctx, array)?;
+            let v = lower_expr(ctx, value)?;
+            // With a fromIndex, pass has_from=1 + the lowered index; without,
+            // pass has_from=0 and reuse `v` as an ignored placeholder DOUBLE
+            // operand (runtime defaults to length-1).
+            let (from_box, has_from) = match from_index {
+                Some(fi) => (lower_expr(ctx, fi)?, "1"),
+                None => (v.clone(), "0"),
+            };
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let i32_v = blk.call(
+                I32,
+                "js_array_last_index_of_jsvalue",
+                &[
+                    (I64, &arr_handle),
+                    (DOUBLE, &v),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
+            );
+            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+        }
+
         // -------- arr.forEach(callback) — invoke callback for side effects --------
         // We don't actually iterate; just lower the callback for side
         // effects (so closures get auto-collected) and return undefined.

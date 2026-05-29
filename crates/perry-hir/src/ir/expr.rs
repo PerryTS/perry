@@ -1197,6 +1197,11 @@ pub enum Expr {
         array: Box<Expr>,
         value: Box<Expr>,
     }, // arr.indexOf(value) -> index
+    ArrayLastIndexOf {
+        array: Box<Expr>,
+        value: Box<Expr>,
+        from_index: Option<Box<Expr>>,
+    }, // arr.lastIndexOf(value, fromIndex?) -> index
     ArrayIncludes {
         array: Box<Expr>,
         value: Box<Expr>,

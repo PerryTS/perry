@@ -394,6 +394,17 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             array: Box::new(substitute_expr(array, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
         },
+        Expr::ArrayLastIndexOf {
+            array,
+            value,
+            from_index,
+        } => Expr::ArrayLastIndexOf {
+            array: Box::new(substitute_expr(array, substitutions)),
+            value: Box::new(substitute_expr(value, substitutions)),
+            from_index: from_index
+                .as_ref()
+                .map(|fi| Box::new(substitute_expr(fi, substitutions))),
+        },
         Expr::ArrayIncludes { array, value } => Expr::ArrayIncludes {
             array: Box::new(substitute_expr(array, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),

@@ -81,9 +81,41 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
     if arr.is_null() {
         return -1;
     }
-    // NB: TypedArray `lastIndexOf` does NOT reach here — the HIR lowers it to
-    // the string `lastIndexOf` path (`js_string_last_index_of`), so a typed
-    // branch would be dead code. Tracked as a separate codegen-routing fix.
+    // TypedArray: backward strict-equality numeric search over the typed
+    // store (#2457 routes `Int32Array(..).lastIndexOf` here via the new
+    // `Expr::ArrayLastIndexOf` lowering). Mirrors the `indexOf` typed branch.
+    if let Some((ta, tlen)) = as_typed_array(arr) {
+        let length = tlen as i64;
+        if length == 0 {
+            return -1;
+        }
+        let start: i64 = if has_from == 0 {
+            length - 1
+        } else {
+            let n = if from_index.is_nan() {
+                0.0
+            } else {
+                from_index.trunc()
+            };
+            if n >= length as f64 {
+                length - 1
+            } else if n >= 0.0 {
+                n as i64
+            } else if n >= -(length as f64) {
+                length + (n as i64)
+            } else {
+                return -1;
+            }
+        };
+        let mut i = start;
+        while i >= 0 {
+            if crate::typedarray::js_typed_array_get(ta, i as i32) == value {
+                return i as i32;
+            }
+            i -= 1;
+        }
+        return -1;
+    }
     unsafe {
         let length = (*arr).length as i64;
         if length == 0 {
@@ -214,5 +246,25 @@ mod typed_search_tests {
         assert_eq!(js_array_includes_jsvalue(arr, f64::NAN), 1);
         assert_eq!(js_array_indexOf_jsvalue(arr, f64::NAN), -1);
         assert_eq!(js_array_indexOf_jsvalue(arr, 2.5), 2);
+    }
+
+    /// `lastIndexOf` on a registered TypedArray scans the typed backing store
+    /// backward (#2457). Without a fromIndex it starts at the last element;
+    /// with one it clamps like the array path.
+    #[test]
+    fn typed_array_last_index_of() {
+        // Int32Array([1, 2, 3, 2, 1])
+        let ta = js_typed_array_new_empty(KIND_INT32 as i32, 5);
+        for (i, v) in [1.0, 2.0, 3.0, 2.0, 1.0].iter().enumerate() {
+            js_typed_array_set(ta, i as i32, *v);
+        }
+        let arr = ta as *const ArrayHeader;
+        // no fromIndex (has_from = 0): highest match.
+        assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 0.0, 0), 3);
+        assert_eq!(js_array_last_index_of_jsvalue(arr, 9.0, 0.0, 0), -1);
+        // fromIndex = 2: search backward from index 2.
+        assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 2.0, 1), 1);
+        // strict equality → NaN never matches.
+        assert_eq!(js_array_last_index_of_jsvalue(arr, f64::NAN, 0.0, 0), -1);
     }
 }

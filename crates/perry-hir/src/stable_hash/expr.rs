@@ -319,6 +319,7 @@ impl SH for Expr {
             Expr::ArrayShift(id) => { tag(h, 252); id.hash(h); }
             Expr::ArrayUnshift { array_id, value } => { tag(h, 253); array_id.hash(h); value.as_ref().hash(h); }
             Expr::ArrayIndexOf { array, value } => { tag(h, 254); array.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::ArrayLastIndexOf { array, value, from_index } => { tag(h, 11244); array.as_ref().hash(h); value.as_ref().hash(h); if let Some(fi) = from_index { tag(h, 1); fi.as_ref().hash(h); } else { tag(h, 0); } }
             Expr::ArrayIncludes { array, value } => { tag(h, 255); array.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ArraySlice { array, start, end } => { tag(h, 256); array.as_ref().hash(h); start.as_ref().hash(h); end.hash(h); }
             Expr::ArraySplice { array_id, start, delete_count, items, } => { tag(h, 257); array_id.hash(h); start.as_ref().hash(h); delete_count.hash(h); items.hash(h); }

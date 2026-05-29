@@ -1324,6 +1324,17 @@ where
             f(array);
             f(value);
         }
+        Expr::ArrayLastIndexOf {
+            array,
+            value,
+            from_index,
+        } => {
+            f(array);
+            f(value);
+            if let Some(fi) = from_index {
+                f(fi);
+            }
+        }
         Expr::ArraySlice { array, start, end } => {
             f(array);
             f(start);

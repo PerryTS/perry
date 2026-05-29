@@ -117,7 +117,10 @@ pub(super) fn try_local_array_methods(
                     Some(Type::Named(n))
                         if n == "Uint8Array" || n == "Buffer" || n == "Uint8ClampedArray"
                 );
-                let is_ambiguous_method = matches!(method_name, "indexOf" | "includes" | "slice");
+                let is_ambiguous_method = matches!(
+                    method_name,
+                    "indexOf" | "includes" | "slice" | "lastIndexOf"
+                );
                 let is_not_string = if is_known_string {
                     false // definitely a string, skip array block
                 } else if is_user_class_instance {
@@ -205,6 +208,23 @@ pub(super) fn try_local_array_methods(
                                     return Ok(Ok(Expr::ArrayIncludes {
                                         array: Box::new(Expr::LocalGet(array_id)),
                                         value: Box::new(args.into_iter().next().unwrap()),
+                                    }));
+                                }
+                            }
+                            // arr.lastIndexOf(value, fromIndex?) — route to the
+                            // array runtime fn. Without this, a known-not-string
+                            // / typed-array local fell through to the *string*
+                            // lastIndexOf (#2457): `new Int32Array(...).lastIndexOf`
+                            // threw "(number).lastIndexOf is not a function".
+                            "lastIndexOf" => {
+                                if !args.is_empty() {
+                                    let mut it = args.into_iter();
+                                    let value = it.next().unwrap();
+                                    let from_index = it.next().map(Box::new);
+                                    return Ok(Ok(Expr::ArrayLastIndexOf {
+                                        array: Box::new(Expr::LocalGet(array_id)),
+                                        value: Box::new(value),
+                                        from_index,
                                     }));
                                 }
                             }
