@@ -70,6 +70,12 @@ pub fn describe_received(value: f64) -> String {
     if jv.is_bool() {
         return format!("type boolean ({})", jv.as_bool());
     }
+    if jv.is_any_string() {
+        return format!("type string ({})", inspect_string_for_received(value));
+    }
+    if jv.is_bigint() {
+        return format!("type bigint ({}n)", bigint_decimal(value));
+    }
     if is_numeric(jv) {
         let n = if jv.is_int32() {
             jv.as_int32() as f64
@@ -93,6 +99,59 @@ pub fn describe_received(value: f64) -> String {
         return "an instance of Object".to_string();
     }
     "an unsupported value".to_string()
+}
+
+/// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
+/// `String`. Used by `describe_received` to render a `Received type string
+/// ('…')` clause.
+fn read_js_string(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+/// Render a string the way Node's `determineSpecificType` does for the
+/// `Received …` clause: single-quoted (switched to double quotes when the
+/// content has a single quote but no double quote), then truncated to 25
+/// characters plus `...` once the quoted form exceeds 28 characters.
+fn inspect_string_for_received(value: f64) -> String {
+    let content = read_js_string(value);
+    let quote = if content.contains('\'') && !content.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let inspected = format!("{quote}{content}{quote}");
+    if inspected.chars().count() > 28 {
+        let truncated: String = inspected.chars().take(25).collect();
+        format!("{truncated}...")
+    } else {
+        inspected
+    }
+}
+
+/// Decimal rendering of a BigInt value for the `Received type bigint (…n)`
+/// clause.
+fn bigint_decimal(value: f64) -> String {
+    let ptr = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::bigint::BigIntHeader;
+    if ptr.is_null() {
+        return "0".to_string();
+    }
+    let s = crate::bigint::js_bigint_to_string(ptr);
+    if s.is_null() {
+        return "0".to_string();
+    }
+    unsafe {
+        let len = (*s).byte_len as usize;
+        let data = (s as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
 }
 
 /// Throw `TypeError [ERR_INVALID_ARG_TYPE]` for a bad path argument, matching

@@ -462,7 +462,11 @@ pub(super) fn try_native_module_methods(
                             }));
                         }
                         "alloc" => {
-                            let size = args.first().cloned().unwrap_or(Expr::Number(0.0));
+                            // #2013: a missing `size` must surface Node's
+                            // `ERR_INVALID_ARG_TYPE` (Received undefined), so
+                            // default to `undefined` — not `0` — and let the
+                            // runtime validator throw.
+                            let size = args.first().cloned().unwrap_or(Expr::Undefined);
                             let fill = args.get(1).cloned().map(Box::new);
                             let encoding = args.get(2).cloned().map(Box::new);
                             return Ok(Ok(Expr::BufferAlloc {
@@ -472,7 +476,8 @@ pub(super) fn try_native_module_methods(
                             }));
                         }
                         "allocUnsafe" | "allocUnsafeSlow" => {
-                            let size = args.first().cloned().unwrap_or(Expr::Number(0.0));
+                            // #2013: missing `size` → Node ERR_INVALID_ARG_TYPE.
+                            let size = args.first().cloned().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::BufferAllocUnsafe(Box::new(size))));
                         }
                         "concat" => {

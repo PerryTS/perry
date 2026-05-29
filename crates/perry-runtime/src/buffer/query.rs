@@ -128,6 +128,9 @@ pub extern "C" fn js_buffer_byte_length(str_ptr: *const StringHeader) -> i32 {
 /// Node-style `Buffer.byteLength(value, encoding?)`.
 #[no_mangle]
 pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 {
+    // #2013: reject a non string/Buffer/ArrayBuffer/TypedArray first argument
+    // with `ERR_INVALID_ARG_TYPE`, matching Node.
+    super::validate::validate_byte_length_arg(value);
     let bits = value.to_bits();
     let jsval = crate::JSValue::from_bits(bits);
 

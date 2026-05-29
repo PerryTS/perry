@@ -20,6 +20,7 @@ mod mutate;
 mod numeric;
 mod query;
 mod transcode;
+pub mod validate;
 mod view;
 
 // ---- Re-exports: types & constants ----
@@ -102,6 +103,9 @@ pub use coding::{
 
 // ---- Re-exports: transcode (FFI) ----
 pub use transcode::js_buffer_transcode;
+
+// ---- Re-exports: Node argument validation (FFI, #2013) ----
+pub use validate::{js_buffer_validate_concat_list, js_buffer_validate_size};
 
 // ---- Re-exports: iterator surface (FFI + dispatch hook) ----
 pub use iter::{
