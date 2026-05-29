@@ -42,7 +42,8 @@ pub(crate) use constraints::{check_class_constraints, check_function_constraints
 pub(crate) use context::ModuleIndex;
 pub(crate) use defaults::fill_default_arguments;
 pub(crate) use infer::{
-    infer_type_args, infer_type_args_for_class, type_contains_type_var, unify_types,
+    infer_type_args, infer_type_args_for_class, is_array_like_generic, type_contains_type_var,
+    unify_rest_param_types, unify_types,
 };
 pub(crate) use inference_lookup::{ClassInfo, FuncInfo, InferenceLookup};
 pub(crate) use mangle::{generate_specialized_name, mangle_type, mangle_type_args};

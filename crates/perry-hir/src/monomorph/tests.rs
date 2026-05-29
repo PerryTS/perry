@@ -338,3 +338,114 @@ fn test_type_inference_string() {
         "Return type should be String"
     );
 }
+
+#[test]
+fn test_type_inference_rest_type_var_binds_tuple() {
+    let collect_func = Function {
+        id: 1,
+        name: "collect".to_string(),
+        type_params: vec![TypeParam {
+            name: "Params".to_string(),
+            constraint: Some(Box::new(Type::Generic {
+                base: "ReadonlyArray".to_string(),
+                type_args: vec![Type::String],
+            })),
+            default: None,
+        }],
+        params: vec![Param {
+            id: 0,
+            name: "params".to_string(),
+            ty: Type::TypeVar("Params".to_string()),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: true,
+        }],
+        return_type: Type::TypeVar("Params".to_string()),
+        body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
+        is_async: false,
+        is_generator: false,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+    };
+
+    let mut module = Module::new("test");
+    module.functions.push(collect_func);
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![
+            Expr::String("a".to_string()),
+            Expr::String("b".to_string()),
+            Expr::String("c".to_string()),
+        ],
+        type_args: vec![],
+    }));
+
+    monomorphize_module(&mut module);
+
+    let specialized = module
+        .functions
+        .iter()
+        .find(|f| f.name == "collect$tup_str_str_str")
+        .expect("rest type variable should specialize as the trailing tuple");
+
+    assert!(specialized.params[0].is_rest);
+    assert_eq!(
+        specialized.params[0].ty,
+        Type::Tuple(vec![Type::String, Type::String, Type::String])
+    );
+}
+
+#[test]
+fn test_type_inference_rest_array_binds_element_type() {
+    let collect_func = Function {
+        id: 1,
+        name: "collect".to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }],
+        params: vec![Param {
+            id: 0,
+            name: "items".to_string(),
+            ty: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: true,
+        }],
+        return_type: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+        body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
+        is_async: false,
+        is_generator: false,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+    };
+
+    let mut module = Module::new("test");
+    module.functions.push(collect_func);
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::String("a".to_string()), Expr::String("b".to_string())],
+        type_args: vec![],
+    }));
+
+    monomorphize_module(&mut module);
+
+    let specialized = module
+        .functions
+        .iter()
+        .find(|f| f.name == "collect$str")
+        .expect("rest array should specialize by element type");
+
+    assert!(specialized.params[0].is_rest);
+    assert_eq!(
+        specialized.params[0].ty,
+        Type::Array(Box::new(Type::String))
+    );
+}

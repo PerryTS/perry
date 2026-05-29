@@ -57,6 +57,11 @@ fn check_constraint(
         Type::Array(elem_constraint) => {
             if let Type::Array(elem_type) = concrete_type {
                 check_constraint(type_param, elem_type, elem_constraint, module, idx)
+            } else if let Type::Tuple(elem_types) = concrete_type {
+                for elem_type in elem_types {
+                    check_constraint(type_param, elem_type, elem_constraint, module, idx)?;
+                }
+                Ok(())
             } else {
                 Err(ConstraintError::TypeMismatch {
                     type_param: type_param.to_string(),
@@ -259,6 +264,31 @@ fn types_satisfy(actual: &Type, expected: &Type) -> bool {
         (Type::Boolean, Type::Boolean) => true,
         (Type::BigInt, Type::BigInt) => true,
         (Type::Array(a), Type::Array(b)) => types_satisfy(a, b),
+        (Type::Array(elem), Type::Generic { base, type_args })
+            if super::is_array_like_generic(base) && type_args.len() == 1 =>
+        {
+            types_satisfy(elem, &type_args[0])
+        }
+        (Type::Tuple(elems), Type::Generic { base, type_args })
+            if super::is_array_like_generic(base) && type_args.len() == 1 =>
+        {
+            elems.iter().all(|elem| types_satisfy(elem, &type_args[0]))
+        }
+        (
+            Type::Generic {
+                base: actual_base,
+                type_args: actual_args,
+            },
+            Type::Generic {
+                base: expected_base,
+                type_args: expected_args,
+            },
+        ) if actual_base == expected_base && actual_args.len() == expected_args.len() => {
+            actual_args
+                .iter()
+                .zip(expected_args.iter())
+                .all(|(actual_arg, expected_arg)| types_satisfy(actual_arg, expected_arg))
+        }
         (Type::Named(a), Type::Named(b)) => a == b,
         _ => actual == expected,
     }
