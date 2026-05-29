@@ -247,6 +247,28 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p perry-runtime
           cargo build --release --target ${{ matrix.target }} -p perry-stdlib
 
+      - name: Build native ext libraries (Unix)
+        # #2532 — the perry-ext-* wrapper crates ship the host functions for
+        # node:http (server), ws, net, zlib, fastify, the db drivers, etc.
+        # They are NOT dependencies of perry-stdlib, so `cargo build -p
+        # perry-stdlib` above does not produce them. An out-of-tree install
+        # needs the prebuilt `libperry_ext_*.a` sitting next to
+        # libperry_runtime.a so `perry compile` can link them without a
+        # workspace checkout (see optimized_libs.rs::resolve_prebuilt_ext_libs).
+        # Best-effort per crate: a wrapper that can't build on this host must
+        # not fail the whole release — the packaging glob below ships
+        # whatever was produced.
+        if: runner.os != 'Windows'
+        run: |
+          for d in crates/perry-ext-*; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            echo "::group::build $name"
+            cargo build --release --target ${{ matrix.target }} -p "$name" \
+              || echo "  (skipped $name — failed to build on this host)"
+            echo "::endgroup::"
+          done
+
       - name: Build UI library (macOS)
         if: runner.os == 'macOS'
         run: cargo build --release --target ${{ matrix.target }} -p perry-ui-macos
@@ -365,6 +387,14 @@ jobs:
             if [ -f "target/${{ matrix.target }}/release/$lib" ]; then
               cp "target/${{ matrix.target }}/release/$lib" staging/
             fi
+          done
+          # #2532 — ship the perry-ext-* staticlibs so an out-of-tree install
+          # can link node:http server / ws / net / zlib / fastify / db
+          # drivers without the workspace source. `perry compile` finds them
+          # via the same exe-dir / PERRY_LIB_DIR search as the runtime/stdlib
+          # libs (optimized_libs.rs::resolve_prebuilt_ext_libs).
+          for lib in target/${{ matrix.target }}/release/libperry_ext_*.a; do
+            [ -f "$lib" ] && cp "$lib" staging/
           done
           # Closes #394: macOS legs also ship iOS-cross-compiled libs.
           # Device variant uses the canonical `_ios` suffix; simulator
