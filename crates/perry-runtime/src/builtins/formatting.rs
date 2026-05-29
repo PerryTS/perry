@@ -9,8 +9,13 @@
 use super::println;
 use super::*;
 
+mod array_buffer;
 mod boxed_primitives;
+pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 mod collections;
+mod strip_vt;
+
+pub use strip_vt::js_util_strip_vt_control_characters;
 
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
@@ -588,6 +593,20 @@ unsafe fn format_error_value(error_ptr: *const crate::error::ErrorHeader, depth:
     out
 }
 
+/// #2089: a Date's `util.inspect` rendering — ISO string (unquoted) or "Invalid Date". DateCell pointer only (gated by callers).
+unsafe fn date_inspect_string(value: f64) -> String {
+    let s_ptr = crate::date::js_date_to_iso_string(value);
+    if s_ptr.is_null() {
+        return "Invalid Date".to_string();
+    }
+    let len = (*s_ptr).byte_len as usize;
+    let data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes)
+        .unwrap_or("Invalid Date")
+        .to_string()
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -650,6 +669,19 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // Typed array — Int32Array(N) [ a, b, c ] etc.
                 let ta = ptr as *const crate::typedarray::TypedArrayHeader;
                 crate::typedarray::format_typed_array(ta)
+            } else if crate::buffer::is_data_view(ptr as usize) {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                array_buffer::format_data_view_value(buf_ptr)
+            } else if crate::buffer::is_any_array_buffer(ptr as usize)
+                && !crate::buffer::is_uint8array_buffer(ptr as usize)
+            {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                let label = if crate::buffer::is_shared_array_buffer(ptr as usize) {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                };
+                array_buffer::format_array_buffer_value(buf_ptr, label)
             } else if crate::buffer::is_registered_buffer(ptr as usize) {
                 // Buffer/Uint8Array — `<Buffer xx xx ...>`. No GC header, so
                 // this must precede the GC_HEADER_SIZE arithmetic below (which
@@ -664,6 +696,12 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
             } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
                 let target = crate::proxy::js_proxy_target(value);
                 format_jsvalue(target, depth)
+            } else if crate::date::is_date_cell_addr(ptr as usize) {
+                // #2089: a Date is a NaN-boxed `DateCell` pointer. Node's
+                // `util.inspect` prints the ISO string unquoted (or
+                // `Invalid Date`). Handle before the GC-header object dispatch
+                // below, which would deref the 8-byte cell as an ObjectHeader.
+                date_inspect_string(value)
             } else if (ptr as usize) < 0x100000 {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
                 // POINTER_TAG values whose payload is a small registry id, NOT
@@ -1041,6 +1079,7 @@ unsafe fn format_object_as_json(
         }
     }
 
+    let boxed_base = boxed_primitives::boxed_primitive_base_for_object(obj_ptr);
     let class_name = {
         let class_id = (*obj_ptr).class_id;
         if class_id == 0 {
@@ -1050,20 +1089,22 @@ unsafe fn format_object_as_json(
         }
     };
     let class_name_ref = class_name.as_deref();
-    let empty_object = || match class_name_ref {
-        Some(name) => format!("{name} {{}}"),
-        None => "{}".to_string(),
+    let empty_object = || {
+        if let Some(base) = boxed_base.as_deref() {
+            return base.to_string();
+        }
+        match class_name_ref {
+            Some(name) => format!("{name} {{}}"),
+            None => "{}".to_string(),
+        }
     };
 
     let keys_array = (*obj_ptr).keys_array;
-    if keys_array.is_null() {
-        return empty_object();
-    }
-
-    let key_count = crate::array::js_array_length(keys_array) as usize;
-    if key_count == 0 {
-        return empty_object();
-    }
+    let key_count = if keys_array.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(keys_array) as usize
+    };
 
     // Honor `Object.defineProperty(..., { enumerable: false })`. By default
     // we include every key in the `keys_array` (enumerability is rarely
@@ -1167,9 +1208,10 @@ unsafe fn format_object_as_json(
     if parts.is_empty() {
         return empty_object();
     }
-    let single_line = match class_name_ref {
-        Some(name) => format!("{} {{ {} }}", name, parts.join(", ")),
-        None => format!("{{ {} }}", parts.join(", ")),
+    let single_line = match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{ {} }}", base, parts.join(", ")),
+        (None, Some(name)) => format!("{} {{ {} }}", name, parts.join(", ")),
+        (None, None) => format!("{{ {} }}", parts.join(", ")),
     };
     // Node's `util.inspect` switches to multi-line layout when the single-line
     // rendering would exceed `breakLength` (default 80). The threshold is
@@ -1193,9 +1235,10 @@ unsafe fn format_object_as_json(
         .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
-    match class_name_ref {
-        Some(name) => format!("{} {{\n{}\n}}", name, body),
-        None => format!("{{\n{}\n}}", body),
+    match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{\n{}\n}}", base, body),
+        (None, Some(name)) => format!("{} {{\n{}\n}}", name, body),
+        (None, None) => format!("{{\n{}\n}}", body),
     }
 }
 
@@ -1289,6 +1332,11 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 if crate::proxy::js_proxy_is_proxy(value) != 0 {
                     let target = crate::proxy::js_proxy_target(value);
                     format_jsvalue_for_json(target, depth)
+                } else if crate::date::is_date_cell_addr(ptr as usize) {
+                    // #2089: Date inside an inspected object — ISO string
+                    // unquoted (or `Invalid Date`), not the 8-byte cell deref'd
+                    // as an object.
+                    date_inspect_string(value)
                 } else if (ptr as usize) < 0x100000 {
                     "[object Object]".to_string()
                 } else if crate::symbol::is_registered_symbol(ptr as usize)
@@ -1903,77 +1951,6 @@ pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
             || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
     };
     f64::from_bits(crate::value::JSValue::bool(equal).bits())
-}
-
-#[no_mangle]
-pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
-    unsafe {
-        let s_ptr = crate::value::js_jsvalue_to_string(value);
-        let input = if s_ptr.is_null() {
-            String::new()
-        } else {
-            let len = (*s_ptr).byte_len as usize;
-            let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            std::str::from_utf8(bytes).unwrap_or("").to_string()
-        };
-        let mut out = String::with_capacity(input.len());
-        let bytes = input.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == 0x1b {
-                let start = i;
-                i += 1;
-                if i < bytes.len() && bytes[i] == b'[' {
-                    i += 1;
-                    while i < bytes.len() {
-                        let b = bytes[i];
-                        i += 1;
-                        if (0x40..=0x7e).contains(&b) {
-                            break;
-                        }
-                    }
-                    continue;
-                } else if i < bytes.len() && bytes[i] == b']' {
-                    i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                    continue;
-                }
-                out.push_str(&input[start..i]);
-            } else {
-                // Preserve multi-byte UTF-8 sequences: advance by the
-                // full code-point width instead of casting one byte to
-                // char (which mangles non-ASCII, e.g. "café" → "cafÃ©").
-                let lead = bytes[i];
-                let width = if lead < 0x80 {
-                    1
-                } else if lead < 0xc0 {
-                    1 // stray continuation byte; copy verbatim
-                } else if lead < 0xe0 {
-                    2
-                } else if lead < 0xf0 {
-                    3
-                } else {
-                    4
-                };
-                let end = (i + width).min(bytes.len());
-                out.push_str(std::str::from_utf8(&bytes[i..end]).unwrap_or(""));
-                i = end;
-            }
-        }
-        let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
-        f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
-    }
 }
 
 /// Print an array in the format [element1, element2, ...]

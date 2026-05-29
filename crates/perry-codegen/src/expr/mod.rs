@@ -1712,6 +1712,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DecodeURI(..)
         | Expr::EncodeURIComponent(..)
         | Expr::DecodeURIComponent(..)
+        | Expr::DateToString(..)
         | Expr::DateToDateString(..)
         | Expr::DateToTimeString(..)
         | Expr::DateToLocaleDateString(..)
@@ -1875,9 +1876,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::UrlSetPort { .. }
         | Expr::UrlSetUsername { .. }
         | Expr::UrlSetPassword { .. }
+        | Expr::UrlSetHref { .. }
         | Expr::UrlCanParse(..)
         | Expr::UrlCanParseWithBase { .. }
         | Expr::UrlParse(..)
+        | Expr::UrlParseWithBase { .. }
         | Expr::UrlSearchParamsNew(..)
         | Expr::UrlSearchParamsGet { .. }
         | Expr::UrlSearchParamsHas { .. }
