@@ -97,6 +97,23 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, runtime, &[(I32, &size_i32)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "Uint8Array" if args.len() >= 2 => {
+            let source = lower_expr(ctx, &args[0])?;
+            let offset = lower_expr(ctx, &args[1])?;
+            let offset_i32 = ctx.block().fptosi(DOUBLE, &offset, I32);
+            let length_i32 = if args.len() >= 3 {
+                let length = lower_expr(ctx, &args[2])?;
+                ctx.block().fptosi(DOUBLE, &length, I32)
+            } else {
+                "-1".to_string()
+            };
+            let handle = ctx.block().call(
+                I64,
+                "js_uint8array_view",
+                &[(DOUBLE, &source), (I32, &offset_i32), (I32, &length_i32)],
+            );
+            Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
+        }
         // Minimal DataView support for BufferSource consumers such as
         // StringDecoder: Perry models ArrayBuffer/Uint8Array storage as a
         // BufferHeader, so `new DataView(buffer)` can alias the same backing

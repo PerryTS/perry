@@ -517,6 +517,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_native_error", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_number_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
@@ -1047,6 +1048,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `new Uint8Array(x)` runtime dispatch — handles the non-literal case
     // where `x` could be a number (length) or an array (source data).
     module.declare_function("js_uint8array_new", I64, &[DOUBLE]);
+    module.declare_function("js_uint8array_view", I64, &[DOUBLE, I32, I32]);
     // Generic typed array runtime (Int8/16/32, Uint16/32, Float32/64, Uint8Clamped).
     // Uint8Array piggybacks on the BufferHeader path.
     module.declare_function("js_typed_array_new_empty", I64, &[I32, I32]);

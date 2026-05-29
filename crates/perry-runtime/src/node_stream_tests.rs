@@ -756,7 +756,10 @@ fn callable_stream_constructor_autoinstantiates_passthrough() {
 fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
     let dest = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
 
-    assert_eq!(ns_pipe1(std::ptr::null(), dest).to_bits(), dest.to_bits());
+    assert_eq!(
+        ns_pipe2(std::ptr::null(), dest, f64::from_bits(TAG_UNDEFINED)).to_bits(),
+        dest.to_bits()
+    );
     assert!(pipe_destination_is_missing(f64::from_bits(TAG_UNDEFINED)));
     assert!(pipe_destination_is_missing(f64::from_bits(TAG_NULL)));
     assert!(!pipe_destination_is_missing(dest));

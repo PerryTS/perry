@@ -642,6 +642,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "assert",
         has_receiver: false,
+        method: "partialDeepStrictEqual",
+        class_filter: None,
+        runtime: "js_assert_partial_deep_strict_equal",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "assert",
+        has_receiver: false,
         method: "notDeepStrictEqual",
         class_filter: None,
         runtime: "js_assert_not_deep_strict_equal",
@@ -789,6 +798,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "deepStrictEqual",
         class_filter: None,
         runtime: "js_assert_deep_strict_equal",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "assert/strict",
+        has_receiver: false,
+        method: "partialDeepStrictEqual",
+        class_filter: None,
+        runtime: "js_assert_partial_deep_strict_equal",
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
@@ -1129,6 +1147,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "util/types",
         has_receiver: false,
+        method: "isNativeError",
+        class_filter: None,
+        runtime: "js_util_types_is_native_error",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
         method: "isNumberObject",
         class_filter: None,
         runtime: "js_util_types_is_number_object",
@@ -1179,6 +1206,26 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         runtime: "js_buffer_is_utf8",
         args: &[NA_F64],
         ret: NR_F64,
+    },
+    // node:buffer legacy web aliases. The globals already lower to these
+    // runtime helpers; namespace and named imports should hit the same path.
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "atob",
+        class_filter: None,
+        runtime: "js_atob",
+        args: &[NA_F64],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "btoa",
+        class_filter: None,
+        runtime: "js_btoa",
+        args: &[NA_F64],
+        ret: NR_STR,
     },
     // Issue #1210: `buffer.transcode(source, fromEnc, toEnc)`.
     // Receiver-less Node-buffer export; arguments are NaN-boxed (source

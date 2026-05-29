@@ -928,7 +928,8 @@ where
         | Expr::UrlSetHostname { url, value }
         | Expr::UrlSetPort { url, value }
         | Expr::UrlSetUsername { url, value }
-        | Expr::UrlSetPassword { url, value } => {
+        | Expr::UrlSetPassword { url, value }
+        | Expr::UrlSetHref { url, value } => {
             f(url);
             f(value);
         }
