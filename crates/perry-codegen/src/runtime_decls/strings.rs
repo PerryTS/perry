@@ -1167,6 +1167,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_from_char_code", I64, &[I32]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
+    module.declare_function(
+        "js_string_last_index_of_from",
+        I32,
+        &[I64, I64, DOUBLE, I32],
+    );
     module.declare_function("js_string_locale_compare", DOUBLE, &[I64, I64]);
     module.declare_function("js_string_normalize", I64, &[I64, I64]);
     module.declare_function("js_string_pad_start", I64, &[I64, DOUBLE, I64]);

@@ -268,3 +268,49 @@ pub extern "C" fn js_string_last_index_of(
         None => -1,
     }
 }
+
+/// `String.prototype.lastIndexOf(searchString, position)` (ECMA-262 §22.1.3.9):
+/// the highest match-start index `<= position` (UTF-16 units), or -1.
+/// `has_pos == 0` means no `position` argument (defaults to +Infinity, i.e.
+/// search the whole string) and delegates to the fast `js_string_last_index_of`.
+/// `position` is `ToIntegerOrInfinity`-clamped to `[0, length]`; `NaN` → end.
+#[no_mangle]
+pub extern "C" fn js_string_last_index_of_from(
+    haystack: *const StringHeader,
+    needle: *const StringHeader,
+    position: f64,
+    has_pos: i32,
+) -> i32 {
+    if has_pos == 0 {
+        return js_string_last_index_of(haystack, needle);
+    }
+    if !is_valid_string_ptr(haystack) {
+        return -1;
+    }
+    let hlen16 = unsafe { (*haystack).utf16_len as i64 };
+    // ToIntegerOrInfinity(position), clamped to [0, length]. NaN → search end.
+    let pos16: i64 = if position.is_nan() || position >= hlen16 as f64 {
+        hlen16
+    } else if position <= 0.0 {
+        0
+    } else {
+        position as i64
+    };
+    if !is_valid_string_ptr(needle) || unsafe { (*needle).byte_len } == 0 {
+        // Empty needle matches at every position; the answer is min(pos, len).
+        return pos16 as i32;
+    }
+    // Walk matches in ascending UTF-16 order; keep the highest start <= pos16.
+    let h = string_as_str(haystack);
+    let n = string_as_str(needle);
+    let mut best: i32 = -1;
+    for (byte_pos, _) in h.match_indices(n) {
+        let u16idx = byte_offset_to_utf16_index(h, byte_pos) as i64;
+        if u16idx <= pos16 {
+            best = u16idx as i32;
+        } else {
+            break; // ascending — no later match can satisfy <= pos16
+        }
+    }
+    best
+}

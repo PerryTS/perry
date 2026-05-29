@@ -793,7 +793,13 @@ pub unsafe extern "C" fn js_native_call_method(
                             f64::from_bits(JSValue::bool(i >= 0).bits())
                         }
                         "lastIndexOf" => {
-                            crate::string::js_string_last_index_of(s_ptr, needle) as f64
+                            if args_len >= 2 {
+                                let pos = unsafe { *args_ptr.add(1) };
+                                crate::string::js_string_last_index_of_from(s_ptr, needle, pos, 1)
+                                    as f64
+                            } else {
+                                crate::string::js_string_last_index_of(s_ptr, needle) as f64
+                            }
                         }
                         "startsWith" => {
                             let at = if args_len >= 2 { arg_i32(1) } else { 0 };
