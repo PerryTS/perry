@@ -440,12 +440,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: writer.desiredSize does not restore to HWM after write resolves. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/flow/sync-pause-in-data-listener": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: pause() inside 'data' listener \u2014 does not stop further synchronous emits. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/compose-multi-async-fn": {
     "issue": "1531",
     "added": "2026-05-24",
