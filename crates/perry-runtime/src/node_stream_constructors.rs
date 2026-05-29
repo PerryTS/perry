@@ -716,16 +716,23 @@ pub extern "C" fn js_node_stream_compose(_streams_array: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
 
-pub(super) fn add_finished_error_false_close_listener(stream: f64, callback: f64) {
+pub(super) fn add_finished_once_listeners(
+    stream: f64,
+    callback: f64,
+    watch_finish: bool,
+    watch_close: bool,
+) {
     let listener = js_closure_alloc(ns_finished_error_false_close as *const u8, 3);
     js_closure_set_capture_f64(listener, 0, stream);
     js_closure_set_capture_f64(listener, 1, callback);
     js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
-    add_stream_listener_for_event(
-        stream,
-        string_value(b"close"),
-        box_pointer(listener as *const u8),
-    );
+    let listener_value = box_pointer(listener as *const u8);
+    if watch_finish {
+        add_stream_listener_for_event(stream, string_value(b"finish"), listener_value);
+    }
+    if watch_close {
+        add_stream_listener_for_event(stream, string_value(b"close"), listener_value);
+    }
 }
 
 pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callback: f64) {
@@ -760,8 +767,12 @@ pub(super) fn add_finished_cleanup_completion_listener(stream: f64, callback: f6
 }
 
 /// `stream.finished(stream, [options], cb)` callback form. This slice covers
-/// Node's `{ error: false }` path: there is no dedicated `error` listener, but
-/// `close` still observes the stream's stored error and calls the callback.
+/// focused option paths:
+///
+/// - `{ error: false }`: do not install an error listener, but `close` still
+///   observes the stream's stored error and calls the callback.
+/// - `{ readable: false }`: ignore the readable side and call back when the
+///   writable side emits `finish`.
 #[no_mangle]
 pub extern "C" fn js_node_stream_finished(args: *const crate::array::ArrayHeader) -> f64 {
     let args = pipeline_args(args);
@@ -778,8 +789,12 @@ pub extern "C" fn js_node_stream_finished(args: *const crate::array::ArrayHeader
     if !is_callable_value(callback) {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if get_hidden_value(options, hidden_key(b"error")).is_some_and(|v| v.to_bits() == TAG_FALSE) {
-        add_finished_error_false_close_listener(stream, callback);
+    let watch_close =
+        get_hidden_value(options, hidden_key(b"error")).is_some_and(|v| v.to_bits() == TAG_FALSE);
+    let watch_finish = get_hidden_value(options, hidden_key(b"readable"))
+        .is_some_and(|v| v.to_bits() == TAG_FALSE);
+    if watch_close || watch_finish {
+        add_finished_once_listeners(stream, callback, watch_finish, watch_close);
     }
     if let Some(signal) = options_signal(options) {
         add_finished_signal_abort_listener(stream, signal, callback);
