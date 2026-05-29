@@ -793,6 +793,27 @@ fn test_array_includes() {
 }
 
 #[test]
+fn test_array_last_index_of() {
+    let arr = js_array_alloc(8);
+    for v in [1.0, 2.0, 3.0, 2.0, 1.0] {
+        js_array_push_f64(arr, v);
+    }
+    // No fromIndex (has_from == 0) → search from the last element.
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 0.0, 0), 3);
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 1.0, 0.0, 0), 4);
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 9.0, 0.0, 0), -1);
+    // Explicit fromIndex (has_from == 1), including the spec's clamping.
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 2.0, 1), 1);
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, -2.0, 1), 3); // 5 + (-2) = 3
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, -10.0, 1), -1); // < -length
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 100.0, 1), 3); // clamp to len-1
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 0.0, 1), -1); // only index 0
+                                                                      // Empty array.
+    let empty = js_array_alloc(1);
+    assert_eq!(js_array_last_index_of_jsvalue(empty, 1.0, 0.0, 0), -1);
+}
+
+#[test]
 fn test_array_from_f64_and_length() {
     let values = [5.0, 10.0, 15.0];
     let arr = js_array_from_f64(values.as_ptr(), 3);
