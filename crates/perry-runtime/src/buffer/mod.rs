@@ -11,6 +11,7 @@ use crate::string::{
 mod access;
 mod cmp;
 mod coding;
+mod copy_bytes;
 mod copy_write;
 mod encode;
 mod from;
@@ -64,6 +65,7 @@ pub use access::{
 };
 
 // ---- Re-exports: copy / write ----
+pub use copy_bytes::js_buffer_copy_bytes_from;
 pub use copy_write::{js_buffer_copy, js_buffer_write, js_buffer_write_len};
 
 // ---- Re-exports: compare / search ----

@@ -1141,6 +1141,22 @@ fn register_noalias_buffer_view(
 
 fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
     match expr {
+        perry_hir::Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            ..
+        } if module == "buffer" && method == "copyBytesFrom" => Some(BufferViewInit {
+            elem: BufferElem::U8,
+            element_width_bytes: 1,
+            index_unit: BufferIndexUnit::Byte,
+            data_offset_bytes: 8,
+            length_offset_from_data: -8,
+            length_source: buffer_alloc_length_source(expr),
+            native_owner_local_id: None,
+            native_byte_offset: None,
+            native_byte_length: None,
+        }),
         perry_hir::Expr::BufferAlloc { .. }
         | perry_hir::Expr::BufferAllocUnsafe(_)
         | perry_hir::Expr::Uint8ArrayNew(_) => Some(BufferViewInit {
@@ -1262,6 +1278,12 @@ fn buffer_alloc_length_source(expr: &perry_hir::Expr) -> LengthSource {
         perry_hir::Expr::TypedArrayNew { arg: None, .. } => {
             return LengthSource::Constant(0);
         }
+        perry_hir::Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            ..
+        } if module == "buffer" && method == "copyBytesFrom" => None,
         perry_hir::Expr::NativeArenaView { length, .. } => Some(length.as_ref()),
         _ => None,
     };

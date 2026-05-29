@@ -44,6 +44,18 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         return f64::from_bits(v.bits());
     }
 
+    if crate::buffer::is_registered_buffer(raw as usize) {
+        let byte_val =
+            crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, idx_i32);
+        return byte_val as f64;
+    }
+    if crate::typedarray::lookup_typed_array_kind(raw as usize).is_some() {
+        return crate::typedarray::js_typed_array_get(
+            raw as *const crate::typedarray::TypedArrayHeader,
+            idx_i32,
+        );
+    }
+
     let gc_type = unsafe {
         let gc_header_addr = raw.wrapping_sub(crate::gc::GC_HEADER_SIZE as u64) as usize;
         if gc_header_addr < 0x1000 {
@@ -117,6 +129,23 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         let s = idx_i32.to_string();
         let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
         js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
+        return;
+    }
+
+    if crate::buffer::is_registered_buffer(raw as usize) {
+        crate::buffer::js_buffer_set(
+            raw as *mut crate::buffer::BufferHeader,
+            idx_i32,
+            value as i32,
+        );
+        return;
+    }
+    if crate::typedarray::lookup_typed_array_kind(raw as usize).is_some() {
+        crate::typedarray::js_typed_array_set(
+            raw as *mut crate::typedarray::TypedArrayHeader,
+            idx_i32,
+            value,
+        );
         return;
     }
 

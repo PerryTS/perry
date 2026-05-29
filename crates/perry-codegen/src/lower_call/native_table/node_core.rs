@@ -1246,6 +1246,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "buffer",
         has_receiver: false,
+        method: "copyBytesFrom",
+        class_filter: None,
+        runtime: "js_buffer_copy_bytes_from",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
         method: "isAscii",
         class_filter: None,
         runtime: "js_buffer_is_ascii",

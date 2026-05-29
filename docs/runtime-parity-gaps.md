@@ -1592,12 +1592,11 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:buffer
 
-**Gap APIs: 41** · Already covered: 67
+**Gap APIs: 40** · Already covered: 68
 
 #### Missing from Perry
 
 - `Buffer.allocUnsafeSlow(size)`
-- `Buffer.copyBytesFrom(view[, offset[, length]])`
 - `Buffer.isEncoding(encoding)`
 - `Buffer.poolSize`
 - `buf.readBigInt64BE([offset])`
@@ -1647,6 +1646,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `Buffer.byteLength(string[, encoding])` | `manifest:buffer.byteLength` |
 | `Buffer.compare(buf1, buf2)` | `ffi:js_buffer_compare` |
 | `Buffer.concat(list[, totalLength])` | `manifest:buffer.concat` |
+| `Buffer.copyBytesFrom(view[, offset[, length]])` | `ffi:js_buffer_copy_bytes_from` |
 | `Buffer.from(array)` | `manifest:buffer.from` |
 | `Buffer.from(arrayBuffer[, byteOffset[, length]])` | `manifest:buffer.from` |
 | `Buffer.from(buffer)` | `manifest:buffer.from` |

@@ -290,6 +290,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
             };
             ptr_to_f64(buf as *const u8)
         }
+        ("buffer.Buffer", "copyBytesFrom") => {
+            let buf = crate::buffer::js_buffer_copy_bytes_from(arg(0), arg(1), arg(2));
+            ptr_to_f64(buf as *const u8)
+        }
         ("buffer.Buffer", "of") => {
             let arr = pack_args();
             ptr_to_f64(crate::buffer::js_buffer_from_array(arr) as *const u8)

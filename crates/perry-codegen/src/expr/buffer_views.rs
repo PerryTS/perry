@@ -248,10 +248,19 @@ pub(crate) fn update_buffer_view_for_assignment(
     value: &Expr,
     lowered_value: &str,
 ) {
-    if matches!(
+    let is_fresh_u8_buffer = matches!(
         value,
         Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) | Expr::Uint8ArrayNew(_)
-    ) {
+    ) || matches!(
+        value,
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            ..
+        } if module == "buffer" && method == "copyBytesFrom"
+    );
+    if is_fresh_u8_buffer {
         let blk = ctx.block();
         let handle = unbox_to_i64(blk, lowered_value);
         let handle_ptr = blk.inttoptr(I64, &handle);

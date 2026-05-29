@@ -2685,6 +2685,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "from", false, None),
     method("buffer", "of", false, None),
     method("buffer", "concat", false, None),
+    method("buffer", "copyBytesFrom", false, None),
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),

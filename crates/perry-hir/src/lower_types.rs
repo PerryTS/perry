@@ -741,7 +741,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     // array path which reads f64 elements as JS values.
                     if obj_name == "Buffer" {
                         return match method_name {
-                            "from" | "alloc" | "allocUnsafe" | "concat" => {
+                            "from" | "alloc" | "allocUnsafe" | "concat" | "copyBytesFrom" => {
                                 Type::Named("Uint8Array".to_string())
                             }
                             "isBuffer" => Type::Boolean,

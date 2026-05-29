@@ -510,6 +510,15 @@ pub(super) fn try_native_module_methods(
                             }
                             return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                         }
+                        "copyBytesFrom" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "buffer".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "copyBytesFrom".to_string(),
+                                args,
+                            }));
+                        }
                         "of" => {
                             return Ok(Ok(Expr::BufferFrom {
                                 data: Box::new(Expr::Array(args)),

@@ -1401,6 +1401,14 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
             };
             Some(Type::Named(name.to_string()))
         }
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            ..
+        } if module == "buffer" && method == "copyBytesFrom" => {
+            Some(Type::Named("Uint8Array".to_string()))
+        }
         _ => None,
     }
 }
