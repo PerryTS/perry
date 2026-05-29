@@ -338,6 +338,16 @@ pub(super) fn readable_data_listener_added(stream: f64) {
     invoke_read_once(stream);
 }
 
+pub(super) fn readable_listener_added(stream: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        return;
+    }
+    if get_hidden_value(stream, hidden_read_key()).is_some() {
+        invoke_read_once(stream);
+    }
+    schedule_readable_event(stream);
+}
+
 pub(super) fn schedule_readable_resume(stream: f64) {
     if has_truthy_hidden(stream, hidden_readable_resume_scheduled_key()) {
         return;
@@ -818,6 +828,14 @@ pub(super) fn clear_readable_buffer(stream: f64) {
     set_hidden_value(stream, hidden_key(b"readableLength"), 0.0);
 }
 
+pub(super) fn clear_pending_readable_chunks(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_readable_pending_key(),
+        box_pointer(crate::array::js_array_alloc(0) as *const u8),
+    );
+}
+
 pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
     let size_value = JSValue::from_bits(size.to_bits());
     if size_value.is_undefined() || !size_value.is_number() {
@@ -959,7 +977,8 @@ pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
     set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
     mark_disturbed(stream);
     if stream_hidden_ended(stream) && remaining == 0.0 {
-        queue_readable_event(stream);
+        clear_pending_readable_chunks(stream);
+        schedule_readable_end(stream);
     }
     chunk
 }

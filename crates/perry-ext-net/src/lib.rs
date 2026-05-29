@@ -65,6 +65,15 @@ pub use lifecycle::*;
 // over a socket produced by `agent.createConnection` (split out for the gate).
 mod raw_bridge;
 use raw_bridge::RawReadState;
+// #2013 — chainable option-setter no-ops + Node arg-validation bridge to
+// perry-runtime (split out to keep lib.rs under the 2000-line gate). The
+// `#[no_mangle]` setter/setTimeout symbols re-export at the crate root; the
+// validator `extern` declarations are imported for the listen/connect sites.
+mod option_setters;
+pub use option_setters::{
+    js_net_server_noop_self, js_net_socket_noop_self, js_net_socket_set_timeout,
+};
+use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
 
 use crate::tls::do_tls_handshake;
 
@@ -620,7 +629,11 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
             _ => "localhost".to_string(),
         };
         let port = match get_object_number_field(arg1_f64, "port") {
-            Some(p) => p as u16,
+            Some(p) => {
+                // #2013: validate `options.port` before truncating to u16.
+                js_net_validate_connect_port(p);
+                p as u16
+            }
             None => return 0,
         };
         let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
@@ -640,6 +653,8 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
         Some(h) => h,
         None => return 0,
     };
+    // #2013: positional `port` must be a valid integer in [0, 65536).
+    js_net_validate_connect_port(arg1_f64);
     let port = arg1_f64 as u16;
     let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
     register_connect_cb(handle, arg3_f64);
@@ -788,6 +803,10 @@ pub unsafe extern "C" fn js_net_create_server(
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i64: i64) {
     ensure_gc_scanner_registered();
+    // #2013: a numeric `port` must be an integer in [0, 65536); Node throws
+    // RangeError [ERR_SOCKET_BAD_PORT] otherwise. (A string is a pipe path and
+    // is left alone.)
+    js_net_validate_listen_port(port);
     let port_u16 = port as u16;
     let host = "0.0.0.0".to_string();
 
@@ -1080,6 +1099,9 @@ pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) 
 /// See `js_net_socket_connect`.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64) {
+    // #2013: validate the port first (RangeError [ERR_SOCKET_BAD_PORT]),
+    // before any host handling, matching Node's `Socket.prototype.connect`.
+    js_net_validate_connect_port(port);
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
         None => {
@@ -1407,39 +1429,6 @@ pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
     if let Some(s) = sockets.get(&handle) {
         let _ = s.cmd_tx.send(SocketCommand::Destroy);
     }
-}
-
-// ─── FFI: chainable no-op socket/server options (issue #1852) ────────────────
-//
-// Node's `net.Socket` and `net.Server` expose a family of configuration
-// methods that return the instance (`this`) for chaining — `setNoDelay`,
-// `setKeepAlive`, `setTimeout`, `setEncoding`, `pause`, `resume`, `ref`,
-// `unref`, `cork`, `uncork`, etc. Perry's TCP transport doesn't model TCP
-// socket options (Nagle, keep-alive, idle-timeout) or read-pause yet, but
-// the methods still need to *exist and be callable*: pre-fix, calling any
-// of them threw "x is not a function" (the radar's "value() missing"
-// cluster) and aborted the program before the real I/O ever ran.
-//
-// These two shims accept the receiver handle (the dispatch table declares
-// `args: &[]`, so user-supplied option args are evaluated for the call but
-// not forwarded) and return it unchanged so `sock.setNoDelay(true)` and
-// chained forms like `sock.setKeepAlive().setNoDelay()` both type-check and
-// keep flowing. The codegen NaN-boxes the returned id with POINTER_TAG
-// (NR_PTR), reproducing the original Socket/Server value shape so a
-// subsequent method on the result still dispatches.
-
-/// Chainable no-op for `net.Socket` option setters — returns the socket
-/// handle unchanged.
-#[no_mangle]
-pub extern "C" fn js_net_socket_noop_self(handle: i64) -> i64 {
-    handle
-}
-
-/// Chainable no-op for `net.Server` option setters — returns the server
-/// handle unchanged.
-#[no_mangle]
-pub extern "C" fn js_net_server_noop_self(handle: i64) -> i64 {
-    handle
 }
 
 // ─── FFI: socket.on(event, callback) ─────────────────────────────────────────

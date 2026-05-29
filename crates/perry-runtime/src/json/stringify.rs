@@ -896,6 +896,12 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     let actual_fields = keys_len;
 
+    // #2438: enumerate own keys in ECMA-262 OrdinaryOwnPropertyKeys order —
+    // array-index keys first (ascending numeric), then string keys in
+    // insertion order. `None` means no array-index keys, so insertion order
+    // already matches spec and the loop walks `0..actual_fields` directly.
+    let key_order = crate::object::ecma_own_key_order(keys_arr);
+
     // Deferred toJSON + closure checks (issue #67 tightening): scan fields
     // once to detect if any field is actually a closure. For data-only
     // objects with nested arrays/objects (e.g. `{a:1, b:"", c:[...]}`) the
@@ -959,7 +965,16 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
 
     buf.push('{');
     let mut first = true;
-    for f in 0..actual_fields {
+    // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
+    // order when array-index keys are present, else slot `j` (no allocation).
+    let pos = |j: u32| -> u32 {
+        match &key_order {
+            Some(ord) => ord[j as usize],
+            None => j,
+        }
+    };
+    for j in 0..actual_fields {
+        let f = pos(j);
         let field_bits = read_field_bits(f);
         let field_val = f64::from_bits(field_bits);
         // Skip undefined per JSON spec
@@ -1144,6 +1159,12 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     }
     let keys_arr = (*obj).keys_array;
     if keys_arr.is_null() {
+        return None;
+    }
+    // #2438: array-index keys must enumerate first in ascending numeric order,
+    // which the insertion-ordered prefix template can't express. Bail to the
+    // generic slow path (`stringify_object_inner`), which reorders per spec.
+    if crate::object::keys_contain_array_index(keys_arr) {
         return None;
     }
     let keys_len = (*keys_arr).length;

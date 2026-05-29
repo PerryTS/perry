@@ -440,6 +440,26 @@ pub(crate) fn handle_to_pointer_f64(handle: i64) -> f64 {
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
 }
 
+extern "C" {
+    /// `perry-runtime`'s implicit-`this` cell setter (resolved at final
+    /// link; declared here because `perry-runtime` is only a
+    /// dev-dependency of this crate). Returns the previous value.
+    fn js_implicit_this_set(value: f64) -> f64;
+}
+
+/// Run `f` with the runtime's implicit-`this` cell bound to `this_val`,
+/// restoring the previous binding afterward. Node invokes server,
+/// socket, and request callbacks with `this` bound to the emitting
+/// object, so the canonical
+/// `server.listen(0, function() { this.address().port })` idiom
+/// resolves `this` to the server (#2132).
+pub(crate) fn with_implicit_this<R>(this_val: f64, f: impl FnOnce() -> R) -> R {
+    let prev = unsafe { js_implicit_this_set(this_val) };
+    let r = f();
+    unsafe { js_implicit_this_set(prev) };
+    r
+}
+
 #[allow(dead_code)]
 pub(crate) fn _force_jsvalue_link(v: f64) -> Option<String> {
     jsvalue_to_owned_string(v)

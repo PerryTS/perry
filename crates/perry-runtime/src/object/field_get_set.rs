@@ -583,6 +583,88 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     crate::array::js_array_alloc(0)
 }
 
+/// Returns `Some(index)` if `s` is a canonical array-index string per ECMA-262
+/// (the decimal form of an integer in `0..=2^32-2`, no leading zeros, no sign),
+/// else `None`. These are the keys that `OrdinaryOwnPropertyKeys` enumerates
+/// first, in ascending numeric order. (#2438)
+pub(crate) fn canonical_array_index(s: &str) -> Option<u32> {
+    let b = s.as_bytes();
+    if b == b"0" {
+        return Some(0);
+    }
+    // Non-empty, no leading zero, every byte an ASCII digit.
+    if b.is_empty() || b[0] == b'0' || !b.iter().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    // Array-index range is `0..=2^32-2` (4294967294). 4294967295 is reserved
+    // for `.length`, not a valid index; larger values are ordinary string keys.
+    match s.parse::<u64>() {
+        Ok(n) if n <= 4_294_967_294 => Some(n as u32),
+        _ => None,
+    }
+}
+
+/// Compute the position order that `OrdinaryOwnPropertyKeys` mandates for an
+/// object's `keys_array`: array-index keys first in ascending numeric order,
+/// then the remaining string keys in insertion order. Each returned `u32` is
+/// an index into `keys_array` (which is parallel to the field slots), so a
+/// caller can reorder both keys and values with the same permutation. (#2438)
+///
+/// Returns `None` when no key is an array index — i.e. the keys are already in
+/// spec order — so callers keep their zero-extra-allocation insertion-order
+/// fast path for the overwhelmingly common case.
+pub(crate) unsafe fn ecma_own_key_order(keys: *const ArrayHeader) -> Option<Vec<u32>> {
+    // Cheap first pass: bail with zero allocation when no key is an array
+    // index — the overwhelmingly common case, where insertion order already
+    // satisfies OrdinaryOwnPropertyKeys. (Also covers a null `keys`.)
+    if !keys_contain_array_index(keys) {
+        return None;
+    }
+    let len = crate::array::js_array_length(keys);
+    let mut int_keys: Vec<(u32, u32)> = Vec::new();
+    let mut str_positions: Vec<u32> = Vec::new();
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..len {
+        let key_val = crate::array::js_array_get(keys, i);
+        let idx = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .and_then(canonical_array_index);
+        match idx {
+            Some(n) => int_keys.push((n, i)),
+            None => str_positions.push(i),
+        }
+    }
+    // `int_keys` is non-empty here — `keys_contain_array_index` returned true.
+    int_keys.sort_unstable_by_key(|&(n, _)| n);
+    let mut out = Vec::with_capacity(len as usize);
+    out.extend(int_keys.iter().map(|&(_, pos)| pos));
+    out.extend(str_positions);
+    Some(out)
+}
+
+/// Whether any key in `keys_array` is a canonical array index. Cheap predicate
+/// for paths that just need to know whether spec reordering is required (e.g.
+/// the JSON.stringify shape-template fast path) without building the full
+/// permutation. (#2438)
+pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool {
+    if keys.is_null() {
+        return false;
+    }
+    let len = crate::array::js_array_length(keys);
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..len {
+        let key_val = crate::array::js_array_get(keys, i);
+        let is_idx = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .and_then(canonical_array_index)
+            .is_some();
+        if is_idx {
+            return true;
+        }
+    }
+    false
+}
+
 /// Get the keys of an object as an array of strings.
 /// If any key has a per-property descriptor with `enumerable: false`, that key is filtered out.
 /// Otherwise (the common case), this returns the stored keys array directly.
@@ -657,10 +739,21 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         let has_descriptors =
             PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == obj as usize));
         let len = crate::array::js_array_length(keys) as usize;
+        // #2438: enumerate in ECMA-262 OrdinaryOwnPropertyKeys order —
+        // array-index keys first (ascending numeric), then string keys in
+        // insertion order. `None` means no array-index keys, so insertion
+        // order already matches spec and we walk `0..len` with no extra alloc.
+        let order = ecma_own_key_order(keys);
+        let pos = |j: usize| -> u32 {
+            match &order {
+                Some(ord) => ord[j],
+                None => j as u32,
+            }
+        };
         if !has_descriptors {
             let out = crate::array::js_array_alloc(len as u32);
-            for i in 0..len {
-                let key_val = crate::array::js_array_get(keys, i as u32);
+            for j in 0..len {
+                let key_val = crate::array::js_array_get(keys, pos(j));
                 crate::array::js_array_push_f64(out, f64::from_bits(key_val.bits()));
             }
             return out;
@@ -668,8 +761,8 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // Slow path: filter out non-enumerable keys.
         let filtered = crate::array::js_array_alloc(len as u32);
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        for i in 0..len {
-            let key_val = crate::array::js_array_get(keys, i as u32);
+        for j in 0..len {
+            let key_val = crate::array::js_array_get(keys, pos(j));
             // #1781: accept inline SSO short keys (≤5 bytes) — the
             // pre-fix `is_string()` skipped them and Object.keys silently
             // dropped them from the result.
@@ -715,8 +808,17 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
         };
         let result = crate::array::js_array_alloc(count as u32);
 
-        for i in 0..count {
-            let value = js_object_get_field(obj as *mut ObjectHeader, i as u32);
+        // #2438: walk slots in OrdinaryOwnPropertyKeys order so values line up
+        // with the spec key order (and with `Object.keys`/`Object.entries`).
+        let order = ecma_own_key_order(keys);
+        let pos = |j: usize| -> u32 {
+            match &order {
+                Some(ord) => ord[j],
+                None => j as u32,
+            }
+        };
+        for j in 0..count {
+            let value = js_object_get_field(obj as *mut ObjectHeader, pos(j));
             crate::array::js_array_push_f64(result, f64::from_bits(value.bits()));
         }
 
@@ -761,14 +863,24 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
         };
         let result = crate::array::js_array_alloc(count as u32);
 
-        for i in 0..count {
+        // #2438: emit pairs in OrdinaryOwnPropertyKeys order (array-index keys
+        // first, ascending; then string keys in insertion order).
+        let order = ecma_own_key_order(keys);
+        let pos = |j: usize| -> u32 {
+            match &order {
+                Some(ord) => ord[j],
+                None => j as u32,
+            }
+        };
+        for j in 0..count {
+            let i = pos(j);
             // Create a pair array [key, value]
             let pair = crate::array::js_array_alloc(2);
 
             // Get the key (from keys array — already validated non-null
             // when count came from there).
-            if !keys.is_null() && (i as u32) < crate::array::js_array_length(keys) {
-                let key = crate::array::js_array_get_f64(keys, i as u32);
+            if !keys.is_null() && i < crate::array::js_array_length(keys) {
+                let key = crate::array::js_array_get_f64(keys, i);
                 crate::array::js_array_push_f64(pair, key);
             } else {
                 crate::array::js_array_push_f64(pair, 0.0);
@@ -777,7 +889,7 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
             // Read the value. `js_object_get_field` handles the
             // inline-vs-overflow split internally (inline if
             // i < field_count, overflow_get otherwise).
-            let value = js_object_get_field(obj as *mut ObjectHeader, i as u32);
+            let value = js_object_get_field(obj as *mut ObjectHeader, i);
             crate::array::js_array_push_f64(pair, f64::from_bits(value.bits()));
 
             // Push the pair to result (NaN-box the array pointer)
