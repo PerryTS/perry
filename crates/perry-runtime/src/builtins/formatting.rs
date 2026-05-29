@@ -1076,14 +1076,11 @@ unsafe fn format_object_as_json(
     };
 
     let keys_array = (*obj_ptr).keys_array;
-    if keys_array.is_null() {
-        return empty_object();
-    }
-
-    let key_count = crate::array::js_array_length(keys_array) as usize;
-    if key_count == 0 {
-        return empty_object();
-    }
+    let key_count = if keys_array.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(keys_array) as usize
+    };
 
     // Honor `Object.defineProperty(..., { enumerable: false })`. By default
     // we include every key in the `keys_array` (enumerability is rarely
