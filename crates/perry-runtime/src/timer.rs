@@ -10,7 +10,10 @@
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use std::collections::HashMap;
 use std::os::raw::c_int;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use std::time::{Duration, Instant};
 
 /// A scheduled timer
@@ -54,7 +57,7 @@ pub extern "C" fn js_set_timeout(delay_ms: f64) -> *mut Promise {
     ensure_initialized();
 
     let promise = js_promise_new();
-    let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
+    let delay = Duration::from_millis(normalize_timer_delay(delay_ms));
     let deadline = Instant::now() + delay;
 
     TIMER_QUEUE.lock().unwrap().push(Timer {
@@ -72,7 +75,7 @@ pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promis
     ensure_initialized();
 
     let promise = js_promise_new();
-    let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
+    let delay = Duration::from_millis(normalize_timer_delay(delay_ms));
     let deadline = Instant::now() + delay;
 
     TIMER_QUEUE.lock().unwrap().push(Timer {
@@ -199,6 +202,9 @@ static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
 // clobber an unrelated Timeout with the same numeric id.
 static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
+static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
+static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
+static WARNED_TIMER_TRACE_HINT: AtomicBool = AtomicBool::new(false);
 
 fn timer_handle_value(id: i64) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(id as *mut u8).bits())
@@ -225,6 +231,68 @@ fn next_timer_id() -> i64 {
     let current = *next;
     *next += 1;
     current
+}
+
+fn timer_delay_text(delay_ms: f64) -> String {
+    if delay_ms.is_infinite() && delay_ms.is_sign_positive() {
+        "Infinity".to_string()
+    } else if delay_ms.is_infinite() && delay_ms.is_sign_negative() {
+        "-Infinity".to_string()
+    } else {
+        delay_ms.to_string()
+    }
+}
+
+fn emit_timer_delay_warning(kind: &str, message: String) {
+    eprintln!("(node:{}) {}: {}", std::process::id(), kind, message);
+    if !WARNED_TIMER_TRACE_HINT.swap(true, Ordering::AcqRel) {
+        eprintln!("(Use `node --trace-warnings ...` to show where the warning was created)");
+    }
+}
+
+fn coerce_timer_delay(delay_value: f64) -> f64 {
+    let value = crate::value::JSValue::from_bits(delay_value.to_bits());
+    if value.is_undefined() {
+        1.0
+    } else {
+        crate::builtins::js_number_coerce(delay_value)
+    }
+}
+
+fn normalize_timer_delay(delay_value: f64) -> u64 {
+    const TIMEOUT_MAX: f64 = 2_147_483_647.0;
+    let delay_ms = coerce_timer_delay(delay_value);
+    if delay_ms > TIMEOUT_MAX {
+        emit_timer_delay_warning(
+            "TimeoutOverflowWarning",
+            format!(
+                "{} does not fit into a 32-bit signed integer.\nTimeout duration was set to 1.",
+                timer_delay_text(delay_ms)
+            ),
+        );
+        1
+    } else if delay_ms < 0.0 {
+        if !WARNED_NEGATIVE_TIMER_DELAY.swap(true, Ordering::AcqRel) {
+            emit_timer_delay_warning(
+                "TimeoutNegativeWarning",
+                format!(
+                    "{} is a negative number.\nTimeout duration was set to 1.",
+                    timer_delay_text(delay_ms)
+                ),
+            );
+        }
+        1
+    } else if delay_ms.is_nan() {
+        if !WARNED_NAN_TIMER_DELAY.swap(true, Ordering::AcqRel) {
+            emit_timer_delay_warning(
+                "TimeoutNaNWarning",
+                "NaN is not a number.\nTimeout duration was set to 1.".to_string(),
+            );
+        }
+        1
+    } else {
+        delay_ms.max(0.0) as u64
+    }
 }
 
 fn set_timer_ref_state(id: i64, has_ref: bool) {
@@ -369,7 +437,7 @@ fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_na
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let delay_ms = delay_ms.max(0.0) as u64;
+    let delay_ms = normalize_timer_delay(delay_ms);
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
     let id = next_timer_id();
@@ -687,7 +755,7 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
 fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i64 {
     ensure_initialized();
 
-    let interval = interval_ms.max(0.0) as u64;
+    let interval = normalize_timer_delay(interval_ms);
     let next_deadline = Instant::now() + Duration::from_millis(interval);
 
     let id = next_timer_id();
