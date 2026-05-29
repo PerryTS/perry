@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1546 entries across 85 modules
+// Coverage: 1578 entries across 87 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1074,6 +1074,76 @@ declare module "os" {
 }
 
 declare module "path" {
+  /** stdlib */
+  export const delimiter: any;
+  /** stdlib */
+  export const posix: any;
+  /** stdlib */
+  export const sep: any;
+  /** stdlib */
+  export const win32: any;
+  /** stdlib */
+  export function basename(...args: any[]): any;
+  /** stdlib */
+  export function dirname(...args: any[]): any;
+  /** stdlib */
+  export function extname(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function isAbsolute(...args: any[]): any;
+  /** stdlib */
+  export function join(...args: any[]): any;
+  /** stdlib */
+  export function matchesGlob(...args: any[]): any;
+  /** stdlib */
+  export function normalize(...args: any[]): any;
+  /** stdlib */
+  export function parse(...args: any[]): any;
+  /** stdlib */
+  export function relative(...args: any[]): any;
+  /** stdlib */
+  export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function toNamespacedPath(...args: any[]): any;
+}
+
+declare module "path/posix" {
+  /** stdlib */
+  export const delimiter: any;
+  /** stdlib */
+  export const posix: any;
+  /** stdlib */
+  export const sep: any;
+  /** stdlib */
+  export const win32: any;
+  /** stdlib */
+  export function basename(...args: any[]): any;
+  /** stdlib */
+  export function dirname(...args: any[]): any;
+  /** stdlib */
+  export function extname(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function isAbsolute(...args: any[]): any;
+  /** stdlib */
+  export function join(...args: any[]): any;
+  /** stdlib */
+  export function matchesGlob(...args: any[]): any;
+  /** stdlib */
+  export function normalize(...args: any[]): any;
+  /** stdlib */
+  export function parse(...args: any[]): any;
+  /** stdlib */
+  export function relative(...args: any[]): any;
+  /** stdlib */
+  export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function toNamespacedPath(...args: any[]): any;
+}
+
+declare module "path/win32" {
   /** stdlib */
   export const delimiter: any;
   /** stdlib */
