@@ -484,14 +484,14 @@ fn readable_encoding_tag(stream: f64) -> Option<i32> {
 }
 
 /// Byte length of a stream chunk for `push()`'s highWaterMark accounting:
-/// the UTF-16 length for strings, the byte length for buffers, and `1`
+/// the UTF-8 byte length for strings, the byte length for buffers, and `1`
 /// (object-mode count) for anything else.
 fn chunk_byte_len(chunk: f64) -> usize {
     let jsval = JSValue::from_bits(chunk.to_bits());
     if jsval.is_any_string() {
         let ptr = crate::value::js_get_string_pointer_unified(chunk) as *const crate::StringHeader;
         if !ptr.is_null() && (ptr as usize) >= 0x10000 {
-            return unsafe { (*ptr).utf16_len as usize };
+            return unsafe { (*ptr).byte_len as usize };
         }
         return 0;
     }
