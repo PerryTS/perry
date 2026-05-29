@@ -1698,6 +1698,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_headers_new", DOUBLE, &[]);
     // headers.set(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)
     module.declare_function("js_headers_set", DOUBLE, &[DOUBLE, I64, I64]);
+    // headers.append(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)
+    module.declare_function("js_headers_append", DOUBLE, &[DOUBLE, I64, I64]);
     // headers.get(handle_f64, key_ptr) -> *mut StringHeader (i64)
     module.declare_function("js_headers_get", I64, &[DOUBLE, I64]);
     // headers.has(handle_f64, key_ptr) -> f64 (TAG_TRUE/FALSE)

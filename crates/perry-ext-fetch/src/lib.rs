@@ -14,7 +14,7 @@
 //!   - response: status / statusText / ok / text / json /
 //!     array_buffer / blob / get_headers / clone / body /
 //!     static_json / static_redirect
-//!   - headers: new / set / get / has / delete / for_each
+//!   - headers: new / set / append / get / has / delete / for_each
 //!   - stream: start / poll / status / close
 //!   - blob: size / type / text / array_buffer / bytes / slice / stream
 //!   - request: new / get_url / get_method / get_body
@@ -601,6 +601,33 @@ pub unsafe extern "C" fn js_headers_set(
     let mut g = HEADERS_HANDLES.lock().unwrap();
     if let Some(h) = g.get_mut(&id) {
         h.insert(key.to_lowercase(), value);
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// # Safety
+/// Both pointers must be null or Perry-runtime `StringHeader`s.
+#[no_mangle]
+pub unsafe extern "C" fn js_headers_append(
+    handle: f64,
+    key_ptr: *const StringHeader,
+    value_ptr: *const StringHeader,
+) -> f64 {
+    let id = handle_id(handle);
+    let Some(key) = read_str(key_ptr) else {
+        return 0.0;
+    };
+    let value = read_str(value_ptr).unwrap_or_default();
+    let mut g = HEADERS_HANDLES.lock().unwrap();
+    if let Some(h) = g.get_mut(&id) {
+        h.entry(key.to_lowercase())
+            .and_modify(|existing| {
+                existing.push_str(", ");
+                existing.push_str(&value);
+            })
+            .or_insert(value);
         1.0
     } else {
         0.0
@@ -1217,6 +1244,23 @@ mod tests {
         assert_eq!(del, 1.0);
         let has2 = unsafe { js_headers_has(h, key.as_raw()) };
         assert_eq!(has2, 0.0);
+    }
+
+    #[test]
+    fn headers_append_combines_values() {
+        let h = js_headers_new();
+        let key = alloc_string("X-Test");
+        let first = alloc_string("a");
+        let second = alloc_string("b");
+
+        let append_first = unsafe { js_headers_append(h, key.as_raw(), first.as_raw()) };
+        let append_second = unsafe { js_headers_append(h, key.as_raw(), second.as_raw()) };
+        assert_eq!(append_first, 1.0);
+        assert_eq!(append_second, 1.0);
+
+        let got_ptr = unsafe { js_headers_get(h, key.as_raw()) };
+        let got = perry_ffi::read_string(unsafe { JsString::from_raw(got_ptr) }).expect("non-null");
+        assert_eq!(got, "a, b");
     }
 
     #[test]

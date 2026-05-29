@@ -132,9 +132,14 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 }
                 let key_ptr = get_raw_string_ptr(ctx, &args[0])?;
                 let val_ptr = get_raw_string_ptr(ctx, &args[1])?;
+                let runtime_fn = if method == "append" {
+                    "js_headers_append"
+                } else {
+                    "js_headers_set"
+                };
                 ctx.block().call(
                     DOUBLE,
-                    "js_headers_set",
+                    runtime_fn,
                     &[(DOUBLE, &h_handle), (I64, &key_ptr), (I64, &val_ptr)],
                 );
                 return Ok(Some(double_literal(f64::from_bits(
