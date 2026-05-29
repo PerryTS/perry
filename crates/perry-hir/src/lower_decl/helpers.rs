@@ -17,6 +17,41 @@ use crate::lower::{
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
+fn strip_for_await_expr_wrappers(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        expr = match expr {
+            ast::Expr::TsAs(x) => &x.expr,
+            ast::Expr::TsNonNull(x) => &x.expr,
+            ast::Expr::TsConstAssertion(x) => &x.expr,
+            ast::Expr::Paren(x) => &x.expr,
+            _ => return expr,
+        };
+    }
+}
+
+pub(super) fn is_filehandle_readlines_for_await_target(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+) -> bool {
+    matches!(
+        infer_type_from_expr(strip_for_await_expr_wrappers(expr), ctx),
+        Type::Named(name) if name == FILEHANDLE_READLINES_ITERATOR_TYPE
+    )
+}
+
+pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::IndexGet {
+            object: Box::new(iterable),
+            index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
+                "@@__perry_wk_asyncIterator".to_string(),
+            )))),
+        }),
+        args: vec![],
+        type_args: vec![],
+    }
+}
+
 /// Build `if (param === undefined) { param = default; }` stmts for every
 /// param with a default value. Prepended to function/constructor bodies so
 /// cross-module callers that pad missing args with `undefined` still observe

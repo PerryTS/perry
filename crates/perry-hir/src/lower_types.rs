@@ -10,6 +10,8 @@ use crate::ir::*;
 use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::{get_pat_name, lower_lit};
 
+pub(crate) const FILEHANDLE_READLINES_ITERATOR_TYPE: &str = "__PerryFileHandleReadLinesIterator";
+
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     match expr {
         // Literals
@@ -610,6 +612,13 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                         }
                         _ => {}
                     }
+                }
+
+                // `FileHandle.readLines()` returns a readline interface whose
+                // async iterator lives behind `[Symbol.asyncIterator]()`, not
+                // as a public `.next()` method on the returned object.
+                if method_name == "readLines" {
+                    return Type::Named(FILEHANDLE_READLINES_ITERATOR_TYPE.to_string());
                 }
 
                 // String methods

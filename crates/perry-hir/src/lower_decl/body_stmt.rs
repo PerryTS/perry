@@ -11,6 +11,7 @@ use crate::lower::{
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
+use super::helpers::{async_iterator_method_call, is_filehandle_readlines_for_await_target};
 use super::*;
 
 fn unwrap_stream_expr(mut expr: &ast::Expr) -> &ast::Expr {
@@ -1082,11 +1083,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
 
             let is_node_readable_for_await =
                 for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
+            let is_filehandle_readlines_for_await = for_of_stmt.is_await
+                && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
 
             if is_generator_call
                 || iter_from_class.is_some()
                 || is_timer_promises_interval_call
                 || is_node_readable_for_await
+                || is_filehandle_readlines_for_await
             {
                 let scope_mark = ctx.push_block_scope();
                 let iter_expr_raw = lower_expr(ctx, &for_of_stmt.right)?;
@@ -1096,6 +1100,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         args: vec![iter_expr_raw],
                         type_args: vec![],
                     }
+                } else if is_filehandle_readlines_for_await {
+                    async_iterator_method_call(iter_expr_raw)
                 } else if is_node_readable_for_await {
                     Expr::Call {
                         callee: Box::new(Expr::PropertyGet {
@@ -1170,7 +1176,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     }),
                 });
                 let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
-                if is_node_readable_for_await {
+                if is_node_readable_for_await || is_filehandle_readlines_for_await {
                     insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
                 }
                 body_stmts.extend(user_body);

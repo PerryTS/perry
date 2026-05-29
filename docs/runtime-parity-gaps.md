@@ -1396,7 +1396,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs/promises
 
-**Gap APIs: 47** · Already covered: 14
+**Gap APIs: 46** · Already covered: 15
 
 #### Missing from Perry
 
@@ -1436,7 +1436,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `filehandle.read([options])`
 - `filehandle.read(buffer[, options])`
 - `filehandle.readableWebStream([options])`
-- `filehandle.readLines([options])`
 - `filehandle.readv(buffers[, position])`
 - `filehandle.sync()`
 - `filehandle.truncate(len)`
@@ -1463,6 +1462,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `filehandle.appendFile(data[, options])` | `manifest:fs.appendFile` |
 | `filehandle.createReadStream([options])` | `manifest:fs.createReadStream` |
 | `filehandle.createWriteStream([options])` | `manifest:fs.createWriteStream` |
+| `filehandle.readLines([options])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.readFile(options)` | `manifest:fs.readFile` |
 | `filehandle.stat([options])` | `manifest:fs.stat` |
 | `filehandle.writeFile(data, options)` | `manifest:fs.writeFile` |

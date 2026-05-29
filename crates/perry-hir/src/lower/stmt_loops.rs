@@ -115,6 +115,26 @@ fn is_node_readable_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) ->
     )
 }
 
+fn is_filehandle_readlines_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    matches!(
+        crate::lower_types::infer_type_from_expr(strip_for_of_expr_wrappers(expr), ctx),
+        Type::Named(name) if name == crate::lower_types::FILEHANDLE_READLINES_ITERATOR_TYPE
+    )
+}
+
+fn async_iterator_method_call(iterable: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::IndexGet {
+            object: Box::new(iterable),
+            index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
+                "@@__perry_wk_asyncIterator".to_string(),
+            )))),
+        }),
+        args: vec![],
+        type_args: vec![],
+    }
+}
+
 fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     let call = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -270,11 +290,14 @@ pub(crate) fn lower_stmt_for_of(
 
     let is_node_readable_for_await =
         for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
+    let is_filehandle_readlines_for_await =
+        for_of_stmt.is_await && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
 
     if is_generator_call
         || iter_from_class.is_some()
         || is_timer_promises_interval_call
         || is_node_readable_for_await
+        || is_filehandle_readlines_for_await
     {
         // Lower to iterator protocol:
         //   let __iter = genFunc(...);                     // generator-fn path
@@ -293,6 +316,8 @@ pub(crate) fn lower_stmt_for_of(
                 args: vec![iter_expr],
                 type_args: vec![],
             }
+        } else if is_filehandle_readlines_for_await {
+            async_iterator_method_call(iter_expr)
         } else if is_node_readable_for_await {
             Expr::Call {
                 callee: Box::new(Expr::PropertyGet {
@@ -388,7 +413,7 @@ pub(crate) fn lower_stmt_for_of(
             lower_stmt(ctx, module, &for_of_stmt.body)?;
         }
         let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-        if is_node_readable_for_await {
+        if is_node_readable_for_await || is_filehandle_readlines_for_await {
             insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
         }
         body_stmts.append(&mut user_body);

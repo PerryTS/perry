@@ -22,7 +22,7 @@ These areas are intentionally left as follow-up work because they require larger
 
 1. Real `fs.watch`, `fs.watchFile`, and `fs.promises.watch` event delivery, including recursive watching, abort signals, and async iterator behavior.
 2. Advanced `glob` semantics: async iterators, arrays of patterns, `exclude`, `withFileTypes`, brace/extglob edge cases, and broader cwd/pathlike validation.
-3. Full FileHandle coverage such as `readLines`, readline integration, and more stream lifecycle/error cases.
+3. Full FileHandle coverage such as readline integration and more stream lifecycle/error cases.
 4. `writeFile` and FileHandle write inputs from streams, async iterables, iterables, and abort signals.
 5. Node-perfect `cp` behavior for async filters, exact validation/errors, symlink cycles, subdirectory guards, mode/reflink semantics, and conflict handling.
 6. Node-perfect errors across fs APIs: exact error type, `code`, `errno`, `path`, `dest`, and `syscall` fields.
