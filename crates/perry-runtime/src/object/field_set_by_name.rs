@@ -196,6 +196,26 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
+    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. Setting
+    // an arbitrary property on it (`date.foo = x`) must NOT deref the small
+    // cell as an `ObjectHeader` below (memory corruption). Perry doesn't model
+    // expando properties on Date objects, so treat it as a no-op — the same
+    // observable result as the old value-type representation (a property set
+    // on a primitive number).
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::date::is_date_cell_addr(addr) {
+            return;
+        }
+    }
     // Strip NaN-boxing tags if present (defensive: handle POINTER_TAG, UNDEFINED, NULL, etc.)
     let obj = {
         let bits = obj as u64;
