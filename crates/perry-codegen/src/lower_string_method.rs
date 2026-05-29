@@ -457,19 +457,35 @@ pub(crate) fn lower_string_method(
                 );
             }
             let other_box = lower_expr(ctx, &args[0])?;
-            // Ignore optional locale/options args.
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
+            // `options` is the 3rd arg; `locales` (2nd) is evaluated for side
+            // effects but unused (no Intl). With an options object present,
+            // route to the variant that honors `{ numeric: true }`.
+            let options_box = if args.len() == 3 {
+                let _ = lower_expr(ctx, &args[1])?; // locales (side effects only)
+                Some(lower_expr(ctx, &args[2])?)
+            } else {
+                for extra in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, extra)?;
+                }
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let other_handle = unbox_str_handle(blk, &other_box);
             // Returns a plain f64 (-1/0/1) — NOT NaN-tagged.
-            Ok(blk.call(
-                DOUBLE,
-                "js_string_locale_compare",
-                &[(I64, &recv_handle), (I64, &other_handle)],
-            ))
+            if let Some(opts) = options_box {
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_string_locale_compare_opts",
+                    &[(I64, &recv_handle), (I64, &other_handle), (DOUBLE, &opts)],
+                ))
+            } else {
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_string_locale_compare",
+                    &[(I64, &recv_handle), (I64, &other_handle)],
+                ))
+            }
         }
         "search" => {
             if args.len() != 1 {

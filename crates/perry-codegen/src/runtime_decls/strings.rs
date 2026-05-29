@@ -1207,6 +1207,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I64, I64, DOUBLE, I32],
     );
     module.declare_function("js_string_locale_compare", DOUBLE, &[I64, I64]);
+    module.declare_function("js_string_locale_compare_opts", DOUBLE, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_normalize", I64, &[I64, I64]);
     module.declare_function("js_string_pad_start", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_string_pad_end", I64, &[I64, DOUBLE, I64]);

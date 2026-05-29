@@ -409,6 +409,103 @@ pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const Str
     }
 }
 
+/// Natural-order collation for `localeCompare(other, locales, { numeric: true })`:
+/// maximal runs of ASCII digits compare by numeric value (leading zeros
+/// ignored, then by digit-count and lexicographically), and non-digit runs
+/// compare with the same case-insensitive primary / case tertiary rule as
+/// `js_string_locale_compare`. So `"10" > "9"` and `"file10" > "file9"`.
+fn locale_compare_numeric(a: &str, b: &str) -> f64 {
+    let mut ai = a.chars().peekable();
+    let mut bi = b.chars().peekable();
+    loop {
+        match (ai.peek().copied(), bi.peek().copied()) {
+            (None, None) => return 0.0,
+            (None, Some(_)) => return -1.0,
+            (Some(_), None) => return 1.0,
+            (Some(ca), Some(cb)) if ca.is_ascii_digit() && cb.is_ascii_digit() => {
+                let mut da = String::new();
+                while let Some(&c) = ai.peek() {
+                    if c.is_ascii_digit() {
+                        da.push(c);
+                        ai.next();
+                    } else {
+                        break;
+                    }
+                }
+                let mut db = String::new();
+                while let Some(&c) = bi.peek() {
+                    if c.is_ascii_digit() {
+                        db.push(c);
+                        bi.next();
+                    } else {
+                        break;
+                    }
+                }
+                // Compare by numeric value: strip leading zeros, then longer
+                // run wins, then lexicographically among equal lengths.
+                let na = da.trim_start_matches('0');
+                let nb = db.trim_start_matches('0');
+                match na.len().cmp(&nb.len()).then_with(|| na.cmp(nb)) {
+                    std::cmp::Ordering::Less => return -1.0,
+                    std::cmp::Ordering::Greater => return 1.0,
+                    std::cmp::Ordering::Equal => {} // equal numeric value — keep going
+                }
+            }
+            (Some(ca), Some(cb)) => {
+                ai.next();
+                bi.next();
+                if ca == cb {
+                    continue;
+                }
+                let la = ca.to_lowercase().next().unwrap_or(ca);
+                let lb = cb.to_lowercase().next().unwrap_or(cb);
+                if la != lb {
+                    return if la < lb { -1.0 } else { 1.0 };
+                }
+                // Same letter, different case: lowercase sorts before uppercase.
+                let a_lower = ca.is_lowercase();
+                let b_lower = cb.is_lowercase();
+                if a_lower != b_lower {
+                    return if a_lower { -1.0 } else { 1.0 };
+                }
+                return if (ca as u32) < (cb as u32) { -1.0 } else { 1.0 };
+            }
+        }
+    }
+}
+
+/// `String.prototype.localeCompare(other, locales, options)` — honors the
+/// `{ numeric: true }` collation option (natural sort); `locales` is ignored
+/// (no Intl/ICU). `options` arrives as a NaN-boxed JSValue (the options object,
+/// or undefined when absent). Reads `options.numeric` (ToBoolean) and routes to
+/// `locale_compare_numeric` when set, else to the default `js_string_locale_compare`.
+#[no_mangle]
+pub extern "C" fn js_string_locale_compare_opts(
+    a: *const StringHeader,
+    b: *const StringHeader,
+    options: f64,
+) -> f64 {
+    let numeric = unsafe {
+        let ptr =
+            crate::value::js_nanbox_get_pointer(options) as *const crate::object::ObjectHeader;
+        if ptr.is_null() || (ptr as usize) < 0x10000 {
+            false
+        } else {
+            let key = crate::string::js_string_from_bytes(b"numeric".as_ptr(), 7);
+            let v = crate::object::js_object_get_field_by_name_f64(ptr, key);
+            crate::value::js_is_truthy(v) != 0
+        }
+    };
+    if !numeric {
+        return js_string_locale_compare(a, b);
+    }
+    if !is_valid_string_ptr(a) || !is_valid_string_ptr(b) {
+        // Match the validity edge-cases of the default path.
+        return js_string_locale_compare(a, b);
+    }
+    locale_compare_numeric(string_as_str(a), string_as_str(b))
+}
+
 /// String.prototype.isWellFormed() — returns NaN-boxed boolean.
 /// A string is well-formed if it contains no lone surrogates.
 /// Lone-surrogate strings are marked with STRING_FLAG_HAS_LONE_SURROGATES at construction.
@@ -492,6 +589,30 @@ pub extern "C" fn js_string_to_well_formed(s: *const StringHeader) -> *mut Strin
         }
     }
     js_string_from_bytes(result.as_ptr(), result.len() as u32)
+}
+
+#[cfg(test)]
+mod numeric_collation_tests {
+    use super::locale_compare_numeric;
+
+    #[test]
+    fn natural_order_compares_digit_runs_numerically() {
+        // Numeric runs compare by value, not lexicographically.
+        assert_eq!(locale_compare_numeric("10", "9"), 1.0);
+        assert_eq!(locale_compare_numeric("9", "10"), -1.0);
+        assert_eq!(locale_compare_numeric("file10", "file9"), 1.0);
+        assert_eq!(locale_compare_numeric("file2", "file10"), -1.0);
+        // Leading zeros: equal numeric value → equal.
+        assert_eq!(locale_compare_numeric("08", "8"), 0.0);
+        assert_eq!(locale_compare_numeric("100", "99"), 1.0);
+        // Mixed runs and pure alpha.
+        assert_eq!(locale_compare_numeric("a10b", "a9b"), 1.0);
+        assert_eq!(locale_compare_numeric("a", "b"), -1.0);
+        assert_eq!(locale_compare_numeric("abc", "abc"), 0.0);
+        // A digit run vs the end of the shorter string.
+        assert_eq!(locale_compare_numeric("x", "x10"), -1.0);
+        assert_eq!(locale_compare_numeric("2foo", "10foo"), -1.0);
+    }
 }
 
 #[cfg(test)]
