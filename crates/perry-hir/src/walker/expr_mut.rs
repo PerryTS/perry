@@ -520,6 +520,10 @@ where
             f(left);
             f(right);
         }
+        Expr::TextEncoderEncodeInto { source, dest } => {
+            f(source);
+            f(dest);
+        }
         Expr::PropertySet { object, value, .. } => {
             f(object);
             f(value);

@@ -14,6 +14,16 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
+fn text_encoder_encode_into(args: Vec<Expr>) -> Expr {
+    let mut args = args.into_iter();
+    let source = args.next().unwrap_or_else(|| Expr::String(String::new()));
+    let dest = args.next().unwrap_or(Expr::Undefined);
+    Expr::TextEncoderEncodeInto {
+        source: Box::new(source),
+        dest: Box::new(dest),
+    }
+}
+
 pub(super) fn try_textencoder_decoder(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -36,6 +46,9 @@ pub(super) fn try_textencoder_decoder(
                                 Expr::String(String::new())
                             };
                             return Ok(Ok(Expr::TextEncoderEncode(Box::new(str_arg))));
+                        }
+                        if class_name == "TextEncoder" && method_name == "encodeInto" {
+                            return Ok(Ok(text_encoder_encode_into(args)));
                         }
                         if class_name == "TextDecoder" && method_name == "decode" {
                             if !args.is_empty() {
@@ -62,6 +75,9 @@ pub(super) fn try_textencoder_decoder(
                             Expr::String(String::new())
                         };
                         return Ok(Ok(Expr::TextEncoderEncode(Box::new(str_arg))));
+                    }
+                    if is_text_encoder && method_name == "encodeInto" {
+                        return Ok(Ok(text_encoder_encode_into(args)));
                     }
                     let is_text_decoder = ctx
                         .lookup_local_type(&obj_name)

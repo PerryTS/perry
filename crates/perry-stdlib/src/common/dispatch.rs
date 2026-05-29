@@ -382,22 +382,12 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Method-gated so a handle id reused by another registry (HashHandle,
     // FastifyApp, …) doesn't misroute. The list mirrors the
     // `class_filter: Some("HttpServer")` rows in http.rs.
-    //
-    // IncomingMessage / ServerResponse follow the same recipe but live in
-    // separate registries; left as a follow-up so this PR stays scoped.
     #[cfg(feature = "external-http-server-pump")]
-    if matches!(
-        method_name,
-        "listen"
-            | "close"
-            | "closeAllConnections"
-            | "closeIdleConnections"
-            | "address"
-            | "on"
-            | "addListener"
-    ) {
+    {
         extern "C" {
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
+            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+            fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_dispatch_method(
                 handle: i64,
                 method_ptr: *const u8,
@@ -405,10 +395,87 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 args_ptr: *const f64,
                 args_len: usize,
             ) -> f64;
+            fn js_ext_http_incoming_message_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+            fn js_ext_http_server_response_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
         }
-        if unsafe { js_ext_http_server_is_handle(handle) } != 0 {
+
+        let is_http_server_method =
+            matches!(
+                method_name,
+                "listen" | "close" | "address" | "on" | "addListener"
+            ) || matches!(method_name, "closeAllConnections" | "closeIdleConnections");
+        if is_http_server_method && unsafe { js_ext_http_server_is_handle(handle) } != 0 {
             return unsafe {
                 js_ext_http_server_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+
+        let is_incoming_message_method = matches!(
+            method_name,
+            "on" | "addListener" | "pause" | "resume" | "destroy" | "read"
+        ) || matches!(
+            method_name,
+            "method" | "url" | "httpVersion"
+        ) || matches!(
+            method_name,
+            "__get_method" | "__get_url" | "__get_httpVersion"
+        ) || matches!(
+            method_name,
+            "__get_complete" | "__get_aborted" | "__get_destroyed"
+        );
+        if is_incoming_message_method
+            && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_incoming_message_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+
+        let is_server_response_method = matches!(
+            method_name,
+            "setHeader" | "getHeader" | "removeHeader" | "hasHeader" | "writeHead" | "write"
+        ) || matches!(
+            method_name,
+            "addTrailers" | "end" | "flushHeaders" | "writeContinue" | "writeProcessing"
+        ) || matches!(
+            method_name,
+            "on" | "addListener" | "setStatus" | "getStatus"
+        ) || matches!(
+            method_name,
+            "__get_statusCode" | "__set_statusCode" | "__set_statusMessage"
+        ) || matches!(
+            method_name,
+            "__get_headersSent" | "__get_writableEnded" | "__get_writableFinished"
+        );
+        if is_server_response_method
+            && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_server_response_dispatch_method(
                     handle,
                     method_name.as_ptr(),
                     method_name.len(),
@@ -1121,6 +1188,83 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         }
     }
 
+    // Server-side node:http request/response handles whose static
+    // `IncomingMessage` / `ServerResponse` type was lost.
+    #[cfg(feature = "external-http-server-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+            fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http_incoming_message_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+            fn js_ext_http_server_response_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+        }
+
+        if matches!(
+            property_name,
+            "method"
+                | "url"
+                | "httpVersion"
+                | "headers"
+                | "rawHeaders"
+                | "complete"
+                | "aborted"
+                | "destroyed"
+                | "on"
+                | "addListener"
+                | "pause"
+                | "resume"
+                | "destroy"
+                | "read"
+        ) && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_incoming_message_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
+            "statusCode"
+                | "headersSent"
+                | "writableEnded"
+                | "writableFinished"
+                | "setHeader"
+                | "getHeader"
+                | "removeHeader"
+                | "hasHeader"
+                | "writeHead"
+                | "write"
+                | "addTrailers"
+                | "end"
+                | "flushHeaders"
+                | "writeContinue"
+                | "writeProcessing"
+                | "on"
+                | "addListener"
+        ) && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_server_response_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+    }
+
     // #1113: `app.server` — return the FastifyApp handle pointer-tagged
     // so `typeof app.server === "object"` and `.on("upgrade", …)`
     // routes through HANDLE_METHOD_DISPATCH back into the FastifyApp
@@ -1680,6 +1824,30 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
         if property_name == "user" {
             crate::fastify::js_fastify_req_set_user_data(handle, value);
+        }
+    }
+
+    #[cfg(feature = "external-http-server-pump")]
+    if matches!(property_name, "statusCode" | "statusMessage") {
+        extern "C" {
+            fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http_server_response_dispatch_property_set(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+                value: f64,
+            ) -> i32;
+        }
+
+        if unsafe { js_ext_http_server_response_is_handle(handle) } != 0 {
+            unsafe {
+                js_ext_http_server_response_dispatch_property_set(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                    value,
+                );
+            }
         }
     }
 }

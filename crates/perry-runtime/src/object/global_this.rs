@@ -146,6 +146,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Request",
     "Response",
     "FinalizationRegistry",
+    "Buffer",
 ];
 
 /// JS built-in namespaces (typeof === "object", not "function"). Same
@@ -542,6 +543,19 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     let (typed_array_intrinsic_ctor, _) = ensure_typed_array_intrinsic();
     // Constructors: ClosureHeader-backed so typeof is "function".
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+        if name == "Buffer" {
+            let name_bytes = name.as_bytes();
+            let name_key =
+                crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+            let ctor_value = super::native_module::buffer_constructor_value();
+            js_object_set_field_by_name(singleton, name_key, ctor_value);
+            super::set_builtin_property_attrs(
+                singleton as usize,
+                name.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+            continue;
+        }
         let func_ptr = if name == "String" {
             global_this_string_thunk as *const u8
         } else {
@@ -944,6 +958,14 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         "Promise" => {
             install_noop_proto_methods(proto_obj, &[("catch", 1), ("finally", 1), ("then", 2)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "TextEncoder" => {
+            install_noop_proto_methods(proto_obj, &[("encode", 1), ("encodeInto", 2)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "TextDecoder" => {
+            install_noop_proto_methods(proto_obj, &[("decode", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Map" => {

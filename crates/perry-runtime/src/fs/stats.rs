@@ -2,18 +2,17 @@
 
 use std::fs;
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
 use super::*;
 
 // ---------- Stats object ----------
 //
 // `fs.statSync(path)` returns a Node-style Stats object supporting
-// `isFile()`, `isDirectory()`, `isSymbolicLink()` methods and a numeric
-// `size` property. We implement it as a plain ObjectHeader populated
-// with three closure fields (one per predicate) and a size field. The
-// closures capture a pre-computed boolean result so calling them just
-// returns the stored value via `js_closure_get_capture_f64`.
+// Node's predicate methods and scalar/timestamp fields. We implement it as a
+// plain ObjectHeader populated with closure fields for the predicates. The
+// closures capture a pre-computed boolean result so calling them just returns
+// the stored value via `js_closure_get_capture_f64`.
 
 pub(crate) extern "C" fn stats_closure_return_captured(
     closure: *const crate::closure::ClosureHeader,
@@ -55,16 +54,16 @@ pub(crate) fn bigint_i64_value(value: i64) -> f64 {
 // Field order MUST match the order writes are emitted below. The Date aliases
 // live in hidden slots after the enumerable fields and are exposed through
 // class-level getters/setters below.
-pub(crate) const STATS_KEYS_REGULAR: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
-pub(crate) const STATS_REGULAR_COUNT: u32 = 21;
+pub(crate) const STATS_KEYS_REGULAR: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0isBlockDevice\0isCharacterDevice\0isFIFO\0isSocket\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
+pub(crate) const STATS_REGULAR_COUNT: u32 = 25;
 pub(crate) const STATS_REGULAR_CLASS_ID: u32 = 0xFFFF_0070;
 
-pub(crate) const STATS_KEYS_BIGINT: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0atimeNs\0mtimeNs\0ctimeNs\0birthtimeNs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
-pub(crate) const STATS_BIGINT_COUNT: u32 = 25;
+pub(crate) const STATS_KEYS_BIGINT: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0isBlockDevice\0isCharacterDevice\0isFIFO\0isSocket\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0atimeNs\0mtimeNs\0ctimeNs\0birthtimeNs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
+pub(crate) const STATS_BIGINT_COUNT: u32 = 29;
 pub(crate) const STATS_BIGINT_CLASS_ID: u32 = 0xFFFF_0071;
 
-const REGULAR_DATE_SLOT_BASE: u32 = 17;
-const BIGINT_DATE_SLOT_BASE: u32 = 21;
+const REGULAR_DATE_SLOT_BASE: u32 = 21;
+const BIGINT_DATE_SLOT_BASE: u32 = 25;
 
 fn stats_date_slot(
     this_value: f64,
@@ -193,6 +192,8 @@ pub(crate) unsafe fn build_stats_object(
     meta_extra: Option<&fs::Metadata>,
 ) -> f64 {
     let (dev, rdev, blksize, ino, blocks) = metadata_node_extra_fields(meta_extra);
+    let (is_block_device, is_character_device, is_fifo, is_socket) =
+        metadata_special_file_predicates(meta_extra);
     // Real nanosecond timestamps when we have a Metadata in hand; otherwise
     // fall back to the millisecond × 1e6 approximation below.
     let times_ns = meta_extra.map(metadata_times_ns);
@@ -230,6 +231,10 @@ pub(crate) unsafe fn build_stats_object(
     set(0, make_stats_predicate(is_file));
     set(1, make_stats_predicate(is_dir));
     set(2, make_stats_predicate(is_symlink));
+    set(3, make_stats_predicate(is_block_device));
+    set(4, make_stats_predicate(is_character_device));
+    set(5, make_stats_predicate(is_fifo));
+    set(6, make_stats_predicate(is_socket));
     if bigint {
         let (a_ns, m_ns, c_ns, b_ns) = times_ns.unwrap_or((
             (atime_ms as i64).saturating_mul(1_000_000),
@@ -237,40 +242,40 @@ pub(crate) unsafe fn build_stats_object(
             (ctime_ms as i64).saturating_mul(1_000_000),
             (birthtime_ms as i64).saturating_mul(1_000_000),
         ));
-        set(3, bigint_u64_value(size));
-        set(4, bigint_i64_value(atime_ms as i64));
-        set(5, bigint_i64_value(mtime_ms as i64));
-        set(6, bigint_i64_value(ctime_ms as i64));
-        set(7, bigint_i64_value(birthtime_ms as i64));
-        set(8, bigint_i64_value(a_ns));
-        set(9, bigint_i64_value(m_ns));
-        set(10, bigint_i64_value(c_ns));
-        set(11, bigint_i64_value(b_ns));
-        set(12, bigint_u64_value(mode as u64));
-        set(13, bigint_i64_value(uid as i64));
-        set(14, bigint_i64_value(gid as i64));
-        set(15, bigint_i64_value(nlink as i64));
-        set(16, bigint_u64_value(dev));
-        set(17, bigint_u64_value(rdev));
-        set(18, bigint_u64_value(blksize));
-        set(19, bigint_u64_value(ino));
-        set(20, bigint_u64_value(blocks));
+        set(7, bigint_u64_value(size));
+        set(8, bigint_i64_value(atime_ms as i64));
+        set(9, bigint_i64_value(mtime_ms as i64));
+        set(10, bigint_i64_value(ctime_ms as i64));
+        set(11, bigint_i64_value(birthtime_ms as i64));
+        set(12, bigint_i64_value(a_ns));
+        set(13, bigint_i64_value(m_ns));
+        set(14, bigint_i64_value(c_ns));
+        set(15, bigint_i64_value(b_ns));
+        set(16, bigint_u64_value(mode as u64));
+        set(17, bigint_i64_value(uid as i64));
+        set(18, bigint_i64_value(gid as i64));
+        set(19, bigint_i64_value(nlink as i64));
+        set(20, bigint_u64_value(dev));
+        set(21, bigint_u64_value(rdev));
+        set(22, bigint_u64_value(blksize));
+        set(23, bigint_u64_value(ino));
+        set(24, bigint_u64_value(blocks));
         set_date_aliases(BIGINT_DATE_SLOT_BASE);
     } else {
-        set(3, size as f64);
-        set(4, atime_ms);
-        set(5, mtime_ms);
-        set(6, ctime_ms);
-        set(7, birthtime_ms);
-        set(8, mode as f64);
-        set(9, uid);
-        set(10, gid);
-        set(11, nlink);
-        set(12, dev as f64);
-        set(13, rdev as f64);
-        set(14, blksize as f64);
-        set(15, ino as f64);
-        set(16, blocks as f64);
+        set(7, size as f64);
+        set(8, atime_ms);
+        set(9, mtime_ms);
+        set(10, ctime_ms);
+        set(11, birthtime_ms);
+        set(12, mode as f64);
+        set(13, uid);
+        set(14, gid);
+        set(15, nlink);
+        set(16, dev as f64);
+        set(17, rdev as f64);
+        set(18, blksize as f64);
+        set(19, ino as f64);
+        set(20, blocks as f64);
         set_date_aliases(REGULAR_DATE_SLOT_BASE);
     }
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
@@ -378,12 +383,28 @@ pub(crate) fn metadata_node_extra_fields(meta: Option<&fs::Metadata>) -> (u64, u
     (0, 0, 0, 0, 0)
 }
 
-/// `fs.statSync(path)` — returns a Stats-like object with `isFile()`,
-/// `isDirectory()`, `isSymbolicLink()` predicate methods and a `size`
-/// numeric field. On error, returns an object where all predicates are
-/// false and size is 0 (Node throws on ENOENT, but Perry's LLVM backend
-/// doesn't have a catch-unwind path for runtime panics — graceful
-/// degradation is safer here).
+fn metadata_special_file_predicates(meta: Option<&fs::Metadata>) -> (bool, bool, bool, bool) {
+    #[cfg(unix)]
+    {
+        if let Some(meta) = meta {
+            let ft = meta.file_type();
+            return (
+                ft.is_block_device(),
+                ft.is_char_device(),
+                ft.is_fifo(),
+                ft.is_socket(),
+            );
+        }
+    }
+    let _ = meta;
+    (false, false, false, false)
+}
+
+/// `fs.statSync(path)` — returns a Stats-like object with Node-compatible
+/// predicate methods and a `size` numeric field. On error, returns an object
+/// where all predicates are false and size is 0 (Node throws on ENOENT, but
+/// Perry's LLVM backend doesn't have a catch-unwind path for runtime panics —
+/// graceful degradation is safer here).
 #[no_mangle]
 pub extern "C" fn js_fs_stat_sync(path_value: f64) -> f64 {
     js_fs_stat_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))

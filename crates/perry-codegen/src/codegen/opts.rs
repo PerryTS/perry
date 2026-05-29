@@ -621,6 +621,10 @@ pub(crate) struct CrossModuleCtx {
     /// dead branches (which may reference FFI functions that don't exist on
     /// the current target).
     pub compile_time_constants: std::collections::HashMap<u32, f64>,
+    /// Effective LLVM target triple for this compile. Expression lowering uses
+    /// this for narrow Node surface differences that are platform-dependent
+    /// even when the manifest entry is platform-neutral.
+    pub target_triple: String,
     /// App metadata backing compile-time `perry/system` introspection APIs.
     pub app_metadata: AppMetadata,
     /// Functions with a 3-param clamp pattern: fid → true. Call sites

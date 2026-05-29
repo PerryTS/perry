@@ -8,11 +8,12 @@
 //! logic changes.
 
 use super::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+    static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -20,6 +21,13 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
             visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+    BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
         }
     });
     scan_stream_event_emitter_prototype_roots_mut(visitor);
@@ -223,6 +231,146 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     value
 }
 
+extern "C" fn buffer_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    encoding_or_offset: f64,
+    length: f64,
+) -> f64 {
+    let value_js = crate::value::JSValue::from_bits(value.to_bits());
+    let buf = if value_js.is_undefined() || value_js.is_null() {
+        crate::buffer::js_buffer_alloc(0, 0)
+    } else if value_js.is_int32() || value_js.is_number() {
+        let size = if value_js.is_int32() {
+            value_js.as_int32()
+        } else {
+            value as i32
+        };
+        crate::buffer::js_buffer_alloc_unsafe(size)
+    } else {
+        let second = crate::value::JSValue::from_bits(encoding_or_offset.to_bits());
+        let third = crate::value::JSValue::from_bits(length.to_bits());
+        let second_is_offset =
+            !second.is_undefined() && !second.is_null() && !second.is_any_string();
+        if !third.is_undefined() || second_is_offset {
+            let len = if third.is_undefined() {
+                -1
+            } else if third.is_int32() {
+                third.as_int32()
+            } else {
+                length as i32
+            };
+            let offset = if second.is_int32() {
+                second.as_int32()
+            } else {
+                encoding_or_offset as i32
+            };
+            crate::buffer::js_buffer_from_arraybuffer_slice(value.to_bits() as i64, offset, len)
+        } else {
+            let enc = if second.is_undefined() {
+                0
+            } else {
+                crate::buffer::js_encoding_tag_from_value(encoding_or_offset)
+            };
+            crate::buffer::js_buffer_from_value(value.to_bits() as i64, enc)
+        }
+    };
+    crate::value::js_nanbox_pointer(buf as i64)
+}
+
+extern "C" fn buffer_prototype_method_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+const BUFFER_STATIC_METHODS: &[&str] = &[
+    "from",
+    "alloc",
+    "allocUnsafe",
+    "allocUnsafeSlow",
+    "concat",
+    "of",
+    "isBuffer",
+    "isEncoding",
+    "byteLength",
+    "compare",
+    "copyBytesFrom",
+];
+
+const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
+    "toString",
+    "equals",
+    "subarray",
+    "readUInt8",
+    "write",
+    "copy",
+    "slice",
+    "fill",
+    "includes",
+    "indexOf",
+    "lastIndexOf",
+];
+
+pub(crate) fn buffer_constructor_value() -> f64 {
+    BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
+        let cached = slot.get();
+        if cached != 0 {
+            return f64::from_bits(cached);
+        }
+
+        let func_ptr = buffer_constructor_thunk as *const u8;
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        if closure.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        crate::closure::js_register_closure_arity(func_ptr, 3);
+        set_bound_native_closure_name(closure, "Buffer");
+        let closure_addr = closure as usize;
+        let value = crate::value::js_nanbox_pointer(closure as i64);
+
+        for method in BUFFER_STATIC_METHODS {
+            let method_value = bound_native_callable_export_value("buffer.Buffer", method);
+            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
+        }
+
+        crate::closure::closure_set_dynamic_prop(closure_addr, "poolSize", buffer_pool_size());
+
+        let proto = js_object_alloc(0, 0);
+        if !proto.is_null() {
+            let constructor = "constructor";
+            let constructor_key =
+                crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+            js_object_set_field_by_name(proto, constructor_key, value);
+            super::set_builtin_property_attrs(
+                proto as usize,
+                constructor.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+
+            for method in BUFFER_PROTOTYPE_METHODS {
+                let method_ptr = buffer_prototype_method_thunk as *const u8;
+                let method_closure = crate::closure::js_closure_alloc(method_ptr, 0);
+                if method_closure.is_null() {
+                    continue;
+                }
+                set_bound_native_closure_name(method_closure, method);
+                let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+                let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
+                js_object_set_field_by_name(proto, key, method_value);
+            }
+            let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+            crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
+            super::set_builtin_property_attrs(
+                closure_addr,
+                "prototype".to_string(),
+                super::PropertyAttrs::new(true, false, false),
+            );
+        }
+
+        slot.set(value.to_bits());
+        value
+    })
+}
+
 fn fn_value(func_ptr: *const u8, name: &str) -> f64 {
     let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
     set_bound_native_closure_name(closure, name);
@@ -335,6 +483,10 @@ pub(crate) fn set_bound_native_closure_name(
 /// builtin path at lower_call/builtin.rs that allocates a real
 /// `EventEmitterHandle`, so dispatch coherence is preserved.
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
+    if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
+        return crate::fs::lchmod_is_callable_on_this_platform();
+    }
+
     matches!(
         (module, prop),
         // #1533: node:stream `promises` namespace exports.
@@ -508,8 +660,6 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "link")
             | ("fs", "lchown")
             | ("fs", "lchownSync")
-            | ("fs", "lchmod")
-            | ("fs", "lchmodSync")
             | ("fs", "lutimes")
             | ("fs", "lutimesSync")
             | ("fs", "mkdir")
@@ -599,6 +749,16 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // needs the property-read form to be a bound-method
             // closure.
             | ("crypto", "getRandomValues")
+            | ("buffer.Buffer", "from")
+            | ("buffer.Buffer", "alloc")
+            | ("buffer.Buffer", "allocUnsafe")
+            | ("buffer.Buffer", "allocUnsafeSlow")
+            | ("buffer.Buffer", "concat")
+            | ("buffer.Buffer", "of")
+            | ("buffer.Buffer", "isBuffer")
+            | ("buffer.Buffer", "isEncoding")
+            | ("buffer.Buffer", "byteLength")
+            | ("buffer.Buffer", "compare")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")
@@ -917,7 +1077,13 @@ pub extern "C" fn js_native_module_bind_method(
         return js_val;
     }
 
-    // Not a constant — create a bound method closure
+    // Not a constant or JS-backed property. Only synthesize callables for
+    // exports that are actually callable on this platform; otherwise namespace
+    // reads such as Linux `fs.lchmodSync` must stay `undefined`.
+    if !is_native_module_callable_export(module_name, property_name) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
     let heap_name = unsafe {
         let layout = std::alloc::Layout::from_size_align(property_name_len, 1).unwrap();
         let ptr = std::alloc::alloc(layout);
@@ -1689,7 +1855,7 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "fs.constants" => fs_const(property),
         "buffer" => match property {
-            "Buffer" => Some(create_sub_namespace("buffer.Buffer")),
+            "Buffer" => Some(buffer_constructor_value()),
             "constants" => Some(create_sub_namespace("buffer.constants")),
             // Match Node's common 64-bit max Buffer length value. Perry won't
             // actually allocate buffers this large, but shape/value parity lets

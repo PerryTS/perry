@@ -714,6 +714,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     // as a single f64 instead of one byte).
                     match (class_name.as_str(), method_name) {
                         ("TextEncoder", "encode") => return Type::Named("Uint8Array".into()),
+                        ("TextEncoder", "encodeInto") => return Type::Object(Default::default()),
                         ("TextDecoder", "decode") => return Type::String,
                         ("FileHandle", "readLines") => {
                             return Type::Named(FILEHANDLE_READLINES_ITERATOR_TYPE.to_string());

@@ -315,6 +315,14 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                 Err(a) => a,
             };
 
+            // TextEncoder/TextDecoder direct methods need to win before
+            // native-instance dispatch, because node:util named constructors
+            // can leave native tags on the local binding.
+            args = match try_textencoder_decoder(ctx, call, args)? {
+                Ok(e) => return Ok(e),
+                Err(a) => a,
+            };
+
             // module.Class.staticMethod() and process.std{in,out} dispatch.
             args = match try_module_class_static(ctx, call, expr, args)? {
                 Ok(e) => return Ok(e),
@@ -365,12 +373,6 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
             // Array methods on inline array literals.
             args = match try_inline_array_methods(ctx, call, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
-
-            // TextEncoder.encode / TextDecoder.decode on inline expressions.
-            args = match try_textencoder_decoder(ctx, call, args)? {
                 Ok(e) => return Ok(e),
                 Err(a) => a,
             };

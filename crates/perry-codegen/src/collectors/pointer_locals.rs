@@ -196,6 +196,7 @@ pub fn collect_pointer_typed_locals(
             | Expr::Uint8ArrayNew(_)
             | Expr::Uint8ArrayFrom(_)
             | Expr::TextEncoderEncode(_) => Some(Type::Named("Uint8Array".into())),
+            Expr::TextEncoderEncodeInto { .. } => Some(Type::Object(Default::default())),
             Expr::NativeMethodCall {
                 module,
                 method,

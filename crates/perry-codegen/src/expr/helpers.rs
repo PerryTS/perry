@@ -306,6 +306,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            | "Buffer"
             // Global functions (typeof === "function" in spec).
             | "structuredClone"
             | "atob"

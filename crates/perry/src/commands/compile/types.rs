@@ -368,6 +368,13 @@ pub struct CompilationContext {
     pub native_modules: BTreeMap<PathBuf, HirModule>,
     /// JavaScript modules to interpret via V8
     pub js_modules: BTreeMap<String, JsModule>,
+    /// Declaration sidecars discovered for resolved implementation files.
+    ///
+    /// Keyed by the canonical implementation path (`dist/index.js`); value is
+    /// the declaration file advertised by package metadata or an adjacent
+    /// sidecar (`dist/index.d.ts`). These are graph metadata, not executable
+    /// modules.
+    pub declaration_sidecars: BTreeMap<PathBuf, PathBuf>,
     /// Mapping from import specifiers to resolved paths
     // #854: populated import-graph metadata on the compilation context;
     // not read on the current path but part of the context contract.
@@ -676,6 +683,7 @@ impl CompilationContext {
         Self {
             native_modules: BTreeMap::new(),
             js_modules: BTreeMap::new(),
+            declaration_sidecars: BTreeMap::new(),
             import_map: BTreeMap::new(),
             needs_wasm_runtime: false,
             needs_ui: false,

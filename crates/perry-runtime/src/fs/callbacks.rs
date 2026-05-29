@@ -438,10 +438,19 @@ pub extern "C" fn js_fs_lchown_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// `fs.lchmod(path, mode, callback)`. macOS/BSD-only; Linux reports an error.
+/// `fs.lchmod(path, mode, callback)`. macOS/BSD-only; on Linux Node exposes
+/// the property with value `undefined`, so any attempted call throws a plain
+/// TypeError before argument validation.
 #[no_mangle]
 pub extern "C" fn js_fs_lchmod_callback(path_value: f64, mode_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if !crate::fs::lchmod_is_callable_on_this_platform() {
+        let _ = (path_value, mode_value, callback);
+        let message = "fs.lchmod is not a function";
+        let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let err = crate::error::js_typeerror_new(msg);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
     crate::fs::validate::validate_path("path", path_value);
     crate::fs::validate::validate_function("cb", callback);
     let cb = last_callback(&[callback]);

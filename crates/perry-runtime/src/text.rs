@@ -13,6 +13,7 @@
 //! pointer on the codegen side. The runtime doesn't need per-instance state.
 
 use crate::buffer::{buffer_alloc, buffer_data_mut, mark_as_uint8array, BufferHeader};
+use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 
 /// `new TextEncoder()` — returns a non-null sentinel integer pointer.
@@ -66,6 +67,85 @@ pub extern "C" fn js_text_encoder_encode_llvm(value: f64) -> i64 {
     mark_as_uint8array(buf as usize);
 
     buf as i64
+}
+
+fn text_encoder_result(read: usize, written: usize) -> *mut ObjectHeader {
+    let obj = js_object_alloc(0, 2);
+    if obj.is_null() {
+        return obj;
+    }
+
+    let read_key = js_string_from_bytes(b"read".as_ptr(), 4);
+    let written_key = js_string_from_bytes(b"written".as_ptr(), 7);
+    js_object_set_field_by_name(obj, read_key, read as f64);
+    js_object_set_field_by_name(obj, written_key, written as f64);
+    obj
+}
+
+fn text_encoder_prefix_len(src: &[u8], dest_len: usize) -> (usize, usize) {
+    if src.is_empty() || dest_len == 0 {
+        return (0, 0);
+    }
+    if src.is_ascii() {
+        let written = src.len().min(dest_len);
+        return (written, written);
+    }
+
+    match std::str::from_utf8(src) {
+        Ok(s) => {
+            let mut read = 0usize;
+            let mut written = 0usize;
+            for ch in s.chars() {
+                let byte_len = ch.len_utf8();
+                if written + byte_len > dest_len {
+                    break;
+                }
+                written += byte_len;
+                read += ch.len_utf16();
+            }
+            (read, written)
+        }
+        Err(_) => {
+            let written = src.len().min(dest_len);
+            let read = crate::string::compute_utf16_len(src.as_ptr(), written as u32) as usize;
+            (read, written)
+        }
+    }
+}
+
+/// `encoder.encodeInto(str, dest)` — UTF-8 encode into an existing Uint8Array.
+///
+/// Returns an object with Node's `{ read, written }` shape. `read` counts UTF-16
+/// code units consumed from the source string; `written` counts bytes copied to
+/// the destination and never splits a UTF-8 sequence.
+#[no_mangle]
+pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i64 {
+    let str_ptr_i = crate::value::js_get_string_pointer_unified(source);
+    let dest_ptr_i = crate::value::js_nanbox_get_pointer(dest);
+
+    if str_ptr_i == 0 || dest_ptr_i == 0 || (dest_ptr_i as usize) < 0x1000 {
+        return text_encoder_result(0, 0) as i64;
+    }
+
+    let str_ptr = str_ptr_i as *const StringHeader;
+    let dest_ptr = dest_ptr_i as *mut BufferHeader;
+    if str_ptr.is_null() || dest_ptr.is_null() {
+        return text_encoder_result(0, 0) as i64;
+    }
+
+    unsafe {
+        let src_len = (*str_ptr).byte_len as usize;
+        let src_data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let src = std::slice::from_raw_parts(src_data, src_len);
+        let dest_len = (*dest_ptr).length as usize;
+        let (read, written) = text_encoder_prefix_len(src, dest_len);
+
+        for (idx, byte) in src.iter().copied().take(written).enumerate() {
+            crate::buffer::js_buffer_set(dest_ptr, idx as i32, byte as i32);
+        }
+
+        text_encoder_result(read, written) as i64
+    }
 }
 
 /// `decoder.decode(buf)` — UTF-8 decode a NaN-boxed `BufferHeader` value.
