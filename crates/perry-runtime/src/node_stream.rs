@@ -76,6 +76,7 @@ const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
 const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
+const READABLE_DEFAULT_READ_ERROR_KEY: &[u8] = b"__perryReadableDefaultReadError";
 const STREAM_DRAIN_SCHEDULED_KEY: &[u8] = b"__perryStreamDrainScheduled";
 const STREAM_READABLE_SCHEDULED_KEY: &[u8] = b"__perryStreamReadableScheduled";
 const STREAM_END_SCHEDULED_KEY: &[u8] = b"__perryStreamEndScheduled";
@@ -1504,6 +1505,14 @@ fn writable_write_after_end_error() -> f64 {
     let msg = b"write after end";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_WRITE_AFTER_END");
+    let err = crate::error::js_error_new_with_message(s);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn readable_default_read_error() -> f64 {
+    let msg = b"The _read() method is not implemented";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(s, "ERR_METHOD_NOT_IMPLEMENTED");
     let err = crate::error::js_error_new_with_message(s);
     crate::value::js_nanbox_pointer(err as i64)
 }
@@ -2997,6 +3006,11 @@ fn hidden_read_key() -> *mut crate::string::StringHeader {
 #[inline]
 fn hidden_read_invoked_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_READ_INVOKED_KEY)
+}
+
+#[inline]
+fn hidden_default_read_error_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_DEFAULT_READ_ERROR_KEY)
 }
 
 #[inline]
@@ -4595,6 +4609,7 @@ fn invoke_construct_callback(stream: f64, opts: f64) {
 
 fn invoke_read_once(stream: f64) {
     let Some(read) = get_hidden_value(stream, hidden_read_key()) else {
+        maybe_emit_default_read_error(stream);
         return;
     };
     if get_hidden_value(stream, hidden_read_invoked_key()).is_some() {
@@ -4606,6 +4621,19 @@ fn invoke_read_once(stream: f64) {
         let _ = crate::closure::js_native_call_value(read, std::ptr::null(), 0);
     }
     crate::object::js_implicit_this_set(prev_this);
+}
+
+fn maybe_emit_default_read_error(stream: f64) {
+    if !has_truthy_hidden(stream, hidden_default_read_error_key())
+        || readable_hidden_chunks(stream).is_some()
+        || stream_hidden_ended(stream)
+        || stream_destroyed(stream)
+        || get_hidden_value(stream, hidden_read_invoked_key()).is_some()
+    {
+        return;
+    }
+    set_hidden_value(stream, hidden_read_invoked_key(), f64::from_bits(TAG_TRUE));
+    destroy_stream(stream, readable_default_read_error());
 }
 
 fn is_single_chunk_value(value: f64) -> bool {
@@ -5391,6 +5419,12 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     let readable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     if let Some(read) = read_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
+    } else {
+        set_hidden_value(
+            readable,
+            hidden_default_read_error_key(),
+            f64::from_bits(TAG_TRUE),
+        );
     }
     init_lifecycle_state(readable, opts);
     init_constructor(readable, "Readable");

@@ -3,6 +3,15 @@ import { Readable } from "node:stream";
 // default _read fires ERR_METHOD_NOT_IMPLEMENTED via 'error').
 const r = new Readable();
 let errored = false;
-r.on("error", () => (errored = true));
+let seen: any;
+r.on("error", (err) => {
+  errored = true;
+  seen = err;
+});
 r.read();
-setImmediate(() => console.log("errored:", errored));
+setImmediate(() => {
+  console.log("errored:", errored);
+  console.log("instanceof Error:", seen instanceof Error);
+  console.log("code:", seen?.code);
+  console.log("message:", seen?.message);
+});
