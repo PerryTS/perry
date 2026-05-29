@@ -127,7 +127,7 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises"];
+pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -2730,6 +2730,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("punycode", "toASCII", false, None),
     method("punycode", "toUnicode", false, None),
     property("punycode", "version"),
+    // #2607: the `ucs2` code-point helper sub-namespace. The sub-namespace
+    // object is a `property` on `punycode`; its `decode`/`encode` methods carry
+    // the `punycode.ucs2` module key (mirrors `util/types`).
+    property("punycode", "ucs2"),
+    method("punycode.ucs2", "decode", false, None),
+    method("punycode.ucs2", "encode", false, None),
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),

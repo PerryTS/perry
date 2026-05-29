@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1513 entries across 83 modules.
+Total: 1516 entries across 84 modules.
 
 ## Modules
 
@@ -68,6 +68,7 @@ Total: 1513 entries across 83 modules.
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
+- [`punycode.ucs2`](#punycode-ucs2)
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
@@ -1739,7 +1740,15 @@ Total: 1513 entries across 83 modules.
 
 ### Properties
 
+- `ucs2`
 - `version`
+
+## `punycode.ucs2`
+
+### Methods
+
+- `decode` — module
+- `encode` — module
 
 ## `querystring`
 

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1513 entries across 83 modules
+// Coverage: 1516 entries across 84 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1911,6 +1911,8 @@ declare module "process" {
 
 declare module "punycode" {
   /** stdlib */
+  export const ucs2: any;
+  /** stdlib */
   export const version: any;
   /** stdlib */
   export function decode(...args: any[]): any;
@@ -1920,6 +1922,13 @@ declare module "punycode" {
   export function toASCII(...args: any[]): any;
   /** stdlib */
   export function toUnicode(...args: any[]): any;
+}
+
+declare module "punycode.ucs2" {
+  /** stdlib */
+  export function decode(...args: any[]): any;
+  /** stdlib */
+  export function encode(...args: any[]): any;
 }
 
 declare module "querystring" {

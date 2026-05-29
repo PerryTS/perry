@@ -282,15 +282,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `rl.commit()`
 - `rl.rollback()`
 
-### node:punycode
-
-**Total APIs: 7** · Perry covers: 5 · Gap: 2
-
-Remaining (the `ucs2` sub-namespace array helpers, #2513 follow-up):
-
-- `punycode.ucs2.decode(string)`
-- `punycode.ucs2.encode(codePoints)`
-
 ### node:stream/consumers
 
 **Total APIs: 6** · Perry covers: 0 · Gap: 6

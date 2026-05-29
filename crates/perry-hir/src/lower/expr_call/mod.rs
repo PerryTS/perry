@@ -70,7 +70,7 @@ use module_static::try_module_static_methods;
 use native_module::try_native_module_methods;
 use nested_namespace::{
     try_path_subnamespace, try_process_hrtime_bigint, try_process_memory_usage_rss,
-    try_util_types_namespace, try_web_crypto_subtle,
+    try_punycode_ucs2_namespace, try_util_types_namespace, try_web_crypto_subtle,
 };
 use post_args_dispatch::{
     try_object_has_own_call, try_object_prototype_call, try_object_static_alias_call,
@@ -307,6 +307,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                 Err(a) => a,
             };
             args = match try_util_types_namespace(ctx, expr, args)? {
+                Ok(e) => return Ok(e),
+                Err(a) => a,
+            };
+            args = match try_punycode_ucs2_namespace(ctx, expr, args)? {
                 Ok(e) => return Ok(e),
                 Err(a) => a,
             };

@@ -349,6 +349,50 @@ pub(super) fn try_util_types_namespace(
     Ok(Err(args))
 }
 
+/// `punycode.ucs2.<method>(args)` (#2607) — sub-namespace dispatch for the
+/// deprecated `node:punycode` module's `ucs2` code-point helpers
+/// (`decode`/`encode`). Rewrites the namespace-access form to a
+/// `NativeMethodCall` on the `punycode.ucs2` module key, routed through
+/// `native_module_dispatch`. Without this the chain would greedily match the
+/// top-level `punycode.decode`/`encode` native-table rows (ignoring `.ucs2`).
+pub(super) fn try_punycode_ucs2_namespace(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Result<Expr, Vec<Expr>>> {
+    if let ast::Expr::Member(outer_member) = expr {
+        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+            if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+                let root_name = root_ident.sym.as_ref();
+                let is_punycode_root = root_name == "punycode"
+                    || ctx.lookup_builtin_module_alias(root_name) == Some("punycode")
+                    || ctx
+                        .lookup_native_module(root_name)
+                        .map(|(m, _)| m == "punycode")
+                        .unwrap_or(false);
+                if is_punycode_root {
+                    if let (ast::MemberProp::Ident(namespace), ast::MemberProp::Ident(method)) =
+                        (&inner_member.prop, &outer_member.prop)
+                    {
+                        if namespace.sym.as_ref() == "ucs2"
+                            && matches!(method.sym.as_ref(), "decode" | "encode")
+                        {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "punycode.ucs2".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method.sym.to_string(),
+                                args,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Err(args))
+}
+
 /// `path.posix.<method>(args)` / `path.win32.<method>(args)` —
 /// sub-namespace dispatch (issue #810). Without this arm the
 /// generic mod.X.Y() block below skips the call (path.posix /
