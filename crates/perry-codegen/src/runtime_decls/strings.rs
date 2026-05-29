@@ -1653,6 +1653,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_entries", I64, &[I64]);
     module.declare_function("js_array_keys", I64, &[I64]);
     module.declare_function("js_array_values", I64, &[I64]);
+    // #2384: iterator-OBJECT variants (real `.next()`-bearing iterator, not an
+    // eager materialized array) backing codegen's `Expr::ArrayValues`/etc.
+    module.declare_function("js_array_entries_iter_obj", I64, &[I64]);
+    module.declare_function("js_array_keys_iter_obj", I64, &[I64]);
+    module.declare_function("js_array_values_iter_obj", I64, &[I64]);
 
     // ──────────────────────────────────────────────────────────────────
     // Web Fetch API: Response / Headers / Request / Blob constructors +

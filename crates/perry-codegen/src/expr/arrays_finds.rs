@@ -942,26 +942,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(len_f64)
         }
 
-        // -------- arr.entries() / .keys() / .values() (eager) --------
+        // -------- arr.entries() / .keys() / .values() --------
+        // #2384: build a real `.next()`-bearing iterator OBJECT (not an eager
+        // materialized array) so `const e = arr.entries(); e.next().value`
+        // matches Node. Spread / for-of / Array.from already detect the
+        // iterator class id (`js_array_clone`, `js_for_of_to_array`) and drive
+        // `.next()`, so those paths keep working.
         Expr::ArrayEntries(arr) => {
             let arr_box = lower_expr(ctx, arr)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let result = blk.call(I64, "js_array_entries", &[(I64, &arr_handle)]);
+            let result = blk.call(I64, "js_array_entries_iter_obj", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         Expr::ArrayKeys(arr) => {
             let arr_box = lower_expr(ctx, arr)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let result = blk.call(I64, "js_array_keys", &[(I64, &arr_handle)]);
+            let result = blk.call(I64, "js_array_keys_iter_obj", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         Expr::ArrayValues(arr) => {
             let arr_box = lower_expr(ctx, arr)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let result = blk.call(I64, "js_array_values", &[(I64, &arr_handle)]);
+            let result = blk.call(I64, "js_array_values_iter_obj", &[(I64, &arr_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
 

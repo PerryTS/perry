@@ -706,13 +706,16 @@ pub(crate) fn lower_array_method(
             }
             Ok(nanbox_pointer_inline(ctx.block(), &deleted_handle))
         }
+        // #2384: build a real `.next()`-bearing iterator OBJECT (not an eager
+        // materialized array) so manual `.next().value` matches Node; spread /
+        // for-of / Array.from already drive `.next()` on the iterator class id.
         "entries" => {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let result = blk.call(I64, "js_array_entries", &[(I64, &recv_handle)]);
+            let result = blk.call(I64, "js_array_entries_iter_obj", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "keys" => {
@@ -721,7 +724,7 @@ pub(crate) fn lower_array_method(
             }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let result = blk.call(I64, "js_array_keys", &[(I64, &recv_handle)]);
+            let result = blk.call(I64, "js_array_keys_iter_obj", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "values" => {
@@ -730,7 +733,7 @@ pub(crate) fn lower_array_method(
             }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let result = blk.call(I64, "js_array_values", &[(I64, &recv_handle)]);
+            let result = blk.call(I64, "js_array_values_iter_obj", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         // Issue #515 followup: `arr.with(idx, val)` reaches here when the
@@ -750,6 +753,54 @@ pub(crate) fn lower_array_method(
                 &[(I64, &recv_handle), (DOUBLE, &idx_d), (DOUBLE, &val_d)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
+        }
+        // #2384: iterator-protocol methods. A value-level `arr.entries()` /
+        // `.keys()` / `.values()` now yields a real iterator OBJECT, but
+        // `is_array_expr` still classifies the binding as an array (the static
+        // type is `Array<…>`), so `e.next()` routes here. Returning `recv_box`
+        // (the old catch-all) handed back the iterator object itself —
+        // `.next().value` was then `undefined` (same class of bug as #800's
+        // `lastIndexOf`). Route through the runtime's generic dispatch so the
+        // `ARRAY_ITERATOR_CLASS_ID` check reaches `dispatch_array_iterator_method`.
+        "next" | "return" | "throw" => {
+            let mut lowered_args = Vec::with_capacity(args.len());
+            for a in args {
+                lowered_args.push(lower_expr(ctx, a)?);
+            }
+            let key_idx = ctx.strings.intern(property);
+            let entry = ctx.strings.entry(key_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len_str = entry.byte_len.to_string();
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a_val) in lowered_args.iter().enumerate() {
+                    let slot = ctx
+                        .block()
+                        .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    ctx.block().store(DOUBLE, a_val, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf_reg
+                ));
+                (ptr_reg, n.to_string())
+            };
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_native_call_method",
+                &[
+                    (DOUBLE, &recv_box),
+                    (PTR, &bytes_global),
+                    (I64, &name_len_str),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            );
+            Ok(result)
         }
         // Best-effort fallback: lower args for side effects, return
         // the receiver.

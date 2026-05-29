@@ -86,6 +86,68 @@ pub fn array_entries_iter(arr_f64: f64) -> f64 {
     unsafe { alloc_iterator(arr_ptr, KIND_ENTRIES) }
 }
 
+// ---------------------------------------------------------------------------
+// #2384: C-ABI entry points for codegen's `Expr::ArrayValues`/`ArrayKeys`/
+// `ArrayEntries` fast path. These build a real `.next()`-bearing iterator
+// OBJECT (not an eager materialized array), so a value-level
+// `const e = arr.entries(); e.next().value` matches Node. Spread
+// (`js_array_clone`) and the runtime default-iterator (`js_for_of_to_array`)
+// already detect `ARRAY_ITERATOR_CLASS_ID` and drive `.next()`, so
+// `[...arr.entries()]` / `for...of` / `Array.from(arr.entries())` keep working.
+//
+// They take a RAW array pointer (codegen passes the handle through
+// `unbox_to_i64`) and return the RAW iterator-object pointer as i64; the
+// caller NaN-boxes it via `nanbox_pointer_inline`.
+
+/// GcHeader `obj_type` byte for a receiver, or 0 if the pointer is too low to
+/// carry a header. Mirrors `flat_clone::receiver_gc_type` (that fn is private).
+unsafe fn receiver_obj_type(arr: *const ArrayHeader) -> u8 {
+    let addr = arr as usize;
+    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    let gc_header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*gc_header).obj_type
+}
+
+unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
+    let cleaned = clean_arr_ptr(arr);
+    // #2384's iterator OBJECT is Array-scoped. A Map or Set reaches the codegen
+    // `.entries()`/`.keys()`/`.values()` catch-all when its static type is lost
+    // (`any`-typed Map/Set — effect's `FiberRefs.diff`, #321). Those keep the
+    // existing eager materialization, which `js_array_{entries,keys,values}`
+    // route to the correct Map/Set iterator — building an array-iterator over a
+    // Map/Set buffer would reinterpret it as `[index, value]` garbage. Genuine
+    // arrays (incl. `GC_TYPE_LAZY_ARRAY`) and everything else get the real
+    // iterator object.
+    let t = receiver_obj_type(cleaned);
+    if t == crate::gc::GC_TYPE_MAP || t == crate::gc::GC_TYPE_SET {
+        let materialized = match kind {
+            KIND_KEYS => crate::array::js_array_keys(arr),
+            KIND_VALUES => crate::array::js_array_values(arr),
+            _ => crate::array::js_array_entries(arr),
+        };
+        return materialized as i64;
+    }
+    let nanboxed = alloc_iterator(cleaned as *mut ArrayHeader, kind);
+    js_nanbox_get_pointer(nanboxed)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
+    unsafe { array_iter_obj_raw(arr, KIND_VALUES) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
+    unsafe { array_iter_obj_raw(arr, KIND_KEYS) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
+    unsafe { array_iter_obj_raw(arr, KIND_ENTRIES) }
+}
+
 /// Build the `{ value, done }` iterator-result object. `value` arrives as
 /// a NaN-boxed JSValue; `done` is a JS boolean.
 unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
