@@ -631,6 +631,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "fork")
             | ("events", "EventEmitter")
             | ("events", "on")
+            | ("stream", "compose")
             | ("stream", "pipeline")
             | ("stream", "Readable")
             | ("stream", "Writable")

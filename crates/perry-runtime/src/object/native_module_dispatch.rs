@@ -1244,9 +1244,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("console", "profile") | ("console", "profileEnd") | ("console", "timeStamp") => {
             f64::from_bits(JSValue::undefined().bits())
         }
+        ("stream", "compose") => crate::node_stream::js_node_stream_compose_args(pack_args()),
+        ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.
-        ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         ("stream", "Readable") => crate::node_stream::js_node_stream_readable_new(arg(0)),
         ("stream", "Writable") => crate::node_stream::js_node_stream_writable_new(arg(0)),
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),

@@ -709,10 +709,23 @@ pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f
 /// helper returns a fresh Duplex — the typeof / instanceof checks
 /// callers do (`compose(a, b) instanceof Duplex`) hold, and the
 /// reads/writes are stubbed at the Duplex layer same as a bare
-/// `new Duplex()`. The variadic `...streams` arg list is ignored;
-/// real composition is tracked separately.
+/// `new Duplex()`. Real composition is tracked separately.
 #[no_mangle]
-pub extern "C" fn js_node_stream_compose(_streams_array: f64) -> f64 {
+pub extern "C" fn js_node_stream_compose(first_stream: f64) -> f64 {
+    if first_stream.to_bits() == TAG_UNDEFINED {
+        throw_pipeline_missing_streams();
+    }
+    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}
+
+/// Variadic `stream.compose(...)` entry used by bound native-module property
+/// reads. Direct named imports still enter `js_node_stream_compose` with the
+/// first user argument only.
+pub extern "C" fn js_node_stream_compose_args(args: *const crate::array::ArrayHeader) -> f64 {
+    let args = pipeline_args(args);
+    if args.is_empty() {
+        throw_pipeline_missing_streams();
+    }
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
 

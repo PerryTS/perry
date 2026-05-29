@@ -1,5 +1,5 @@
 import { compose } from "node:stream";
-// compose(non-stream) — should throw TypeError.
+// compose(string) accepts strings as iterable readable sources.
 let caught: string | null = null;
 try {
   (compose as any)("just a string");

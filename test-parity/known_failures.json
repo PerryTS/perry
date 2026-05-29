@@ -518,12 +518,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src,t1,t2) \u2014 output transformation order wrong. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/compose-non-stream-throws": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose(string) \u2014 does not throw TypeError. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/two-stage-error-stops": {
     "issue": "1531",
     "added": "2026-05-24",
