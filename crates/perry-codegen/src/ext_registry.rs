@@ -188,6 +188,17 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // `WellKnown("http")` makes the existing flip do the right thing:
     // the staticlib joins the link line, perry-stdlib's `http-client`
     // feature gets stripped, and the symbols resolve.
+    //
+    // #2532: codegen's `createServer` lowering (native_table/http.rs)
+    // emits `js_node_http_create_server_with_options`, NOT the bare
+    // `js_node_http_create_server` — so the bare name below never
+    // matched the emitted symbol and the owner-detection backup
+    // (compiled-package code with no `import "node:http"`) silently
+    // failed to flip `perry-ext-http` onto the link line. Register both
+    // the options-carrying variant codegen actually emits and the bare
+    // name (still referenced by the `#[used]` FORCE_LINK anchor and the
+    // `I64, &[I64]` decl in runtime_decls/stdlib_ffi.rs).
+    ("js_node_http_create_server_with_options",     OwnerKind::WellKnown("http")),
     ("js_node_http_create_server",                  OwnerKind::WellKnown("http")),
     ("js_node_http_server_listen",                  OwnerKind::WellKnown("http")),
     ("js_node_http_server_close",                   OwnerKind::WellKnown("http")),
@@ -355,5 +366,27 @@ mod tests {
         // assert it didn't show up by checking the only two variants we
         // care about. Done above. Drain semantics:
         let _ = take_used_providers();
+    }
+
+    /// #2532 regression: the symbol codegen actually emits for
+    /// `http.createServer(...)` is `js_node_http_create_server_with_options`
+    /// (see `lower_call/native_table/http.rs`). It must route to
+    /// `WellKnown("http")` so out-of-tree / compiled-package builds (no
+    /// `import "node:http"` in the entry module) still flip
+    /// `perry-ext-http` onto the link line. Before the fix, only the
+    /// pre-rename `js_node_http_create_server` was registered, so the
+    /// emitted symbol matched nothing and the owner-detection backup
+    /// silently no-op'd — the link then failed with
+    /// `Undefined symbols: _js_node_http_create_server_with_options`.
+    #[test]
+    fn emitted_create_server_symbol_routes_to_http() {
+        let _ = take_used_providers();
+        record_ffi_call("js_node_http_create_server_with_options");
+        let got = take_used_providers();
+        assert!(
+            got.contains(&OwnerKind::WellKnown("http")),
+            "js_node_http_create_server_with_options must route to WellKnown(http), got {:?}",
+            got
+        );
     }
 }

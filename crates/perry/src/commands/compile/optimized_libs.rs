@@ -472,7 +472,28 @@ pub(super) fn build_optimized_libs(
                     rt_name, std_name
                 );
             }
-            return OptimizedLibs::empty();
+            // #2532 — out-of-tree (released / out-of-source) install:
+            // we can't rebuild perry-stdlib with a stripped feature set,
+            // so the link uses the prebuilt full `libperry_stdlib.a`.
+            // That full stdlib does NOT carry the `perry-ext-*` host
+            // functions — `node:http`'s server lives in perry-ext-http /
+            // perry-ext-http-server, which aren't perry-stdlib deps — so
+            // an out-of-box `node:http` server otherwise fails to link
+            // with `Undefined symbols: _js_node_http_create_server…`.
+            // Resolve the well-known ext staticlibs the program needs
+            // from the same search path the runtime/stdlib lookups use
+            // (PERRY_LIB_DIR / PERRY_RUNTIME_DIR, the exe dir, Homebrew
+            // `../lib`, …) and hand them back so they join the link line
+            // after the full stdlib.
+            let well_known_libs = if use_well_known {
+                resolve_prebuilt_ext_libs(&iteration_set, target, format, verbose)
+            } else {
+                Vec::new()
+            };
+            return OptimizedLibs {
+                well_known_libs,
+                ..OptimizedLibs::empty()
+            };
         }
     };
 
@@ -962,6 +983,74 @@ pub(super) fn build_optimized_libs(
         extra_bc,
         well_known_libs,
     }
+}
+
+/// #2532 — resolve the prebuilt `perry-ext-*` staticlibs a program needs
+/// when there is **no workspace source** to rebuild from (a released /
+/// out-of-tree install).
+///
+/// The in-tree path strips the matching perry-stdlib feature and rebuilds
+/// stdlib so the ext lib and stdlib don't both define the same `_js_*`
+/// symbols. Out-of-tree we can't rebuild — the link uses the prebuilt full
+/// `libperry_stdlib.a` and the ext lib is appended *after* it. That's safe:
+/// the ext lib's only otherwise-undefined symbols (e.g.
+/// `js_node_http_create_server_with_options`, `js_node_http_server_listen`,
+/// `js_node_http_res_end`) are server-side and absent from stdlib, so the
+/// linker pulls just those archive members; the ext crate's *client*-side
+/// duplicates (`js_http_*`) are never pulled because stdlib already resolves
+/// them.
+///
+/// Each well-known lib is located through `find_library`, which honours the
+/// `PERRY_LIB_DIR` / `PERRY_RUNTIME_DIR` overrides and the exe-dir /
+/// Homebrew `../lib` probes — the same precedence the runtime/stdlib
+/// lookups already use, so a release tarball or `brew` bottle that ships
+/// the ext libs alongside `libperry_runtime.a` resolves them with no extra
+/// configuration.
+fn resolve_prebuilt_ext_libs(
+    iteration_set: &std::collections::BTreeSet<String>,
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> Vec<PathBuf> {
+    let mut libs: Vec<PathBuf> = Vec::new();
+    // Dedup by lib basename — http / https / http2 all map to
+    // `perry_ext_http`, so without this the same `.a` would be added
+    // (and warned about) three times.
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for module in iteration_set {
+        let Some(binding) = super::well_known::lookup_well_known(module) else {
+            continue;
+        };
+        if !seen.insert(binding.lib.clone()) {
+            continue;
+        }
+        let filename =
+            super::well_known::ext_staticlib_filename(&binding.lib, rust_target_triple(target));
+        match super::library_search::find_library(&filename, target) {
+            Some(path) => {
+                if matches!(format, OutputFormat::Text) {
+                    println!(
+                        "  well-known (out-of-tree): routing `{}` → {} ({})",
+                        module,
+                        path.display(),
+                        binding.tracking.as_deref().unwrap_or("no tracking issue")
+                    );
+                }
+                libs.push(path);
+            }
+            None => {
+                if matches!(format, OutputFormat::Text) && verbose > 0 {
+                    eprintln!(
+                        "  well-known (out-of-tree): `{}` not found for `{}` — install \
+                         Perry's bundled ext libs next to the perry binary or set \
+                         PERRY_LIB_DIR; the link will fail with unresolved `js_*` symbols.",
+                        filename, module
+                    );
+                }
+            }
+        }
+    }
+    libs
 }
 
 /// True if this binding's wrapper crate has its own tokio dependency

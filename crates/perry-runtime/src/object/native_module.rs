@@ -255,6 +255,14 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if module_name == "stream" && property_name == "Stream" {
         attach_stream_legacy_prototype(value);
     }
+    if module_name == "stream"
+        && matches!(
+            property_name,
+            "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+        )
+    {
+        attach_stream_constructor_prototype(value, property_name);
+    }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
     // constructor. `PerformanceObserver` is a function value (a bound-method
@@ -890,6 +898,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "formatWithOptions")
             | ("util", "inspect")
             | ("util", "debuglog")
+            | ("util", "getSystemErrorName")
+            | ("util", "getSystemErrorMessage")
+            | ("util", "getSystemErrorMap")
             | ("util", "isArray")
             | ("util", "promisify")
             | ("util", "callbackify")
