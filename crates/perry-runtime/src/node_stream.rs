@@ -220,6 +220,24 @@ extern "C" fn ns_readable_resume_microtask(closure: *const ClosureHeader) -> f64
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn ns_finished_error_false_close(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    if js_closure_get_capture_f64(closure, 2).to_bits() == TAG_TRUE {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    js_closure_set_capture_f64(closure as *mut ClosureHeader, 2, f64::from_bits(TAG_TRUE));
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let callback = js_closure_get_capture_f64(closure, 1);
+    if let Some(err) = readable_hidden_error(stream) {
+        call_listener_args(stream, callback, &[err]);
+    } else {
+        call_listener_args(stream, callback, &[]);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -2911,6 +2929,7 @@ fn register_stub_arities() {
     register(ns_is_paused0 as *const u8, 0);
     register(ns_unpipe1 as *const u8, 1);
     register(ns_readable_resume_microtask as *const u8, 0);
+    register(ns_finished_error_false_close as *const u8, 0);
     register(ns_iter_to_array as *const u8, 1);
     register(ns_iter_map as *const u8, 2);
     register(ns_iter_filter as *const u8, 2);
@@ -5704,6 +5723,43 @@ pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f
 #[no_mangle]
 pub extern "C" fn js_node_stream_compose(_streams_array: f64) -> f64 {
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+}
+
+fn add_finished_error_false_close_listener(stream: f64, callback: f64) {
+    let listener = js_closure_alloc(ns_finished_error_false_close as *const u8, 3);
+    js_closure_set_capture_f64(listener, 0, stream);
+    js_closure_set_capture_f64(listener, 1, callback);
+    js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
+    add_stream_listener_for_event(
+        stream,
+        string_value(b"close"),
+        box_pointer(listener as *const u8),
+    );
+}
+
+/// `stream.finished(stream, [options], cb)` callback form. This slice covers
+/// Node's `{ error: false }` path: there is no dedicated `error` listener, but
+/// `close` still observes the stream's stored error and calls the callback.
+#[no_mangle]
+pub extern "C" fn js_node_stream_finished(args: *const crate::array::ArrayHeader) -> f64 {
+    let args = pipeline_args(args);
+    if args.len() < 2 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = args[0];
+    let mut options = f64::from_bits(TAG_UNDEFINED);
+    let mut callback = args[1];
+    if args.len() >= 3 && is_pipeline_options_arg(args[1]) {
+        options = args[1];
+        callback = args[2];
+    }
+    if !is_callable_value(callback) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    if get_hidden_value(options, hidden_key(b"error")).is_some_and(|v| v.to_bits() == TAG_FALSE) {
+        add_finished_error_false_close_listener(stream, callback);
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// `stream.pipeline(...streams, cb)` wires classic streams end-to-end and
