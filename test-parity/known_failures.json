@@ -404,12 +404,6 @@
     "category": "gap-categorical",
     "reason": "#1278: console.trace / Error.stack frame format diverges from Node (Perry prints native frame addresses like `0: __mh_execute_header` instead of `at <fn> (file:///\u2026:line:col)`). Requires source-position retention through HIR/transform + native-frame \u2192 TS-source mapping. The other two divergences in this fixture (#1276 spurious `Values` column on array-of-arrays, #1277 timer ms numbers) are not gating: #1276 was fixed in v0.5.1019+; #1277 is a misdiagnosis \u2014 Perry's `Instant::now()` is correct and the apparent 1000\u00d7 gap is just AOT-vs-interpreted speedup on the trivial loop workload. Flips to PASS when #1278 lands."
   },
-  "node-suite/stream/readable/object-mode-read-returns-object": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: objectMode Readable.read() does not return single object per call. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/unshift-after-end": {
     "issue": "1532",
     "added": "2026-05-24",
@@ -613,12 +607,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: writer.write() Promise resolution timing \u2014 resolves before sink processes chunk. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/readable-event-with-objectmode": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: objectMode 'readable' event \u2014 read() returns wrong object values. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/from-async-gen-throws-mid": {
     "issue": "1545",
