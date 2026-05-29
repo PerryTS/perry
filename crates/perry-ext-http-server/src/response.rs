@@ -121,6 +121,61 @@ impl HyperResponseShape {
         };
         builder.body(body).unwrap()
     }
+
+    /// Inject Node-compatible default `Connection` / `Keep-Alive` headers
+    /// (#2132). Node's HTTP/1.x server appends `Connection: keep-alive` plus
+    /// `Keep-Alive: timeout=<keepAliveTimeout/1000>` whenever the connection
+    /// is kept alive, and `Connection: close` otherwise. Hyper drives the
+    /// transport-level keep-alive itself but does not surface these headers in
+    /// the response bytes, so byte-for-byte parity tests — and any client
+    /// reading `res.headers.connection` / `res.headers['keep-alive']` — see
+    /// them missing. Add them before handing the shape to hyper, unless the
+    /// handler already set a `Connection` header explicitly. HTTP/2 manages
+    /// connection reuse at the protocol level, so it gets neither header.
+    pub fn apply_default_connection_headers(
+        &mut self,
+        version: hyper::Version,
+        req_connection: Option<&str>,
+        keep_alive_timeout_ms: f64,
+    ) {
+        if self
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("connection"))
+        {
+            return;
+        }
+        if matches!(version, hyper::Version::HTTP_2 | hyper::Version::HTTP_3) {
+            return;
+        }
+
+        let conn_lower = req_connection.map(str::to_ascii_lowercase);
+        let has_token = |tok: &str| {
+            conn_lower
+                .as_deref()
+                .map(|c| c.split(',').any(|t| t.trim() == tok))
+                .unwrap_or(false)
+        };
+
+        // HTTP/1.0 defaults to close (keep-alive only when explicitly
+        // requested); HTTP/1.1 defaults to keep-alive unless asked to close.
+        let should_keep_alive = if version == hyper::Version::HTTP_10 {
+            has_token("keep-alive")
+        } else {
+            !has_token("close")
+        };
+
+        if should_keep_alive && keep_alive_timeout_ms > 0.0 {
+            self.headers
+                .push(("Connection".to_string(), "keep-alive".to_string()));
+            let secs = (keep_alive_timeout_ms / 1000.0).floor().max(0.0) as u64;
+            self.headers
+                .push(("Keep-Alive".to_string(), format!("timeout={}", secs)));
+        } else {
+            self.headers
+                .push(("Connection".to_string(), "close".to_string()));
+        }
+    }
 }
 
 impl ServerResponse {

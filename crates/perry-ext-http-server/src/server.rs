@@ -565,6 +565,11 @@ async fn handle_request(
             raw_headers.push((name.to_string(), v.to_string()));
         }
     }
+    // #2132 — capture the bits needed to synthesize Node's default
+    // `Connection` / `Keep-Alive` response headers before `req` (and
+    // `headers_lower`) are consumed below.
+    let http_version = req.version();
+    let req_connection = headers_lower.get("connection").cloned();
 
     // Phase 4 — WebSocket upgrade detection. If the request looks
     // like a WS upgrade, branch into the handshake path: build the
@@ -605,13 +610,15 @@ async fn handle_request(
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
     let sr_handle = alloc_server_response(response_tx);
 
-    let (request_listeners, handler) = match get_handle::<HttpServer>(server_handle) {
-        Some(s) => (
-            s.listeners.get("request").cloned().unwrap_or_default(),
-            s.handler,
-        ),
-        None => (Vec::new(), 0),
-    };
+    let (request_listeners, handler, keep_alive_timeout) =
+        match get_handle::<HttpServer>(server_handle) {
+            Some(s) => (
+                s.listeners.get("request").cloned().unwrap_or_default(),
+                s.handler,
+                s.keep_alive_timeout,
+            ),
+            None => (Vec::new(), 0, 5_000.0),
+        };
 
     let pending = HttpPendingRequest {
         server_handle,
@@ -632,7 +639,14 @@ async fn handle_request(
     perry_ffi::notify_main_thread();
 
     match response_rx.await {
-        Ok(shape) => Ok(shape.into_hyper()),
+        Ok(mut shape) => {
+            shape.apply_default_connection_headers(
+                http_version,
+                req_connection.as_deref(),
+                keep_alive_timeout,
+            );
+            Ok(shape.into_hyper())
+        }
         Err(_) => Ok(Response::builder()
             .status(500)
             .body(Full::new(Bytes::from("Handler error")).boxed())
