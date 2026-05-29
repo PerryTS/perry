@@ -4167,7 +4167,7 @@ Bun status: 🟡 Missing `Domain` class export, `domain.active`. **Pending depre
 | node:util | 🟡 5 functions missing |
 | node:sys | 🟡 alias for util |
 | node:os | 🟢 Full |
-| node:process | 🟡 minor gaps; `getBuiltinModule`, `loadEnvFile` missing |
+| node:process | 🟡 minor gaps; `loadEnvFile` missing |
 | node:child_process | 🟡 `proc.uid`/`gid`, socket-handle IPC missing |
 | node:cluster | 🟡 cross-worker FDs only on Linux |
 | node:worker_threads | 🟡 `stdin`/`stdout`/`stderr` etc. options missing |

@@ -336,6 +336,76 @@ pub fn is_native_module(path: &str) -> bool {
     !overridden
 }
 
+/// Node.js built-in module names (Node 22 `module.builtinModules`,
+/// prefixless). Used by `process.getBuiltinModule(id)` (#2482) to tell genuine
+/// builtins (`fs`, `crypto`, …) apart from the npm packages that also live in
+/// `NATIVE_MODULES` (`axios`, `lodash`, …) — Node returns `undefined` for the
+/// latter. Intersect with `is_native_module` for the subset Perry can actually
+/// resolve.
+pub const NODE_BUILTIN_MODULES: &[&str] = &[
+    "assert",
+    "assert/strict",
+    "async_hooks",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "diagnostics_channel",
+    "dns",
+    "dns/promises",
+    "domain",
+    "events",
+    "fs",
+    "fs/promises",
+    "http",
+    "http2",
+    "https",
+    "inspector",
+    "module",
+    "net",
+    "os",
+    "path",
+    "path/posix",
+    "path/win32",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "readline/promises",
+    "repl",
+    "sea",
+    "sqlite",
+    "stream",
+    "stream/consumers",
+    "stream/promises",
+    "stream/web",
+    "string_decoder",
+    "sys",
+    "test",
+    "timers",
+    "timers/promises",
+    "tls",
+    "trace_events",
+    "tty",
+    "url",
+    "util",
+    "util/types",
+    "v8",
+    "vm",
+    "wasi",
+    "worker_threads",
+    "zlib",
+];
+
+/// Whether `name` (already `node:`-stripped) is a Node.js built-in module name.
+pub fn is_node_builtin_module(name: &str) -> bool {
+    NODE_BUILTIN_MODULES.contains(&name)
+}
+
 /// Check if a module path refers to a native module, including external native libraries.
 /// External modules are provided by packages with `perry.nativeLibrary` in package.json.
 pub fn is_native_module_with_externals(path: &str, externals: &[String]) -> bool {

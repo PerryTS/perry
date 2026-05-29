@@ -642,7 +642,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `process.addUncaughtExceptionCaptureCallback(fn)`
 - `process.hasUncaughtExceptionCaptureCallback()`
 - `process.dlopen(module, filename[, flags])`
-- `process.getBuiltinModule(id)`
 - `process.loadEnvFile(path)`
 - `process.setSourceMapsEnabled(val)`
 - `process.hrtime([time])`
