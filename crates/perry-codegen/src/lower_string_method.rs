@@ -216,11 +216,10 @@ pub(crate) fn lower_string_method(
             let count_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let count_i32 = blk.fptosi(DOUBLE, &count_d, I32);
             let result = blk.call(
                 I64,
                 "js_string_repeat",
-                &[(I64, &recv_handle), (I32, &count_i32)],
+                &[(I64, &recv_handle), (DOUBLE, &count_d)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }

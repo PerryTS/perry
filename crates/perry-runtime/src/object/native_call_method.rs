@@ -847,7 +847,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 "repeat" => {
-                    let n = if args_len >= 1 { arg_i32(0) } else { 0 };
+                    let n = arg_at(0).unwrap_or(0.0);
                     let r = crate::string::js_string_repeat(s_ptr, n);
                     if r.is_null() {
                         return f64::from_bits(JSValue::undefined().bits());
