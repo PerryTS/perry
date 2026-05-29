@@ -1710,6 +1710,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
                     return JSValue::from_bits(v.to_bits());
                 }
+                if is_array_method_value_name(key_bytes) {
+                    let heap_name = {
+                        let layout =
+                            std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1).unwrap();
+                        let ptr = std::alloc::alloc(layout);
+                        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+                        ptr
+                    };
+                    let this_f64 =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                    return JSValue::from_bits(result.to_bits());
+                }
             }
             return JSValue::undefined();
         }
@@ -2317,6 +2330,13 @@ fn is_primitive_proto_method(key: &[u8]) -> bool {
             | b"isPrototypeOf"
             | b"propertyIsEnumerable"
             | b"toLocaleString"
+    )
+}
+
+fn is_array_method_value_name(key: &[u8]) -> bool {
+    matches!(
+        key,
+        b"pop" | b"push" | b"shift" | b"unshift" | b"splice" | b"slice"
     )
 }
 

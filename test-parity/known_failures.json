@@ -8,12 +8,6 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
-  "issue_655_repro": {
-    "issue": "655",
-    "added": "2026-05-24",
-    "category": "bug-stale",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS; #655 is closed. Deliberate failing repro/harness \u2014 kept as a regression canary. Canonical regression-catcher for issue #655. Flips to PASS when the underlying fix lands. Keep regardless of CI verdict \u2014 it's a deliberate failing repro."
-  },
   "test_gap_regexp_advanced": {
     "issue": null,
     "added": "2026-05-15",

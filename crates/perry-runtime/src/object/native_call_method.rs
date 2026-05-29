@@ -1115,6 +1115,15 @@ pub unsafe extern "C" fn js_native_call_method(
                         );
                         return f64::from_bits(JSValue::pointer(deleted as *mut u8).bits());
                     }
+                    "shift" => {
+                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        return crate::array::js_array_shift_f64(arr);
+                    }
+                    "unshift" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        let result = crate::array::js_array_unshift_f64(arr, *args_ptr);
+                        return crate::array::js_array_length(result) as f64;
+                    }
                     // Issue #515 followup: defensive `with` arm for arrays that
                     // reach the generic dispatch tower because the HIR fold
                     // bailed (untyped receiver, chained call returning Array,
