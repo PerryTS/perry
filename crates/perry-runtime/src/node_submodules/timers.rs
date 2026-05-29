@@ -69,6 +69,15 @@ fn boxed_ptr<T>(ptr: *const T) -> f64 {
     f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
 }
 
+fn boxed_value_to_ptr<T>(value: f64) -> *mut T {
+    let value = JSValue::from_bits(value.to_bits());
+    if value.is_pointer() {
+        value.as_pointer::<T>() as *mut T
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
 fn iter_result(value: f64, done: bool) -> f64 {
     let obj = js_object_alloc(0, 2);
     js_object_set_field_by_name(obj, string_key(b"value"), value);
@@ -83,37 +92,67 @@ fn iter_result(value: f64, done: bool) -> f64 {
 extern "C" fn timers_promises_interval_next(closure: *const ClosureHeader) -> f64 {
     let value = js_closure_get_capture_f64(closure, 0);
     let signal = js_closure_get_capture_f64(closure, 1);
+    let delay_ms = js_closure_get_capture_f64(closure, 2);
+    let closed = js_closure_get_capture_f64(closure, 3);
+    if closed != 0.0 {
+        return boxed_ptr(crate::promise::js_promise_resolved(iter_result(
+            f64::from_bits(TAG_UNDEFINED),
+            true,
+        )) as *const u8);
+    }
     if !JSValue::from_bits(signal.to_bits()).is_undefined()
         && super::stream_promises::signal_aborted(signal)
     {
         let reason = super::stream_promises::signal_reason(signal);
+        js_closure_set_capture_f64(closure as *mut ClosureHeader, 3, 1.0);
         return boxed_ptr(crate::promise::js_promise_rejected(reason) as *const u8);
     }
-    boxed_ptr(crate::promise::js_promise_resolved(iter_result(value, false)) as *const u8)
+
+    let promise = crate::timer::js_set_timeout_value(delay_ms, iter_result(value, false));
+    if !JSValue::from_bits(signal.to_bits()).is_undefined() {
+        super::stream_promises::register_abort_listener(signal, promise);
+    }
+    boxed_ptr(promise as *const u8)
 }
 
 extern "C" fn timers_promises_interval_self(closure: *const ClosureHeader) -> f64 {
     js_closure_get_capture_f64(closure, 0)
 }
 
-/// node:timers/promises.setInterval(delay, value, options) — minimal async
-/// iterator compatible with `for await`: each `.next()` resolves to `value`
-/// until the optional AbortSignal is aborted, then rejects with AbortError.
+extern "C" fn timers_promises_interval_return(closure: *const ClosureHeader) -> f64 {
+    let next_value = js_closure_get_capture_f64(closure, 0);
+    let next = boxed_value_to_ptr::<ClosureHeader>(next_value);
+    js_closure_set_capture_f64(next, 3, 1.0);
+    boxed_ptr(
+        crate::promise::js_promise_resolved(iter_result(f64::from_bits(TAG_UNDEFINED), true))
+            as *const u8,
+    )
+}
+
+/// node:timers/promises.setInterval(delay, value, options) — async iterator
+/// that resolves each `.next()` after the requested delay until it is
+/// returned or the optional AbortSignal rejects the pending tick.
 pub(crate) extern "C" fn timers_promises_set_interval(
     _closure: *const ClosureHeader,
-    _delay_ms: f64,
+    delay_ms: f64,
     value: f64,
     options: f64,
 ) -> f64 {
     let signal = super::stream_promises::options_signal(options)
         .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
-    let obj = js_object_alloc(0, 3);
+    let obj = js_object_alloc(0, 4);
     let obj_value = boxed_ptr(obj as *const u8);
 
-    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 2);
+    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 4);
     js_closure_set_capture_f64(next, 0, value);
     js_closure_set_capture_f64(next, 1, signal);
+    js_closure_set_capture_f64(next, 2, delay_ms);
+    js_closure_set_capture_f64(next, 3, 0.0);
     js_object_set_field_by_name(obj, string_key(b"next"), boxed_ptr(next as *const u8));
+
+    let ret = js_closure_alloc(timers_promises_interval_return as *const u8, 1);
+    js_closure_set_capture_f64(ret, 0, boxed_ptr(next as *const u8));
+    js_object_set_field_by_name(obj, string_key(b"return"), boxed_ptr(ret as *const u8));
 
     let ret = js_closure_alloc(timers_promises_interval_self as *const u8, 1);
     js_closure_set_capture_f64(ret, 0, obj_value);
