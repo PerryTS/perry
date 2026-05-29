@@ -60,6 +60,7 @@ fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             | Expr::BufferAlloc { .. }
             | Expr::BufferAllocUnsafe(_)
             | Expr::BufferConcat(_)
+            | Expr::BufferConcatWithLength { .. }
             | Expr::CryptoRandomBytes(_)
     ) {
         return true;
@@ -398,7 +399,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         1
                     };
                     let update_argc = update_argc_usize.to_string();
-                    let blk = ctx.block();
                     let update_args_buf = ctx.func.alloca_entry_array(DOUBLE, update_argc_usize);
                     {
                         let blk = ctx.block();

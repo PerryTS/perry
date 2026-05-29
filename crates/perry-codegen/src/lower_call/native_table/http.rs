@@ -844,7 +844,13 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         method: "writeHead",
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_write_head",
-        args: &[NA_F64, NA_STR, NA_STR],
+        // #2132: arg2/arg3 are raw JSValues so the runtime can disambiguate
+        // the `writeHead(status, headers)` vs `writeHead(status, statusMessage,
+        // headers)` overloads (string ⇒ statusMessage, object ⇒ headers) and
+        // serialize the headers object. Previously typed `NA_STR`, which
+        // coerced a headers *object* to `"[object Object]"` and silently
+        // dropped every header passed via `writeHead`.
+        args: &[NA_F64, NA_JSV, NA_JSV],
         ret: NR_VOID,
     },
     NativeModSig {

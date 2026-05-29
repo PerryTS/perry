@@ -199,9 +199,15 @@ pub(crate) struct ViewBuilder {
     /// Function id (matches `Function::id` in the HIR).
     pub(crate) func_id: perry_types::FuncId,
     /// Function name (used for the synth view id when sanitized).
+    // #854: stashed on the harvest instance for a future diagnostic pass; the
+    // view id is currently derived inline at emit time, not read back here.
+    #[allow(dead_code)]
     pub(crate) func_name: String,
     /// Module-level container LocalId that this function adds children to
     /// via the terminal `widgetAddChild(LocalGet(target_id), X)` call.
+    // #854: kept for layout/diagnostics; the addChild target is resolved
+    // inline during fold, not read off this field yet.
+    #[allow(dead_code)]
     pub(crate) target_id: LocalId,
     /// Synth identifier for the target — `cv_<n>`. Stable across re-runs.
     pub(crate) target_synth: String,

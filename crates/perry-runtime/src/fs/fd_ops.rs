@@ -123,6 +123,7 @@ pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
 /// `fs.closeSync(fd)` — close a registry fd.
 #[no_mangle]
 pub extern "C" fn js_fs_close_sync(fd_value: f64) -> i32 {
+    crate::fs::validate::validate_fd_open(fd_value, "close");
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         if r.borrow_mut().remove(&fd).is_some() {
@@ -148,6 +149,7 @@ pub extern "C" fn js_fs_read_sync(
     length_value: f64,
     position_value: f64,
 ) -> f64 {
+    crate::fs::validate::validate_fd_open(fd_value, "read");
     let fd = fd_value as i32;
     let offset = offset_value.max(0.0) as usize;
     let length = length_value.max(0.0) as usize;
@@ -225,7 +227,7 @@ pub extern "C" fn js_fs_write_string_sync_options(
     data_value: f64,
     position_value: f64,
 ) -> f64 {
-    crate::fs::validate::validate_fd(fd_value);
+    crate::fs::validate::validate_fd_open(fd_value, "write");
     write_string_sync_inner(fd_value as i32, data_value, position_value)
 }
 
@@ -265,7 +267,7 @@ pub extern "C" fn js_fs_write_buffer_sync(
     length_value: f64,
     position_value: f64,
 ) -> f64 {
-    crate::fs::validate::validate_fd(fd_value);
+    crate::fs::validate::validate_fd_open(fd_value, "write");
     write_buffer_sync_inner(
         fd_value as i32,
         buffer_value,
@@ -351,6 +353,21 @@ pub extern "C" fn js_fs_write_sync_options_dispatch(
 /// `fs.readvSync(fd, buffers[, position])` — deterministic Buffer[] subset.
 #[no_mangle]
 pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_value: f64) -> f64 {
+    // #2013: always reject a non-number fd; only run the EBADF registry
+    // probe when the iovec array is non-empty. Node's empty-array path
+    // surfaces `EINVAL` from the syscall instead of the JS-level EBADF —
+    // matching that exact code would need an `EINVAL` throw here that
+    // doesn't fit the validate-then-pass shape, so we settle for the
+    // common-case `readv(123, [buf])` → `EBADF` parity and leave the
+    // empty-array divergence as a follow-up.
+    let buffers_for_check = array_ptr_from_value(buffers_value);
+    let buffers_nonempty = !buffers_for_check.is_null()
+        && unsafe { crate::array::js_array_length(buffers_for_check) } > 0;
+    if buffers_nonempty {
+        crate::fs::validate::validate_fd_open(fd_value, "read");
+    } else {
+        crate::fs::validate::validate_fd(fd_value);
+    }
     let fd = fd_value as i32;
     let position = if position_value.is_finite() && position_value >= 0.0 {
         Some(position_value as u64)
@@ -427,7 +444,11 @@ pub extern "C" fn js_fs_writev_sync(fd_value: f64, buffers_value: f64, position_
     let buffers_nonempty = !buffers_for_check.is_null()
         && unsafe { crate::array::js_array_length(buffers_for_check) } > 0;
     if buffers_nonempty {
-        crate::fs::validate::validate_fd(fd_value);
+        // #2013: upgrade from type-only validation to type + EBADF so
+        // `fs.writevSync(123, [buf])` matches Node's
+        // `EBADF: bad file descriptor, writev` instead of silently
+        // returning 0.
+        crate::fs::validate::validate_fd_open(fd_value, "writev");
     }
     writev_sync_inner(fd_value as i32, buffers_value, position_value)
 }

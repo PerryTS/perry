@@ -201,6 +201,29 @@ mod parse_float_tests {
     }
 
     #[test]
+    fn number_coerce_handles_nondecimal_integer_literals() {
+        fn nc(s: &str) -> f64 {
+            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            super::js_number_coerce(crate::value::js_nanbox_string(ptr as i64))
+        }
+        // 0x / 0o / 0b, case-insensitive, with/without surrounding whitespace.
+        assert_eq!(nc("0xff"), 255.0);
+        assert_eq!(nc("0o17"), 15.0);
+        assert_eq!(nc("0b11"), 3.0);
+        assert_eq!(nc("0XaB"), 171.0);
+        assert_eq!(nc("  0b1010  "), 10.0);
+        // No leading sign allowed on a NonDecimalIntegerLiteral → NaN.
+        assert!(nc("-0xff").is_nan());
+        assert!(nc("+0b11").is_nan());
+        // Empty / out-of-radix digits → NaN.
+        assert!(nc("0b").is_nan());
+        assert!(nc("0b12").is_nan());
+        // Plain decimals still parse.
+        assert_eq!(nc("42"), 42.0);
+        assert_eq!(nc("-3.5"), -3.5);
+    }
+
+    #[test]
     fn leading_whitespace() {
         assert_eq!(pf("  3.14"), 3.14_f64);
         assert_eq!(pf("\t3.14"), 3.14_f64);
@@ -274,15 +297,23 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
                     if trimmed.is_empty() {
                         return 0.0;
                     }
-                    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-                        return match u64::from_str_radix(&trimmed[2..], 16) {
+                    // Non-decimal integer literals (ECMA-262 StrNumericLiteral
+                    // → NonDecimalIntegerLiteral): `0x`/`0o`/`0b`,
+                    // case-insensitive, with NO leading sign. A signed form
+                    // like "-0xff" is not a NonDecimalIntegerLiteral and is
+                    // not a StrDecimalLiteral either, so it must parse to NaN
+                    // (Node agrees) — we therefore do NOT special-case "-0x".
+                    let radix = match trimmed.as_bytes() {
+                        [b'0', b'x' | b'X', ..] => Some(16),
+                        [b'0', b'o' | b'O', ..] => Some(8),
+                        [b'0', b'b' | b'B', ..] => Some(2),
+                        _ => None,
+                    };
+                    if let Some(radix) = radix {
+                        // Empty digits ("0x") or out-of-radix digits ("0b12")
+                        // are errors → NaN, matching Node.
+                        return match u64::from_str_radix(&trimmed[2..], radix) {
                             Ok(n) => n as f64,
-                            Err(_) => f64::NAN,
-                        };
-                    }
-                    if trimmed.starts_with("-0x") || trimmed.starts_with("-0X") {
-                        return match u64::from_str_radix(&trimmed[3..], 16) {
-                            Ok(n) => -(n as f64),
                             Err(_) => f64::NAN,
                         };
                     }

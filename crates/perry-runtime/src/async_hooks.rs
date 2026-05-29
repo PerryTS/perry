@@ -37,7 +37,11 @@ pub struct AsyncResourceIds {
 
 #[derive(Clone)]
 struct ResourceMeta {
+    // #854: async_hooks resource metadata; real createHook lifecycle is #789
+    #[allow(dead_code)]
     type_name: String,
+    // #854: async_hooks resource metadata; real createHook lifecycle is #789
+    #[allow(dead_code)]
     trigger_async_id: u64,
     resource: f64,
     destroyed: bool,
@@ -126,6 +130,8 @@ pub extern "C" fn js_async_hooks_trigger_async_id() -> f64 {
     trigger_async_id_u64() as f64
 }
 
+// #854: pointer-boxing helper retained for async_hooks resource tracking (#789)
+#[allow(dead_code)]
 #[inline]
 fn box_ptr(ptr: *const u8) -> f64 {
     f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK))
