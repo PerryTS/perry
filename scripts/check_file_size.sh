@@ -108,6 +108,9 @@ crates/perry-runtime/src/builtins/formatting.rs
 # non-byte reject, #2460 reserved-type reject) landed on main without a
 # split. Splitting per stream-kind family is tracked under #2472.
 crates/perry-stdlib/src/streams.rs
+# Native proof regression fixtures: intentionally broad golden tests that keep
+# related source snippets and assertions together for optimizer/codegen review.
+crates/perry-codegen/tests/native_proof_regressions.rs
 EOF
 )
 
