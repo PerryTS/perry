@@ -654,10 +654,15 @@ pub(super) fn try_native_arena_public_api(
                 );
             }
             let view_type = match call.type_args.as_ref() {
-                Some(type_args) if type_args.params.len() == 1 => Some(Type::Generic {
-                    base: "PerryPodView".to_string(),
-                    type_args: vec![extract_ts_type_with_ctx(&type_args.params[0], Some(ctx))],
-                }),
+                Some(type_args) if type_args.params.len() == 1 => {
+                    let type_arg = &type_args.params[0];
+                    let pod_ty = bare_type_param_type_arg(ctx, type_arg)
+                        .unwrap_or_else(|| extract_ts_type_with_ctx(type_arg, Some(ctx)));
+                    Some(Type::Generic {
+                        base: "PerryPodView".to_string(),
+                        type_args: vec![pod_ty],
+                    })
+                }
                 Some(_) => {
                     crate::lower_bail!(
                         call.span,

@@ -108,6 +108,73 @@ fn test_monomorphize_substitutes_pod_layout_type_vars() {
 }
 
 #[test]
+fn test_monomorphize_substitutes_native_pod_view_type_vars() {
+    let packet_ty = Type::Named("Packet".to_string());
+    let generic_view_ty = Type::Generic {
+        base: "PerryPodView".to_string(),
+        type_args: vec![Type::TypeVar("T".to_string())],
+    };
+    let concrete_view_ty = Type::Generic {
+        base: "PerryPodView".to_string(),
+        type_args: vec![packet_ty.clone()],
+    };
+    let view_func = Function {
+        id: 1,
+        name: "view".to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }],
+        params: vec![Param {
+            id: 0,
+            name: "arena".to_string(),
+            ty: Type::Named("NativeArena".to_string()),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+        }],
+        return_type: generic_view_ty.clone(),
+        body: vec![Stmt::Return(Some(Expr::NativePodView {
+            owner: Box::new(Expr::LocalGet(0)),
+            byte_offset: Box::new(Expr::Integer(0)),
+            count: Box::new(Expr::Integer(1)),
+            view_type: Some(generic_view_ty),
+        }))],
+        is_async: false,
+        is_generator: false,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+    };
+
+    let mut module = Module::new("test");
+    module.functions.push(view_func);
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))],
+        type_args: vec![packet_ty],
+    }));
+
+    monomorphize_module(&mut module);
+
+    let specialized = module
+        .functions
+        .iter()
+        .find(|f| f.name == "view$Packet")
+        .expect("Specialized function view$Packet should exist");
+
+    assert_eq!(specialized.return_type, concrete_view_ty);
+    assert!(matches!(
+        &specialized.body[0],
+        Stmt::Return(Some(Expr::NativePodView { view_type, .. }))
+            if view_type.as_ref() == Some(&concrete_view_ty)
+    ));
+}
+
+#[test]
 fn test_monomorphize_generic_function() {
     // Create a generic identity function: function identity<T>(x: T): T { return x; }
     let identity_func = Function {

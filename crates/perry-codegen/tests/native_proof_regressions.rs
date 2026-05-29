@@ -829,6 +829,49 @@ fn pod_layout_specialization_module() -> Module {
     module
 }
 
+fn native_pod_view_specialization_module() -> Module {
+    let generic_view_ty = Type::Generic {
+        base: "PerryPodView".to_string(),
+        type_args: vec![Type::TypeVar("T".to_string())],
+    };
+    let mut module = Module::new("native_pod_view_specialization.ts");
+    module.functions.push(Function {
+        id: 1,
+        name: "view".to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }],
+        params: vec![param(0, "arena", Type::Named("NativeArena".to_string()))],
+        return_type: generic_view_ty.clone(),
+        body: vec![Stmt::Return(Some(Expr::NativePodView {
+            owner: Box::new(local(0)),
+            byte_offset: Box::new(int(0)),
+            count: Box::new(int(4)),
+            view_type: Some(generic_view_ty),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::NativeArenaAlloc(Box::new(int(4096)))],
+        type_args: vec![Type::Named("Tiny".to_string())],
+    }));
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::NativeArenaAlloc(Box::new(int(4096)))],
+        type_args: vec![Type::Named("Wide".to_string())],
+    }));
+    module
+}
+
 fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
     let needle = format!("define double @{}(", symbol);
     let start = ir
@@ -910,6 +953,46 @@ fn pod_layout_constants_specialize_generic_layout_type_params() {
     assert!(
         wide_ir.contains("16.0") && wide_ir.contains("8.0") && !wide_ir.contains("4.0"),
         "Wide specialization should use size 16, align 8, offset 8:\n{wide_ir}"
+    );
+}
+
+#[test]
+fn native_pod_view_specializes_generic_layout_type_params() {
+    let mut module = native_pod_view_specialization_module();
+    monomorphize_module(&mut module);
+
+    assert!(
+        module.functions.iter().any(|f| f.name == "view$Tiny"),
+        "expected Tiny specialization: {:?}",
+        module
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        module.functions.iter().any(|f| f.name == "view$Wide"),
+        "expected Wide specialization: {:?}",
+        module
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    module.functions.retain(|func| func.type_params.is_empty());
+    module.init.clear();
+    let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
+    let tiny_ir = function_ir_section(&ir, "perry_fn_native_pod_view_specialization_ts__view_Tiny");
+    let wide_ir = function_ir_section(&ir, "perry_fn_native_pod_view_specialization_ts__view_Wide");
+
+    assert!(
+        tiny_ir.contains("call i64 @js_native_pod_view") && tiny_ir.contains("i64 8, i64 4"),
+        "Tiny specialization should use stride 8 and alignment 4:\n{tiny_ir}"
+    );
+    assert!(
+        wide_ir.contains("call i64 @js_native_pod_view") && wide_ir.contains("i64 16, i64 8"),
+        "Wide specialization should use stride 16 and alignment 8:\n{wide_ir}"
     );
 }
 

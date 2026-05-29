@@ -209,6 +209,27 @@ fn native_arena_public_pod_view_lowers_explicit_type_arg() {
 }
 
 #[test]
+fn native_arena_public_pod_view_preserves_generic_type_param() {
+    let module = lower_src(
+        r#"
+        function viewGeneric<T extends PerryPod<any>>(arena: NativeArena) {
+            return arena.podView<T>(0, 1);
+        }
+        "#,
+    )
+    .expect("lowering should succeed");
+
+    let expected_view_type = Type::Generic {
+        base: "PerryPodView".to_string(),
+        type_args: vec![Type::TypeVar("T".to_string())],
+    };
+    assert!(matches!(
+        returned_expr(find_function(&module, "viewGeneric")),
+        Expr::NativePodView { view_type, .. } if view_type.as_ref() == Some(&expected_view_type)
+    ));
+}
+
+#[test]
 fn native_arena_public_api_rejects_spread_arguments() {
     assert_lower_err_eq(
         r#"
