@@ -310,6 +310,13 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "structuredClone"
             | "atob"
             | "btoa"
+            | "setTimeout"
+            | "clearTimeout"
+            | "setInterval"
+            | "clearInterval"
+            | "setImmediate"
+            | "clearImmediate"
+            | "queueMicrotask"
             // Namespaces (typeof === "object" in spec).
             | "globalThis"
             | "console"

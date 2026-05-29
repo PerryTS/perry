@@ -158,7 +158,18 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
 /// `globalThis`. Unlike constructor sentinels, these call through to Perry's
 /// real direct-call runtime helpers so rebinding works:
 /// `const clone = globalThis.structuredClone; clone(value)`.
-pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &["structuredClone", "atob", "btoa"];
+pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
+    "structuredClone",
+    "atob",
+    "btoa",
+    "setTimeout",
+    "clearTimeout",
+    "setInterval",
+    "clearInterval",
+    "setImmediate",
+    "clearImmediate",
+    "queueMicrotask",
+];
 
 /// No-op thunk used as the function body for most singleton globalThis
 /// built-in constructor values. Lets `globalThis.Array` carry a real
@@ -207,6 +218,114 @@ extern "C" fn global_this_btoa_thunk(
 ) -> f64 {
     let encoded = crate::string::js_btoa(value);
     crate::value::js_nanbox_string(encoded as i64)
+}
+
+fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
+    let value = crate::value::JSValue::from_bits(rest.to_bits());
+    if !value.is_pointer() {
+        return Vec::new();
+    }
+    let arr = value.as_pointer::<crate::array::ArrayHeader>();
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(arr);
+    (0..len)
+        .map(|i| crate::array::js_array_get_f64(arr, i))
+        .collect()
+}
+
+extern "C" fn global_this_set_timeout_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    delay: f64,
+    rest: f64,
+) -> f64 {
+    let callback = unsafe { crate::timer::js_timer_validate_callback(callback, 0) };
+    let args = global_this_rest_array_values(rest);
+    if args.is_empty() {
+        crate::value::js_nanbox_pointer(crate::timer::js_set_timeout_callback(callback, delay))
+    } else {
+        crate::value::js_nanbox_pointer(unsafe {
+            crate::timer::js_set_timeout_callback_args(
+                callback,
+                delay,
+                args.as_ptr(),
+                args.len() as i32,
+            )
+        })
+    }
+}
+
+extern "C" fn global_this_clear_timeout_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    crate::timer::js_clear_timeout_value(arg);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn global_this_set_interval_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    delay: f64,
+    rest: f64,
+) -> f64 {
+    let callback = unsafe { crate::timer::js_timer_validate_callback(callback, 1) };
+    let args = global_this_rest_array_values(rest);
+    if args.is_empty() {
+        crate::value::js_nanbox_pointer(crate::timer::setInterval(callback, delay))
+    } else {
+        crate::value::js_nanbox_pointer(unsafe {
+            crate::timer::js_set_interval_callback_args(
+                callback,
+                delay,
+                args.as_ptr(),
+                args.len() as i32,
+            )
+        })
+    }
+}
+
+extern "C" fn global_this_clear_interval_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    crate::timer::js_clear_interval_value(arg);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn global_this_set_immediate_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let callback = unsafe { crate::timer::js_timer_validate_callback(callback, 2) };
+    let args = global_this_rest_array_values(rest);
+    if args.is_empty() {
+        crate::value::js_nanbox_pointer(crate::timer::js_set_immediate_callback(callback))
+    } else {
+        crate::value::js_nanbox_pointer(unsafe {
+            crate::timer::js_set_immediate_callback_args(callback, args.as_ptr(), args.len() as i32)
+        })
+    }
+}
+
+extern "C" fn global_this_clear_immediate_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    crate::timer::js_clear_immediate_value(arg);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn global_this_queue_microtask_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+) -> f64 {
+    let callback = unsafe { crate::timer::js_timer_validate_callback(callback, 3) };
+    crate::builtins::js_queue_microtask(callback);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Thunk for `Object.prototype.toString` exposed as a callable closure
@@ -611,17 +730,28 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
-        let (func_ptr, arity) = match name {
-            "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2),
-            "atob" => (global_this_atob_thunk as *const u8, 1),
-            "btoa" => (global_this_btoa_thunk as *const u8, 1),
+        let (func_ptr, arity, has_rest) = match name {
+            "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2, false),
+            "atob" => (global_this_atob_thunk as *const u8, 1, false),
+            "btoa" => (global_this_btoa_thunk as *const u8, 1, false),
+            "setTimeout" => (global_this_set_timeout_thunk as *const u8, 2, true),
+            "clearTimeout" => (global_this_clear_timeout_thunk as *const u8, 1, false),
+            "setInterval" => (global_this_set_interval_thunk as *const u8, 2, true),
+            "clearInterval" => (global_this_clear_interval_thunk as *const u8, 1, false),
+            "setImmediate" => (global_this_set_immediate_thunk as *const u8, 1, true),
+            "clearImmediate" => (global_this_clear_immediate_thunk as *const u8, 1, false),
+            "queueMicrotask" => (global_this_queue_microtask_thunk as *const u8, 1, false),
             _ => continue,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure_ptr.is_null() {
             continue;
         }
-        crate::closure::js_register_closure_arity(func_ptr, arity);
+        if has_rest {
+            crate::closure::js_register_closure_rest(func_ptr, arity);
+        } else {
+            crate::closure::js_register_closure_arity(func_ptr, arity);
+        }
         unsafe {
             crate::builtins::js_register_function_name(func_ptr, name.as_ptr(), name.len() as u32);
         }
