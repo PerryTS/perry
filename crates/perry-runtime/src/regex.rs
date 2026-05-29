@@ -591,7 +591,12 @@ pub extern "C" fn js_string_match_all(
 /// shared `$$`, `$n`/`$nn` (numbered groups, largest-valid-group rule), and
 /// `$<name>` (named groups). An unmatched group expands to the empty string;
 /// an invalid `$`-sequence is emitted literally — both matching Node.
-fn expand_js_replacement(repl: &str, caps: &regex::Captures, subject: &str) -> String {
+fn expand_js_replacement(
+    repl: &str,
+    caps: &regex::Captures,
+    subject: &str,
+    has_named_groups: bool,
+) -> String {
     let m0 = match caps.get(0) {
         Some(m) => m,
         None => return String::new(),
@@ -666,12 +671,23 @@ fn expand_js_replacement(repl: &str, caps: &regex::Captures, subject: &str) -> S
                 }
             }
             b'<' => {
-                if let Some(rel) = repl[i + 2..].find('>') {
-                    let name = &repl[i + 2..i + 2 + rel];
-                    if let Some(m) = caps.name(name) {
-                        out.push_str(m.as_str());
+                // `$<name>` is a named-group reference ONLY when the regex
+                // actually defines named capture groups. With no named groups,
+                // JS emits `$<...>` literally (e.g. /n/ has none, so
+                // "$<bad>" stays "$<bad>"). When the regex has named groups but
+                // this particular name is absent, JS substitutes the empty
+                // string.
+                if has_named_groups {
+                    if let Some(rel) = repl[i + 2..].find('>') {
+                        let name = &repl[i + 2..i + 2 + rel];
+                        if let Some(m) = caps.name(name) {
+                            out.push_str(m.as_str());
+                        }
+                        i += 2 + rel + 1;
+                    } else {
+                        out.push('$');
+                        i += 1;
                     }
-                    i += 2 + rel + 1;
                 } else {
                     out.push('$');
                     i += 1;
@@ -712,6 +728,7 @@ pub extern "C" fn js_string_replace_regex(
     unsafe {
         let regex = &*(*re).regex_ptr;
         let global = (*re).global;
+        let has_named_groups = regex.capture_names().any(|n| n.is_some());
 
         // Route through a JS-aware expander (closure form) so `$&` / `` $` `` /
         // `$'` — which the regex crate's native `$` syntax doesn't support —
@@ -719,13 +736,13 @@ pub extern "C" fn js_string_replace_regex(
         let result = if global {
             regex
                 .replace_all(str_data, |caps: &regex::Captures| {
-                    expand_js_replacement(repl_str, caps, str_data)
+                    expand_js_replacement(repl_str, caps, str_data, has_named_groups)
                 })
                 .to_string()
         } else {
             regex
                 .replace(str_data, |caps: &regex::Captures| {
-                    expand_js_replacement(repl_str, caps, str_data)
+                    expand_js_replacement(repl_str, caps, str_data, has_named_groups)
                 })
                 .to_string()
         };
@@ -1369,6 +1386,7 @@ pub extern "C" fn js_string_replace_regex_named(
     unsafe {
         let regex = &*(*re).regex_ptr;
         let global = (*re).global;
+        let has_named_groups = regex.capture_names().any(|n| n.is_some());
 
         let mut result = String::new();
         let mut last_end = 0usize;
@@ -1390,50 +1408,15 @@ pub extern "C" fn js_string_replace_regex_named(
             let full_match = caps.get(0).unwrap();
             result.push_str(&str_data[last_end..full_match.start()]);
 
-            // Process the replacement string, substituting $<name> references
-            let mut repl_result = String::new();
-            let repl_chars: Vec<char> = repl_str.chars().collect();
-            let mut ri = 0;
-            while ri < repl_chars.len() {
-                if repl_chars[ri] == '$' && ri + 1 < repl_chars.len() {
-                    if repl_chars[ri + 1] == '<' {
-                        // Named group reference: $<name>
-                        let name_start = ri + 2;
-                        if let Some(name_end) =
-                            repl_chars[name_start..].iter().position(|&c| c == '>')
-                        {
-                            let name: String = repl_chars[name_start..name_start + name_end]
-                                .iter()
-                                .collect();
-                            if let Some(m) = caps.name(&name) {
-                                repl_result.push_str(m.as_str());
-                            }
-                            ri = name_start + name_end + 1;
-                        } else {
-                            repl_result.push('$');
-                            ri += 1;
-                        }
-                    } else if repl_chars[ri + 1] == '$' {
-                        repl_result.push('$');
-                        ri += 2;
-                    } else if repl_chars[ri + 1].is_ascii_digit() {
-                        // Numbered group: $1, $2, etc.
-                        let digit = (repl_chars[ri + 1] as u32 - '0' as u32) as usize;
-                        if let Some(m) = caps.get(digit) {
-                            repl_result.push_str(m.as_str());
-                        }
-                        ri += 2;
-                    } else {
-                        repl_result.push('$');
-                        ri += 1;
-                    }
-                } else {
-                    repl_result.push(repl_chars[ri]);
-                    ri += 1;
-                }
-            }
-
-            result.push_str(&repl_result);
+            // Delegate to the unified JS-aware expander so `$<name>` follows the
+            // spec: literal when the regex has no named groups, empty when the
+            // named group is absent (and `$&`/`` $` ``/`$'`/`$n`/`$$` all work).
+            result.push_str(&expand_js_replacement(
+                repl_str,
+                caps,
+                str_data,
+                has_named_groups,
+            ));
             last_end = full_match.end();
         }
 
@@ -1456,26 +1439,61 @@ mod tests {
         let re = regex::Regex::new(r"(\w+)\s(\w+)").unwrap();
         let subj = "John Smith";
         let caps = re.captures(subj).unwrap();
-        assert_eq!(expand_js_replacement("$2 $1", &caps, subj), "Smith John");
-        assert_eq!(expand_js_replacement("[$&]", &caps, subj), "[John Smith]");
+        assert_eq!(
+            expand_js_replacement("$2 $1", &caps, subj, false),
+            "Smith John"
+        );
+        assert_eq!(
+            expand_js_replacement("[$&]", &caps, subj, false),
+            "[John Smith]"
+        );
 
         // $` (before) / $' (after) with a mid-string single-char match.
         let re2 = regex::Regex::new("b").unwrap();
         let s2 = "abc";
         let c2 = re2.captures(s2).unwrap();
-        assert_eq!(expand_js_replacement("$`", &c2, s2), "a");
-        assert_eq!(expand_js_replacement("$'", &c2, s2), "c");
-        assert_eq!(expand_js_replacement("$&", &c2, s2), "b");
-        assert_eq!(expand_js_replacement("$$", &c2, s2), "$"); // escaped literal
-        assert_eq!(expand_js_replacement("$z", &c2, s2), "$z"); // invalid → literal
-        assert_eq!(expand_js_replacement("end$", &c2, s2), "end$"); // trailing $
+        assert_eq!(expand_js_replacement("$`", &c2, s2, false), "a");
+        assert_eq!(expand_js_replacement("$'", &c2, s2, false), "c");
+        assert_eq!(expand_js_replacement("$&", &c2, s2, false), "b");
+        assert_eq!(expand_js_replacement("$$", &c2, s2, false), "$"); // escaped literal
+        assert_eq!(expand_js_replacement("$z", &c2, s2, false), "$z"); // invalid → literal
+        assert_eq!(expand_js_replacement("end$", &c2, s2, false), "end$"); // trailing $
 
         // Numbered groups: two-digit-then-one-digit fallback + unmatched → "".
         let re3 = regex::Regex::new(r"(a)(x)?(b)").unwrap();
         let s3 = "ab";
         let c3 = re3.captures(s3).unwrap();
-        assert_eq!(expand_js_replacement("$1$2$3", &c3, s3), "ab"); // $2 unmatched → ""
-        assert_eq!(expand_js_replacement("$10", &c3, s3), "a0"); // no group 10 → $1 then '0'
+        assert_eq!(expand_js_replacement("$1$2$3", &c3, s3, false), "ab"); // $2 unmatched → ""
+        assert_eq!(expand_js_replacement("$10", &c3, s3, false), "a0"); // no group 10 → $1 then '0'
+    }
+
+    #[test]
+    fn js_replacement_named_group_gate() {
+        // No named groups in the regex → `$<name>` is emitted literally (#2421).
+        let re = regex::Regex::new("n").unwrap();
+        let subj = "end";
+        let caps = re.captures(subj).unwrap();
+        assert_eq!(
+            expand_js_replacement("$<bad>", &caps, subj, false),
+            "$<bad>"
+        );
+        assert_eq!(
+            expand_js_replacement("[$<bad>]", &caps, subj, false),
+            "[$<bad>]"
+        );
+
+        // Named groups present: known name substitutes, unknown name → "".
+        let re2 = regex::Regex::new(r"(?<first>\w+)\s(?<last>\w+)").unwrap();
+        let subj2 = "John Smith";
+        let caps2 = re2.captures(subj2).unwrap();
+        assert_eq!(
+            expand_js_replacement("$<last>, $<first>", &caps2, subj2, true),
+            "Smith, John"
+        );
+        assert_eq!(
+            expand_js_replacement("[$<missing>]", &caps2, subj2, true),
+            "[]"
+        );
     }
 
     #[test]
