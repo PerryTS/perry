@@ -13,9 +13,9 @@ mod array_buffer;
 mod boxed_primitives;
 pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 mod collections;
-mod typed_array_equality;
 mod identity_equality;
 mod strip_vt;
+mod typed_array_equality;
 
 pub use strip_vt::js_util_strip_vt_control_characters;
 
@@ -1935,6 +1935,7 @@ pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
     }
     if let Some(equal) = typed_array_equality::deep_strict_typed_array_equal(left, right) {
         return f64::from_bits(crate::value::JSValue::bool(equal).bits());
+    }
     if identity_equality::is_identity_only_deep_equal_value(left)
         || identity_equality::is_identity_only_deep_equal_value(right)
     {
