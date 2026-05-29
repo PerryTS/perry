@@ -50,6 +50,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "console"
+            && method == "Console"
+            && crate::builtins::is_console_instance_value(value)
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
                 "PerformanceEntry" => crate::perf_hooks::CLASS_ID_PERFORMANCE_ENTRY,

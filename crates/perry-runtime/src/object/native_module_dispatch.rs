@@ -1170,6 +1170,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("punycode.ucs2", "encode") => crate::punycode::js_punycode_ucs2_encode(arg(0)),
 
         // ── console module namespace (`node:console` / `console`) ──
+        ("console", "Console") => crate::builtins::js_console_new(arg(0)),
         ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {
             crate::builtins::js_console_log_spread(pack_args());
             f64::from_bits(JSValue::undefined().bits())

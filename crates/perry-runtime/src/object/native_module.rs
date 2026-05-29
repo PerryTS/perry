@@ -527,6 +527,14 @@ pub(crate) unsafe fn bound_native_callable_module_and_method(
     Some((module, method))
 }
 
+pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32> {
+    let (module, method) = bound_native_callable_module_and_method(value)?;
+    match (module.as_str(), method.as_str()) {
+        ("console", "Console") => Some(1),
+        _ => None,
+    }
+}
+
 pub(crate) fn set_bound_native_closure_name(
     closure: *mut crate::closure::ClosureHeader,
     name: &str,

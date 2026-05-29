@@ -446,7 +446,41 @@ thread_local! {
     static CONSOLE_INSTANCES: RefCell<HashMap<usize, ConsoleInstanceState>> = RefCell::new(HashMap::new());
 }
 
-pub(crate) const CONSOLE_INSTANCE_CLASS_ID: u32 = 0xFFFF_0081;
+pub(crate) const CONSOLE_INSTANCE_CLASS_ID: u32 = 0xFFFF_0083;
+
+pub(crate) fn is_console_instance_method_name(method_name: &str) -> bool {
+    matches!(
+        method_name,
+        "log"
+            | "info"
+            | "debug"
+            | "dir"
+            | "dirxml"
+            | "error"
+            | "warn"
+            | "count"
+            | "countReset"
+            | "group"
+            | "groupCollapsed"
+            | "groupEnd"
+            | "clear"
+            | "profile"
+            | "profileEnd"
+            | "timeStamp"
+    )
+}
+
+pub(crate) fn is_console_instance_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let obj = jsval.as_pointer::<crate::object::ObjectHeader>();
+    if obj.is_null() || (obj as usize) < 0x100000 {
+        return false;
+    }
+    unsafe { (*obj).class_id == CONSOLE_INSTANCE_CLASS_ID }
+}
 
 struct ConsoleInstanceState {
     stdout: f64,

@@ -1769,6 +1769,12 @@ pub extern "C" fn js_object_get_field_by_name(
                 // `First argument to _arity must be a non-negative
                 // integer no greater than ten` at module init.
                 if name_bytes == b"length" {
+                    let closure_value = crate::value::js_nanbox_pointer(obj as i64);
+                    if let Some(arity) =
+                        super::native_module::bound_native_callable_value_arity(closure_value)
+                    {
+                        return JSValue::number(arity as f64);
+                    }
                     let arity =
                         crate::closure::closure_arity(obj as *const crate::closure::ClosureHeader);
                     return JSValue::number(arity.unwrap_or(0) as f64);
@@ -2268,6 +2274,28 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                 }
             }
+            if class_id == crate::builtins::CONSOLE_INSTANCE_CLASS_ID {
+                let key_bytes = std::slice::from_raw_parts(
+                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                    (*key).byte_len as usize,
+                );
+                if let Ok(name) = std::str::from_utf8(key_bytes) {
+                    if crate::builtins::is_console_instance_method_name(name) {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)
+                                    .unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+                            ptr
+                        };
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                }
+            }
             return JSValue::undefined();
         }
 
@@ -2495,6 +2523,21 @@ pub extern "C" fn js_object_get_field_by_name(
             if let Ok(name) = std::str::from_utf8(key_bytes) {
                 if let Some(v) = lookup_prototype_method(class_id, name) {
                     return JSValue::from_bits(v.to_bits());
+                }
+                if class_id == crate::builtins::CONSOLE_INSTANCE_CLASS_ID
+                    && crate::builtins::is_console_instance_method_name(name)
+                {
+                    let heap_name = {
+                        let layout =
+                            std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1).unwrap();
+                        let ptr = std::alloc::alloc(layout);
+                        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+                        ptr
+                    };
+                    let this_f64 =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                    return JSValue::from_bits(result.to_bits());
                 }
             }
 

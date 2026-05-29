@@ -69,7 +69,10 @@ pub use console::{
     scan_console_log_singleton_roots_mut,
 };
 
-pub(crate) use console::try_console_instance_method_dispatch;
+pub(crate) use console::{
+    is_console_instance_method_name, is_console_instance_value,
+    try_console_instance_method_dispatch, CONSOLE_INSTANCE_CLASS_ID,
+};
 
 pub use formatting::{
     function_name_for_ptr, js_array_print, js_register_function_name, js_util_format,

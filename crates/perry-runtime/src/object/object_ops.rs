@@ -841,11 +841,20 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     // user-attached dynamic-property side table.
                     let resolved: Option<(f64, bool, bool)> = match name {
                         "length" => {
-                            let arity = crate::closure::closure_arity(
-                                ptr as *const crate::closure::ClosureHeader,
-                            );
-                            // Numbers are NaN-boxed as their raw f64 bits.
-                            Some((arity.unwrap_or(0) as f64, false, true))
+                            let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
+                            if let Some(arity) =
+                                super::native_module::bound_native_callable_value_arity(
+                                    closure_value,
+                                )
+                            {
+                                Some((arity as f64, false, true))
+                            } else {
+                                let arity = crate::closure::closure_arity(
+                                    ptr as *const crate::closure::ClosureHeader,
+                                );
+                                // Numbers are NaN-boxed as their raw f64 bits.
+                                Some((arity.unwrap_or(0) as f64, false, true))
+                            }
                         }
                         "name" => {
                             let dynv = crate::closure::closure_get_dynamic_prop(ptr, "name");

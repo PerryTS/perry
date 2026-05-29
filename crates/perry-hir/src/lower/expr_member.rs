@@ -905,6 +905,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "console"
+                    && class_name == "Console"
+                    && is_console_instance_method_name(&property_name)
+                {
+                    // `new Console(...).log` is a method value read, not a
+                    // zero-arg native getter. The call form still lowers
+                    // through NativeMethodCall; bare reads stay as PropertyGet
+                    // so runtime lookup can return a bound callable.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1704,6 +1717,28 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "removeAllListeners"
             | "setMaxListeners"
             | "getMaxListeners"
+    )
+}
+
+fn is_console_instance_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "log"
+            | "info"
+            | "debug"
+            | "dir"
+            | "dirxml"
+            | "error"
+            | "warn"
+            | "count"
+            | "countReset"
+            | "group"
+            | "groupCollapsed"
+            | "groupEnd"
+            | "clear"
+            | "profile"
+            | "profileEnd"
+            | "timeStamp"
     )
 }
 
