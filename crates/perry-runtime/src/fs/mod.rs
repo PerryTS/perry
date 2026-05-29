@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::closure::ClosureHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
-use crate::value::POINTER_MASK;
+use crate::value::{POINTER_MASK, POINTER_TAG};
 
 mod callbacks;
 pub use callbacks::*;
@@ -30,7 +30,7 @@ mod stats;
 pub use stats::*;
 mod dirent;
 pub use dirent::*;
-pub(crate) mod validate;
+pub mod validate;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
@@ -50,6 +50,18 @@ thread_local! {
 /// numeric fd (#2013).
 pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
+}
+
+pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) != POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    if addr < 0x1000 {
+        return None;
+    }
+    FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().get(&addr).copied())
 }
 
 struct DirState {
@@ -80,6 +92,9 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
     if value.is_finite() && value >= 0.0 && value <= i32::MAX as f64 {
         Some(value as i32)
     } else {
+        if let Some(fd) = filehandle_object_fd(value) {
+            return Some(fd);
+        }
         unsafe {
             let bits = value.to_bits();
             let addr = if (bits >> 48) >= 0x7FF8 {
@@ -87,9 +102,6 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
             } else {
                 bits as usize
             };
-            if let Some(fd) = FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().get(&addr).copied()) {
-                return Some(fd);
-            }
             if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1
                 || !extract_string_ptr(value).is_null()
             {
@@ -118,7 +130,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
 ) -> *mut StringHeader {
     validate::validate_path_or_fd("path", path_value, "read");
     unsafe {
-        let path_str_for_log = decode_path_value(path_value).unwrap_or_default();
+        let _path_str_for_log = decode_path_value(path_value).unwrap_or_default();
 
         // Debug: log path on Android
         #[cfg(target_os = "android")]

@@ -371,6 +371,9 @@ pub fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
 
 /// Merge two .p12 files into the first one (appends the second's cert+key).
 /// Both must use the same password. Uses openssl to extract PEM and repackage.
+// #854: signing helper for the macOS distribute="both" cert-merge flow;
+// kept as the documented entry point even where currently unreferenced.
+#[allow(dead_code)]
 pub fn merge_p12_files(
     primary_p12: &std::path::Path,
     secondary_p12: &str,

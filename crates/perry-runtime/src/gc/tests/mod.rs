@@ -1,5 +1,6 @@
 mod alloc;
 mod barrier;
+mod contract;
 mod copying;
 mod evacuation;
 mod helper_stores;

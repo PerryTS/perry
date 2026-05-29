@@ -21,7 +21,8 @@ use tokio::sync::oneshot;
 
 use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
 use crate::types::{
-    jsvalue_to_body_bytes, read_string_header, PTR_MASK, STRING_TAG, TAG_NULL, TAG_UNDEFINED,
+    js_json_stringify, jsvalue_to_body_bytes, read_string_header, PTR_MASK, STRING_TAG, TAG_NULL,
+    TAG_UNDEFINED,
 };
 
 pub type ResponseBody = BoxBody<Bytes, Infallible>;
@@ -351,19 +352,72 @@ pub extern "C" fn js_node_http_res_writable_finished(handle: i64) -> i32 {
         .unwrap_or(0)
 }
 
-/// `res.writeHead(status, statusMessage?, headers?)` — set status +
-/// optional status message + bulk headers. `headers_json` is the
-/// JSON-stringified header object from the TS-side wrapper, or empty
-/// for no bulk headers.
+/// Merge a JSON-encoded header object (`{"Content-Type":"text/plain",...}`)
+/// into a `ServerResponse`'s header map, preserving the original case for
+/// `getHeaderNames()` while keying the lookup table lowercase. Shared by
+/// `writeHead`'s bulk-header path.
+fn apply_headers_json(sr: &mut ServerResponse, json: &str) {
+    if json.is_empty() || json == "null" || json == "undefined" {
+        return;
+    }
+    if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(json) {
+        for (k, v) in obj {
+            let lower = k.to_lowercase();
+            let value = match v {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            sr.headers.insert(lower.clone(), value);
+            sr.raw_header_names.insert(lower, k);
+        }
+    }
+}
+
+/// `res.writeHead(statusCode[, statusMessage][, headers])` — set status +
+/// optional status message + bulk headers.
+///
+/// #2132: `arg2`/`arg3` arrive as raw NaN-boxed JSValues (`NA_JSV`) so the
+/// runtime can resolve Node's overloads — a string in slot 2 is the
+/// `statusMessage`, an object in slot 2 or 3 is the bulk `headers`. Headers
+/// objects are serialized here via `js_json_stringify`. The previous wiring
+/// typed both slots `NA_STR`, which coerced a headers *object* to the literal
+/// `"[object Object]"` and silently dropped every header set through
+/// `writeHead` (visible as missing `Content-Type` etc. on the wire).
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_write_head(
     handle: i64,
     status: f64,
-    status_msg_ptr: *const StringHeader,
-    headers_json_ptr: *const StringHeader,
+    arg2: i64,
+    arg3: i64,
 ) {
-    let msg = read_string_header(status_msg_ptr as *mut _);
-    let headers_json = read_string_header(headers_json_ptr as *mut _);
+    let v2 = JsValue::from_bits(arg2 as u64);
+    let v3 = JsValue::from_bits(arg3 as u64);
+
+    // Resolve the (statusMessage?, headers?) overload. `is_pointer()` is the
+    // POINTER_TAG heap-object test — exactly the shape of a headers object
+    // literal; strings (STRING_TAG) and primitives are excluded.
+    let mut status_message: Option<String> = None;
+    let mut headers_value: Option<f64> = None;
+    if v3.is_pointer() {
+        headers_value = Some(f64::from_bits(arg3 as u64));
+        if v2.is_string() {
+            status_message = read_string_header(v2.as_string_ptr());
+        }
+    } else if v2.is_pointer() {
+        headers_value = Some(f64::from_bits(arg2 as u64));
+    } else if v2.is_string() {
+        status_message = read_string_header(v2.as_string_ptr());
+    }
+
+    let headers_json = headers_value.and_then(|hv| {
+        let ptr = js_json_stringify(hv, 0);
+        if ptr.is_null() {
+            None
+        } else {
+            read_string_header(ptr)
+        }
+    });
+
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if sr.headers_sent {
             return;
@@ -371,27 +425,13 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         if status.is_finite() && status > 0.0 {
             sr.status_code = status as u16;
         }
-        if let Some(m) = msg {
+        if let Some(m) = status_message {
             if !m.is_empty() {
                 sr.status_message = Some(m);
             }
         }
         if let Some(json) = headers_json {
-            if !json.is_empty() && json != "null" && json != "undefined" {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
-                    if let Some(obj) = parsed.as_object() {
-                        for (k, v) in obj {
-                            let lower = k.to_lowercase();
-                            let value = match v {
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            };
-                            sr.headers.insert(lower.clone(), value);
-                            sr.raw_header_names.insert(lower, k.clone());
-                        }
-                    }
-                }
-            }
+            apply_headers_json(sr, &json);
         }
     }
 }
@@ -569,4 +609,56 @@ pub(crate) fn alloc_server_response(response_tx: oneshot::Sender<HyperResponseSh
 #[allow(dead_code)]
 pub(crate) fn _force_link_helpers(v: f64) -> bool {
     f64::from_bits(TAG_NULL) == v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_response() -> ServerResponse {
+        let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
+        ServerResponse::new(tx)
+    }
+
+    #[test]
+    fn write_head_headers_json_merges_and_preserves_case() {
+        // #2132: a `writeHead(status, headers)` object is JSON-serialized and
+        // merged here; the lookup key is lowercase but the original case is
+        // retained for `getHeaderNames()`.
+        let mut sr = empty_response();
+        apply_headers_json(&mut sr, r#"{"Content-Type":"text/plain","X-Custom":"abc"}"#);
+        assert_eq!(
+            sr.headers.get("content-type").map(String::as_str),
+            Some("text/plain")
+        );
+        assert_eq!(sr.headers.get("x-custom").map(String::as_str), Some("abc"));
+        assert_eq!(
+            sr.raw_header_names.get("content-type").map(String::as_str),
+            Some("Content-Type")
+        );
+        assert_eq!(
+            sr.raw_header_names.get("x-custom").map(String::as_str),
+            Some("X-Custom")
+        );
+    }
+
+    #[test]
+    fn write_head_headers_json_stringifies_non_string_values() {
+        let mut sr = empty_response();
+        apply_headers_json(&mut sr, r#"{"Content-Length":42,"X-Flag":true}"#);
+        assert_eq!(
+            sr.headers.get("content-length").map(String::as_str),
+            Some("42")
+        );
+        assert_eq!(sr.headers.get("x-flag").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn write_head_headers_json_ignores_empty_and_sentinels() {
+        let mut sr = empty_response();
+        apply_headers_json(&mut sr, "");
+        apply_headers_json(&mut sr, "null");
+        apply_headers_json(&mut sr, "undefined");
+        assert!(sr.headers.is_empty());
+    }
 }

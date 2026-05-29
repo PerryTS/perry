@@ -60,6 +60,9 @@ impl ScanReport {
         Ok(())
     }
 
+    // #854: severity-count accessors over the report findings; kept for
+    // callers/tests that summarize a ScanReport.
+    #[allow(dead_code)]
     pub fn p0_count(&self) -> usize {
         self.findings
             .iter()
@@ -67,6 +70,7 @@ impl ScanReport {
             .count()
     }
 
+    #[allow(dead_code)] // #854: severity-count accessor, see p0_count.
     pub fn p1_count(&self) -> usize {
         self.findings
             .iter()

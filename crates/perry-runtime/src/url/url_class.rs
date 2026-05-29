@@ -72,6 +72,22 @@ fn url_can_have_credentials(url: *mut ObjectHeader) -> bool {
     let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
     let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
     !host.is_empty() && protocol != "file:"
+fn normalize_hostname_value(raw: &str) -> Option<String> {
+    if raw.is_empty()
+        || raw.chars().any(|c| {
+            c.is_ascii_control()
+                || matches!(
+                    c,
+                    ' ' | '#' | '/' | ':' | '<' | '>' | '?' | '@' | '[' | '\\' | ']' | '^' | '|'
+                )
+        })
+    {
+        return None;
+    }
+    match idna::domain_to_ascii(raw) {
+        Ok(ascii) if !ascii.is_empty() => Some(ascii),
+        _ => None,
+    }
 }
 
 /// Create a new URL from a string
@@ -246,7 +262,9 @@ pub extern "C" fn js_url_set_hostname(url: *mut ObjectHeader, value: *mut crate:
     if url.is_null() {
         return;
     }
-    let raw = string_header_to_string(value);
+    let Some(raw) = normalize_hostname_value(&string_header_to_string(value)) else {
+        return;
+    };
     unsafe {
         js_object_set_field_f64(url, URL_HOSTNAME, create_string_f64(&raw));
         rebuild_url_host(url);
@@ -391,6 +409,26 @@ pub extern "C" fn js_url_parse(input: *mut crate::StringHeader) -> *mut ObjectHe
         return std::ptr::null_mut();
     }
     create_url_object(&s)
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_parse_with_base(
+    input: *mut crate::StringHeader,
+    base: *mut crate::StringHeader,
+) -> *mut ObjectHeader {
+    let input_s = string_from_header(input);
+    let base_s = string_from_header(base);
+    if is_valid_absolute_url(&input_s) {
+        return create_url_object(&input_s);
+    }
+    if !is_valid_absolute_url(&base_s) || input_s.trim().is_empty() {
+        return std::ptr::null_mut();
+    }
+    let resolved = resolve_url(&input_s, &base_s);
+    if !is_valid_absolute_url(&resolved) {
+        return std::ptr::null_mut();
+    }
+    create_url_object(&resolved)
 }
 
 /// Get the pathname property from a URL

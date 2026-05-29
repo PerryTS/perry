@@ -104,7 +104,11 @@ pub(crate) enum ExpectedNativeRep {
     F32,
     BufferLen,
     HandleId,
+    // #854: expected-rep variants matched by is_rep but not yet constructed by
+    // any ABI classifier; kept as part of the native-rep expectation taxonomy.
+    #[allow(dead_code)]
     NativeHandle,
+    #[allow(dead_code)]
     PromiseBoundary,
 }
 
@@ -218,6 +222,9 @@ impl LoweredValue {
         )
     }
 
+    // #854: near-future ABI rep-match predicate; not yet called by a codegen
+    // dispatch site.
+    #[allow(dead_code)]
     pub(crate) fn is_rep(&self, expected: ExpectedNativeRep) -> bool {
         matches!(
             (expected, &self.rep),
