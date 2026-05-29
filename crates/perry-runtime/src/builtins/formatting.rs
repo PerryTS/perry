@@ -376,10 +376,15 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
 /// surface in `[bracketed]` form. See #1200.
 thread_local! {
     static INSPECT_SHOW_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INSPECT_SHOW_PROXY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(crate) fn inspect_show_hidden() -> bool {
     INSPECT_SHOW_HIDDEN.with(|c| c.get())
+}
+
+fn inspect_show_proxy() -> bool {
+    INSPECT_SHOW_PROXY.with(|c| c.get())
 }
 
 /// RAII guard for `INSPECT_SHOW_HIDDEN`; restores the previous value on
@@ -396,6 +401,21 @@ impl InspectShowHiddenGuard {
 impl Drop for InspectShowHiddenGuard {
     fn drop(&mut self) {
         INSPECT_SHOW_HIDDEN.with(|c| c.set(self.0));
+    }
+}
+
+pub(crate) struct InspectShowProxyGuard(bool);
+
+impl InspectShowProxyGuard {
+    pub(crate) fn new(show: bool) -> Self {
+        let prev = INSPECT_SHOW_PROXY.with(|c| c.replace(show));
+        Self(prev)
+    }
+}
+
+impl Drop for InspectShowProxyGuard {
+    fn drop(&mut self) {
+        INSPECT_SHOW_PROXY.with(|c| c.set(self.0));
     }
 }
 
@@ -695,8 +715,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // instead (registry-gated, before the GC-header read; #800).
                 collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
             } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
-                let target = crate::proxy::js_proxy_target(value);
-                format_jsvalue(target, depth)
+                format_proxy_value(value, depth, false)
             } else if crate::date::is_date_cell_addr(ptr as usize) {
                 // #2089: a Date is a NaN-boxed `DateCell` pointer. Node's
                 // `util.inspect` prints the ISO string unquoted (or
@@ -842,8 +861,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     // `[Object]` (#1204). The depth cap is overridable via
                     // INSPECT_DEPTH_LIMIT for `%o` / `console.dir(v, { depth })`.
                     let obj_ptr = ptr as *const crate::object::ObjectHeader;
-                    if let Some(body) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
-                        return body.to_string();
+                    if let Some(body) = format_weak_wrapper(obj_ptr, depth) {
+                        return body;
                     }
                     if let Err(id) = inspect_enter_circular(ptr as usize) {
                         return format!("[Circular *{}]", id);
@@ -966,6 +985,66 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
     }
     out.push('>');
     out
+}
+
+fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
+    let target = crate::proxy::js_proxy_target(value);
+    if !inspect_show_proxy() {
+        return if json {
+            format_jsvalue_for_json(target, depth)
+        } else {
+            format_jsvalue(target, depth)
+        };
+    }
+
+    let handler = crate::proxy::js_proxy_handler(value);
+    let target_str = if json {
+        format_jsvalue_for_json(target, depth + 1)
+    } else {
+        format_jsvalue(target, depth + 1)
+    };
+    let handler_str = if json {
+        format_jsvalue_for_json(handler, depth + 1)
+    } else {
+        format_jsvalue(handler, depth + 1)
+    };
+    format!("Proxy [ {}, {} ]", target_str, handler_str)
+}
+
+fn format_weak_wrapper(
+    obj_ptr: *const crate::object::ObjectHeader,
+    depth: usize,
+) -> Option<String> {
+    use crate::weakref::WeakWrapperKind;
+
+    match crate::weakref::weak_wrapper_kind(obj_ptr)? {
+        WeakWrapperKind::WeakRef | WeakWrapperKind::FinalizationRegistry => {
+            crate::weakref::weak_wrapper_inspect_label(obj_ptr).map(str::to_string)
+        }
+        WeakWrapperKind::WeakMap | WeakWrapperKind::WeakSet if !inspect_show_hidden() => {
+            crate::weakref::weak_wrapper_inspect_label(obj_ptr).map(str::to_string)
+        }
+        WeakWrapperKind::WeakMap => {
+            let parts = crate::weakref::weak_collection_entries(obj_ptr)
+                .into_iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{} => {}",
+                        format_jsvalue(key, depth + 1),
+                        format_jsvalue_for_json(value, depth + 1)
+                    )
+                })
+                .collect::<Vec<_>>();
+            Some(format!("WeakMap {{ {} }}", parts.join(", ")))
+        }
+        WeakWrapperKind::WeakSet => {
+            let parts = crate::weakref::weak_collection_entries(obj_ptr)
+                .into_iter()
+                .map(|(key, _)| format_jsvalue(key, depth + 1))
+                .collect::<Vec<_>>();
+            Some(format!("WeakSet {{ {} }}", parts.join(", ")))
+        }
+    }
 }
 
 /// Format an object as JSON-like string
@@ -1331,8 +1410,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 // Request) carries no GC header, so reading `ptr - 8` would
                 // deref unmapped memory — print a placeholder instead.
                 if crate::proxy::js_proxy_is_proxy(value) != 0 {
-                    let target = crate::proxy::js_proxy_target(value);
-                    format_jsvalue_for_json(target, depth)
+                    format_proxy_value(value, depth, true)
                 } else if crate::date::is_date_cell_addr(ptr as usize) {
                     // #2089: Date inside an inspected object — ISO string
                     // unquoted (or `Invalid Date`), not the 8-byte cell deref'd
@@ -1418,8 +1496,8 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT
                         // for `%o` / `console.dir(v, { depth })`.
                         let obj_ptr = ptr as *const crate::object::ObjectHeader;
-                        if let Some(body) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
-                            return body.to_string();
+                        if let Some(body) = format_weak_wrapper(obj_ptr, depth) {
+                            return body;
                         }
                         if let Err(id) = inspect_enter_circular(ptr as usize) {
                             return format!("[Circular *{}]", id);
@@ -1807,11 +1885,10 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                 }
                 b'o' => {
                     // Node's `%o` overlays util.inspect options with
-                    // showHidden/showProxy and depth: 4. Perry does not expose
-                    // showProxy yet, but showHidden and the depth budget are
-                    // observable in current parity fixtures.
+                    // showHidden/showProxy and depth: 4.
                     let _depth_guard = InspectDepthLimitGuard::new(4);
                     let _hidden_guard = InspectShowHiddenGuard::new(true);
+                    let _proxy_guard = InspectShowProxyGuard::new(true);
                     out.push_str(&format_jsvalue(val, 0));
                 }
                 b'O' => {
@@ -1862,6 +1939,8 @@ pub extern "C" fn js_util_format_with_options(
     let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
     let show_hidden =
         unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
+    let show_proxy =
+        unsafe { super::console::decode_dir_bool_option(options, "showProxy") }.unwrap_or(false);
     let custom_inspect =
         unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
     let getters =
@@ -1872,6 +1951,7 @@ pub extern "C" fn js_util_format_with_options(
         unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
     let _depth_guard = InspectDepthLimitGuard::new(max_depth);
     let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
+    let _proxy_guard = InspectShowProxyGuard::new(show_proxy);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     let _getters_guard = InspectGettersGuard::new(getters);
     let _sorted_guard = InspectSortedGuard::new(sorted);
@@ -1884,6 +1964,8 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
     let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
     let show_hidden =
         unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
+    let show_proxy =
+        unsafe { super::console::decode_dir_bool_option(options, "showProxy") }.unwrap_or(false);
     // `util.inspect` defaults to `customInspect: true`; an explicit
     // `{ customInspect: false }` opts out and surfaces the hook as a
     // symbol property. Refs #1201.
@@ -1897,6 +1979,7 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
         unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
     let _depth_guard = InspectDepthLimitGuard::new(max_depth);
     let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
+    let _proxy_guard = InspectShowProxyGuard::new(show_proxy);
     let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
     let _getters_guard = InspectGettersGuard::new(getters);
     let _sorted_guard = InspectSortedGuard::new(sorted);

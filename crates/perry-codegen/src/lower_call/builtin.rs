@@ -949,26 +949,41 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &p)))
         }
         "WeakMap" => {
-            // Lower init iterable args for side effects; the runtime's
-            // js_weakmap_new takes no args and the HIR lowering of
-            // `.set(k,v)` calls dispatch on the resulting handle.
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let lowered_args = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
             let handle = ctx.block().call(I64, "js_weakmap_new", &[]);
             // js_weakmap_new returns a raw `*mut ObjectHeader` — NaN-box
             // with POINTER_TAG so subsequent `js_weakmap_*` calls can
             // `js_nanbox_get_pointer` on the f64.
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            Ok(Some(boxed))
+            if let Some(iterable) = lowered_args.first() {
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_weakmap_init_iterable",
+                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
+                )))
+            } else {
+                Ok(Some(boxed))
+            }
         }
         "WeakSet" => {
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
+            let lowered_args = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
             let handle = ctx.block().call(I64, "js_weakset_new", &[]);
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            Ok(Some(boxed))
+            if let Some(iterable) = lowered_args.first() {
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_weakset_init_iterable",
+                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
+                )))
+            } else {
+                Ok(Some(boxed))
+            }
         }
         "AbortController" => {
             // Lower any incidental args for side effects (shouldn't have any).
