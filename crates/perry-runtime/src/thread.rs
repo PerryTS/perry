@@ -247,6 +247,12 @@ pub(crate) enum SerializedValue {
 
     /// A BigInt: 16 x u64 limbs in little-endian order.
     BigInt([u64; BIGINT_LIMBS]),
+
+    /// A Date: its millisecond timestamp (may be NaN for an Invalid Date).
+    /// Re-allocated as a fresh `DateCell` on the receiving thread (#2089) —
+    /// deep-copy semantics, since the source cell's pointer is meaningless in
+    /// another thread's arena.
+    Date(f64),
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
@@ -325,6 +331,11 @@ pub(crate) unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
             }
             gc::GC_TYPE_CLOSURE => {
                 return serialize_closure(raw_ptr as *const ClosureHeader);
+            }
+            gc::GC_TYPE_DATE_CELL => {
+                // #2089: copy the timestamp; the receiving thread re-allocates
+                // a fresh cell (deep-copy, like every other crossed value).
+                return SerializedValue::Date((*(raw_ptr as *const crate::date::DateCell)).ts);
             }
             _ => {
                 // Unknown pointer type — treat as undefined
@@ -585,6 +596,11 @@ pub(crate) unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) 
             let ptr = bigint::bigint_alloc_with_limbs(*limbs);
             // NaN-box with BIGINT_TAG
             BIGINT_TAG | (ptr as u64 & POINTER_MASK)
+        }
+
+        SerializedValue::Date(ts) => {
+            // #2089: allocate a fresh DateCell in THIS thread's arena.
+            crate::date::alloc_date_cell(*ts).to_bits()
         }
     }
 }

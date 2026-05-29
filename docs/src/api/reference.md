@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1492 entries across 82 modules.
+Total: 1498 entries across 82 modules.
 
 ## Modules
 
@@ -1857,6 +1857,7 @@ Total: 1492 entries across 82 modules.
 - `toWeb` — module
 - `uncork` — instance
 - `unpipe` — instance
+- `unshift` — instance
 - `writable` — instance
 - `writableCorked` — instance
 - `writableEnded` — instance
@@ -1997,8 +1998,11 @@ Total: 1492 entries across 82 modules.
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
 - `isDate` — module
+- `isFloat32Array` — module
 - `isFloat64Array` — module
+- `isInt16Array` — module
 - `isInt32Array` — module
+- `isInt8Array` — module
 - `isMap` — module
 - `isMapIterator` — module
 - `isNumberObject` — module
@@ -2011,7 +2015,9 @@ Total: 1492 entries across 82 modules.
 - `isStringObject` — module
 - `isTypedArray` — module
 - `isUint16Array` — module
+- `isUint32Array` — module
 - `isUint8Array` — module
+- `isUint8ClampedArray` — module
 
 ## `uuid`
 

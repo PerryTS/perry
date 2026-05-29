@@ -202,7 +202,7 @@ pub(crate) extern "C" fn thunk_fs_promises_cp(
     to: f64,
     options: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_cp_sync_options(from, to, options);
+    let _ = crate::fs::js_fs_cp_async_options(from, to, options);
     promise_undefined()
 }
 
