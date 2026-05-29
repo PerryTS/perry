@@ -253,6 +253,7 @@ where
         | Expr::DateGetUtcSeconds(v)
         | Expr::DateGetUtcMilliseconds(v)
         | Expr::DateValueOf(v)
+        | Expr::DateToString(v)
         | Expr::DateToDateString(v)
         | Expr::DateToTimeString(v)
         | Expr::DateToLocaleDateString(v)
@@ -317,6 +318,11 @@ where
             f(base);
         }
 
+        Expr::UrlParseWithBase { input, base } => {
+            f(input);
+            f(base);
+        }
+
         Expr::NativeArenaView {
             owner,
             byte_offset,
@@ -338,9 +344,16 @@ where
             f(count);
         }
 
-        Expr::UrlSearchParamsForEach { params, callback } => {
+        Expr::UrlSearchParamsForEach {
+            params,
+            callback,
+            this_arg,
+        } => {
             f(params);
             f(callback);
+            if let Some(this_arg) = this_arg {
+                f(this_arg);
+            }
         }
 
         Expr::TaggedTemplateStrings { cooked, .. } => {

@@ -588,6 +588,20 @@ unsafe fn format_error_value(error_ptr: *const crate::error::ErrorHeader, depth:
     out
 }
 
+/// #2089: a Date's `util.inspect` rendering — ISO string (unquoted) or "Invalid Date". DateCell pointer only (gated by callers).
+unsafe fn date_inspect_string(value: f64) -> String {
+    let s_ptr = crate::date::js_date_to_iso_string(value);
+    if s_ptr.is_null() {
+        return "Invalid Date".to_string();
+    }
+    let len = (*s_ptr).byte_len as usize;
+    let data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes)
+        .unwrap_or("Invalid Date")
+        .to_string()
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -664,6 +678,12 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
             } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
                 let target = crate::proxy::js_proxy_target(value);
                 format_jsvalue(target, depth)
+            } else if crate::date::is_date_cell_addr(ptr as usize) {
+                // #2089: a Date is a NaN-boxed `DateCell` pointer. Node's
+                // `util.inspect` prints the ISO string unquoted (or
+                // `Invalid Date`). Handle before the GC-header object dispatch
+                // below, which would deref the 8-byte cell as an ObjectHeader.
+                date_inspect_string(value)
             } else if (ptr as usize) < 0x100000 {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
                 // POINTER_TAG values whose payload is a small registry id, NOT
@@ -1289,6 +1309,11 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 if crate::proxy::js_proxy_is_proxy(value) != 0 {
                     let target = crate::proxy::js_proxy_target(value);
                     format_jsvalue_for_json(target, depth)
+                } else if crate::date::is_date_cell_addr(ptr as usize) {
+                    // #2089: Date inside an inspected object — ISO string
+                    // unquoted (or `Invalid Date`), not the 8-byte cell deref'd
+                    // as an object.
+                    date_inspect_string(value)
                 } else if (ptr as usize) < 0x100000 {
                     "[object Object]".to_string()
                 } else if crate::symbol::is_registered_symbol(ptr as usize)

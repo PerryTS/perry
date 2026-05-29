@@ -38,7 +38,14 @@ pub const GC_TYPE_NATIVE_ARENA_OWNER: u8 = 13;
 pub const GC_TYPE_NATIVE_TYPED_VIEW: u8 = 14;
 pub const GC_TYPE_NATIVE_HANDLE: u8 = 15;
 pub const GC_TYPE_NATIVE_POD_VIEW: u8 = 16;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_NATIVE_POD_VIEW;
+/// A 1-slot mutable `Date` cell (`DateCell { ts: f64 }`). Arena-allocated,
+/// non-movable (so a NaN-boxed pointer held in a plain f64/DOUBLE local
+/// never goes stale across a copying GC), pointer-free (the `ts` slot is a
+/// raw IEEE double, not a JSValue). Gives `Date` reference semantics so
+/// setter mutations propagate through aliasing / function / closure
+/// boundaries (#2089).
+pub const GC_TYPE_DATE_CELL: u8 = 17;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_DATE_CELL;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -421,6 +428,26 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::NativePodView,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_DATE_CELL,
+        "date",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        // Non-movable: a Date is referenced by a NaN-boxed pointer kept in a
+        // plain f64/DOUBLE local that codegen does NOT shadow-root. The
+        // conservative stack scan keeps it alive; keeping the address stable
+        // means that un-rooted pointer never goes stale across a GC move.
+        false,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        // pointer_free: the single `ts` slot is a raw f64, never a JSValue.
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
     )),
 ];
 

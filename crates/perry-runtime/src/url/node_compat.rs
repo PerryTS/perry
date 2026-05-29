@@ -5,37 +5,126 @@
 use super::*;
 
 use super::parse::{create_url_object, is_valid_absolute_url, parse_url, resolve_url};
-use super::search_params::{url_decode, url_encode};
+use super::search_params::url_decode;
+
+const QUERYSTRING_ESCAPE_HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+fn legacy_querystring_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for &b in input.as_bytes() {
+        match b {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => out.push(b as char),
+            _ => {
+                out.push('%');
+                out.push(QUERYSTRING_ESCAPE_HEX[(b >> 4) as usize] as char);
+                out.push(QUERYSTRING_ESCAPE_HEX[(b & 0x0F) as usize] as char);
+            }
+        }
+    }
+    out
+}
+
+fn throw_url_format_invalid_arg() -> ! {
+    let msg = b"The \"urlObject\" argument must be of type object or string.";
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_INVALID_ARG_TYPE");
+    let err = crate::error::js_typeerror_new(msg_ptr);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn throw_url_type_error_with_code(message: &str, code: &'static str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_file_url_pathname(pathname: &str) -> String {
+    let bytes = pathname.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if bytes[i + 1] == b'2' && (bytes[i + 2] | 0x20) == b'f' {
+                throw_url_type_error_with_code(
+                    "File URL path must not include encoded / characters",
+                    "ERR_INVALID_FILE_URL_PATH",
+                );
+            }
+            if let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// Convert a file:// URL to a filesystem path
 /// Strips the "file://" prefix and percent-decodes the result
 /// js_url_file_url_to_path(url_f64: f64) -> f64 (NaN-boxed string)
 #[no_mangle]
 pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
-    let url_string = get_string_content(url_f64);
+    let url_string = object_from_f64(url_f64)
+        .map(|obj| object_prop_string(obj, "href"))
+        .unwrap_or_else(|| {
+            let ptr =
+                crate::value::js_get_string_pointer_unified(url_f64) as *mut crate::StringHeader;
+            string_from_header(ptr)
+        });
 
-    // Strip file:// prefix
-    let path = if url_string.starts_with("file:///") {
-        // file:///path → /path (Unix)
-        &url_string[7..]
-    } else if url_string.starts_with("file://") {
-        // file://host/path or file:///path
-        &url_string[7..]
-    } else if url_string.starts_with("file:") {
-        &url_string[5..]
-    } else {
-        // Not a file URL, return as-is
-        &url_string
+    let Some(after_scheme) = url_string.strip_prefix("file:") else {
+        throw_url_type_error_with_code("The URL must be of scheme file", "ERR_INVALID_URL_SCHEME");
     };
 
-    // Percent-decode the path
-    let decoded = url_decode(path);
+    let pathname = if let Some(authority_and_path) = after_scheme.strip_prefix("//") {
+        let path_start = authority_and_path
+            .find('/')
+            .unwrap_or(authority_and_path.len());
+        let host = &authority_and_path[..path_start];
+        if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+            throw_url_type_error_with_code(
+                "File URL host must be \"localhost\" or empty on darwin",
+                "ERR_INVALID_FILE_URL_HOST",
+            );
+        }
+        &authority_and_path[path_start..]
+    } else {
+        after_scheme
+    };
+    let pathname = pathname.split(['?', '#']).next().unwrap_or_default();
+
+    let decoded = decode_file_url_pathname(pathname);
     create_string_f64(&decoded)
 }
 
 #[no_mangle]
 pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
     let path = get_string_content(path_f64);
+    let path = crate::path::resolve_posix_str(&path);
     let mut encoded = String::new();
     for b in path.bytes() {
         match b {
@@ -58,6 +147,9 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
     let input = get_string_content(input_f64);
+    if input.chars().any(|c| c.is_ascii_whitespace()) {
+        return create_string_f64("");
+    }
     let out = idna::domain_to_ascii(&input).unwrap_or_else(|_| String::new());
     create_string_f64(&out)
 }
@@ -65,6 +157,9 @@ pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
     let input = get_string_content(input_f64);
+    if input.chars().any(|c| c.is_ascii_whitespace()) {
+        return create_string_f64("");
+    }
     let (out, _) = idna::domain_to_unicode(&input);
     create_string_f64(&out)
 }
@@ -182,8 +277,8 @@ fn legacy_format_from_object(obj: *mut ObjectHeader) -> String {
                 let val = crate::object::js_object_get_field_by_name_f64(qobj, val_key);
                 parts.push(format!(
                     "{}={}",
-                    url_encode(&key),
-                    url_encode(&get_string_content(val))
+                    legacy_querystring_escape(&key),
+                    legacy_querystring_escape(&get_string_content(val))
                 ));
             }
             if !parts.is_empty() {
@@ -205,7 +300,13 @@ fn legacy_format_from_object(obj: *mut ObjectHeader) -> String {
 #[no_mangle]
 pub extern "C" fn js_url_format(value: f64, options: f64) -> f64 {
     let Some(obj) = object_from_f64(value) else {
-        return create_string_f64("");
+        let js_value = crate::value::JSValue::from_bits(value.to_bits());
+        if js_value.is_any_string() {
+            let ptr =
+                crate::value::js_get_string_pointer_unified(value) as *mut crate::StringHeader;
+            return create_string_f64(&string_from_header(ptr));
+        }
+        throw_url_format_invalid_arg();
     };
     let href = object_prop_string(obj, "href");
     let mut out = if !href.is_empty() {
@@ -230,9 +331,44 @@ pub extern "C" fn js_url_format(value: f64, options: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_url_legacy_parse(input: f64, parse_query_string: f64) -> f64 {
+pub extern "C" fn js_url_legacy_parse(
+    input: f64,
+    parse_query_string: f64,
+    slashes_denote_host: f64,
+) -> f64 {
     let s = get_string_content(input);
-    let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(&s);
+    let (protocol, mut host, mut hostname, mut port, mut pathname, search, hash) = parse_url(&s);
+    let bool_true_bits = 0x7FFC_0000_0000_0004u64;
+    let slashes_host = slashes_denote_host.to_bits() == bool_true_bits;
+    let protocol_is_null = protocol.is_empty() && slashes_host && s.starts_with("//");
+
+    if protocol_is_null {
+        let rest = pathname.strip_prefix("//").unwrap_or(&pathname);
+        let path_idx = rest.find('/').unwrap_or(rest.len());
+        host = rest[..path_idx].to_string();
+        pathname = if path_idx < rest.len() {
+            rest[path_idx..].to_string()
+        } else {
+            "/".to_string()
+        };
+        hostname = host.clone();
+        if let Some(port_idx) = host.rfind(':') {
+            let potential_port = &host[port_idx + 1..];
+            if !potential_port.is_empty() && potential_port.chars().all(|c| c.is_ascii_digit()) {
+                hostname = host[..port_idx].to_string();
+                port = potential_port.to_string();
+            }
+        }
+    }
+
+    if let Some(percent_idx) = host.find('%') {
+        let invalid_tail = format!("{}{}", &host[percent_idx..], pathname);
+        host.truncate(percent_idx);
+        hostname = host.clone();
+        port.clear();
+        pathname = invalid_tail;
+    }
+
     let mut auth = String::new();
     if let Some(at_idx) = host.rfind('@') {
         auth = host[..at_idx].to_string();
@@ -249,7 +385,7 @@ pub extern "C" fn js_url_legacy_parse(input: f64, parse_query_string: f64) -> f6
             rest
         };
     }
-    let parse_qs = parse_query_string.to_bits() == 0x7FFC_0000_0000_0004u64;
+    let parse_qs = parse_query_string.to_bits() == bool_true_bits;
     let query = if parse_qs {
         let mut map = serde_json::Map::new();
         let raw = search.strip_prefix('?').unwrap_or(&search);
@@ -261,8 +397,13 @@ pub extern "C" fn js_url_legacy_parse(input: f64, parse_query_string: f64) -> f6
     } else {
         serde_json::Value::String(search.strip_prefix('?').unwrap_or(&search).to_string())
     };
+    let protocol_value = if protocol_is_null {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(protocol)
+    };
     json_to_value(serde_json::json!({
-        "protocol": protocol,
+        "protocol": protocol_value,
         "host": host,
         "hostname": hostname,
         "port": port,
