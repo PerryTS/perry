@@ -28,6 +28,27 @@ const FINREG_SHAPE_ID: u32 = 0x7FFF_FE11;
 pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0029;
 pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WeakWrapperKind {
+    WeakRef,
+    FinalizationRegistry,
+    WeakMap,
+    WeakSet,
+}
+
+pub(crate) fn weak_wrapper_kind(obj: *const ObjectHeader) -> Option<WeakWrapperKind> {
+    if obj.is_null() {
+        return None;
+    }
+    match unsafe { (*obj).class_id } {
+        CLASS_ID_WEAKREF => Some(WeakWrapperKind::WeakRef),
+        CLASS_ID_FINALIZATION_REGISTRY => Some(WeakWrapperKind::FinalizationRegistry),
+        CLASS_ID_WEAKMAP => Some(WeakWrapperKind::WeakMap),
+        CLASS_ID_WEAKSET => Some(WeakWrapperKind::WeakSet),
+        _ => None,
+    }
+}
+
 /// The full `util.inspect` body for a weak-collection wrapper, or `None` if
 /// `obj` isn't one. Returning the complete string (not just the class name)
 /// lets WeakMap/WeakSet print Node's `{ <items unknown> }` placeholder — their
@@ -35,15 +56,36 @@ pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
 /// FinalizationRegistry stay `{}`. Without this, WeakMap/WeakSet leaked their
 /// `__perry_wk_entries` storage field (e.g. `{ __perry_wk_entries: [] }`).
 pub(crate) fn weak_wrapper_inspect_label(obj: *const ObjectHeader) -> Option<&'static str> {
-    if obj.is_null() {
-        return None;
+    match weak_wrapper_kind(obj)? {
+        WeakWrapperKind::WeakRef => Some("WeakRef {}"),
+        WeakWrapperKind::FinalizationRegistry => Some("FinalizationRegistry {}"),
+        WeakWrapperKind::WeakMap => Some("WeakMap { <items unknown> }"),
+        WeakWrapperKind::WeakSet => Some("WeakSet { <items unknown> }"),
     }
-    match unsafe { (*obj).class_id } {
-        CLASS_ID_WEAKREF => Some("WeakRef {}"),
-        CLASS_ID_FINALIZATION_REGISTRY => Some("FinalizationRegistry {}"),
-        CLASS_ID_WEAKMAP => Some("WeakMap { <items unknown> }"),
-        CLASS_ID_WEAKSET => Some("WeakSet { <items unknown> }"),
-        _ => None,
+}
+
+pub(crate) fn weak_collection_entries(obj: *const ObjectHeader) -> Vec<(f64, f64)> {
+    match weak_wrapper_kind(obj) {
+        Some(WeakWrapperKind::WeakMap | WeakWrapperKind::WeakSet) => {}
+        _ => return Vec::new(),
+    }
+
+    unsafe {
+        let entries_ptr = entries_array(obj as *mut ObjectHeader);
+        if entries_ptr.is_null() {
+            return Vec::new();
+        }
+        let len = js_array_length(entries_ptr) as usize;
+        let mut entries = Vec::with_capacity(len);
+        for i in 0..len {
+            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
+            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+            if pair_ptr.is_null() {
+                continue;
+            }
+            entries.push((js_array_get_f64(pair_ptr, 0), js_array_get_f64(pair_ptr, 1)));
+        }
+        entries
     }
 }
 
@@ -256,6 +298,36 @@ pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
 }
 
 #[no_mangle]
+pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
+    if crate::array::js_array_is_array(iterable).to_bits() != TAG_TRUE {
+        return map;
+    }
+    let arr_ptr = js_nanbox_get_pointer(iterable) as *const ArrayHeader;
+    if arr_ptr.is_null() {
+        return map;
+    }
+    unsafe {
+        let len = js_array_length(arr_ptr) as usize;
+        for i in 0..len {
+            let pair = js_array_get_f64(arr_ptr, i as u32);
+            if crate::array::js_array_is_array(pair).to_bits() != TAG_TRUE {
+                continue;
+            }
+            let pair_ptr = js_nanbox_get_pointer(pair) as *const ArrayHeader;
+            if pair_ptr.is_null() {
+                continue;
+            }
+            js_weakmap_set(
+                map,
+                js_array_get_f64(pair_ptr, 0),
+                js_array_get_f64(pair_ptr, 1),
+            );
+        }
+    }
+    map
+}
+
+#[no_mangle]
 pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
     let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
     if map_ptr.is_null() {
@@ -393,6 +465,24 @@ pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
         (*obj).class_id = CLASS_ID_WEAKSET;
     }
     obj
+}
+
+#[no_mangle]
+pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
+    if crate::array::js_array_is_array(iterable).to_bits() != TAG_TRUE {
+        return set;
+    }
+    let arr_ptr = js_nanbox_get_pointer(iterable) as *const ArrayHeader;
+    if arr_ptr.is_null() {
+        return set;
+    }
+    unsafe {
+        let len = js_array_length(arr_ptr) as usize;
+        for i in 0..len {
+            js_weakset_add(set, js_array_get_f64(arr_ptr, i as u32));
+        }
+    }
+    set
 }
 
 #[no_mangle]

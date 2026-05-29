@@ -897,6 +897,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // generic extern-call path at lower_call.rs:149.
     module.declare_function("js_weakmap_new", I64, &[]);
     module.declare_function("js_weakset_new", I64, &[]);
+    module.declare_function("js_weakmap_init_iterable", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_weakset_init_iterable", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_weakmap_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_weakmap_get", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_weakmap_has", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -1175,6 +1177,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_object_set_symbol_property",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_object_literal_infer_computed_function_name",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
     );
     module.declare_function("js_object_get_symbol_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);

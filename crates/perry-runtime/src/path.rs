@@ -394,6 +394,38 @@ fn normalize_win32_str(input: &str) -> String {
     format!("{}{}", device, tail)
 }
 
+fn posix_cwd_as_win32_path() -> String {
+    std::env::current_dir()
+        .map(|cwd| cwd.to_string_lossy().replace('/', "\\"))
+        .unwrap_or_else(|_| "\\".to_string())
+}
+
+fn join_win32_paths(base: &str, tail: &str) -> String {
+    if tail.is_empty() {
+        base.to_string()
+    } else if base.ends_with('\\') || base.ends_with('/') {
+        format!("{}{}", base, tail)
+    } else {
+        format!("{}\\{}", base, tail)
+    }
+}
+
+fn win32_resolve_inner(path_str: &str) -> String {
+    let split = split_win32(path_str);
+    if split.is_absolute {
+        return normalize_win32_str(path_str);
+    }
+
+    let cwd = posix_cwd_as_win32_path();
+    let path = if split.prefix.is_empty() {
+        join_win32_paths(&cwd, path_str)
+    } else {
+        let drive_cwd = format!("{}{}", split.prefix, cwd);
+        join_win32_paths(&drive_cwd, split.rest)
+    };
+    normalize_win32_str(&path)
+}
+
 /// Get directory name from path. Per Node spec, the root's dirname is the
 /// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
 /// returns `None` there, which we treat as "stay at root".
@@ -1319,16 +1351,7 @@ pub extern "C" fn js_path_win32_resolve(path_ptr: *const StringHeader) -> *mut S
             Some(s) => s,
             None => return string_to_js(""),
         };
-        let split = split_win32(&path_str);
-        let absolute = if split.is_absolute {
-            normalize_win32_str(&path_str)
-        } else {
-            // Synthesize a C:\-rooted result when called with a purely
-            // relative input. Real-world parity tests always feed an
-            // absolute first segment.
-            normalize_win32_str(&format!("C:\\{}", path_str))
-        };
-        string_to_js(&absolute)
+        string_to_js(&win32_resolve_inner(&path_str))
     }
 }
 
@@ -1494,8 +1517,8 @@ mod glob_tests {
 #[cfg(test)]
 mod win32_normalize_tests {
     use super::{
-        current_dir_as_win32, normalize_win32_str, win32_basename_inner, win32_dirname_inner,
-        win32_to_namespaced_path,
+        current_dir_as_win32, join_win32_paths, normalize_win32_str, posix_cwd_as_win32_path,
+        win32_basename_inner, win32_dirname_inner, win32_resolve_inner, win32_to_namespaced_path,
     };
 
     #[test]
@@ -1570,6 +1593,21 @@ mod win32_normalize_tests {
         assert_eq!(normalize_win32_str("a//b//../b"), "a\\b");
         assert_eq!(normalize_win32_str("/foo/../../../bar"), "\\bar");
         assert_eq!(normalize_win32_str(""), ".");
+    }
+
+    #[test]
+    fn resolve_drive_relative_uses_posix_cwd_as_drive_cwd() {
+        let cwd = posix_cwd_as_win32_path();
+        let drive_cwd = format!("C:{}", cwd);
+        assert_eq!(
+            win32_resolve_inner("C:foo"),
+            normalize_win32_str(&join_win32_paths(&drive_cwd, "foo"))
+        );
+        assert_ne!(win32_resolve_inner("C:foo"), "C:\\C:foo");
+        assert_eq!(
+            win32_resolve_inner("foo"),
+            normalize_win32_str(&join_win32_paths(&cwd, "foo"))
+        );
     }
 
     #[test]
