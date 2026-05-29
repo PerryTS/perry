@@ -506,12 +506,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) \u2014 chain produces wrong output. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/readable-stream-id-properties": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: distinct Readable instances \u2014 same identity or wrong prototype shared. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/transform-piped-twice": {
     "issue": "1545",
     "added": "2026-05-24",
