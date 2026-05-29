@@ -663,6 +663,11 @@ pub(super) fn apply_pkg_and_toml_config(
                 }
                 warn_non_string("ios_client_id", ga);
                 warn_non_string("android_client_id", ga);
+                // #1303 — project-relative search dir for the vendored
+                // optional framework (GoogleSignIn SDK). Consumed by the link
+                // step (`link/mod.rs::resolve_optional_framework_dir`) and the
+                // `perry publish` tarball; validated here only for type.
+                warn_non_string("framework_dir", ga);
                 warn_non_string("server_client_id", ga);
 
                 if let Some(scopes) = ga.get("default_scopes") {

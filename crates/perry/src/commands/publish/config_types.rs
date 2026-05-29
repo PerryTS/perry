@@ -21,6 +21,19 @@ pub(super) struct PerryToml {
     pub(super) audit: Option<AuditConfig>,
     pub(super) verify: Option<VerifyConfig>,
     pub(super) release_notes: Option<std::collections::HashMap<String, String>>,
+    pub(super) google_auth: Option<GoogleAuthConfig>,
+}
+
+/// `[google_auth]` block (#1138 / #1303). Only `framework_dir` matters to
+/// `perry publish` — the client-id keys are consumed at compile time
+/// (`host_config.rs` / `apple_info_plist.rs`). `framework_dir` is a
+/// project-relative path to the vendored optional-framework search dir
+/// (e.g. the GoogleSignIn SDK); publish must force it into the upload
+/// tarball so the worker can link the real SDK. See issue #1303.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub(super) struct GoogleAuthConfig {
+    pub(super) framework_dir: Option<String>,
 }
 
 // #854: deserialized [project] table; not every key is read.

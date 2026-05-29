@@ -405,6 +405,26 @@ compiles and the binary still links, returning a runtime
 symbols. The same `build.rs` opt-in (`-F $DIR` to `swiftc`) must
 gate the bridge's compile so both halves agree.
 
+**Project-relative `framework_dir` (survives `perry publish`).** The
+env var works for local `perry compile`, but `perry publish` uploads
+the project to a remote build worker where the dev's shell env
+doesn't transfer and an absolute local path wouldn't exist anyway.
+For the round-trip, declare the framework search dir **relative to
+the project root** in `perry.toml`:
+
+```toml
+[google_auth]
+framework_dir = "vendor/google-sign-in/frameworks"   # relative to perry.toml
+```
+
+Perry resolves it to an absolute path and exports it as the
+package's `frameworksEnv` before building the wrapper crate — on the
+local machine **and** on the worker — and `perry publish` forces the
+directory into the upload tarball (even though it holds the static
+archive binary, which the default binary-artifact exclusion would
+otherwise drop). Precedence is **explicit env var > `framework_dir`**,
+so existing local setups are unchanged. Issue #1303.
+
 **Contract — static frameworks only.** `-framework` links the
 archive directly; Perry does **not** embed the `.framework` into
 `<app>.app/Frameworks/` or add an `@executable_path/Frameworks`

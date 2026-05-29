@@ -159,6 +159,56 @@ mod native_package_selection_tests {
     }
 }
 
+/// Walk up from the entry `.ts` to the directory holding `perry.toml`.
+/// Mirrors `widget_build::project_root_for` — kept local so the link
+/// module doesn't reach across sibling modules for one path lookup.
+fn find_project_root_for(input: &Path) -> Option<PathBuf> {
+    let mut dir = input.canonicalize().ok()?;
+    for _ in 0..8 {
+        dir = dir.parent()?.to_path_buf();
+        if dir.join("perry.toml").exists() {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+/// Resolve the vendored optional-framework search directory for a native
+/// library that gates an SDK on `frameworks_env` (issue #1303 — e.g.
+/// `@perryts/google-auth`'s `PERRY_GOOGLE_SIGN_IN_FRAMEWORK_DIR`).
+///
+/// Precedence (matches the issue's contract):
+///   1. The `frameworks_env` env var, when set in the process environment
+///      — today's local `perry compile` behavior. Returned verbatim.
+///   2. `perry.toml [google_auth].framework_dir`, resolved relative to the
+///      project root → absolute. This is what survives the `perry publish`
+///      worker round-trip: the dev's shell env doesn't transfer and an
+///      absolute local path wouldn't exist on the worker, but perry.toml +
+///      the project-relative dir are both uploaded with `--project`, so the
+///      worker's `perry compile` re-resolves the same dir.
+///
+/// Returns `None` when neither source yields a path. Callers still check
+/// `is_dir()` before linking, so a stale/misspelled path skips silently
+/// (the wrapper's `#if canImport(...)` fallback keeps the link valid).
+fn resolve_optional_framework_dir(env_name: &str, args_input: &Path) -> Option<PathBuf> {
+    // 1. Explicit env var wins (today's behavior).
+    if let Some(dir) = std::env::var_os(env_name) {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    // 2. Project-relative `perry.toml [google_auth].framework_dir`.
+    let project_root = find_project_root_for(args_input)?;
+    let content = fs::read_to_string(project_root.join("perry.toml")).ok()?;
+    let doc = content.parse::<toml::Table>().ok()?;
+    let rel = doc
+        .get("google_auth")?
+        .as_table()?
+        .get("framework_dir")?
+        .as_str()?;
+    Some(project_root.join(rel))
+}
+
 /// Construct the platform-specific linker command, append every required
 /// argument (object files, libraries, frameworks, system libs, native libs,
 /// geisterhand libs), invoke it, and bail on non-zero status.
@@ -1388,6 +1438,23 @@ pub(super) fn build_and_run_link(
                         }
                     }
 
+                    // #1303 — when the wrapper crate's `build.rs` gates an
+                    // optional vendored SDK on an env var (`frameworks_env`)
+                    // and the dev declared a project-relative `framework_dir`
+                    // in `perry.toml [google_auth]`, export the resolved
+                    // absolute path so `build.rs` opts the real SDK in. This
+                    // fires on the local machine AND on the `perry publish`
+                    // worker (where the dev's shell env doesn't transfer, but
+                    // the uploaded perry.toml + dir do). If the env var is
+                    // already set we re-export the same value — idempotent.
+                    if let Some(env_name) = target_config.frameworks_env.as_deref() {
+                        if let Some(dir) = resolve_optional_framework_dir(env_name, args_input) {
+                            if dir.is_dir() {
+                                cargo_cmd.env(env_name, &dir);
+                            }
+                        }
+                    }
+
                     let cargo_status = cargo_cmd.status()?;
                     if !cargo_status.success() {
                         return Err(anyhow!(
@@ -1477,34 +1544,40 @@ pub(super) fn build_and_run_link(
             //
             // Contract is static frameworks only — `-framework` links the
             // archive directly with no `.app/Frameworks/` embed + rpath.
+            //
+            // #1303 — the search dir resolves from the `frameworks_env` env
+            // var (local) or, when unset, the project-relative
+            // `perry.toml [google_auth].framework_dir` (so a `perry publish`
+            // worker build links the real SDK instead of the stub).
             if let Some(env_name) = target_config.frameworks_env.as_deref() {
                 if !target_config.optional_frameworks.is_empty() {
-                    match std::env::var(env_name) {
-                        Ok(dir) if Path::new(&dir).is_dir() => {
+                    match resolve_optional_framework_dir(env_name, args_input) {
+                        Some(dir) if dir.is_dir() => {
                             cmd.arg("-F").arg(&dir);
                             for framework in &target_config.optional_frameworks {
                                 cmd.arg("-framework").arg(framework);
                             }
                             if let OutputFormat::Text = format {
                                 println!(
-                                    "Linking {} optional framework(s) for {} from ${} ({})",
+                                    "Linking {} optional framework(s) for {} ({})",
                                     target_config.optional_frameworks.len(),
                                     native_lib.module,
-                                    env_name,
-                                    dir
+                                    dir.display()
                                 );
                             }
                         }
-                        Ok(dir) => {
+                        Some(dir) => {
                             if let OutputFormat::Text = format {
                                 println!(
-                                    "Skipping optional frameworks for {}: ${} = {:?} is not a directory",
-                                    native_lib.module, env_name, dir
+                                    "Skipping optional frameworks for {}: {:?} is not a directory",
+                                    native_lib.module,
+                                    dir.display()
                                 );
                             }
                         }
-                        Err(_) => {
-                            // env var unset → silent skip (canImport fallback).
+                        None => {
+                            // Neither env var nor framework_dir → silent skip
+                            // (the wrapper's canImport fallback keeps linking).
                         }
                     }
                 }
@@ -1798,4 +1871,59 @@ pub(super) fn build_and_run_link(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod optional_framework_dir_tests {
+    use super::*;
+
+    /// Lay out a temp project: `<root>/perry.toml` + `<root>/src/main.ts`,
+    /// with the perry.toml `[google_auth]` table set to `toml_body`.
+    /// Returns (tempdir, entry-ts-path).
+    fn scaffold(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("perry.toml"), toml_body).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let entry = src.join("main.ts");
+        fs::write(&entry, "export {}\n").unwrap();
+        (dir, entry)
+    }
+
+    #[test]
+    fn resolves_framework_dir_relative_to_project_root() {
+        let (dir, entry) =
+            scaffold("[google_auth]\nframework_dir = \"vendor/google-sign-in/frameworks\"\n");
+        // Use a uniquely-named env var that is guaranteed unset.
+        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_A";
+        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
+        // Compare against the canonicalized root — `find_project_root_for`
+        // canonicalizes the entry, so the resolved path is symlink-resolved
+        // (e.g. /var/folders → /private/var on macOS).
+        assert_eq!(
+            resolved,
+            dir.path()
+                .canonicalize()
+                .unwrap()
+                .join("vendor/google-sign-in/frameworks")
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_framework_dir_key() {
+        let (_dir, entry) = scaffold("[google_auth]\nios_client_id = \"abc\"\n");
+        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_B";
+        assert!(resolve_optional_framework_dir(env_name, &entry).is_none());
+    }
+
+    #[test]
+    fn env_var_takes_precedence_over_perry_toml() {
+        let (_dir, entry) = scaffold("[google_auth]\nframework_dir = \"vendor/from-toml\"\n");
+        // Unique name so we don't race other tests sharing process env.
+        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_SET_C";
+        std::env::set_var(env_name, "/absolute/from/env");
+        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
+        std::env::remove_var(env_name);
+        assert_eq!(resolved, PathBuf::from("/absolute/from/env"));
+    }
 }

@@ -67,6 +67,34 @@ pub(crate) fn create_project_tarball_with_excludes(
     project_dir: &Path,
     extra_excludes: &[String],
 ) -> Result<Vec<u8>> {
+    create_project_tarball(project_dir, extra_excludes, &[])
+}
+
+/// As [`create_project_tarball_with_excludes`], but `force_include_dirs`
+/// (absolute paths) are packed verbatim — files under them bypass
+/// [`should_exclude_file`]. Issue #1303: a vendored optional-framework dir
+/// (e.g. the GoogleSignIn SDK declared via `perry.toml [google_auth]
+/// framework_dir`) contains the static archive binary (extension-less, often
+/// >1 MB) and would otherwise be dropped, leaving the worker to link the
+/// no-SDK stub.
+pub(crate) fn create_project_tarball(
+    project_dir: &Path,
+    extra_excludes: &[String],
+    force_include_dirs: &[PathBuf],
+) -> Result<Vec<u8>> {
+    // Force-include dirs are matched by absolute-path prefix; canonicalize
+    // so a relative/`./`-prefixed input still matches the walked paths.
+    let force_roots: Vec<PathBuf> = force_include_dirs
+        .iter()
+        .filter_map(|d| d.canonicalize().ok())
+        .collect();
+    let is_force_included = |path: &Path| -> bool {
+        path.canonicalize()
+            .ok()
+            .map(|abs| force_roots.iter().any(|r| abs.starts_with(r)))
+            .unwrap_or(false)
+    };
+
     let buf = Vec::new();
     let encoder = GzEncoder::new(buf, Compression::default());
     let mut ar = tar::Builder::new(encoder);
@@ -124,7 +152,7 @@ pub(crate) fn create_project_tarball_with_excludes(
         }
 
         if path.is_file() {
-            if should_exclude_file(path) {
+            if should_exclude_file(path) && !is_force_included(path) {
                 continue;
             }
             ar.append_path_with_name(path, relative)?;
@@ -183,4 +211,57 @@ pub(crate) fn create_project_tarball_with_excludes(
     ar.finish()?;
     let encoder = ar.into_inner()?;
     Ok(encoder.finish()?)
+}
+
+#[cfg(test)]
+mod force_include_tests {
+    use super::*;
+
+    /// Collect the relative paths packed into a gzipped tarball.
+    fn tar_entries(bytes: &[u8]) -> Vec<String> {
+        let dec = flate2::read::GzDecoder::new(bytes);
+        let mut ar = tar::Archive::new(dec);
+        ar.entries()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn force_include_keeps_otherwise_excluded_framework_binary() {
+        let proj = tempfile::tempdir().unwrap();
+        // A vendored static framework binary: extension-less and >1 MB,
+        // which `should_exclude_file` drops by default.
+        let fw = proj
+            .path()
+            .join("vendor/google-sign-in/frameworks/GoogleSignIn.framework");
+        fs::create_dir_all(&fw).unwrap();
+        let binary = fw.join("GoogleSignIn");
+        fs::write(&binary, vec![0u8; 2 * 1024 * 1024]).unwrap();
+        // A normal source file so the tarball is never empty.
+        fs::write(proj.path().join("index.ts"), "export {}\n").unwrap();
+
+        // Without force-include: the binary is dropped.
+        let plain = create_project_tarball(proj.path(), &[], &[]).unwrap();
+        let plain_entries = tar_entries(&plain);
+        assert!(
+            !plain_entries
+                .iter()
+                .any(|p| p.ends_with("GoogleSignIn.framework/GoogleSignIn")),
+            "binary should be excluded by default, got {plain_entries:?}"
+        );
+
+        // With force-include: the binary survives.
+        let fw_dir = proj.path().join("vendor/google-sign-in/frameworks");
+        let forced =
+            create_project_tarball(proj.path(), &[], std::slice::from_ref(&fw_dir)).unwrap();
+        let forced_entries = tar_entries(&forced);
+        assert!(
+            forced_entries
+                .iter()
+                .any(|p| p.ends_with("GoogleSignIn.framework/GoogleSignIn")),
+            "force-included framework binary should be packed, got {forced_entries:?}"
+        );
+    }
 }

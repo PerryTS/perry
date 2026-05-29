@@ -35,7 +35,7 @@ pub(crate) use saved_config::{
     save_config, AndroidSavedConfig, AppleSavedConfig, BetaConfig, HarmonyosSavedConfig,
     IosSavedConfig, PerryConfig,
 };
-pub(crate) use tarball::create_project_tarball_with_excludes;
+pub(crate) use tarball::{create_project_tarball, create_project_tarball_with_excludes};
 
 // Sibling-only items used by run_async and tests.
 use config_types::PerryToml;
@@ -1356,7 +1356,21 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         .as_ref()
         .and_then(|p| p.exclude.clone())
         .unwrap_or_default();
-    let tarball = create_project_tarball_with_excludes(&project_dir, &publish_excludes)
+
+    // #1303 — force the vendored optional-framework dir
+    // (`[google_auth].framework_dir`, project-relative) into the upload set
+    // so the remote worker has the SDK binaries. Without this, the static
+    // archive (extension-less, usually >1 MB) is dropped by the default
+    // binary-artifact exclusion and the worker links the no-SDK stub.
+    let force_include_dirs: Vec<PathBuf> = config
+        .google_auth
+        .as_ref()
+        .and_then(|ga| ga.framework_dir.as_deref())
+        .map(|rel| project_dir.join(rel))
+        .filter(|p| p.is_dir())
+        .into_iter()
+        .collect();
+    let tarball = create_project_tarball(&project_dir, &publish_excludes, &force_include_dirs)
         .context("Failed to create project tarball")?;
 
     let tarball_size = tarball.len();
