@@ -60,6 +60,17 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
     }
 }
 
+/// #1475 — safe-area insets. macOS windows have no status bar / home
+/// indicator, so report all-zero insets. Keeps the symbol present so
+/// `getSafeAreaInsets()` links on the host build.
+#[no_mangle]
+pub extern "C" fn perry_system_get_safe_area_insets() -> f64 {
+    extern "C" {
+        fn perry_safe_area_insets_make(top: f64, right: f64, bottom: f64, left: f64) -> f64;
+    }
+    unsafe { perry_safe_area_insets_make(0.0, 0.0, 0.0, 0.0) }
+}
+
 // ---- Network reachability (issue #582) ----
 #[no_mangle]
 pub extern "C" fn perry_system_network_get_status(callback: f64) {

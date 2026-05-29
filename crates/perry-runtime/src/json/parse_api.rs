@@ -291,6 +291,8 @@ pub(crate) enum TapeMode {
 /// exercise every stringify / equality / compare consumer arm
 /// across both representations. Cached so the per-parse-call cost
 /// is one relaxed atomic load.
+// #854: SSO-emission gate retained for the JSON parse fast path
+#[allow(dead_code)]
 pub(crate) fn sso_emit_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();

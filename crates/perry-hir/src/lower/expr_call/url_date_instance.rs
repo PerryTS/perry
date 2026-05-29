@@ -133,6 +133,7 @@ pub(super) fn try_url_date_weakref_instance(
                         | Expr::BufferAlloc { .. }
                         | Expr::BufferAllocUnsafe(_)
                         | Expr::BufferConcat(_)
+                        | Expr::BufferConcatWithLength { .. }
                 ) {
                     return Ok(Ok(Expr::Call {
                         callee: Box::new(Expr::PropertyGet {

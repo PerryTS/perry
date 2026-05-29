@@ -124,6 +124,8 @@ fn stream_dynamic_instanceof_follows_node_stream_inheritance() {
     let passthrough_ctor =
         crate::object::bound_native_callable_export_value("stream", "PassThrough");
     let stream_ctor = crate::object::bound_native_callable_export_value("stream", "Stream");
+    let event_emitter_ctor =
+        crate::object::bound_native_callable_export_value("events", "EventEmitter");
 
     let transform = js_node_stream_transform_new(f64::from_bits(TAG_UNDEFINED));
     assert_eq!(
@@ -148,6 +150,14 @@ fn stream_dynamic_instanceof_follows_node_stream_inheritance() {
     );
     assert_eq!(
         crate::object::js_instanceof_dynamic(transform, stream_ctor).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        crate::object::js_instanceof_dynamic(transform, event_emitter_ctor).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(
+        crate::object::js_instanceof(transform, 0xFFFF0076).to_bits(),
         TAG_TRUE
     );
     assert_eq!(

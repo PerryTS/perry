@@ -75,7 +75,7 @@ pub use self::push_pop::{
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{
     js_array_includes_f64, js_array_includes_jsvalue, js_array_indexOf_f64,
-    js_array_indexOf_jsvalue,
+    js_array_indexOf_jsvalue, js_array_last_index_of_jsvalue,
 };
 pub use self::sort::{js_array_sort_default, js_array_sort_with_comparator};
 pub use self::splice_slice::{js_array_slice, js_array_splice};

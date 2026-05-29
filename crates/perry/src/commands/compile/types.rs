@@ -19,6 +19,9 @@ pub struct CompileResult {
     pub output_path: PathBuf,
     pub target: String,
     pub bundle_id: Option<String>,
+    // #854: set by every target builder to record library-output shape; not
+    // currently read back, but part of the CompileResult contract.
+    #[allow(dead_code)]
     pub is_dylib: bool,
     /// V2.2 codegen cache stats from this build, when the cache was enabled.
     /// `None` when disabled (`--no-cache`, `PERRY_NO_CACHE=1`, or bitcode-link mode).
@@ -342,6 +345,9 @@ pub struct JsModule {
     /// Source code of the JS module
     pub source: String,
     /// Module specifier used in imports (e.g., "lodash", "./utils.js")
+    // #854: descriptive field on the JsModule record; not read on the
+    // current V8-free path but kept for the module-graph contract.
+    #[allow(dead_code)]
     pub specifier: String,
 }
 
@@ -363,6 +369,9 @@ pub struct CompilationContext {
     /// JavaScript modules to interpret via V8
     pub js_modules: BTreeMap<String, JsModule>,
     /// Mapping from import specifiers to resolved paths
+    // #854: populated import-graph metadata on the compilation context;
+    // not read on the current path but part of the context contract.
+    #[allow(dead_code)]
     pub import_map: BTreeMap<String, PathBuf>,
     /// Whether the WebAssembly host runtime is needed (codegen detected
     /// `WebAssembly.*` usage OR the user passed `--enable-wasm-runtime`).
@@ -439,6 +448,9 @@ pub struct CompilationContext {
     /// Cache for resolve_import results: (import_source, importer_dir) -> Option<(resolved_path, kind)>
     pub resolve_cache: HashMap<(String, PathBuf), Option<(PathBuf, ModuleKind)>>,
     /// Cache for find_node_modules results: start_dir -> Option<node_modules_dir>
+    // #854: resolver cache field on the compilation context; not read on the
+    // current path but kept as part of the context contract.
+    #[allow(dead_code)]
     pub node_modules_cache: HashMap<PathBuf, Option<PathBuf>>,
     /// Whether geisterhand (in-process input fuzzer) is enabled
     pub needs_geisterhand: bool,
@@ -597,6 +609,56 @@ pub struct CompilationContext {
     /// makes the dangerous "compile this random npm package into the
     /// binary" surface a two-key opt-in.
     pub allow_compile_packages: Vec<String>,
+    /// #2309: tree-shaking / dead-code elimination enabled for this build.
+    /// Off (default) ⇒ behaviour is byte-identical to pre-#2309: no refusal
+    /// deferral, no reachability prune, no `process.env` define-folding.
+    /// Sources (any enables): `PERRY_TREE_SHAKE=1` env, or
+    /// `perry.experiments.treeShake: true` in the host `package.json`.
+    pub tree_shake: bool,
+    /// #2309: refusals (`new Function` RuntimeUnknown, #463 unimplemented APIs)
+    /// recorded while lowering `node_modules` modules under tree-shaking,
+    /// instead of hard-erroring. After reachability is computed, any whose
+    /// module survived the prune is re-raised; the rest are dropped silently
+    /// (the offending code never ships). Tagged with the canonical module path
+    /// by the collect driver after each lower.
+    pub deferred_refusals: Vec<perry_hir::DeferredRefusal>,
+    /// #2309: cache of each package's `sideEffects` field, keyed by the
+    /// package directory (the dir containing the owning `package.json`).
+    /// Drives whether a bare side-effect import edge of a reachable module may
+    /// be dropped during the prune.
+    pub side_effects_cache: HashMap<PathBuf, SideEffects>,
+    /// #2309 (Stage 2): build-time `process.env.X` substitutions, esbuild
+    /// `define`-style. Read from `perry.define` in the host `package.json`
+    /// only (same trust boundary as `compilePackages`), plus an implicit
+    /// `NODE_ENV → "production"` default applied to `node_modules` code unless
+    /// overridden. Keyed by the full `process.env.<NAME>` string.
+    pub define: HashMap<String, DefineValue>,
+}
+
+/// #2309: a package's declared `sideEffects` (package.json). `Unknown` (the
+/// default for an absent/unparseable field) is treated as side-effectful —
+/// the conservative choice that never drops code.
+#[derive(Debug, Clone)]
+pub enum SideEffects {
+    /// `"sideEffects": false` — no module in the package has observable
+    /// top-level side effects; bare side-effect import edges are droppable.
+    None,
+    /// `"sideEffects": true`, absent, or unparseable — treat every module as
+    /// side-effectful (conservative).
+    Unknown,
+    /// `"sideEffects": ["glob", ...]` — only files matching a glob have side
+    /// effects; others are droppable. Globs are relative to the package dir.
+    Globs(Vec<String>),
+}
+
+/// #2309 (Stage 2): a build-time `define` value. Parsed from `perry.define`
+/// (JSON value) into a folded HIR literal.
+#[derive(Debug, Clone)]
+pub enum DefineValue {
+    Str(String),
+    Bool(bool),
+    Number(f64),
+    Null,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -658,6 +720,10 @@ impl CompilationContext {
             allow_dynamic_hosts: false,
             allow_native_library: Vec::new(),
             allow_compile_packages: Vec::new(),
+            tree_shake: false,
+            deferred_refusals: Vec::new(),
+            side_effects_cache: HashMap::new(),
+            define: HashMap::new(),
         }
     }
 }
@@ -668,6 +734,9 @@ pub struct NativeLibraryManifest {
     /// Package module name (e.g., "@honeide/editor")
     pub module: String,
     /// Resolved package directory path
+    // #854: set when parsing a native-library manifest; not read back yet
+    // but part of the NativeLibraryManifest record.
+    #[allow(dead_code)]
     pub package_dir: PathBuf,
     /// `perry.nativeLibrary.abiVersion` — semver range the wrapper
     /// declares it was built against. Validated against the bundled

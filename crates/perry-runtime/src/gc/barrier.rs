@@ -796,6 +796,8 @@ pub(crate) fn runtime_store_external_jsvalue_slot(
     runtime_store_external_heap_word_slot(parent_user, slot_addr, value_bits);
 }
 
+// #854: GC write-barrier external-slot store-with-layout path
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn runtime_store_external_jsvalue_slot_with_layout(
     parent_user: usize,

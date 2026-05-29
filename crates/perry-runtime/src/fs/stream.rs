@@ -187,6 +187,8 @@ pub(crate) extern "C" fn write_stream_write_impl(closure: *const ClosureHeader, 
 
 /// `ws.end()` — flush the buffer to disk, mark finished, and fire
 /// any pending finish listener.
+// #854: fs write-stream end helper retained for the stream subsystem
+#[allow(dead_code)]
 pub(crate) extern "C" fn write_stream_end0_impl(closure: *const ClosureHeader) -> f64 {
     write_stream_end_internal(closure, None)
 }

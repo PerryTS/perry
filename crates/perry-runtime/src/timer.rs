@@ -307,6 +307,48 @@ pub extern "C" fn js_timer_refresh(timer_id: i64) {
     }
 }
 
+/// Issue #2013 — validate the first argument of `setTimeout`/`setInterval`
+/// /`setImmediate` so a non-callable value throws Node's
+/// `TypeError [ERR_INVALID_ARG_TYPE]` shape instead of segfaulting on
+/// the downstream pointer-deref of the unboxed handle. `value` is the
+/// caller's NaN-boxed JS value (codegen passes the full f64 before the
+/// `unbox_to_i64` that the existing FFIs require). `fn_name` is the
+/// JS function name reported in the error message
+/// (`"setTimeout"` / `"setInterval"` / `"setImmediate"`).
+///
+/// Returns the raw closure pointer (extracted via `unbox_to_i64`) for
+/// the callable case so the codegen can pass it straight to the
+/// scheduling entry without a second unbox.
+#[no_mangle]
+pub unsafe extern "C" fn js_timer_validate_callback(value: f64, fn_name_idx: i32) -> i64 {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) == POINTER_TAG {
+        let ptr = (bits & POINTER_MASK) as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return ptr as i64;
+        }
+    }
+    // 0 = setTimeout, 1 = setInterval, 2 = setImmediate, anything
+    // else falls back to the generic "callback" wording.
+    let fn_name: &str = match fn_name_idx {
+        0 => "setTimeout",
+        1 => "setInterval",
+        2 => "setImmediate",
+        _ => "timer",
+    };
+    let message = format!(
+        "The \"callback\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    // `setTimeout` / `setInterval` / `setImmediate` all surface the
+    // bad-callback case as ERR_INVALID_ARG_TYPE — the message body
+    // varies a touch but the code does not.
+    let _ = fn_name;
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
 /// JS-style setTimeout that takes a callback function and delay
 /// The callback is a closure pointer that will be called with no arguments
 /// Returns a timer ID
