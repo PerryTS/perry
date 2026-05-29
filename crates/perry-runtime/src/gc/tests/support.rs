@@ -40,6 +40,17 @@ pub(super) fn test_heap_child_slot_count(user_ptr: *mut u8) -> usize {
     }
 }
 
+pub(super) fn assert_marked_user_ptr(ptr: usize, label: &str) {
+    unsafe {
+        let header = header_from_user_ptr(ptr as *const u8);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "{label} should be marked"
+        );
+    }
+}
+
 pub(super) fn malloc_user_ptr_tracked(ptr: *mut u8) -> bool {
     let header = unsafe { header_from_user_ptr(ptr) };
     MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header))

@@ -452,6 +452,14 @@ pub(crate) fn test_seed_parse_roots(value: f64, key_ptr: *const StringHeader) {
 }
 
 #[cfg(test)]
+pub(crate) fn test_clear_parse_roots() {
+    PARSE_ROOTS.with(|r| r.borrow_mut().clear());
+    PARSE_KEY_CACHE.with(|c| c.borrow_mut().clear());
+    PARSE_KEY_RING.with(|ring| ring.borrow_mut().clear());
+    PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+#[cfg(test)]
 pub(crate) fn test_parse_roots_snapshot() -> (u64, usize) {
     let value_bits =
         PARSE_ROOTS.with(|r| r.borrow().first().copied().map(f64::to_bits).unwrap_or(0));
