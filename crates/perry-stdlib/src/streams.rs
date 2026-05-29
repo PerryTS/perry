@@ -2161,6 +2161,7 @@ mod tests {
                     pull_cb: 0,
                     cancel_cb: 0,
                     high_water_mark: 1.0,
+                    strategy_size_cb: 0,
                     is_byte_stream: false,
                     pulling: false,
                     started: false,
