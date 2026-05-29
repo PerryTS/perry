@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1512 entries across 83 modules.
+Total: 1513 entries across 83 modules.
 
 ## Modules
 
@@ -258,6 +258,7 @@ Total: 1512 entries across 83 modules.
 - `btoa` — module
 - `byteLength` — module
 - `concat` — module
+- `copyBytesFrom` — module
 - `from` — module
 - `isAscii` — module
 - `isBuffer` — module

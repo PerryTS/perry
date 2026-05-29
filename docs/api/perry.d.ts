@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1512 entries across 83 modules
+// Coverage: 1513 entries across 83 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -195,6 +195,8 @@ declare module "buffer" {
   export function byteLength(...args: any[]): any;
   /** stdlib */
   export function concat(...args: any[]): any;
+  /** stdlib */
+  export function copyBytesFrom(...args: any[]): any;
   /** stdlib */
   export function from(...args: any[]): any;
   /** stdlib */
