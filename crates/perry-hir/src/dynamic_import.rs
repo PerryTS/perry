@@ -361,7 +361,7 @@ fn flatten_into<'a, F>(
     }
 }
 
-/// Issue #100 / #1725: collect every `Stmt::Let { mutable: false, init: Some(_), .. }`
+/// Issue #100 / #1725 / #1674: collect every `Stmt::Let { init: Some(_), .. }`
 /// reachable in the module into a `local_id → init_expr` map — the module-init
 /// body, every function / method / constructor body, and (descending) nested
 /// closure bodies.
@@ -383,12 +383,13 @@ fn flatten_into<'a, F>(
 /// resolves at the import site. `LocalId`s are module-unique, so a single flat
 /// id→init map across all scopes is unambiguous.
 ///
-/// Mutable bindings (`let`, `var`, reassigned-anywhere consts) are excluded —
-/// only `const x = <single_init>` shapes participate. This matches the spec's
-/// "single SSA def to a resolvable expression" constraint without a full SSA
-/// pass: TypeScript-style `const` already guarantees a single assignment, and an
-/// occasional later `LocalSet` (an erased TS reassignment that survived to HIR)
-/// invalidates the entry below so it falls back to Unresolved.
+/// Both `const` and `let`/`var` single-init bindings participate, but any
+/// binding that is *reassigned* anywhere (a later `LocalSet`) is excluded by the
+/// mutation scan below — so the effective constraint is the spec's "single SSA
+/// def to a resolvable expression" without a full SSA pass. `const` guarantees
+/// this by construction; a `let p = <init>` that is never written again is
+/// single-assignment in practice and resolves identically (#1674). A genuinely
+/// mutated binding falls back to Unresolved.
 pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap<u32, Expr> {
     use std::collections::HashMap;
     let mut consts: HashMap<u32, Expr> = HashMap::new();
@@ -471,14 +472,17 @@ pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap
 fn collect_const_locals_stmt(stmt: &Stmt, out: &mut std::collections::HashMap<u32, Expr>) {
     match stmt {
         Stmt::Let {
-            id,
-            init: Some(e),
-            mutable,
-            ..
+            id, init: Some(e), ..
         } => {
-            if !*mutable {
-                out.insert(*id, e.clone());
-            }
+            // #1674: collect both `const` and never-reassigned `let`/`var`
+            // bindings (regardless of the `mutable` flag). A `let p = <expr>`
+            // that is never written again is single-assignment in practice —
+            // `collect_module_const_locals`'s mutation scan removes any id that
+            // later receives a `LocalSet`, so a genuinely reassigned binding
+            // still falls back to Unresolved. This lets a path bound to a
+            // resolvable init resolve, e.g.
+            // `let p = cond ? './a.ts' : './b.ts'; await import(p)`.
+            out.insert(*id, e.clone());
             collect_const_locals_expr(e, out);
         }
         Stmt::Let { init: None, .. } => {}
@@ -802,10 +806,11 @@ pub fn resolve_import_path_with_consts(
                 resolve_import_path_with_consts(init, consts, visiting)
             } else {
                 Resolution::Unresolved(
-                    "path argument references a binding that is not a module-level \
-                     const initialized to a literal (only string literals, ternaries, \
-                     template literals over const locals, and the module-level consts \
-                     themselves are supported)"
+                    "path argument references a binding that is not statically \
+                     resolvable to a literal (supported: string literals, ternaries, \
+                     template literals over resolvable locals, and `const`/never-\
+                     reassigned `let` bindings initialized to a resolvable value; a \
+                     binding reassigned anywhere falls back here)"
                         .to_string(),
                 )
             };
@@ -1101,6 +1106,60 @@ mod tests {
         let consts = collect_module_const_locals(&m);
         assert!(consts.contains_key(&1));
         assert!(!consts.contains_key(&2));
+    }
+
+    #[test]
+    fn collect_includes_unreassigned_let_but_drops_reassigned() {
+        // #1674: a `let` (mutable) that is never reassigned resolves like a
+        // const; a reassigned one still falls back to Unresolved.
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 1,
+            name: "stableLet".into(),
+            ty: perry_types::Type::String,
+            mutable: true,
+            init: Some(Expr::String("./a.ts".into())),
+        });
+        m.init.push(Stmt::Let {
+            id: 2,
+            name: "reassignedLet".into(),
+            ty: perry_types::Type::String,
+            mutable: true,
+            init: Some(Expr::String("./b.ts".into())),
+        });
+        m.init.push(Stmt::Expr(Expr::LocalSet(
+            2,
+            Box::new(Expr::String("./c.ts".into())),
+        )));
+        let consts = collect_module_const_locals(&m);
+        assert!(matches!(consts.get(&1), Some(Expr::String(s)) if s == "./a.ts"));
+        assert!(!consts.contains_key(&2));
+    }
+
+    #[test]
+    fn resolve_unreassigned_let_ternary_union() {
+        // The #1674 acceptance shape: `let p = cond ? './a.ts' : './b.ts'`.
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "p".into(),
+            ty: perry_types::Type::String,
+            mutable: true,
+            init: Some(Expr::Conditional {
+                condition: Box::new(Expr::Bool(true)),
+                then_expr: Box::new(Expr::String("./a.ts".into())),
+                else_expr: Box::new(Expr::String("./b.ts".into())),
+            }),
+        });
+        let consts = collect_module_const_locals(&m);
+        let mut visiting = std::collections::HashSet::new();
+        match resolve_import_path_with_consts(&Expr::LocalGet(5), &consts, &mut visiting) {
+            Resolution::Set(mut v) => {
+                v.sort();
+                assert_eq!(v, vec!["./a.ts", "./b.ts"]);
+            }
+            Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+        }
     }
 
     #[test]
