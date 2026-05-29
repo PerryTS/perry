@@ -56,6 +56,15 @@ pub extern "C" fn js_set_native_zlib_dispatch(func: JsNativeZlibDispatchFn) {
     JS_NATIVE_ZLIB_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the node:http/https/http2 server-factory dispatcher. Registered by
+/// perry-stdlib at startup (under `external-http-server-pump`) so a captured /
+/// aliased `createServer` reaches the perry-ext-http-server impls, which this
+/// crate can't call directly. Stays null when the http ext crate isn't linked. (#2533)
+#[no_mangle]
+pub extern "C" fn js_set_native_http_dispatch(func: JsNativeHttpDispatchFn) {
+    JS_NATIVE_HTTP_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the native module JS property loader (called by perry-jsruntime)
 /// This callback loads a native module via V8 and gets a property from it.
 #[no_mangle]

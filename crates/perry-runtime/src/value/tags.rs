@@ -120,6 +120,16 @@ pub(crate) type JsNativeCryptoDispatchFn =
 /// stdlib zlib FFIs since this crate cannot call them directly.
 pub(crate) type JsNativeZlibDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// node:http / node:https / node:http2 server-factory dispatcher (registered
+/// by perry-stdlib under the `external-http-server-pump` feature, which is
+/// enabled whenever a program imports one of those modules). Lets a captured /
+/// aliased `createServer` (`const cs = createServer; cs(handler)`, or
+/// `@hono/node-server`'s `const createServer = options.createServer ||
+/// createServerHTTP`) reach the perry-ext-http-server impls. Unlike crypto/zlib
+/// it also takes the module name so one callback can route http vs https vs
+/// http2. Stays null when the http ext crate isn't linked. (#2533)
+pub(crate) type JsNativeHttpDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const u8, usize, *const f64, usize) -> f64;
 
 // ----- JS handle dispatch atomics (shared between handle.rs and consumers) -----
 
@@ -134,3 +144,4 @@ pub static JS_NEW_FROM_HANDLE_V8: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_
 pub static JS_HANDLE_TYPEOF: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_CRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
