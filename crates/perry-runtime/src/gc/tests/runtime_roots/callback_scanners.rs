@@ -4,7 +4,7 @@ use super::*;
 fn test_map_set_foreach_runtime_handles_survive_callback_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let callback = crate::closure::js_closure_alloc(test_foreach_force_minor_gc as *const u8, 0);
     let callback_scope = RuntimeHandleScope::new();
@@ -45,7 +45,7 @@ fn test_map_set_foreach_runtime_handles_survive_callback_copied_minor_gc() {
 #[test]
 fn test_json_reviver_runtime_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
 
     let input = br#"{"a":[{"b":"c"}],"d":1}"#;
@@ -96,7 +96,7 @@ fn test_geisterhand_callback_then_json_reviver_copied_minor_gc() {
         assert_moved_callable_closure(bits, original);
     }
 
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     let input = br#"{"a":[{"b":"c"}],"d":1}"#;
     let setup_scope = RuntimeHandleScope::new();
@@ -131,7 +131,7 @@ fn test_geisterhand_callback_then_json_reviver_copied_minor_gc() {
 fn test_json_reviver_treats_closure_property_as_leaf_after_copied_minor_gc() {
     TEST_REVIVER_CLOSURE_VISITS.with(|visits| visits.set(0));
     let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let scope = RuntimeHandleScope::new();
     let obj = crate::object::js_object_alloc(0, 1);
@@ -194,7 +194,7 @@ fn test_json_reviver_treats_closure_property_as_leaf_after_copied_minor_gc() {
 fn test_json_tape_eager_materialization_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let object_input = br#"{"a":[{"b":"c"}],"d":1}"#;
     let object_tape = crate::json_tape::build_tape(object_input).unwrap();
@@ -254,7 +254,7 @@ unsafe fn test_alloc_lazy_json_array(input: &[u8]) -> *mut crate::json_tape::Laz
 fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let input = br#"["lazy-alpha-long","lazy-beta-long"]"#;
     let hdr = {
@@ -298,7 +298,7 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
 fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let input = br#"[{"id":0},{"id":1},{"id":2},{"id":3}]"#;
     let hdr = unsafe { test_alloc_lazy_json_array(input) };
@@ -344,7 +344,7 @@ fn test_promise_then_and_finally_handles_survive_setup_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     activate_malloc_registry_for_tests();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
 
     let scope = RuntimeHandleScope::new();
@@ -405,7 +405,7 @@ fn test_promise_combinator_setup_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     activate_malloc_registry_for_tests();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
 
     let scope = RuntimeHandleScope::new();
@@ -475,7 +475,7 @@ fn test_promise_contexts_rekey_live_and_drop_dead_from_space_after_copied_minor(
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     activate_malloc_registry_for_tests();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
     crate::promise::test_clear_promise_scanner_roots();
 
@@ -566,7 +566,7 @@ fn test_native_async_completion_token_roots_survive_copied_minor_gc() {
 #[test]
 fn test_microtask_dispatch_handles_survive_callback_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
 
     let scope = RuntimeHandleScope::new();
