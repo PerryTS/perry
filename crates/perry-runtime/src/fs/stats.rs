@@ -52,14 +52,129 @@ pub(crate) fn bigint_i64_value(value: i64) -> f64 {
 //   - 0xFE5C: regular Stats (numeric fields)
 //   - 0xFE5D: bigint Stats (adds *Ns fields)
 //
-// Field order MUST match the order writes are emitted below.
+// Field order MUST match the order writes are emitted below. The Date aliases
+// live in hidden slots after the enumerable fields and are exposed through
+// class-level getters/setters below.
 pub(crate) const STATS_KEYS_REGULAR: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
-pub(crate) const STATS_REGULAR_COUNT: u32 = 17;
+pub(crate) const STATS_REGULAR_COUNT: u32 = 21;
 pub(crate) const STATS_REGULAR_CLASS_ID: u32 = 0xFFFF_0070;
 
 pub(crate) const STATS_KEYS_BIGINT: &[u8] = b"isFile\0isDirectory\0isSymbolicLink\0size\0atimeMs\0mtimeMs\0ctimeMs\0birthtimeMs\0atimeNs\0mtimeNs\0ctimeNs\0birthtimeNs\0mode\0uid\0gid\0nlink\0dev\0rdev\0blksize\0ino\0blocks\0";
-pub(crate) const STATS_BIGINT_COUNT: u32 = 21;
+pub(crate) const STATS_BIGINT_COUNT: u32 = 25;
 pub(crate) const STATS_BIGINT_CLASS_ID: u32 = 0xFFFF_0071;
+
+const REGULAR_DATE_SLOT_BASE: u32 = 17;
+const BIGINT_DATE_SLOT_BASE: u32 = 21;
+
+fn stats_date_slot(
+    this_value: f64,
+    offset: u32,
+) -> Option<(*mut crate::object::ObjectHeader, u32)> {
+    let value = crate::value::JSValue::from_bits(this_value.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let obj = value.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    unsafe {
+        match (*obj).class_id {
+            STATS_REGULAR_CLASS_ID => Some((obj, REGULAR_DATE_SLOT_BASE + offset)),
+            STATS_BIGINT_CLASS_ID => Some((obj, BIGINT_DATE_SLOT_BASE + offset)),
+            _ => None,
+        }
+    }
+}
+
+fn stats_date_get(this_value: f64, offset: u32) -> f64 {
+    if let Some((obj, slot)) = stats_date_slot(this_value, offset) {
+        return f64::from_bits(crate::object::js_object_get_field(obj, slot).bits());
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn stats_date_set(this_value: f64, offset: u32, value: f64) -> f64 {
+    if let Some((obj, slot)) = stats_date_slot(this_value, offset) {
+        crate::object::js_object_set_field_f64(obj, slot, value);
+    }
+    value
+}
+
+extern "C" fn stats_atime_getter(this_value: f64) -> f64 {
+    stats_date_get(this_value, 0)
+}
+
+extern "C" fn stats_mtime_getter(this_value: f64) -> f64 {
+    stats_date_get(this_value, 1)
+}
+
+extern "C" fn stats_ctime_getter(this_value: f64) -> f64 {
+    stats_date_get(this_value, 2)
+}
+
+extern "C" fn stats_birthtime_getter(this_value: f64) -> f64 {
+    stats_date_get(this_value, 3)
+}
+
+extern "C" fn stats_atime_setter(this_value: f64, value: f64) -> f64 {
+    stats_date_set(this_value, 0, value)
+}
+
+extern "C" fn stats_mtime_setter(this_value: f64, value: f64) -> f64 {
+    stats_date_set(this_value, 1, value)
+}
+
+extern "C" fn stats_ctime_setter(this_value: f64, value: f64) -> f64 {
+    stats_date_set(this_value, 2, value)
+}
+
+extern "C" fn stats_birthtime_setter(this_value: f64, value: f64) -> f64 {
+    stats_date_set(this_value, 3, value)
+}
+
+fn ensure_stats_date_accessors_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| unsafe {
+        for class_id in [STATS_REGULAR_CLASS_ID, STATS_BIGINT_CLASS_ID] {
+            for (name, getter, setter) in [
+                (
+                    "atime",
+                    stats_atime_getter as *const u8,
+                    stats_atime_setter as *const u8,
+                ),
+                (
+                    "mtime",
+                    stats_mtime_getter as *const u8,
+                    stats_mtime_setter as *const u8,
+                ),
+                (
+                    "ctime",
+                    stats_ctime_getter as *const u8,
+                    stats_ctime_setter as *const u8,
+                ),
+                (
+                    "birthtime",
+                    stats_birthtime_getter as *const u8,
+                    stats_birthtime_setter as *const u8,
+                ),
+            ] {
+                crate::object::js_register_class_getter(
+                    class_id as i64,
+                    name.as_ptr(),
+                    name.len() as i64,
+                    getter as i64,
+                );
+                crate::object::js_register_class_setter(
+                    class_id as i64,
+                    name.as_ptr(),
+                    name.len() as i64,
+                    setter as i64,
+                );
+            }
+        }
+    });
+}
 
 pub(crate) unsafe fn build_stats_object(
     is_file: bool,
@@ -81,6 +196,7 @@ pub(crate) unsafe fn build_stats_object(
     // Real nanosecond timestamps when we have a Metadata in hand; otherwise
     // fall back to the millisecond × 1e6 approximation below.
     let times_ns = meta_extra.map(metadata_times_ns);
+    ensure_stats_date_accessors_registered();
 
     let (obj, count) = if bigint {
         let o = crate::object::js_object_alloc_class_with_keys(
@@ -104,6 +220,12 @@ pub(crate) unsafe fn build_stats_object(
     let _ = count;
     let set = |idx: u32, v: f64| {
         crate::object::js_object_set_field_f64(obj, idx, v);
+    };
+    let set_date_aliases = |base: u32| {
+        set(base, crate::date::alloc_date_cell(atime_ms));
+        set(base + 1, crate::date::alloc_date_cell(mtime_ms));
+        set(base + 2, crate::date::alloc_date_cell(ctime_ms));
+        set(base + 3, crate::date::alloc_date_cell(birthtime_ms));
     };
     set(0, make_stats_predicate(is_file));
     set(1, make_stats_predicate(is_dir));
@@ -133,6 +255,7 @@ pub(crate) unsafe fn build_stats_object(
         set(18, bigint_u64_value(blksize));
         set(19, bigint_u64_value(ino));
         set(20, bigint_u64_value(blocks));
+        set_date_aliases(BIGINT_DATE_SLOT_BASE);
     } else {
         set(3, size as f64);
         set(4, atime_ms);
@@ -148,6 +271,7 @@ pub(crate) unsafe fn build_stats_object(
         set(14, blksize as f64);
         set(15, ino as f64);
         set(16, blocks as f64);
+        set_date_aliases(REGULAR_DATE_SLOT_BASE);
     }
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     f64::from_bits(POINTER_TAG | (obj as u64 & 0x0000_FFFF_FFFF_FFFF))

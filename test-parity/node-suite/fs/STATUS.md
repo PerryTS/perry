@@ -26,7 +26,7 @@ These areas are intentionally left as follow-up work because they require larger
 4. `writeFile` and FileHandle write inputs from streams, async iterables, iterables, and abort signals.
 5. Node-perfect `cp` behavior for async filters, exact validation/errors, symlink cycles, subdirectory guards, mode/reflink semantics, and conflict handling.
 6. Node-perfect errors across fs APIs: exact error type, `code`, `errno`, `path`, `dest`, and `syscall` fields.
-7. Stats `Date` fields (`atime`, `mtime`, `ctime`, `birthtime`) and related timestamp precision. The numeric and bigint timestamp fields are covered; Date object parity needs runtime Date representation work.
+7. Remaining Stats timestamp precision edge cases. Numeric, bigint, and Date-valued timestamp aliases are covered for the main stat/lstat/fstat paths.
 8. Stream edge cases: backpressure, `autoClose`, `emitClose`, destroy/error ordering, and fd lifecycle parity.
 9. URL/path edge cases, especially full compatibility with `pathToFileURL()`-generated objects.
 10. Additional platform- and permission-sensitive behavior once the parity runner can model those deterministically.
