@@ -982,8 +982,13 @@ pub enum Expr {
     },
     BufferAllocUnsafe(Box<Expr>), // Buffer.allocUnsafe(size) -> Buffer
     BufferConcat(Box<Expr>),      // Buffer.concat(list) -> Buffer
-    BufferIsBuffer(Box<Expr>),    // Buffer.isBuffer(obj) -> boolean
-    BufferIsEncoding(Box<Expr>),  // Buffer.isEncoding(encoding) -> boolean
+    BufferConcatWithLength {
+        // Buffer.concat(list, totalLength) -> Buffer
+        list: Box<Expr>,
+        total_length: Box<Expr>,
+    },
+    BufferIsBuffer(Box<Expr>),   // Buffer.isBuffer(obj) -> boolean
+    BufferIsEncoding(Box<Expr>), // Buffer.isEncoding(encoding) -> boolean
     BufferByteLength {
         data: Box<Expr>,
         encoding: Option<Box<Expr>>,

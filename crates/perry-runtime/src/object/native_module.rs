@@ -634,6 +634,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "promisify")
             | ("util", "callbackify")
+            | ("util", "parseArgs")
             | ("util", "deprecate")
             | ("util", "inherits")
             | ("util", "isDeepStrictEqual")
@@ -1938,6 +1939,8 @@ unsafe fn http_methods_array() -> f64 {
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.
+// #854: fs.constants object builder retained for the native fs module
+#[allow(dead_code)]
 unsafe fn create_fs_constants_object() -> f64 {
     let cached = FS_CONSTANTS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {

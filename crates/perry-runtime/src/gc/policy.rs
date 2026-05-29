@@ -1,5 +1,145 @@
 use super::*;
 
+/// Hard work budget for ordinary automatic GC steps once the collector is
+/// split into resumable phases.
+pub const GC_NORMAL_INCREMENTAL_WORK_UNITS: usize = 2_048;
+/// Soft telemetry target for ordinary automatic GC steps.
+pub const GC_NORMAL_INCREMENTAL_SOFT_PAUSE_US: u64 = 2_000;
+/// Hard work budget for allocation-side mutator assist steps.
+pub const GC_MUTATOR_ASSIST_WORK_UNITS: usize = 256;
+/// Soft telemetry target for allocation-side mutator assist steps.
+pub const GC_MUTATOR_ASSIST_SOFT_PAUSE_US: u64 = 500;
+
+/// Runtime-visible classification for GC progress.
+///
+/// Only `NormalIncremental` and `MutatorAssist` satisfy the low-pause
+/// invariant today defined by this contract: bounded by work units, not heap
+/// size. Explicit synchronous work and emergency full collections are allowed
+/// to be unbounded only because they are separately requested or separately
+/// reported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GcProgressKind {
+    NormalIncremental,
+    MutatorAssist,
+    ExplicitSynchronous,
+    ExplicitFull,
+    EmergencyFull,
+    LegacySynchronous,
+}
+
+impl GcProgressKind {
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NormalIncremental => "normal_incremental",
+            Self::MutatorAssist => "mutator_assist",
+            Self::ExplicitSynchronous => "explicit_synchronous",
+            Self::ExplicitFull => "explicit_full",
+            Self::EmergencyFull => "emergency_full",
+            Self::LegacySynchronous => "legacy_synchronous",
+        }
+    }
+
+    #[inline]
+    pub const fn is_budgeted(self) -> bool {
+        matches!(self, Self::NormalIncremental | Self::MutatorAssist)
+    }
+
+    #[inline]
+    pub const fn report_class(self) -> &'static str {
+        match self {
+            Self::NormalIncremental | Self::MutatorAssist => "ordinary_budgeted",
+            Self::ExplicitSynchronous | Self::ExplicitFull => "explicit",
+            Self::EmergencyFull => "emergency",
+            Self::LegacySynchronous => "legacy",
+        }
+    }
+}
+
+/// Hard work-unit limit plus a soft pause target for telemetry.
+///
+/// `None` means the path is intentionally unbounded and must be labeled by its
+/// `GcProgressKind`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GcPauseBudget {
+    pub work_units: Option<usize>,
+    pub pause_us: Option<u64>,
+}
+
+impl GcPauseBudget {
+    #[inline]
+    pub const fn bounded(work_units: usize, pause_us: u64) -> Self {
+        Self {
+            work_units: Some(work_units),
+            pause_us: Some(pause_us),
+        }
+    }
+
+    #[inline]
+    pub const fn unbounded() -> Self {
+        Self {
+            work_units: None,
+            pause_us: None,
+        }
+    }
+
+    #[inline]
+    pub const fn is_bounded(self) -> bool {
+        self.work_units.is_some()
+    }
+}
+
+/// GC progress policy exposed to runtime and trace consumers.
+///
+/// Current automatic threshold collections do not use the finite budgets yet;
+/// they are reported as `LegacySynchronous` until allocation pressure is paced
+/// into `NormalIncremental` or `MutatorAssist` work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GcProgressContract {
+    pub normal_step_budget: GcPauseBudget,
+    pub assist_budget: GcPauseBudget,
+    pub explicit_synchronous_policy: GcPauseBudget,
+    pub explicit_full_policy: GcPauseBudget,
+    pub emergency_policy: GcPauseBudget,
+}
+
+impl GcProgressContract {
+    #[inline]
+    pub const fn budget_for(self, kind: GcProgressKind) -> GcPauseBudget {
+        match kind {
+            GcProgressKind::NormalIncremental => self.normal_step_budget,
+            GcProgressKind::MutatorAssist => self.assist_budget,
+            GcProgressKind::ExplicitSynchronous => self.explicit_synchronous_policy,
+            GcProgressKind::ExplicitFull => self.explicit_full_policy,
+            GcProgressKind::EmergencyFull => self.emergency_policy,
+            GcProgressKind::LegacySynchronous => GcPauseBudget::unbounded(),
+        }
+    }
+}
+
+impl Default for GcProgressContract {
+    fn default() -> Self {
+        Self {
+            normal_step_budget: GcPauseBudget::bounded(
+                GC_NORMAL_INCREMENTAL_WORK_UNITS,
+                GC_NORMAL_INCREMENTAL_SOFT_PAUSE_US,
+            ),
+            assist_budget: GcPauseBudget::bounded(
+                GC_MUTATOR_ASSIST_WORK_UNITS,
+                GC_MUTATOR_ASSIST_SOFT_PAUSE_US,
+            ),
+            explicit_synchronous_policy: GcPauseBudget::unbounded(),
+            explicit_full_policy: GcPauseBudget::unbounded(),
+            emergency_policy: GcPauseBudget::unbounded(),
+        }
+    }
+}
+
+/// Return Perry's process-wide GC progress contract.
+pub fn gc_progress_contract() -> GcProgressContract {
+    GcProgressContract::default()
+}
+
 pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
 pub(super) const GC_FLAG_SUPPRESSED: u8 = 0b10;
@@ -222,6 +362,22 @@ impl GcTriggerKind {
             GcTriggerKind::SurvivorPromotionBytes => "survivor_promotion_bytes",
             GcTriggerKind::Manual => "manual",
             GcTriggerKind::Direct => "direct",
+        }
+    }
+
+    #[inline]
+    pub(super) const fn progress_kind(self, collection_kind: GcCollectionKind) -> GcProgressKind {
+        match (self, collection_kind) {
+            (GcTriggerKind::Manual, GcCollectionKind::Full) => GcProgressKind::ExplicitFull,
+            (GcTriggerKind::Manual, GcCollectionKind::Minor) => GcProgressKind::ExplicitSynchronous,
+            (
+                GcTriggerKind::ArenaBytes
+                | GcTriggerKind::MallocCount
+                | GcTriggerKind::OldGenBytes
+                | GcTriggerKind::SurvivorPromotionBytes
+                | GcTriggerKind::Direct,
+                _,
+            ) => GcProgressKind::LegacySynchronous,
         }
     }
 }

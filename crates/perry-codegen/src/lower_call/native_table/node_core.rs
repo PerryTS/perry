@@ -904,10 +904,28 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "util",
         has_receiver: false,
+        method: "callbackify",
+        class_filter: None,
+        runtime: "js_util_callbackify",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
         method: "deprecate",
         class_filter: None,
         runtime: "js_util_deprecate",
         args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "parseArgs",
+        class_filter: None,
+        runtime: "js_util_parse_args",
+        args: &[NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

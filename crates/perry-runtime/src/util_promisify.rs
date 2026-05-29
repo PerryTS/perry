@@ -1,6 +1,7 @@
-//! `util.promisify(original)` — wraps a Node-style callback function
-//! `original(arg1, …, argN, cb)` (where `cb(err, value)`) into a function
-//! returning a Promise.
+//! `util.promisify(original)` and `util.callbackify(original)` adapters.
+//!
+//! `promisify` wraps a Node-style callback function `original(arg1, …, argN, cb)`
+//! (where `cb(err, value)`) into a function returning a Promise.
 //!
 //! Implementation strategy:
 //!
@@ -34,10 +35,15 @@ use crate::closure::{
     js_register_closure_rest, ClosureHeader,
 };
 use crate::ffi::setjmp::setjmp;
-use crate::promise::{js_promise_new, js_promise_reject, js_promise_resolve, Promise};
+use crate::promise::{
+    js_promise_attach_handlers, js_promise_new, js_promise_reject, js_promise_resolve,
+    js_value_is_promise, ClosurePtr, Promise,
+};
+use crate::string::js_string_from_bytes;
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_NULL, TAG_UNDEFINED};
 
-const TAG_UNDEFINED_F64: f64 = unsafe { std::mem::transmute::<u64, f64>(TAG_UNDEFINED) };
+const TAG_UNDEFINED_F64: f64 = f64::from_bits(TAG_UNDEFINED);
+const TAG_NULL_F64: f64 = f64::from_bits(TAG_NULL);
 const PROMISIFY_CUSTOM_KEY: &[u8] = b"nodejs.util.promisify.custom";
 
 fn nanbox_pointer(ptr: *const u8) -> f64 {
@@ -46,6 +52,13 @@ fn nanbox_pointer(ptr: *const u8) -> f64 {
 
 fn nanbox_promise(p: *mut Promise) -> f64 {
     f64::from_bits(JSValue::pointer(p as *const u8).bits())
+}
+
+fn promise_ptr_from_value(value: f64) -> *mut Promise {
+    if js_value_is_promise(value) == 0 {
+        return std::ptr::null_mut();
+    }
+    (value.to_bits() & POINTER_MASK) as *mut Promise
 }
 
 fn err_is_nullish(err: f64) -> bool {
@@ -116,6 +129,9 @@ fn register_thunks_once() {
         // the arity lets dispatch pad with `undefined` when callers
         // invoke it as `cb(err)` only, matching Node's contract.
         js_register_closure_arity(inner_callback_thunk as *const u8, 2);
+        js_register_closure_rest(callbackify_outer_thunk as *const u8, 0);
+        js_register_closure_arity(callbackify_fulfilled_thunk as *const u8, 1);
+        js_register_closure_arity(callbackify_rejected_thunk as *const u8, 1);
         flag.set(true);
     });
 }
@@ -200,6 +216,32 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_util_deprecate(fn_value: f64, _msg: f64, _code: f64) -> f64 {
     fn_value
+}
+
+/// `util.callbackify(fn)` — returns a wrapper closure as a NaN-boxed f64.
+#[no_mangle]
+pub extern "C" fn js_util_callbackify(fn_value: f64) -> f64 {
+    let bits = fn_value.to_bits();
+    let tag = bits & TAG_MASK;
+    if tag != POINTER_TAG {
+        return fn_value;
+    }
+
+    register_thunks_once();
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+    let closure = js_closure_alloc(callbackify_outer_thunk as *const u8, 1);
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        0,
+        fn_handle.get_nanbox_f64(),
+    );
+    nanbox_pointer(closure_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
 }
 
 /// Outer wrapper body: `(closure, rest_array_value) -> promise_value`.
@@ -307,4 +349,160 @@ extern "C" fn inner_callback_thunk(closure: *const ClosureHeader, err: f64, valu
         js_promise_reject(promise_ptr, err);
     }
     TAG_UNDEFINED_F64
+}
+
+/// Outer callbackify body: `(closure, rest_array_value) -> undefined`.
+///
+/// The last incoming argument is the Node-style callback. Every preceding
+/// argument is forwarded to the original promise-returning function.
+extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+
+    let fn_value = if closure.is_null() {
+        TAG_UNDEFINED_F64
+    } else {
+        js_closure_get_capture_f64(closure, 0)
+    };
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+
+    let rest_bits = rest_value.to_bits();
+    let rest_arr_ptr = if (rest_bits & TAG_MASK) == POINTER_TAG {
+        (rest_bits & POINTER_MASK) as *const ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+    let rest_len = if rest_arr_ptr.is_null() {
+        0
+    } else {
+        js_array_length(rest_arr_ptr) as usize
+    };
+    if rest_len == 0 {
+        return TAG_UNDEFINED_F64;
+    }
+
+    let rest_data = unsafe {
+        (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+    };
+    let callback_value = unsafe { *rest_data.add(rest_len - 1) };
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+
+    let original_arg_len = rest_len - 1;
+    let mut original_args = js_array_alloc(original_arg_len as u32);
+    for i in 0..original_arg_len {
+        let v = unsafe { *rest_data.add(i) };
+        original_args = js_array_push_f64(original_args, v);
+    }
+    let original_args_handle = scope.root_raw_mut_ptr(original_args);
+
+    let mut returned = TAG_UNDEFINED_F64;
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { setjmp(trap_buf as *mut c_int) };
+    if jumped == 0 {
+        let arr = original_args_handle.get_raw_const_ptr::<ArrayHeader>();
+        let data =
+            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 };
+        returned = unsafe {
+            crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
+        };
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        call_callback_rejected(callback_handle.get_nanbox_f64(), exc);
+    }
+    crate::exception::js_try_end();
+
+    let promise_ptr = promise_ptr_from_value(returned);
+    if promise_ptr.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
+
+    let fulfilled = js_closure_alloc(callbackify_fulfilled_thunk as *const u8, 1);
+    if fulfilled.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let fulfilled_handle = scope.root_raw_mut_ptr(fulfilled);
+    js_closure_set_capture_f64(
+        fulfilled_handle.get_raw_mut_ptr(),
+        0,
+        callback_handle.get_nanbox_f64(),
+    );
+
+    let rejected = js_closure_alloc(callbackify_rejected_thunk as *const u8, 1);
+    if rejected.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let rejected_handle = scope.root_raw_mut_ptr(rejected);
+    js_closure_set_capture_f64(
+        rejected_handle.get_raw_mut_ptr(),
+        0,
+        callback_handle.get_nanbox_f64(),
+    );
+
+    js_promise_attach_handlers(
+        promise_handle.get_raw_mut_ptr(),
+        fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+        rejected_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+    );
+
+    TAG_UNDEFINED_F64
+}
+
+extern "C" fn callbackify_fulfilled_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let callback_value = js_closure_get_capture_f64(closure, 0);
+    let args = [TAG_NULL_F64, value];
+    unsafe {
+        crate::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
+    }
+    TAG_UNDEFINED_F64
+}
+
+extern "C" fn callbackify_rejected_thunk(closure: *const ClosureHeader, reason: f64) -> f64 {
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let callback_value = js_closure_get_capture_f64(closure, 0);
+    call_callback_rejected(callback_value, reason);
+    TAG_UNDEFINED_F64
+}
+
+fn call_callback_rejected(callback_value: f64, reason: f64) {
+    let err = if crate::value::js_is_truthy(reason) == 0 {
+        make_falsy_rejection_error(reason)
+    } else {
+        reason
+    };
+    let args = [err];
+    unsafe {
+        crate::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
+    }
+}
+
+fn make_falsy_rejection_error(reason: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let reason_handle = scope.root_nanbox_f64(reason);
+
+    let msg = js_string_from_bytes(
+        b"Promise was rejected with falsy value".as_ptr(),
+        b"Promise was rejected with falsy value".len() as u32,
+    );
+    let msg_handle = scope.root_string_ptr(msg);
+    let error = crate::error::js_error_new_with_message(
+        msg_handle.get_raw_const_ptr::<crate::StringHeader>() as *mut crate::StringHeader,
+    );
+    let error_handle = scope.root_raw_mut_ptr(error);
+
+    let reason_key = js_string_from_bytes(b"reason".as_ptr(), b"reason".len() as u32);
+    let reason_key_handle = scope.root_string_ptr(reason_key);
+    crate::object::js_object_set_field_by_name(
+        error_handle.get_raw_mut_ptr::<crate::error::ErrorHeader>()
+            as *mut crate::object::ObjectHeader,
+        reason_key_handle.get_raw_const_ptr::<crate::StringHeader>(),
+        reason_handle.get_nanbox_f64(),
+    );
+
+    nanbox_pointer(error_handle.get_raw_const_ptr::<crate::error::ErrorHeader>() as *const u8)
 }

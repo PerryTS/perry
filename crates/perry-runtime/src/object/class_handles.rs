@@ -47,6 +47,11 @@ pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
 /// `Object.prototype.toString.call(handle)` recover Web stream tags.
 pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
+/// Probe for stdlib `events.EventEmitter` handles. The handles are returned as
+/// pointer-tagged small integers, so runtime `instanceof` cannot inspect them
+/// as heap objects.
+pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+
 // Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)
 // and read from many threads thereafter (perry/thread workers run user code that
 // hits these). Stored as AtomicPtr to make reads/writes data-race-free; the
@@ -57,6 +62,7 @@ static HANDLE_PROPERTY_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mu
 static HANDLE_PROPERTY_SET_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 #[inline]
 pub fn handle_method_dispatch() -> Option<HandleMethodDispatchFn> {
@@ -126,6 +132,21 @@ pub fn stream_handle_kind_probe() -> Option<StreamHandleKindProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_stream_handle_kind_probe(f: StreamHandleKindProbeFn) {
     STREAM_HANDLE_KIND_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn event_emitter_handle_probe() -> Option<EventEmitterHandleProbeFn> {
+    let p = EVENT_EMITTER_HANDLE_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterHandleProbeFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_handle_probe(f: EventEmitterHandleProbeFn) {
+    EVENT_EMITTER_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 /// Register a function to handle property access on handle-based objects.

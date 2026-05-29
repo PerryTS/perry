@@ -415,6 +415,9 @@ pub(crate) fn while_condition_range_fact(
     }
 }
 
+// #854: width-1 convenience wrapper over bounds_for_buffer_access_width; all
+// current callers pass an explicit width, so this seam is unused for now.
+#[allow(dead_code)]
 pub(crate) fn bounds_for_buffer_access(
     ctx: &FnCtx<'_>,
     buffer_local_id: u32,
