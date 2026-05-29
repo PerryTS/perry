@@ -10,6 +10,7 @@ use super::println;
 use super::*;
 
 mod boxed_primitives;
+mod collections;
 
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
@@ -657,6 +658,13 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // would read garbage one word before the BufferHeader).
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 format_buffer_value(buf_ptr)
+            } else if crate::regex::is_registered_regex(ptr as usize) {
+                // RegExp literals are GC_TYPE_OBJECT allocations with no
+                // enumerable string keys, so the generic object formatter
+                // prints `{}`. Render the literal form `/source/flags`
+                // instead (registry-gated; #800). This check sits with the
+                // other registry pre-checks, before the GC-header read.
+                collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
             } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
                 let target = crate::proxy::js_proxy_target(value);
                 format_jsvalue(target, depth)
@@ -826,7 +834,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let body_str = format_object_as_json(obj_ptr, depth);
                     inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
-                    "Map {}".to_string()
+                    collections::format_map_with_cycle(ptr, depth)
+                } else if gc_type == crate::gc::GC_TYPE_SET {
+                    collections::format_set_with_cycle(ptr, depth)
                 } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
                     format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                 } else if gc_type == crate::gc::GC_TYPE_PROMISE {
@@ -1286,6 +1296,18 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     format_jsvalue_for_json(target, depth)
                 } else if (ptr as usize) < 0x100000 {
                     "[object Object]".to_string()
+                } else if crate::symbol::is_registered_symbol(ptr as usize)
+                    || crate::regex::is_registered_regex(ptr as usize)
+                    || crate::buffer::is_registered_buffer(ptr as usize)
+                    || crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some()
+                {
+                    // Symbol / RegExp / Buffer / TypedArray field values need
+                    // type-specific rendering this JSON-ish formatter never
+                    // implemented — they collapsed to `[object Object]` / `{}`
+                    // (#800). Delegate to `format_jsvalue`, which gates these
+                    // on the same registries BEFORE any GC-header read (Buffers
+                    // carry no GC header, so the read below would be garbage).
+                    format_jsvalue(value, depth)
                 } else {
                     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                         as *const crate::gc::GcHeader;
@@ -1371,15 +1393,14 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                             "[object Object]".to_string()
                         };
                         inspect_finish_circular(ptr as usize, body_str)
+                    } else if gc_type == crate::gc::GC_TYPE_MAP {
+                        collections::format_map_with_cycle(ptr, depth)
+                    } else if gc_type == crate::gc::GC_TYPE_SET {
+                        collections::format_set_with_cycle(ptr, depth)
                     } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
-                        // Function-valued object fields used to fall through
-                        // to the `[object Object]` catch-all below, hiding
-                        // both the function name and any user-attached own
-                        // properties (e.g. `console.log({ handler: myFn })`
-                        // collapsed `myFn` to `[object Object]`). Route
-                        // through the same display path `format_jsvalue`'s
-                        // own GC_TYPE_CLOSURE branch uses so the registered
-                        // function name flows out.
+                        // Function-valued field: route through the same display
+                        // path as `format_jsvalue` so the registered function
+                        // name flows out instead of `[object Object]`.
                         format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                     } else {
                         "[object Object]".to_string()
@@ -1389,6 +1410,11 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
+            // A TypedArray field is a RAW (non-NaN-boxed) heap pointer, so it
+            // lands here, not in the pointer branch; redirect it (#800).
+            if let Some(s) = collections::raw_heap_pointer_display(value, depth) {
+                return s;
+            }
             let n = value;
             if n.is_nan() {
                 "NaN".to_string()
