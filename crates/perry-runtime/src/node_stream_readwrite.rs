@@ -1433,8 +1433,25 @@ pub(super) fn invoke_construct_callback(stream: f64, opts: f64) {
 }
 
 pub(super) fn invoke_read_once(stream: f64) {
+    invoke_read_once_inner(stream, true);
+}
+
+/// Like [`invoke_read_once`] but never synthesizes the default `_read`
+/// (`ERR_METHOD_NOT_IMPLEMENTED`) error for a bare `Readable`. Passive probes
+/// such as `finished()` must observe a stream's state without destroying it —
+/// in Node, attaching `finished()` listeners does not call `_read`. Triggering
+/// the default error here destroyed an idle stream before a later
+/// `destroy(err)` could run, so `finished()` rejected with the default read
+/// error instead of the caller's error (#2441 regression / #2462).
+pub(super) fn probe_read_once(stream: f64) {
+    invoke_read_once_inner(stream, false);
+}
+
+fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
     let Some(read) = get_hidden_value(stream, hidden_read_key()) else {
-        maybe_emit_default_read_error(stream);
+        if emit_default_error {
+            maybe_emit_default_read_error(stream);
+        }
         return;
     };
     if get_hidden_value(stream, hidden_read_invoked_key()).is_some() {
@@ -1749,12 +1766,12 @@ pub fn js_node_stream_collect_bytes_result(stream: f64) -> Result<Vec<u8>, f64> 
 }
 
 pub(crate) fn js_node_stream_hidden_error_after_read(stream: f64) -> Option<f64> {
-    invoke_read_once(stream);
+    probe_read_once(stream);
     readable_hidden_error(stream)
 }
 
 pub(crate) fn js_node_stream_is_stub_ended_after_read(stream: f64) -> bool {
-    invoke_read_once(stream);
+    probe_read_once(stream);
     stream_hidden_ended(stream)
 }
 
