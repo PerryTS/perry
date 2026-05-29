@@ -1299,6 +1299,14 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         cargo_cmd.arg("--target").arg(triple);
     }
 
+    // #1529 — the geisterhand runtime/stdlib also land in the dlopen'd
+    // `libperry_app.so` on Android; force global-dynamic TLS so the IE
+    // model doesn't crash at load. (RUSTFLAGS scopes to the cross target,
+    // so host build-scripts/proc-macros are unaffected.)
+    if matches!(target, Some("android") | Some("android-x86_64")) {
+        cargo_cmd.env("RUSTFLAGS", "-C tls-model=global-dynamic");
+    }
+
     let status = cargo_cmd
         .status()
         .map_err(|e| anyhow!("Failed to run cargo: {}", e))?;

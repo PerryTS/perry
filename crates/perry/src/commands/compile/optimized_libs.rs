@@ -611,14 +611,30 @@ pub(super) fn build_optimized_libs(
             }
         }
     }
+    // RUSTFLAGS is the only path that works without a custom cargo profile,
+    // and cargo correctly reuses incremental artifacts that were built with
+    // the same RUSTFLAGS. The hash-keyed CARGO_TARGET_DIR keeps builds with
+    // distinct flag sets from clobbering each other's cache.
+    let mut rustflags: Vec<&str> = Vec::new();
     if panic_abort_safe {
         // Override the workspace profile's `panic = "unwind"` for the
-        // duration of this invocation. RUSTFLAGS is the only path that
-        // works without a custom cargo profile, and cargo correctly
-        // reuses incremental artifacts that were built with the same
-        // RUSTFLAGS. The hash-keyed CARGO_TARGET_DIR keeps the abort
-        // and unwind builds from clobbering each other's cache.
-        cargo_cmd.env("RUSTFLAGS", "-C panic=abort");
+        // duration of this invocation.
+        rustflags.push("-C panic=abort");
+    }
+    // #1529 — Android loads `libperry_app.so` via `dlopen` at runtime
+    // (PerryActivity's System.loadLibrary), but Rust's default TLS model for
+    // the aarch64-linux-android target is Initial-Executable, which is only
+    // valid for libraries present at process startup. A dlopen'd library
+    // crashes with `TLS symbol "(null)" ... using IE access model`. The
+    // runtime/stdlib use `thread_local!` heavily (per-thread arena, GC state,
+    // shadow stack), so those IE TLS relocations get baked into the final
+    // cdylib. Force global-dynamic so the dynamic linker can resolve TLS
+    // slots after the process has started.
+    if matches!(target, Some("android") | Some("android-x86_64")) {
+        rustflags.push("-C tls-model=global-dynamic");
+    }
+    if !rustflags.is_empty() {
+        cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
     }
 
     // Closes #25 (the v0.5.384 NJOBS 6→3 retreat): serialize parallel

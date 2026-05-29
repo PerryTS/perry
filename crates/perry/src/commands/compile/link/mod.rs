@@ -1177,7 +1177,8 @@ pub(super) fn build_and_run_link(
             } else if is_android {
                 (
                     "libperry_ui_android.a",
-                    "cargo build --release -p perry-ui-android --target aarch64-linux-android",
+                    // #1529 — TLS model must be global-dynamic for the dlopen'd cdylib.
+                    "RUSTFLAGS=\"-C tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
                 )
             } else if is_linux {
                 (
@@ -1353,11 +1354,14 @@ pub(super) fn build_and_run_link(
                         cargo_cmd.arg("-Zbuild-std=std,panic_abort");
                     }
 
-                    // For Android, ensure 16 KB page size alignment (required by Google Play)
+                    // For Android, ensure 16 KB page size alignment (required by Google Play),
+                    // and force the global-dynamic TLS model (#1529): the native lib's TLS
+                    // relocations are baked into the dlopen'd `libperry_app.so`, so an
+                    // Initial-Executable model (rustc's android default) crashes at load.
                     if is_android {
                         cargo_cmd.env(
                             "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
-                            "-C link-arg=-Wl,-z,max-page-size=16384",
+                            "-C link-arg=-Wl,-z,max-page-size=16384 -C tls-model=global-dynamic",
                         );
                     }
 

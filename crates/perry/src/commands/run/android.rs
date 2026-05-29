@@ -48,6 +48,62 @@ pub fn build_and_run_android(
     std::fs::copy(so_path, jni_dir.join("libperry_app.so"))
         .map_err(|e| anyhow!("Failed to copy .so to jniLibs: {}", e))?;
 
+    // #1527 — bundle companion shared libraries. The compile step copies
+    // third-party `crate-android` cdylib outputs (e.g. `libperry_play_billing.so`
+    // from @perryts/play-billing) next to the main binary in the staging dir
+    // (the "Copied companion library" log line). `libperry_app.so` records them
+    // in DT_NEEDED, so the dynamic linker must find them in the same `lib/<abi>/`
+    // dir inside the APK — Gradle bundles whatever lives in jniLibs/<abi>/.
+    // Without this, the app crashes on launch with `UnsatisfiedLinkError:
+    // dlopen failed: library "lib….so" not found`. Static-lib companions link
+    // directly into libperry_app.so and have no `.so` here, so nothing to copy.
+    let staging_dir = so_path.parent().unwrap_or(Path::new("."));
+    if let Ok(entries) = std::fs::read_dir(staging_dir) {
+        let mut bundled = 0usize;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Only sibling `.so` files; the main output was already copied as
+            // libperry_app.so above (and it carries no `.so` extension itself,
+            // so it can't match here and won't be double-copied).
+            let is_so = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e == "so")
+                .unwrap_or(false);
+            if !is_so || path == *so_path {
+                continue;
+            }
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            match std::fs::copy(&path, jni_dir.join(name)) {
+                Ok(_) => {
+                    bundled += 1;
+                    if let OutputFormat::Text = format {
+                        println!("  Bundled companion library: {}", name.to_string_lossy());
+                    }
+                }
+                Err(e) => {
+                    if let OutputFormat::Text = format {
+                        println!(
+                            "Warning: failed to bundle companion library {}: {}",
+                            name.to_string_lossy(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        if bundled > 0 {
+            if let OutputFormat::Text = format {
+                println!(
+                    "  Bundled {} companion .so into jniLibs/arm64-v8a (#1527)",
+                    bundled
+                );
+            }
+        }
+    }
+
     // Copy resource directories (assets/, logo/, etc.) into APK assets
     // Android loads ImageFile('assets/foo.png') from the APK's assets/ directory,
     // so we need 'assets/' inside 'app/src/main/assets/' → accessible as 'assets/foo.png'
