@@ -230,12 +230,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose() composite Duplex doesn't forward data through the chain, so the joined output never arrives. Shape sub-tests pass; reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/finished/options-config": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: finished({error:false,...}) options-config doesn't fire callback. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/subclass/extends-duplex": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -289,12 +283,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: duplexPair() \u2014 fails to compile (export not yet wired through perry-stdlib stream re-exports). Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/finished/error-false-option": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: finished({error:false}) option ignored \u2014 callback still fires on destroy(err). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/single-sync-fn": {
     "issue": "1531",
