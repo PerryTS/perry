@@ -1233,6 +1233,7 @@ mod tests {
     #[test]
     fn stream_promises_finished_rejects_later_destroy_error() {
         let stream = crate::node_stream::js_node_stream_readable_new(undefined_value());
+        crate::node_stream::test_install_manual_read(stream);
         let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
         let promise = promise_ptr(promise_value);
 

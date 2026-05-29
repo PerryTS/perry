@@ -82,17 +82,6 @@ crates/perry-runtime/src/object/native_call_method.rs
 # loop). Extracting that pass is high-risk surgery deferred to the codegen
 # split tracked under #1435.
 crates/perry-codegen/src/codegen/mod.rs
-# node:stream runtime (Readable/Writable/Duplex + EventEmitter listener
-# lifecycle). Crossed the limit during the stream-parity PR wave (#1962/
-# #1963/#1976/#1981 …); splitting mid-wave would conflict with several open
-# stream PRs that all touch this file. Split tracked under #1987.
-crates/perry-runtime/src/node_stream.rs
-# Stream parity test surface; co-evolves with the node_stream.rs module and
-# crossed the limit after #2198 added the readable-read-size cases. Splitting
-# would scatter assertions away from the inputs they exercise — defer until
-# the node_stream.rs split under #1987 lands, then re-cluster tests under the
-# new sub-modules.
-crates/perry-runtime/src/node_stream_tests.rs
 # Central class registry — class IDs, prototypes, parent-closure
 # scanning, and field-init replay. Crossed the limit after the
 # #1787 instance-field init replay (#2074) + web-stream class
@@ -113,6 +102,12 @@ crates/perry-runtime/src/object/native_module.rs
 # ObjectHeader) tipped it over. Splitting the two towers into sibling
 # modules is tracked under #1435.
 crates/perry-runtime/src/builtins/formatting.rs
+# WHATWG Streams (ReadableStream/WritableStream/TransformStream + reader/
+# writer/controller dispatch). Crossed the limit at 2088 LOC after the
+# web-stream correctness batch (#2450 pipeTo preventClose, #2455 BYOB-on-
+# non-byte reject, #2460 reserved-type reject) landed on main without a
+# split. Splitting per stream-kind family is tracked under #2472.
+crates/perry-stdlib/src/streams.rs
 EOF
 )
 
