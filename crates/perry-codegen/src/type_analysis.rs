@@ -614,6 +614,14 @@ fn is_numeric_typed_array_class(name: &str) -> bool {
     )
 }
 
+fn expression_has_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    match static_type_of(ctx, object) {
+        Some(HirType::Array(_)) | Some(HirType::Tuple(_)) | Some(HirType::String) => true,
+        Some(HirType::Named(name)) => name == "Buffer" || is_numeric_typed_array_class(&name),
+        _ => false,
+    }
+}
+
 fn is_fixed_width_buffer_numeric_read(method: &str) -> bool {
     matches!(
         method,
@@ -683,6 +691,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // walker matches `class_field_global_index`'s inheritance
         // traversal so the type of any inherited field is also seen.
         Expr::PropertyGet { object, property } => {
+            if property == "length" && expression_has_numeric_length(ctx, object) {
+                return true;
+            }
             let Some(owner_class_name) = receiver_class_name(ctx, object) else {
                 return false;
             };
@@ -1719,6 +1730,9 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Bool(_) => Some(HirType::Boolean),
         Expr::LocalGet(id) => ctx.local_types.get(id).cloned(),
         Expr::PropertyGet { object, property } => {
+            if property == "length" && expression_has_numeric_length(ctx, object) {
+                return Some(HirType::Number);
+            }
             if is_process_namespace_version_property(object, property) {
                 return Some(HirType::String);
             }
