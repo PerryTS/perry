@@ -546,7 +546,7 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
     if jsval.is_null() || jsval.is_undefined() {
         return push_chunk(stream, chunk);
     }
-    if has_truthy_hidden(stream, hidden_ended_key()) {
+    if has_truthy_hidden(stream, hidden_end_emitted_key()) {
         destroy_stream(stream, readable_unshift_after_end_error());
         return f64::from_bits(TAG_FALSE);
     }
@@ -576,7 +576,7 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
 fn readable_unshift_after_end_error() -> f64 {
     let msg = b"stream.unshift() after end event";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_PUSH_AFTER_EOF");
+    crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_UNSHIFT_AFTER_END_EVENT");
     let err = crate::error::js_error_new_with_message(s);
     crate::value::js_nanbox_pointer(err as i64)
 }

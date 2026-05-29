@@ -481,6 +481,22 @@ fn readable_unshift_prepends_chunk_and_returns_hwm_signal() {
     );
 }
 
+#[test]
+fn readable_unshift_after_eof_before_end_prepends_chunk() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    let _ = js_node_stream_method_push(handle, string_value("world"));
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+    assert_eq!(
+        js_node_stream_method_unshift(handle, string_value("hello ")).to_bits(),
+        TAG_TRUE
+    );
+
+    let joined = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(joined), b"hello world");
+}
+
 fn stream_test_buffer_bytes(value: f64) -> Vec<u8> {
     let len = crate::buffer::js_native_buffer_byte_len(value);
     let data = crate::buffer::js_native_buffer_data_ptr(value);
