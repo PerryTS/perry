@@ -791,14 +791,14 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
         let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
         unsafe {
             // GC_STORE_AUDIT(ROOT): SHAPE_INLINE_CACHE entries are scanned by scan_shape_cache_roots_mut.
-            (*cache.get())[slot] = ShapeCacheEntry {
-                shape_id,
-                keys_array,
-            };
+            let entry = &mut (*cache.get())[slot];
+            entry.shape_id = shape_id;
+            crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut entry.keys_array, keys_array);
         }
     });
     SHAPE_CACHE_OVERFLOW.with(|m| {
         m.borrow_mut().insert(shape_id, keys_array);
+        crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
     });
 }
 
@@ -989,13 +989,12 @@ fn transition_cache_insert(
     }
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
-        (*t)[slot] = TransitionEntry {
-            prev_keys,
-            key_ptr: kp,
-            next_keys,
-            slot_idx,
-            target_len,
-        };
+        let entry = &mut (*t)[slot];
+        entry.prev_keys = prev_keys;
+        entry.key_ptr = kp;
+        crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
+        entry.slot_idx = slot_idx;
+        entry.target_len = target_len;
     });
     // Small dynamic shapes are stabilized eagerly because otherwise
     // the original builder can grow the cached target in place and
@@ -1226,15 +1225,15 @@ pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHe
         let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
         unsafe {
             // GC_STORE_AUDIT(ROOT): test seed mirrors SHAPE_INLINE_CACHE roots scanned by scan_shape_cache_roots_mut.
-            (*cache.get())[slot] = ShapeCacheEntry {
-                shape_id,
-                keys_array,
-            };
+            let entry = &mut (*cache.get())[slot];
+            entry.shape_id = shape_id;
+            crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut entry.keys_array, keys_array);
         }
     });
     SHAPE_CACHE_OVERFLOW.with(|cache| {
         cache.borrow_mut().clear();
         cache.borrow_mut().insert(shape_id, keys_array);
+        crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
     });
 }
 
@@ -1258,13 +1257,12 @@ pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
 pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors TRANSITION_CACHE_GLOBAL roots scanned by scan_transition_cache_roots_mut.
-        (*t)[0] = TransitionEntry {
-            prev_keys: 0,
-            key_ptr: 0,
-            next_keys,
-            slot_idx: 0,
-            target_len: 0,
-        };
+        let entry = &mut (*t)[0];
+        entry.prev_keys = 0;
+        entry.key_ptr = 0;
+        crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
+        entry.slot_idx = 0;
+        entry.target_len = 0;
     });
 }
 
@@ -1334,21 +1332,53 @@ pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
 #[cfg(test)]
 pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_this_ptr: i64) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    HTTP_METHODS_CACHE.store(object_cache_bits[0], Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &HTTP_METHODS_CACHE,
+        object_cache_bits[0],
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    FS_CONSTANTS_CACHE.store(object_cache_bits[1], Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &FS_CONSTANTS_CACHE,
+        object_cache_bits[1],
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    OS_CONSTANTS_CACHE.store(object_cache_bits[2], Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_CACHE,
+        object_cache_bits[2],
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    OS_CONSTANTS_SIGNALS_CACHE.store(object_cache_bits[3], Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_SIGNALS_CACHE,
+        object_cache_bits[3],
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    OS_CONSTANTS_ERRNO_CACHE.store(object_cache_bits[4], Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_ERRNO_CACHE,
+        object_cache_bits[4],
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    OS_CONSTANTS_PRIORITY_CACHE.store(object_cache_bits[5], Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_PRIORITY_CACHE,
+        object_cache_bits[5],
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    OS_CONSTANTS_DLOPEN_CACHE.store(object_cache_bits[6], Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_DLOPEN_CACHE,
+        object_cache_bits[6],
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test seed mirrors GLOBAL_THIS_PTR scanned by scan_object_cache_roots_mut.
-    GLOBAL_THIS_PTR.store(global_this_ptr, Ordering::Release);
+    crate::gc::runtime_store_root_atomic_raw_i64(
+        &GLOBAL_THIS_PTR,
+        global_this_ptr,
+        Ordering::Release,
+    );
 }
 
 #[cfg(test)]
@@ -1370,21 +1400,37 @@ pub(crate) fn test_object_cache_roots() -> ([u64; 7], i64) {
 #[cfg(test)]
 pub(crate) fn test_clear_object_cache_roots() {
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    HTTP_METHODS_CACHE.store(0, Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(&HTTP_METHODS_CACHE, 0, Ordering::Relaxed);
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    FS_CONSTANTS_CACHE.store(0, Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(&FS_CONSTANTS_CACHE, 0, Ordering::Relaxed);
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    OS_CONSTANTS_CACHE.store(0, Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(&OS_CONSTANTS_CACHE, 0, Ordering::Relaxed);
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    OS_CONSTANTS_SIGNALS_CACHE.store(0, Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_SIGNALS_CACHE,
+        0,
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    OS_CONSTANTS_ERRNO_CACHE.store(0, Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_ERRNO_CACHE,
+        0,
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    OS_CONSTANTS_PRIORITY_CACHE.store(0, Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_PRIORITY_CACHE,
+        0,
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    OS_CONSTANTS_DLOPEN_CACHE.store(0, Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &OS_CONSTANTS_DLOPEN_CACHE,
+        0,
+        Ordering::Relaxed,
+    );
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinel into scanned GLOBAL_THIS_PTR.
-    GLOBAL_THIS_PTR.store(0, Ordering::Release);
+    crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, 0, Ordering::Release);
 }
 
 /// Remove OVERFLOW_FIELDS entry for a freed object pointer.

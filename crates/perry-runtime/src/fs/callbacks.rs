@@ -1,9 +1,6 @@
 //! Callback-style fs APIs — pre-flight probe + (err, value) dispatch.
 
-use std::fs;
-
 use crate::closure::ClosureHeader;
-use crate::string::js_string_from_bytes;
 
 use super::*;
 
@@ -593,40 +590,17 @@ pub extern "C" fn js_fs_open_callback(path_value: f64, arg1: f64, arg2: f64, arg
     } else {
         arg1
     };
-    // Probe only the clear read-only cases (`"r"`, `"r+"`, or undefined ⇒
-    // Node defaults to `"r"`). Anything else — `"w"`, `"a"`, numeric flag
-    // bitsets like `O_CREAT|O_WRONLY` — may create the file, so we defer
-    // to the underlying open instead of pre-rejecting on a missing path.
-    let read_only = unsafe { open_flag_is_read_only(flags) };
-    if read_only {
-        unsafe {
-            if let Some(err_val) = fs_callback_read_error(path_value, "open") {
-                call_cb_err2(cb, err_val);
-                return f64::from_bits(TAG_UNDEFINED);
-            }
-        }
-    }
-    let fd = js_fs_open_sync(path_value, flags);
+    let fd = match unsafe { fs_open_sync_result(path_value, flags) } {
+        Ok(fd) => fd as f64,
+        Err((err, path)) => unsafe {
+            call_cb_err2(cb, build_fs_error_value(&err, "open", &path));
+            return f64::from_bits(TAG_UNDEFINED);
+        },
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), fd);
     }
     f64::from_bits(TAG_UNDEFINED)
-}
-
-/// Returns true when an `open` flags value is unambiguously read-only.
-/// Treats `undefined` (Node's default) as read-only, the string flags
-/// `"r"` and `"r+"` as read-only, and everything else — including any
-/// numeric/integer flag — as potentially creating, so the caller skips
-/// the missing-path probe and defers to the syscall.
-pub(crate) unsafe fn open_flag_is_read_only(flags_value: f64) -> bool {
-    let jsval = crate::value::JSValue::from_bits(flags_value.to_bits());
-    if jsval.is_undefined() {
-        return true;
-    }
-    match decode_flags_string(flags_value).as_deref() {
-        Some("r") | Some("r+") => true,
-        _ => false,
-    }
 }
 
 pub(crate) unsafe fn decode_flags_string(value: f64) -> Option<String> {
@@ -1004,7 +978,7 @@ mod sso_tests_1781 {
     /// #1781: fs flag strings ("r", "r+", "w", "a", "wx", …) are all <= 5
     /// bytes, so they are inline SSO values (tag 0x7FF9). `is_string()` is
     /// STRING_TAG-only and rejected every one — `decode_flags_string`
-    /// returned None for all flags, breaking the read-only fast-path probe.
+    /// returned None for all flags, breaking string flag parsing.
     #[test]
     fn decode_flags_string_handles_sso_flags() {
         for flag in ["r", "r+", "w", "w+", "a", "a+", "wx", "ax", "as"] {
@@ -1017,13 +991,5 @@ mod sso_tests_1781 {
             let got = unsafe { decode_flags_string(f64::from_bits(v.bits())) };
             assert_eq!(got.as_deref(), Some(flag), "decode mismatch for {flag:?}");
         }
-    }
-
-    #[test]
-    fn open_flag_is_read_only_recognizes_sso_flags() {
-        let r = crate::value::JSValue::try_short_string(b"r").unwrap();
-        assert!(unsafe { open_flag_is_read_only(f64::from_bits(r.bits())) });
-        let w = crate::value::JSValue::try_short_string(b"w").unwrap();
-        assert!(!unsafe { open_flag_is_read_only(f64::from_bits(w.bits())) });
     }
 }

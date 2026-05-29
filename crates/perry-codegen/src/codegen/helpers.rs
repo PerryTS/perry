@@ -556,7 +556,7 @@ pub(super) fn init_static_fields_late(
                 }
                 let v = crate::expr::lower_expr(ctx, init_expr)?;
                 let g_ref = format!("@{}", global_name);
-                ctx.block().store(DOUBLE, &v, &g_ref);
+                crate::expr::emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
             }
         }
     }
@@ -786,7 +786,7 @@ pub(super) fn emit_namespace_populator(
         ],
     );
     let ns_name = format!("__perry_ns_{}", module_prefix);
-    blk.store(DOUBLE, &result, &format!("@{}", ns_name));
+    crate::expr::emit_root_nanbox_store_on_block(blk, &result, &format!("@{}", ns_name));
     let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
     blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
 }

@@ -4,8 +4,6 @@
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 use crate::closure::ClosureHeader;
 
@@ -169,7 +167,9 @@ pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
     unsafe {
         match fs_open_sync_result(path_value, flags_value) {
             Ok(fd) => fd as f64,
-            Err(_) => -1.0,
+            Err((err, path)) => {
+                crate::exception::js_throw(build_fs_error_value(&err, "open", &path))
+            }
         }
     }
 }

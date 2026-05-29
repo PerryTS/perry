@@ -125,19 +125,6 @@ impl CopyingPointerSet {
         })
     }
 
-    pub(super) fn ensure_malloc_registry_for_copy_only_preflight(&self) {
-        if self.malloc_registry_available.get() {
-            return;
-        }
-        MALLOC_STATE.with(|s| {
-            let mut s = s.borrow_mut();
-            ensure_set_built(&mut s);
-            if s.malloc_registry_available() {
-                self.malloc_registry_available.set(true);
-            }
-        });
-    }
-
     #[inline]
     pub(super) fn raw_pointer_candidate(bits: u64) -> bool {
         (0x1000..=POINTER_MASK).contains(&bits) && bits & 0x7 == 0
@@ -677,84 +664,6 @@ pub(super) fn scan_remembered_dirty_slots_copying(
     stats
 }
 
-pub(super) struct CopyOnlyRootPreflight<'a> {
-    pub(super) ptrs: &'a CopyingPointerSet,
-    pub(super) fallback_reason: Option<CopiedMinorFallbackReason>,
-    pub(super) stats: LegacyRootTraceStats,
-}
-
-impl<'a> CopyOnlyRootPreflight<'a> {
-    pub(super) fn new(
-        ptrs: &'a CopyingPointerSet,
-        registered_rust_scanners: usize,
-        registered_ffi_scanners: usize,
-    ) -> Self {
-        Self {
-            ptrs,
-            fallback_reason: None,
-            stats: LegacyRootTraceStats {
-                registered_rust_scanners,
-                registered_ffi_scanners,
-                ..LegacyRootTraceStats::default()
-            },
-        }
-    }
-
-    pub(super) fn check_bits(&mut self, bits: u64) {
-        self.stats.emitted_roots += 1;
-        let Some(addr) = self.decode_copy_only_addr(bits) else {
-            return;
-        };
-        let Some(ptr) = self.ptrs.classify_arena(addr) else {
-            self.ptrs.ensure_malloc_registry_for_copy_only_preflight();
-            if self.ptrs.classify_malloc(addr).is_some() {
-                self.stats.emitted_malloc_roots += 1;
-                self.fallback_reason = Some(CopiedMinorFallbackReason::CopyOnlyRoots);
-            } else {
-                self.stats.malformed_roots += 1;
-            }
-            return;
-        };
-
-        match ptr.kind {
-            CopyingPointerKind::Eden
-            | CopyingPointerKind::FromSurvivor
-            | CopyingPointerKind::ToSurvivor => {
-                self.stats.emitted_young_roots += 1;
-                self.fallback_reason = Some(CopiedMinorFallbackReason::CopyOnlyRoots);
-            }
-            CopyingPointerKind::Longlived | CopyingPointerKind::Old => {
-                self.stats.emitted_old_roots += 1;
-            }
-            CopyingPointerKind::Malloc => unreachable!("malloc roots are classified separately"),
-        }
-    }
-
-    pub(super) fn decode_copy_only_addr(&mut self, bits: u64) -> Option<usize> {
-        let tag = bits & TAG_MASK;
-        if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-            let addr = (bits & POINTER_MASK) as usize;
-            return (addr != 0).then_some(addr);
-        }
-        if tag >= 0x7FF8_0000_0000_0000 {
-            return None;
-        }
-        if !CopyingPointerSet::raw_pointer_candidate(bits) {
-            return None;
-        }
-        Some(bits as usize)
-    }
-}
-
-pub(super) extern "C" fn perry_ffi_copy_only_preflight_root(value: f64, ctx: *mut c_void) {
-    if ctx.is_null() {
-        return;
-    }
-    unsafe {
-        (*(ctx as *mut CopyOnlyRootPreflight<'_>)).check_bits(value.to_bits());
-    }
-}
-
 pub(super) struct CopiedMinorEligibility {
     pub(super) eligible: bool,
     pub(super) fallback_reason: CopiedMinorFallbackReason,
@@ -767,6 +676,13 @@ pub(super) struct CopiedMinorEligibility {
 
 impl CopiedMinorEligibility {
     pub(super) fn evaluate(trigger_kind: GcTriggerKind) -> Self {
+        Self::evaluate_with_stack_decision(trigger_kind, conservative_stack_scan_decision())
+    }
+
+    pub(super) fn evaluate_with_stack_decision(
+        trigger_kind: GcTriggerKind,
+        stack_decision: ConservativeStackScanDecision,
+    ) -> Self {
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger_kind);
         if !old_to_young_tracking_complete() {
             return Self::fallback(
@@ -774,10 +690,7 @@ impl CopiedMinorEligibility {
                 malloc_sweep_due,
             );
         }
-        if matches!(
-            conservative_stack_scan_decision(),
-            ConservativeStackScanDecision::Scan
-        ) {
+        if matches!(stack_decision, ConservativeStackScanDecision::Scan) {
             return Self::fallback(
                 CopiedMinorFallbackReason::ConservativeStack,
                 malloc_sweep_due,
@@ -862,24 +775,17 @@ impl CopiedMinorEligibility {
     }
 
     pub(super) fn copy_only_root_preflight_reason(
-        ptrs: &CopyingPointerSet,
+        _ptrs: &CopyingPointerSet,
     ) -> (Option<CopiedMinorFallbackReason>, LegacyRootTraceStats) {
-        let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
-        let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
-        let mut preflight = CopyOnlyRootPreflight::new(ptrs, scanners.len(), ffi_scanners.len());
-
-        for scanner in scanners {
-            scanner(&mut |value: f64| {
-                preflight.check_bits(value.to_bits());
-            });
-        }
-
-        let ctx = &mut preflight as *mut CopyOnlyRootPreflight<'_> as *mut c_void;
-        for scanner in ffi_scanners {
-            scanner(perry_ffi_copy_only_preflight_root, ctx);
-        }
-
-        (preflight.fallback_reason, preflight.stats)
+        let (registered_rust_scanners, registered_ffi_scanners) = copy_only_root_scanner_counts();
+        let stats = LegacyRootTraceStats {
+            registered_rust_scanners,
+            registered_ffi_scanners,
+            ..LegacyRootTraceStats::default()
+        };
+        let reason = (registered_rust_scanners > 0 || registered_ffi_scanners > 0)
+            .then_some(CopiedMinorFallbackReason::CopyOnlyRoots);
+        (reason, stats)
     }
 
     pub(super) fn mutable_root_preflight_reason(
@@ -927,6 +833,14 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     trigger_kind: GcTriggerKind,
 ) -> Option<CopiedMinorFastPathOutcome> {
     let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
+    gc_collect_minor_copying_fast_path_with_eligibility(trace, start, eligibility)
+}
+
+pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
+    trace: &mut Option<GcCycleTrace>,
+    start: Instant,
+    eligibility: CopiedMinorEligibility,
+) -> Option<CopiedMinorFastPathOutcome> {
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
         trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;

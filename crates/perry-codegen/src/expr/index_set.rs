@@ -37,9 +37,10 @@ use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
     buffer_access_materialization_reason, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
-    emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
+    emit_layout_note_slot_on_block, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block,
     expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
@@ -496,7 +497,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let new_box = nanbox_pointer_inline(blk, &new_handle);
                         let g_ref = format!("@{}", global_name);
                         // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                        ctx.block().store(DOUBLE, &new_box, &g_ref);
+                        emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
                         // Gen-GC Phase C2: write barrier on array element store.
                         if write_barrier_needed {
                             let val_bits = ctx.block().bitcast_double_to_i64(&val_double);

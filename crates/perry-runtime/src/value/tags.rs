@@ -120,6 +120,11 @@ pub(crate) type JsNativeCryptoDispatchFn =
 /// stdlib zlib FFIs since this crate cannot call them directly.
 pub(crate) type JsNativeZlibDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// node:querystring module-method dispatcher (registered by perry-stdlib).
+/// Same dependency-boundary pattern as crypto/zlib: captured callable exports
+/// can reach the stdlib implementation without perry-runtime depending on it.
+pub(crate) type JsNativeQuerystringDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:http / node:https / node:http2 server-factory dispatcher (registered
 /// by perry-stdlib under the `external-http-server-pump` feature, which is
 /// enabled whenever a program imports one of those modules). Lets a captured /
@@ -144,4 +149,5 @@ pub static JS_NEW_FROM_HANDLE_V8: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_
 pub static JS_HANDLE_TYPEOF: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_CRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_QUERYSTRING_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

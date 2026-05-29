@@ -602,6 +602,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_event_names", I64, &[]);
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
+    module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);

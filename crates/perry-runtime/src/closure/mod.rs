@@ -43,9 +43,12 @@ pub use dispatch::{
 };
 pub(crate) use dispatch::{reset_throw_not_callable_counter, resolve_call2_direct};
 
+#[cfg(test)]
+pub(crate) use dynamic_props::test_clear_closure_side_tables;
 pub(crate) use dynamic_props::{
     clone_closure_rebind_this, closure_dynamic_props_owner_moved,
     visit_closure_dynamic_prop_value_slots_mut, visit_closure_dynamic_prop_values_mut,
+    visit_closure_static_prototype_slot_mut,
 };
 pub use dynamic_props::{
     closure_dynamic_props_snapshot, closure_get_dynamic_prop, closure_set_dynamic_prop,

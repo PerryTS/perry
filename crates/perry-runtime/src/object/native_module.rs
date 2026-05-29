@@ -123,6 +123,35 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        "querystring" => Some(&[
+            b"unescapeBuffer",
+            b"unescape",
+            b"escape",
+            b"stringify",
+            b"encode",
+            b"parse",
+            b"decode",
+        ]),
+        "util" => Some(&[
+            b"callbackify",
+            b"debuglog",
+            b"deprecate",
+            b"format",
+            b"formatWithOptions",
+            b"getSystemErrorMap",
+            b"getSystemErrorName",
+            b"getSystemErrorMessage",
+            b"inherits",
+            b"inspect",
+            b"isArray",
+            b"isDeepStrictEqual",
+            b"promisify",
+            b"stripVTControlCharacters",
+            b"types",
+            b"parseArgs",
+            b"TextDecoder",
+            b"TextEncoder",
+        ]),
         "net" => Some(&[
             b"_createServerHandle",
             b"_normalizeArgs",
@@ -295,6 +324,7 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
         c.borrow_mut().insert(key, value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     });
     value
 }
@@ -558,6 +588,8 @@ pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32
     let (module, method) = bound_native_callable_module_and_method(value)?;
     match (module.as_str(), method.as_str()) {
         ("console", "Console") => Some(1),
+        ("util", "isArray") => Some(1),
+        ("process", "getBuiltinModule") => Some(1),
         _ => native_callable_export_arity(module.as_str(), method.as_str()),
     }
 }
@@ -639,6 +671,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "removeAllListeners")
             | ("process", "setMaxListeners")
             | ("process", "getMaxListeners")
+            | ("process", "getBuiltinModule")
             | ("process", "cpuUsage")
             | ("process", "resourceUsage")
             | ("process", "getActiveResourcesInfo")
@@ -916,6 +949,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
             | ("util", "getSystemErrorMap")
+            | ("util", "parseEnv")
             | ("util", "isArray")
             | ("util", "promisify")
             | ("util", "callbackify")
@@ -1025,6 +1059,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("punycode", "encode")
             | ("punycode", "toASCII")
             | ("punycode", "toUnicode")
+            | ("querystring", "unescapeBuffer")
             | ("console", "Console")
             | ("console", "log")
             | ("console", "info")
@@ -2266,7 +2301,7 @@ fn create_cached_sub_namespace(name: &str, cache: &std::sync::atomic::AtomicU64)
 
     let result = create_sub_namespace(name);
     // GC_STORE_AUDIT(ROOT): os constants caches are mutable roots visited by scan_object_cache_roots_mut.
-    cache.store(result.to_bits(), Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(cache, result.to_bits(), Ordering::Relaxed);
     result
 }
 
@@ -2332,7 +2367,11 @@ unsafe fn http_methods_array() -> f64 {
     }
     let value = crate::value::js_nanbox_pointer(arr as i64);
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
-    HTTP_METHODS_CACHE.store(value.to_bits(), Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &HTTP_METHODS_CACHE,
+        value.to_bits(),
+        Ordering::Relaxed,
+    );
     value
 }
 
@@ -2430,6 +2469,10 @@ unsafe fn create_fs_constants_object() -> f64 {
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
     // GC_STORE_AUDIT(ROOT): FS_CONSTANTS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
-    FS_CONSTANTS_CACHE.store(result.to_bits(), Ordering::Relaxed);
+    crate::gc::runtime_store_root_atomic_nanbox_u64(
+        &FS_CONSTANTS_CACHE,
+        result.to_bits(),
+        Ordering::Relaxed,
+    );
     result
 }

@@ -42,7 +42,7 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
         }
         SMALL_INT_CACHE.with(|c| unsafe {
             // GC_STORE_AUDIT(ROOT): SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.
-            (*c.get())[idx] = ptr;
+            crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut (*c.get())[idx], ptr);
         });
         return ptr;
     }
@@ -106,7 +106,10 @@ pub(crate) fn test_seed_small_int_cache_root(index: usize, string_ptr: usize) {
     let idx = index % SMALL_INT_CACHE_SIZE;
     SMALL_INT_CACHE.with(|c| unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors SMALL_INT_CACHE roots scanned by scan_small_int_cache_roots_mut.
-        (*c.get())[idx] = string_ptr as *mut StringHeader;
+        crate::gc::runtime_store_root_raw_mut_ptr_slot(
+            &raw mut (*c.get())[idx],
+            string_ptr as *mut StringHeader,
+        );
     });
 }
 
@@ -121,7 +124,10 @@ pub(crate) fn test_clear_small_int_cache_root(index: usize) {
     let idx = index % SMALL_INT_CACHE_SIZE;
     SMALL_INT_CACHE.with(|c| unsafe {
         // GC_STORE_AUDIT(ROOT): test clear writes a non-pointer sentinel into scanned SMALL_INT_CACHE roots.
-        (*c.get())[idx] = std::ptr::null_mut();
+        crate::gc::runtime_store_root_raw_mut_ptr_slot(
+            &raw mut (*c.get())[idx],
+            std::ptr::null_mut(),
+        );
     });
 }
 

@@ -39,6 +39,21 @@ pub(crate) fn emit_write_barrier_slot_on_block(
     );
 }
 
+pub(crate) fn emit_root_nanbox_store_on_block(blk: &mut LlBlock, value: &str, root_slot: &str) {
+    blk.store(DOUBLE, value, root_slot);
+    let value_bits = blk.bitcast_double_to_i64(value);
+    blk.call_void("js_write_barrier_root_nanbox", &[(I64, &value_bits)]);
+}
+
+pub(crate) fn emit_root_heap_word_store_on_block(
+    blk: &mut LlBlock,
+    value_bits: &str,
+    root_slot: &str,
+) {
+    blk.store(I64, value_bits, root_slot);
+    blk.call_void("js_write_barrier_root_heap_word", &[(I64, value_bits)]);
+}
+
 /// GC layout-note emission (refs #1090) — at heap-slot stores whose
 /// content is known statically, record the per-slot value type so the
 /// generational GC can decide whether the slot can be pointer-free

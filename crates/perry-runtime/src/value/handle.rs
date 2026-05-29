@@ -56,6 +56,14 @@ pub extern "C" fn js_set_native_zlib_dispatch(func: JsNativeZlibDispatchFn) {
     JS_NATIVE_ZLIB_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the node:querystring module-method dispatcher. Registered by
+/// perry-stdlib at startup so a captured `querystring.unescapeBuffer` reaches
+/// the stdlib FFI rather than falling through to `undefined`.
+#[no_mangle]
+pub extern "C" fn js_set_native_querystring_dispatch(func: JsNativeQuerystringDispatchFn) {
+    JS_NATIVE_QUERYSTRING_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the node:http/https/http2 server-factory dispatcher. Registered by
 /// perry-stdlib at startup (under `external-http-server-pump`) so a captured /
 /// aliased `createServer` reaches the perry-ext-http-server impls, which this

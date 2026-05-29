@@ -451,7 +451,7 @@ fn lock_safe_runtime_scanners_media_callbacks_defers_direct_minor_gc() {
 }
 
 #[test]
-fn test_conservative_stack_scan_auto_policy_skips_active_shadow_frame() {
+fn test_conservative_stack_scan_auto_policy_skips_native_stack_by_default() {
     let _guard = ShadowAndGlobalRootResetGuard;
     reset_shadow_stack();
     assert_eq!(
@@ -460,7 +460,7 @@ fn test_conservative_stack_scan_auto_policy_skips_active_shadow_frame() {
     );
     assert_eq!(
         conservative_stack_scan_decision_for(ConservativeStackScanMode::Auto, false),
-        ConservativeStackScanDecision::Scan
+        ConservativeStackScanDecision::SkipDisabled
     );
 
     let h = js_shadow_frame_push(1);
@@ -470,7 +470,7 @@ fn test_conservative_stack_scan_auto_policy_skips_active_shadow_frame() {
             ConservativeStackScanMode::Auto,
             shadow_stack_has_active_frame()
         ),
-        ConservativeStackScanDecision::SkipShadowStackActive
+        ConservativeStackScanDecision::SkipDisabled
     );
     js_shadow_frame_pop(h);
 }

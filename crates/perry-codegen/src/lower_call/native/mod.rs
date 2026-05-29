@@ -26,7 +26,9 @@ use perry_dispatch::{ArgKind as UiArgKind, ReturnKind as UiReturnKind};
 use perry_hir::Expr;
 use perry_types::Type as HirType;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{
+    emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
+};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
@@ -1986,7 +1988,7 @@ pub(crate) fn lower_native_method_call(
                         ctx.block().store(DOUBLE, &new_box, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);
-                        ctx.block().store(DOUBLE, &new_box, &g_ref);
+                        emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
                     }
                 }
                 Expr::PropertyGet {
@@ -2072,7 +2074,7 @@ pub(crate) fn lower_native_method_call(
                         ctx.block().store(DOUBLE, &new_box, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);
-                        ctx.block().store(DOUBLE, &new_box, &g_ref);
+                        emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
                     }
                 }
                 Expr::PropertyGet {

@@ -10,7 +10,8 @@ use anyhow::{bail, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
-    lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle, unbox_to_i64, FnCtx,
+    emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, nanbox_string_inline,
+    unbox_str_handle, unbox_to_i64, FnCtx,
 };
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64, PTR};
@@ -701,7 +702,7 @@ pub(crate) fn lower_array_method(
                     ctx.block().store(DOUBLE, &modified_box, &slot);
                 } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
                     let g_ref = format!("@{}", global_name);
-                    ctx.block().store(DOUBLE, &modified_box, &g_ref);
+                    emit_root_nanbox_store_on_block(ctx.block(), &modified_box, &g_ref);
                 }
             }
             Ok(nanbox_pointer_inline(ctx.block(), &deleted_handle))

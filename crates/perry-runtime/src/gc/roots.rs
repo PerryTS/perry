@@ -128,7 +128,6 @@ pub(super) enum ConservativeStackScanMode {
 pub(super) enum ConservativeStackScanDecision {
     Scan,
     SkipDisabled,
-    SkipShadowStackActive,
 }
 
 impl ConservativeStackScanDecision {
@@ -137,7 +136,6 @@ impl ConservativeStackScanDecision {
         match self {
             Self::Scan => "scan",
             Self::SkipDisabled => "skip_disabled",
-            Self::SkipShadowStackActive => "skip_shadow_stack_active",
         }
     }
 }
@@ -172,15 +170,12 @@ pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
 #[inline]
 pub(super) fn conservative_stack_scan_decision_for(
     mode: ConservativeStackScanMode,
-    shadow_frame_active: bool,
+    _shadow_frame_active: bool,
 ) -> ConservativeStackScanDecision {
     match mode {
         ConservativeStackScanMode::Disabled => ConservativeStackScanDecision::SkipDisabled,
         ConservativeStackScanMode::Full => ConservativeStackScanDecision::Scan,
-        ConservativeStackScanMode::Auto if shadow_frame_active => {
-            ConservativeStackScanDecision::SkipShadowStackActive
-        }
-        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::Scan,
+        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::SkipDisabled,
     }
 }
 
@@ -193,13 +188,19 @@ pub(super) fn conservative_stack_scan_decision() -> ConservativeStackScanDecisio
 
 /// Register a root scanner function.
 /// Each scanner is called during the mark phase to discover roots.
-/// This legacy API exposes copied values only. When evacuation is
-/// enabled, every discovered target is treated as pinned because the GC
-/// has no mutable slot it can rewrite after forwarding.
+/// This legacy API exposes copied values only. It remains supported for
+/// fallback/full GC, where discovered targets can be pinned, but registering
+/// any copy-only scanner makes low-pause copied-minor collection ineligible.
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
     ROOT_SCANNERS.with(|scanners| {
         scanners.borrow_mut().push(scanner);
     });
+}
+
+pub(super) fn copy_only_root_scanner_counts() -> (usize, usize) {
+    let rust_scanners = ROOT_SCANNERS.with(|scanners| scanners.borrow().len());
+    let ffi_scanners = FFI_ROOT_SCANNERS.with(|scanners| scanners.borrow().len());
+    (rust_scanners, ffi_scanners)
 }
 
 /// Register a runtime-owned root scanner that exposes mutable slots.
@@ -250,8 +251,9 @@ pub(super) const PERRY_FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 /// `perry-ffi` adapts its Rust-facing `fn(&mut dyn FnMut(f64))`
 /// convenience API to this callback shape so native wrapper archives
 /// can stay runtime-free. Like the Rust legacy scanner API, this is
-/// copy-only storage from the GC's perspective; evacuation pins those
-/// roots instead of attempting to rewrite native-owned slots.
+/// copy-only storage from the GC's perspective. Registration keeps the
+/// fallback/full-GC path compatible, but makes low-pause copied-minor
+/// collection ineligible because native-owned slots cannot be rewritten.
 #[no_mangle]
 pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner) {
     FFI_ROOT_SCANNERS.with(|scanners| {
@@ -293,8 +295,14 @@ pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner_named(
 /// Called by codegen in module init functions.
 #[no_mangle]
 pub extern "C" fn js_gc_register_global_root(ptr: i64) {
+    let root = ptr as *mut u64;
+    if !root.is_null() {
+        unsafe {
+            runtime_write_barrier_root_heap_word(*root);
+        }
+    }
     GLOBAL_ROOTS.with(|roots| {
-        roots.borrow_mut().push(ptr as *mut u64);
+        roots.borrow_mut().push(root);
     });
 }
 
@@ -306,10 +314,7 @@ pub(super) fn mark_stack_roots_for_decision(
 ) -> ConservativeRootTraceStats {
     match decision {
         ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
-        ConservativeStackScanDecision::SkipDisabled
-        | ConservativeStackScanDecision::SkipShadowStackActive => {
-            ConservativeRootTraceStats::default()
-        }
+        ConservativeStackScanDecision::SkipDisabled => ConservativeRootTraceStats::default(),
     }
 }
 
@@ -1227,6 +1232,7 @@ impl RuntimeHandleScope {
 
     #[inline]
     pub(super) fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
+        runtime_handle_slot_write_barrier(slot);
         let index = RUNTIME_HANDLE_STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
             let index = stack.len();
@@ -1319,6 +1325,19 @@ impl RuntimeHandleScope {
     }
 }
 
+#[inline]
+pub(super) fn runtime_handle_slot_write_barrier(slot: RuntimeHandleSlot) {
+    match slot {
+        RuntimeHandleSlot::Nanbox(bits) => runtime_write_barrier_root_nanbox(bits),
+        RuntimeHandleSlot::HeapWord(bits) => runtime_write_barrier_root_heap_word(bits),
+        RuntimeHandleSlot::RawTagged { addr, tag } => {
+            if addr != 0 {
+                runtime_write_barrier_root_nanbox(tag | (addr as u64 & POINTER_MASK));
+            }
+        }
+    }
+}
+
 impl Default for RuntimeHandleScope {
     fn default() -> Self {
         Self::new()
@@ -1382,6 +1401,7 @@ impl<'scope> RuntimeHandle<'scope> {
             RuntimeHandleSlot::Nanbox(current) => *current = bits,
             _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
         });
+        runtime_write_barrier_root_nanbox(bits);
     }
 
     pub fn get_heap_word_u64(&self) -> u64 {
@@ -1396,6 +1416,7 @@ impl<'scope> RuntimeHandle<'scope> {
             RuntimeHandleSlot::HeapWord(current) => *current = bits,
             _ => panic!("runtime handle kind mismatch: expected heap word"),
         });
+        runtime_write_barrier_root_heap_word(bits);
     }
 
     pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
@@ -1407,7 +1428,12 @@ impl<'scope> RuntimeHandle<'scope> {
 
     pub fn set_raw_mut_ptr<T>(&self, ptr: *mut T) {
         self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, .. } => *addr = ptr as usize,
+            RuntimeHandleSlot::RawTagged { addr, tag } => {
+                *addr = ptr as usize;
+                if !ptr.is_null() {
+                    runtime_write_barrier_root_nanbox(*tag | (ptr as u64 & POINTER_MASK));
+                }
+            }
             _ => panic!("runtime handle kind mismatch: expected raw pointer"),
         });
     }
@@ -1421,7 +1447,12 @@ impl<'scope> RuntimeHandle<'scope> {
 
     pub fn set_raw_const_ptr<T>(&self, ptr: *const T) {
         self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, .. } => *addr = ptr as usize,
+            RuntimeHandleSlot::RawTagged { addr, tag } => {
+                *addr = ptr as usize;
+                if !ptr.is_null() {
+                    runtime_write_barrier_root_nanbox(*tag | (ptr as u64 & POINTER_MASK));
+                }
+            }
             _ => panic!("runtime handle kind mismatch: expected raw pointer"),
         });
     }
