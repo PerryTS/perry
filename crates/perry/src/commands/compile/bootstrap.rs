@@ -246,6 +246,25 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
     if importers.len() > limit {
         detail.push_str(&format!("\n  ... and {} more", importers.len() - limit));
     }
+    let mut packages: Vec<String> = importers
+        .iter()
+        .filter_map(|path| super::audit_manifest::package_name_for_path(&path.to_string_lossy()))
+        .filter(|pkg| !ctx.compile_packages.contains(pkg))
+        .collect();
+    packages.sort();
+    packages.dedup();
+    let package_hint = if packages.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nPackage hint: the following npm package(s) are still routed \
+             to runtime JavaScript because they are not in \
+             `perry.compilePackages`: {}. If you have reviewed and trust \
+             them, add them to both `perry.compilePackages` and \
+             `perry.allow.compilePackages`.",
+            packages.join(", ")
+        )
+    };
     anyhow::bail!(
         "JavaScript runtime (V8) support has been removed. This build of \
          Perry compiles TypeScript ahead-of-time only and cannot evaluate \
@@ -254,8 +273,47 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
          \n\
          Port the offending module(s) to TypeScript, add the owning package \
          to `perry.compilePackages` so it is compiled natively, or replace \
-         it with a native Perry stdlib equivalent."
+         it with a native Perry stdlib equivalent.{package_hint}"
     );
+}
+
+#[cfg(test)]
+mod js_runtime_gate_tests {
+    use std::path::PathBuf;
+
+    use super::{enforce_js_runtime_gate, CompilationContext};
+
+    #[test]
+    fn diagnostic_suggests_missing_compile_package_on_windows_paths() {
+        let mut ctx = CompilationContext::new(PathBuf::from(r"C:\repo"));
+        ctx.compile_packages.insert("ps-node".to_string());
+        ctx.compile_packages.insert("table-parser".to_string());
+        ctx.js_runtime_importers.push(PathBuf::from(
+            r"C:\repo\node_modules\connected-domain\index.js",
+        ));
+
+        let message = enforce_js_runtime_gate(&ctx)
+            .expect_err("runtime JS importer must fail the V8-free gate")
+            .to_string();
+
+        assert!(message.contains("connected-domain"));
+        assert!(message.contains("perry.compilePackages"));
+        assert!(message.contains("perry.allow.compilePackages"));
+    }
+
+    #[test]
+    fn diagnostic_does_not_suggest_already_opted_in_packages() {
+        let mut ctx = CompilationContext::new(PathBuf::from("/repo"));
+        ctx.compile_packages.insert("already-native".to_string());
+        ctx.js_runtime_importers
+            .push(PathBuf::from("/repo/node_modules/already-native/index.js"));
+
+        let message = enforce_js_runtime_gate(&ctx)
+            .expect_err("runtime JS importer must fail the V8-free gate")
+            .to_string();
+
+        assert!(!message.contains("Package hint:"));
+    }
 }
 
 /// Recompute project_root as the common ancestor of all module paths.

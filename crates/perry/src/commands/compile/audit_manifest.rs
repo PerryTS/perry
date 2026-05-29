@@ -20,8 +20,9 @@ use super::CompilationContext;
 /// `node_modules/@scope/pkg/...` returns `@scope/pkg`. Returns `None`
 /// for user-source files outside `node_modules/`.
 pub(super) fn package_name_for_path(source_path: &str) -> Option<String> {
-    let idx = source_path.rfind("node_modules/")?;
-    let after = &source_path[idx + "node_modules/".len()..];
+    let normalized = source_path.replace('\\', "/");
+    let idx = normalized.rfind("node_modules/")?;
+    let after = &normalized[idx + "node_modules/".len()..];
     if let Some(stripped) = after.strip_prefix('@') {
         let mut parts = stripped.splitn(3, '/');
         let scope = parts.next().unwrap_or("");
@@ -152,6 +153,14 @@ mod js_runtime_gate_tests {
         assert_eq!(
             package_name_for_path("/repo/node_modules/outer/node_modules/inner/lib/index.js"),
             Some("inner".to_string())
+        );
+    }
+
+    #[test]
+    fn windows_path_under_node_modules() {
+        assert_eq!(
+            package_name_for_path(r"C:\repo\node_modules\connected-domain\index.js"),
+            Some("connected-domain".to_string())
         );
     }
 
