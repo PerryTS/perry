@@ -164,7 +164,8 @@ static KEEP_NS_SET_DEFAULT_HWM: extern "C" fn(f64, f64) -> f64 =
 static KEEP_NS_ADD_ABORT_SIGNAL: extern "C" fn(f64, f64) -> f64 =
     super::js_node_stream_add_abort_signal;
 #[used]
-static KEEP_NS_COMPOSE: extern "C" fn(f64) -> f64 = super::js_node_stream_compose;
+static KEEP_NS_COMPOSE: extern "C" fn(*const crate::array::ArrayHeader) -> f64 =
+    super::js_node_stream_compose;
 #[used]
 static KEEP_NS_PIPELINE: extern "C" fn(*const crate::array::ArrayHeader) -> f64 =
     super::js_node_stream_pipeline;

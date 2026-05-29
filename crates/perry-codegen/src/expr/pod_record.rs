@@ -10,7 +10,9 @@ use crate::native_value::{
 };
 use crate::types::{DOUBLE, F32, I32, I64, I8};
 
-use super::{lower_expr, lower_expr_native, nanbox_pointer_inline, FnCtx};
+use super::{
+    emit_root_nanbox_store_on_block, lower_expr, lower_expr_native, nanbox_pointer_inline, FnCtx,
+};
 
 pub(crate) fn materialize_pod_local(
     ctx: &mut FnCtx<'_>,
@@ -229,7 +231,7 @@ pub(crate) fn lower_pod_local_reassignment(
     }
     if let Some(global_name) = ctx.module_globals.get(&local_id).cloned() {
         let global_ref = format!("@{}", global_name);
-        ctx.block().store(DOUBLE, &value_js, &global_ref);
+        emit_root_nanbox_store_on_block(ctx.block(), &value_js, &global_ref);
     }
     record_pod_dynamic_fallback(
         ctx,
@@ -381,7 +383,7 @@ fn materialize_pod_parts(
     );
     if let Some(global_name) = ctx.module_globals.get(&local_id).cloned() {
         let global_ref = format!("@{}", global_name);
-        ctx.block().store(DOUBLE, &materialized_value, &global_ref);
+        emit_root_nanbox_store_on_block(ctx.block(), &materialized_value, &global_ref);
     }
     materialized_value
 }

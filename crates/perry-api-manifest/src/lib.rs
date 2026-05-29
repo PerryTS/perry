@@ -269,6 +269,21 @@ mod tests {
     }
 
     #[test]
+    fn util_is_array_is_manifest_method() {
+        let entry = module_has_symbol("node:util", "isArray")
+            .expect("util.isArray should be in the manifest");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: false,
+                class_filter: None
+            }
+        ));
+        assert_eq!(entry.params.len(), 1);
+        assert!(matches!(entry.returns, TypeSpec::Bool));
+    }
+
+    #[test]
     fn known_modules_consistent_with_manifest() {
         // Every entry's module must appear in NATIVE_MODULES.
         // Catches typos and entries on un-registered modules.

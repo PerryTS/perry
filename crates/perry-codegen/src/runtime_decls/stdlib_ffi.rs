@@ -921,7 +921,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // #1541: addAbortSignal(signal, stream) — identity-returns the stream.
     module.declare_function("js_node_stream_add_abort_signal", DOUBLE, &[DOUBLE, DOUBLE]);
     // #1539: compose(...streams) -> new Duplex; duplexPair(opts) -> [Duplex, Duplex].
-    module.declare_function("js_node_stream_compose", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_compose", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_pipeline", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_finished", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_duplex_pair", DOUBLE, &[DOUBLE]);
@@ -1010,6 +1010,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // STRING_TAG value directly.
     module.declare_function("js_querystring_escape", DOUBLE, &[DOUBLE]);
     module.declare_function("js_querystring_unescape", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_querystring_unescape_buffer", I64, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_querystring_parse",
         I64,

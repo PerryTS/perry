@@ -157,6 +157,7 @@ pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
             return;
         }
         (*ptr).value = value;
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     }
 }
 
@@ -185,4 +186,9 @@ fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
         return false;
     }
     true
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_box_registry() {
+    BOX_REGISTRY.with(|r| r.borrow_mut().clear());
 }

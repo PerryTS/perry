@@ -2,7 +2,7 @@
 
 use super::*;
 
-use crate::expr::lower_expr_with_expected_type;
+use crate::expr::{emit_root_nanbox_store_on_block, lower_expr_with_expected_type};
 use crate::native_value::{
     AliasState, BufferAccessMode, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
     LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
@@ -686,7 +686,7 @@ pub(crate) fn lower_let(
         if let Some(init_expr) = init {
             let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
             let g_ref = format!("@{}", global_name);
-            ctx.block().store(DOUBLE, &v, &g_ref);
+            emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
 
             // Buffer data-pointer slot: when the HIR facts identify a fresh
             // immutable u8 buffer, pre-compute the data base pointer (handle +

@@ -127,6 +127,7 @@ pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
             s.stack[slot] = value;
             s.active[slot] = value != 0;
             if value != 0 {
+                crate::gc::runtime_write_barrier_root_nanbox(value);
                 let ptr = s.slot_ptrs[slot] as *mut u64;
                 if !ptr.is_null() {
                     *ptr = value;
@@ -155,6 +156,7 @@ pub extern "C" fn js_shadow_slot_bind(idx: u32, value_slot: *mut u64) {
             s.slot_ptrs[slot] = value_slot as usize;
             s.stack[slot] = *value_slot;
             s.active[slot] = true;
+            crate::gc::runtime_write_barrier_root_nanbox(*value_slot);
         }
     });
 }

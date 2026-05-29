@@ -171,14 +171,15 @@ pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
     sticky
 }
 
-pub(super) unsafe fn remember_live_old_to_young_slots(
+pub(super) unsafe fn remember_retained_old_to_young_slots(
     sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
+    require_marked: bool,
 ) {
     if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
-    if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+    if require_marked && (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
         return;
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
@@ -191,16 +192,18 @@ pub(super) unsafe fn remember_live_old_to_young_slots(
     });
 }
 
-pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet {
+pub(super) fn rebuild_live_old_to_young_remembered_set(
+    require_marked: bool,
+) -> StickyRememberedSet {
     let mut sticky = StickyRememberedSet::default();
     crate::arena::old_arena_walk_objects(|hp| unsafe {
-        remember_live_old_to_young_slots(&mut sticky, hp as *mut GcHeader);
+        remember_retained_old_to_young_slots(&mut sticky, hp as *mut GcHeader, require_marked);
     });
     MALLOC_STATE.with(|s| {
         let s = s.borrow();
         for &header in s.objects.iter() {
             unsafe {
-                remember_live_old_to_young_slots(&mut sticky, header);
+                remember_retained_old_to_young_slots(&mut sticky, header, require_marked);
             }
         }
     });
@@ -340,6 +343,93 @@ pub(super) fn verify_old_to_young_edges_covered() -> OldYoungEdgeVerifyStats {
     });
     if stats.missing_edges != 0 {
         panic_old_young_edge_verifier_failed(stats);
+    }
+    stats
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct MarkInvariantMissingEdge {
+    pub(super) parent: usize,
+    pub(super) slot: usize,
+    pub(super) child: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct MarkInvariantVerifyStats {
+    pub(super) checked_marked_objects: usize,
+    pub(super) checked_edges: usize,
+    pub(super) missing_edges: usize,
+    pub(super) first_missing: Option<MarkInvariantMissingEdge>,
+}
+
+impl MarkInvariantVerifyStats {
+    fn record_missing(&mut self, parent: usize, slot: usize, child: usize) {
+        self.missing_edges = self.missing_edges.saturating_add(1);
+        if self.first_missing.is_none() {
+            self.first_missing = Some(MarkInvariantMissingEdge {
+                parent,
+                slot,
+                child,
+            });
+        }
+    }
+}
+
+#[cold]
+pub(super) fn panic_mark_invariant_verifier_failed(stats: MarkInvariantVerifyStats) -> ! {
+    let missing = stats.first_missing.unwrap_or_default();
+    panic!(
+        "mark-invariant-verifier failed: checked_marked_objects={} checked_edges={} missing_edges={} first_missing_parent=0x{:x} first_missing_slot=0x{:x} first_missing_child=0x{:x}",
+        stats.checked_marked_objects,
+        stats.checked_edges,
+        stats.missing_edges,
+        missing.parent,
+        missing.slot,
+        missing.child
+    );
+}
+
+pub(super) unsafe fn verify_marked_object_child_marks(
+    stats: &mut MarkInvariantVerifyStats,
+    header: *mut GcHeader,
+) {
+    if header.is_null() {
+        return;
+    }
+    let flags = (*header).gc_flags;
+    if flags & GC_FLAG_FORWARDED != 0 || flags & GC_FLAG_MARKED == 0 {
+        return;
+    }
+    let parent = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+    stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
+    visit_gc_rewrite_slots(header, |slot| unsafe {
+        slot.record_layout_read();
+        let Some((child, child_header)) = current_heap_header_for_heap_word(*slot.slot, None)
+        else {
+            return;
+        };
+        stats.checked_edges = stats.checked_edges.saturating_add(1);
+        if (*child_header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+            stats.record_missing(parent, slot.slot as usize, child);
+        }
+    });
+}
+
+pub(super) fn verify_marked_heap_no_unmarked_children() -> MarkInvariantVerifyStats {
+    let mut stats = MarkInvariantVerifyStats::default();
+    crate::arena::arena_walk_objects(|hp| unsafe {
+        verify_marked_object_child_marks(&mut stats, hp as *mut GcHeader);
+    });
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        for &header in s.objects.iter() {
+            unsafe {
+                verify_marked_object_child_marks(&mut stats, header);
+            }
+        }
+    });
+    if stats.missing_edges != 0 {
+        panic_mark_invariant_verifier_failed(stats);
     }
     stats
 }

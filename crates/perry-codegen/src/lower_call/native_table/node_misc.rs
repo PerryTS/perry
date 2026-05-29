@@ -26,6 +26,15 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "querystring",
         has_receiver: false,
+        method: "unescapeBuffer",
+        class_filter: None,
+        runtime: "js_querystring_unescape_buffer",
+        args: &[NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "querystring",
+        has_receiver: false,
         method: "parse",
         class_filter: None,
         runtime: "js_querystring_parse",
