@@ -244,7 +244,7 @@ impl SH for Expr {
             Expr::WebCryptoSign { algorithm, key, data, } => { tag(h, 199); algorithm.as_ref().hash(h); key.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoVerify { algorithm, key, signature, data, } => { tag(h, 200); algorithm.as_ref().hash(h); key.as_ref().hash(h); signature.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoDeriveBits { algorithm, base_key, length, } => { tag(h, 473); algorithm.as_ref().hash(h); base_key.as_ref().hash(h); length.as_ref().hash(h); }
-            Expr::WebCryptoDeriveKey { algorithm, base_key, derived_key_algorithm, extractable, usages, } => { tag(h, 474); algorithm.as_ref().hash(h); base_key.as_ref().hash(h); derived_key_algorithm.as_ref().hash(h); extractable.as_ref().hash(h); usages.as_ref().hash(h); }
+            Expr::WebCryptoDeriveKey { algorithm, base_key, derived_key_algorithm, extractable, usages, } => { tag(h, 12010); algorithm.as_ref().hash(h); base_key.as_ref().hash(h); derived_key_algorithm.as_ref().hash(h); extractable.as_ref().hash(h); usages.as_ref().hash(h); }
             Expr::WebCryptoEncrypt { algorithm, key, data, } => { tag(h, 466); algorithm.as_ref().hash(h); key.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoDecrypt { algorithm, key, data, } => { tag(h, 467); algorithm.as_ref().hash(h); key.as_ref().hash(h); data.as_ref().hash(h); }
             Expr::WebCryptoGenerateKey { algorithm, extractable, usages, } => { tag(h, 469); algorithm.as_ref().hash(h); extractable.as_ref().hash(h); usages.as_ref().hash(h); }
@@ -272,15 +272,15 @@ impl SH for Expr {
             Expr::OsLoadavg => tag(h, 218),
             Expr::OsMachine => tag(h, 219),
             Expr::OsVersion => tag(h, 220),
-            Expr::BufferFrom { data, encoding } => { tag(h, 215); data.as_ref().hash(h); encoding.hash(h); }
+            Expr::BufferFrom { data, encoding } => { tag(h, 12011); data.as_ref().hash(h); encoding.hash(h); }
             Expr::BufferFromArrayBuffer { data, byte_offset, length, } => { tag(h, 11220); data.as_ref().hash(h); byte_offset.as_ref().hash(h); length.hash(h); }
-            Expr::BufferAlloc { size, fill, encoding } => { tag(h, 216); size.as_ref().hash(h); fill.hash(h); encoding.hash(h); }
-            Expr::BufferAllocUnsafe(e) => { tag(h, 217); e.as_ref().hash(h); }
-            Expr::BufferConcat(e) => { tag(h, 218); e.as_ref().hash(h); }
-            Expr::BufferConcatWithLength { list, total_length } => { tag(h, 11222); list.as_ref().hash(h); total_length.as_ref().hash(h); }
-            Expr::BufferIsBuffer(e) => { tag(h, 219); e.as_ref().hash(h); }
+            Expr::BufferAlloc { size, fill, encoding } => { tag(h, 12012); size.as_ref().hash(h); fill.hash(h); encoding.hash(h); }
+            Expr::BufferAllocUnsafe(e) => { tag(h, 12013); e.as_ref().hash(h); }
+            Expr::BufferConcat(e) => { tag(h, 12014); e.as_ref().hash(h); }
+            Expr::BufferConcatWithLength { list, total_length } => { tag(h, 12035); list.as_ref().hash(h); total_length.as_ref().hash(h); }
+            Expr::BufferIsBuffer(e) => { tag(h, 12015); e.as_ref().hash(h); }
             Expr::BufferIsEncoding(e) => { tag(h, 11219); e.as_ref().hash(h); }
-            Expr::BufferByteLength { data, encoding } => { tag(h, 220); data.as_ref().hash(h); encoding.hash(h); }
+            Expr::BufferByteLength { data, encoding } => { tag(h, 12016); data.as_ref().hash(h); encoding.hash(h); }
             Expr::BufferToString { buffer, encoding } => { tag(h, 221); buffer.as_ref().hash(h); encoding.hash(h); }
             Expr::BufferLength(e) => { tag(h, 222); e.as_ref().hash(h); }
             Expr::BufferSlice { buffer, start, end } => { tag(h, 223); buffer.as_ref().hash(h); start.hash(h); end.hash(h); }
@@ -296,19 +296,19 @@ impl SH for Expr {
             Expr::Uint8ArrayGet { array, index } => { tag(h, 233); array.as_ref().hash(h); index.as_ref().hash(h); }
             Expr::Uint8ArraySet { array, index, value, } => { tag(h, 234); array.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::TypedArrayNew { kind, arg } => { tag(h, 235); kind.hash(h); arg.hash(h); }
-            Expr::NativeArenaAlloc(e) => { tag(h, 11237); e.as_ref().hash(h); }
-            Expr::NativeArenaView { owner, kind, byte_offset, length } => { tag(h, 11238); owner.as_ref().hash(h); kind.hash(h); byte_offset.as_ref().hash(h); length.as_ref().hash(h); }
-            Expr::NativePodView { owner, byte_offset, count, view_type } => { tag(h, 11241); owner.as_ref().hash(h); byte_offset.as_ref().hash(h); count.as_ref().hash(h); view_type.hash(h); }
-            Expr::NativeArenaDispose(e) => { tag(h, 11242); e.as_ref().hash(h); }
-            Expr::NativeMemoryFillU32 { view, value } => { tag(h, 11243); view.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::NativeMemoryCopy { dst, src } => { tag(h, 11244); dst.as_ref().hash(h); src.as_ref().hash(h); }
+            Expr::NativeArenaAlloc(e) => { tag(h, 12031); e.as_ref().hash(h); }
+            Expr::NativeArenaView { owner, kind, byte_offset, length } => { tag(h, 12032); owner.as_ref().hash(h); kind.hash(h); byte_offset.as_ref().hash(h); length.as_ref().hash(h); }
+            Expr::NativePodView { owner, byte_offset, count, view_type } => { tag(h, 12037); owner.as_ref().hash(h); byte_offset.as_ref().hash(h); count.as_ref().hash(h); view_type.hash(h); }
+            Expr::NativeArenaDispose(e) => { tag(h, 12038); e.as_ref().hash(h); }
+            Expr::NativeMemoryFillU32 { view, value } => { tag(h, 12034); view.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::NativeMemoryCopy { dst, src } => { tag(h, 12039); dst.as_ref().hash(h); src.as_ref().hash(h); }
             Expr::ChildProcessExecSync { command, options } => { tag(h, 236); command.as_ref().hash(h); options.hash(h); }
             Expr::ChildProcessSpawnSync { command, args, options, } => { tag(h, 237); command.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessSpawn { command, args, options, } => { tag(h, 238); command.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessFork { module, args, options, } => { tag(h, 11240); module.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessExec { command, options, callback, } => { tag(h, 239); command.as_ref().hash(h); options.hash(h); callback.hash(h); }
             Expr::ChildProcessExecFile { file, args, options, callback, } => { tag(h, 11239); file.as_ref().hash(h); args.hash(h); options.hash(h); callback.hash(h); }
-            Expr::ChildProcessExecFileSync { file, args, options, } => { tag(h, 11240); file.as_ref().hash(h); args.hash(h); options.hash(h); }
+            Expr::ChildProcessExecFileSync { file, args, options, } => { tag(h, 12033); file.as_ref().hash(h); args.hash(h); options.hash(h); }
             Expr::ChildProcessSpawnBackground { command, args, log_file, env_json, } => { tag(h, 240); command.as_ref().hash(h); args.hash(h); log_file.as_ref().hash(h); env_json.hash(h); }
             Expr::ChildProcessGetProcessStatus(e) => { tag(h, 241); e.as_ref().hash(h); }
             Expr::ChildProcessKillProcess(e) => { tag(h, 242); e.as_ref().hash(h); }
@@ -383,7 +383,7 @@ impl SH for Expr {
             Expr::DateNow => tag(h, 310),
             Expr::DateNew(es) => { tag(h, 311); es.hash(h); }
             Expr::BoxedPrimitiveNew { kind, arg } => {
-                tag(h, 11221);
+                tag(h, 12017);
                 (*kind as u8).hash(h);
                 arg.as_ref().hash(h);
             }
@@ -392,7 +392,7 @@ impl SH for Expr {
             Expr::DateGetFullYear(e) => { tag(h, 314); e.as_ref().hash(h); }
             Expr::DateGetMonth(e) => { tag(h, 315); e.as_ref().hash(h); }
             Expr::DateGetDate(e) => { tag(h, 316); e.as_ref().hash(h); }
-            Expr::DateGetDay(e) => { tag(h, 466); e.as_ref().hash(h); }
+            Expr::DateGetDay(e) => { tag(h, 12018); e.as_ref().hash(h); }
             Expr::DateGetHours(e) => { tag(h, 317); e.as_ref().hash(h); }
             Expr::DateGetMinutes(e) => { tag(h, 318); e.as_ref().hash(h); }
             Expr::DateGetSeconds(e) => { tag(h, 319); e.as_ref().hash(h); }
@@ -460,11 +460,11 @@ impl SH for Expr {
             Expr::UrlSetSearch { url, value } => { tag(h, 370); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSetHash { url, value } => { tag(h, 371); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSetProtocol { url, value } => { tag(h, 465); url.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::UrlSetHostname { url, value } => { tag(h, 466); url.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::UrlSetPort { url, value } => { tag(h, 467); url.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::UrlSetUsername { url, value } => { tag(h, 468); url.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::UrlSetPassword { url, value } => { tag(h, 469); url.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::UrlSetHref { url, value } => { tag(h, 701); url.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::UrlSetHostname { url, value } => { tag(h, 12019); url.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::UrlSetPort { url, value } => { tag(h, 12020); url.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::UrlSetUsername { url, value } => { tag(h, 12021); url.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::UrlSetPassword { url, value } => { tag(h, 12022); url.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::UrlSetHref { url, value } => { tag(h, 12036); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSearchParamsNew(e) => { tag(h, 372); e.hash(h); }
             Expr::UrlSearchParamsGet { params, name } => { tag(h, 373); params.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::UrlSearchParamsHas { params, name, value, } => { tag(h, 374); params.as_ref().hash(h); name.as_ref().hash(h); match value { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
@@ -543,8 +543,8 @@ impl SH for Expr {
             Expr::ReflectConstruct { target, args } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); }
             Expr::ReflectDefineProperty { target, key, descriptor, } => { tag(h, 440); target.as_ref().hash(h); key.as_ref().hash(h); descriptor.as_ref().hash(h); }
             Expr::ReflectGetPrototypeOf(e) => { tag(h, 441); e.as_ref().hash(h); }
-            Expr::ReflectDefineMetadata { key, value, target, property_key, } => { tag(h, 453); key.as_ref().hash(h); value.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
-            Expr::ReflectGetMetadata { key, target, property_key, } => { tag(h, 454); key.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
+            Expr::ReflectDefineMetadata { key, value, target, property_key, } => { tag(h, 12023); key.as_ref().hash(h); value.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
+            Expr::ReflectGetMetadata { key, target, property_key, } => { tag(h, 12024); key.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
             Expr::ReflectGetOwnMetadata { key, target, property_key, } => { tag(h, 455); key.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
             Expr::ReflectHasMetadata { key, target, property_key, } => { tag(h, 456); key.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
             Expr::ReflectHasOwnMetadata { key, target, property_key, } => { tag(h, 457); key.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
@@ -557,16 +557,16 @@ impl SH for Expr {
             Expr::TaggedTemplateStrings { cooked, raw } => { tag(h, 445); cooked.hash(h); raw.hash(h); }
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
-            Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 465); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
-            Expr::ClassExprFresh { template, named_statics, symbol_statics, captured_args, } => { tag(h, 466); template.hash(h); for (n, v) in named_statics { n.hash(h); v.hash(h); } for (k, v) in symbol_statics { k.hash(h); v.hash(h); } for a in captured_args { a.hash(h); } }
+            Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
+            Expr::ClassExprFresh { template, named_statics, symbol_statics, captured_args, } => { tag(h, 12026); template.hash(h); for (n, v) in named_statics { n.hash(h); v.hash(h); } for (k, v) in symbol_statics { k.hash(h); v.hash(h); } for a in captured_args { a.hash(h); } }
             Expr::SetFunctionPrototype { func, proto } => { tag(h, 448); func.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::RegisterPrototypeMethod { class_name, method_name, value, } => { tag(h, 463); class_name.hash(h); method_name.hash(h); value.as_ref().hash(h); }
             Expr::RegisterFunctionPrototypeMethod { func, method_name, value, } => { tag(h, 464); func.as_ref().hash(h); method_name.hash(h); value.as_ref().hash(h); }
             Expr::GetFunctionPrototypeMethod { func, method_name } => { tag(h, 1465); func.as_ref().hash(h); method_name.hash(h); }
-            Expr::WebAssemblyValidate(bytes) => { tag(h, 449); bytes.as_ref().hash(h); }
-            Expr::WebAssemblyInstantiate(bytes) => { tag(h, 450); bytes.as_ref().hash(h); }
-            Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 451); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
-            Expr::DynamicImport { paths, arg } => { tag(h, 452); for p in paths { p.hash(h); } arg.as_ref().hash(h); }
+            Expr::WebAssemblyValidate(bytes) => { tag(h, 12027); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyInstantiate(bytes) => { tag(h, 12028); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
+            Expr::DynamicImport { paths, arg } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); }
         }
     }
 }

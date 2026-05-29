@@ -6,7 +6,7 @@ use super::primitives::SH;
 use super::*;
 use crate::ir::*;
 use perry_types::{ObjectType, PropertyInfo, Type};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 fn empty_module() -> Module {
     Module::new("test_module")
@@ -38,6 +38,139 @@ fn behavior_change_changes_hash() {
         hash_module(&m2),
         "matching init stmts must produce identical hashes"
     );
+}
+
+#[test]
+fn expr_variant_stable_hash_tags_are_unique() {
+    #[derive(Debug)]
+    struct ExprArmTag {
+        variant: String,
+        variant_line: usize,
+        tag: Option<(u32, usize)>,
+    }
+
+    fn expr_variant(line: &str) -> Option<String> {
+        let rest = line.trim_start().strip_prefix("Expr::")?;
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        if end == 0 {
+            None
+        } else {
+            Some(rest[..end].to_string())
+        }
+    }
+
+    fn scan_top_level_tag(
+        text: &str,
+        line_number: usize,
+        brace_depth: &mut usize,
+        tag: &mut Option<(u32, usize)>,
+    ) {
+        const MARKER: &str = "tag(h,";
+
+        let mut index = 0;
+        while index < text.len() {
+            if tag.is_none() && *brace_depth <= 1 && text[index..].starts_with(MARKER) {
+                let digits = text[index + MARKER.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>();
+                if let Ok(value) = digits.parse::<u32>() {
+                    *tag = Some((value, line_number));
+                }
+            }
+
+            let ch = text[index..].chars().next().unwrap();
+            match ch {
+                '{' => *brace_depth += 1,
+                '}' => *brace_depth = brace_depth.saturating_sub(1),
+                _ => {}
+            }
+            index += ch.len_utf8();
+        }
+    }
+
+    fn finish_current(arms: &mut Vec<ExprArmTag>, current: &mut Option<ExprArmTag>) {
+        if let Some(arm) = current.take() {
+            arms.push(arm);
+        }
+    }
+
+    let mut arms = Vec::new();
+    let mut current = None;
+    let mut brace_depth = 0;
+
+    for (line_index, line) in include_str!("expr.rs").lines().enumerate() {
+        let line_number = line_index + 1;
+        if let Some(variant) = expr_variant(line) {
+            finish_current(&mut arms, &mut current);
+            brace_depth = 0;
+
+            let mut arm = ExprArmTag {
+                variant,
+                variant_line: line_number,
+                tag: None,
+            };
+
+            let arm_body = line
+                .split_once("=>")
+                .map(|(_, body)| body)
+                .unwrap_or_default();
+            scan_top_level_tag(arm_body, line_number, &mut brace_depth, &mut arm.tag);
+            current = Some(arm);
+        } else if let Some(arm) = current.as_mut() {
+            scan_top_level_tag(line, line_number, &mut brace_depth, &mut arm.tag);
+        }
+    }
+    finish_current(&mut arms, &mut current);
+
+    assert!(!arms.is_empty(), "expected to find Expr stable-hash arms");
+
+    let mut failures = Vec::new();
+    let missing_tags = arms
+        .iter()
+        .filter(|arm| arm.tag.is_none())
+        .map(|arm| format!("{} at line {}", arm.variant, arm.variant_line))
+        .collect::<Vec<_>>();
+    if !missing_tags.is_empty() {
+        failures.push(format!(
+            "Expr stable-hash arms missing top-level tags:\n  {}",
+            missing_tags.join("\n  ")
+        ));
+    }
+
+    let mut by_tag: BTreeMap<u32, Vec<&ExprArmTag>> = BTreeMap::new();
+    for arm in &arms {
+        if let Some((tag, _)) = arm.tag {
+            by_tag.entry(tag).or_default().push(arm);
+        }
+    }
+
+    let duplicate_tags = by_tag
+        .into_iter()
+        .filter(|(_, entries)| entries.len() > 1)
+        .map(|(tag, entries)| {
+            let owners = entries
+                .iter()
+                .map(|arm| {
+                    let (_, tag_line) = arm.tag.unwrap();
+                    format!("{} at line {}", arm.variant, tag_line)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("tag {tag}: {owners}")
+        })
+        .collect::<Vec<_>>();
+    if !duplicate_tags.is_empty() {
+        failures.push(format!(
+            "duplicate top-level Expr stable-hash tags:\n  {}",
+            duplicate_tags.join("\n  ")
+        ));
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 #[test]
