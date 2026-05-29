@@ -150,6 +150,12 @@ unsafe fn dispatch_pointer_with_replacer(
             // Error objects have a dedicated layout; Node emits "{}" (#928).
             buf.push_str("{}");
         }
+        crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
+            // Map/Set have a non-ObjectHeader layout; Node serializes both
+            // as "{}". Must not reach the catch-all (segfault) — same fix as
+            // the plain-stringify paths in `stringify.rs`.
+            buf.push_str("{}");
+        }
         _ => {
             // Untagged pointer: structural fallback (no replacer recursion is
             // safe here — we don't know the layout). Defer to plain stringify.
@@ -476,6 +482,21 @@ pub(crate) unsafe fn stringify_value_pretty(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        // Map / Set / Error have non-ObjectHeader layouts; detect them before
+        // the `is_object_pointer` probes below, which would deref their
+        // internals as a `keys_array` and segfault. Node serializes all three
+        // as "{}" (no enumerable own props). Buffers are excluded from the
+        // `gc_obj_type` read (they carry no GcHeader) and left to fall through
+        // to the existing path, which pretty-prints their `toJSON` form.
+        if !crate::buffer::is_registered_buffer(ptr as usize)
+            && matches!(
+                gc_obj_type(ptr),
+                crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_ERROR
+            )
+        {
+            buf.push_str("{}");
+            return;
+        }
         if type_hint == TYPE_OBJECT || (type_hint == TYPE_UNKNOWN && is_object_pointer(ptr)) {
             stringify_object_pretty(ptr, buf, indent, depth);
         } else if type_hint == TYPE_ARRAY {

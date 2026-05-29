@@ -508,6 +508,14 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
                 // `stack`) are non-enumerable; mirror that.
                 buf.push_str("{}");
             }
+            crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
+                // Map/Set have a `{size, capacity, entries/elements}` header,
+                // NOT the JSObject keys/values layout — routing them through
+                // the catch-all `is_object_pointer` path derefs their internals
+                // as a `keys_array` pointer and segfaults. Node serializes both
+                // as "{}" (their contents aren't enumerable own props).
+                buf.push_str("{}");
+            }
             _ => {
                 // Unknown/untagged pointer: fall back to the structural
                 // heuristics for safety (e.g. pointers to non-GC-tracked
@@ -629,6 +637,11 @@ pub(crate) unsafe fn stringify_value_depth(
             }
             crate::gc::GC_TYPE_ERROR => {
                 // Issue #928: see the matching branch in `stringify_value`.
+                buf.push_str("{}");
+            }
+            crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
+                // See the matching branch in `stringify_value` — Map/Set
+                // serialize as "{}" and must not reach the object catch-all.
                 buf.push_str("{}");
             }
             _ => {
@@ -1321,6 +1334,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                     } else {
                         buf.push_str("null");
                     }
+                }
+                crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
+                    // See `stringify_value` — Map/Set serialize as "{}" and
+                    // must not reach the object catch-all (segfault).
+                    buf.push_str("{}");
                 }
                 _ => {
                     if is_object_pointer(elem_ptr) {

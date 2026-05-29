@@ -551,6 +551,32 @@ mod tests {
     }
 
     #[test]
+    fn stringify_set_serializes_as_empty_object() {
+        // Regression: a Set/Map header is NOT an ObjectHeader, so the old
+        // catch-all object path read its internals as a `keys_array` and
+        // segfaulted. Node serializes both as "{}".
+        unsafe {
+            let mut s = crate::set::js_set_alloc(4);
+            s = crate::set::js_set_add(s, 1.0);
+            s = crate::set::js_set_add(s, 2.0);
+            let boxed = f64::from_bits(POINTER_TAG | (s as u64 & POINTER_MASK));
+            let output = js_json_stringify(boxed, TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output).unwrap(), "{}");
+        }
+    }
+
+    #[test]
+    fn stringify_map_serializes_as_empty_object() {
+        unsafe {
+            let mut m = crate::map::js_map_alloc(4);
+            m = crate::map::js_map_set(m, 1.0, 2.0);
+            let boxed = f64::from_bits(POINTER_TAG | (m as u64 & POINTER_MASK));
+            let output = js_json_stringify(boxed, TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output).unwrap(), "{}");
+        }
+    }
+
+    #[test]
     fn direct_parse_shared_shape_roundtrips_array_records() {
         let input = br#"[{"id":1,"name":"item_1","nested":{"x":1,"y":2}},{"id":2,"name":"item_2","nested":{"x":2,"y":4}}]"#;
         let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
