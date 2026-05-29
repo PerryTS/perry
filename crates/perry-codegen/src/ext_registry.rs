@@ -120,6 +120,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_readable_stream_controller_error",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_readable_stream_controller_desired_size",  OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_new",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writable_stream_new_with_sink_type",       OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_get_writer",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_locked",                   OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writable_stream_close",                    OwnerKind::Stdlib { feature: Some("bundled-streams") }),

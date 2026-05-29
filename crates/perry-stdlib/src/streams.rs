@@ -311,6 +311,13 @@ unsafe fn throw_type_error(message: &str) -> ! {
     perry_runtime::exception::js_throw(f64::from_bits(err))
 }
 
+unsafe fn throw_range_error_with_code(message: &str, code: &'static str) -> ! {
+    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(s, code);
+    let err = perry_runtime::error::js_rangeerror_new(s);
+    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+}
+
 unsafe fn reject_type_error(promise: *mut Promise, message: &str) {
     let err = make_type_error_with_message(message);
     js_promise_reject(promise, f64::from_bits(err));
@@ -1134,6 +1141,32 @@ pub unsafe extern "C" fn js_writable_stream_new(
     abort_bits: f64,
     hwm: f64,
 ) -> f64 {
+    js_writable_stream_new_with_sink_type(
+        start_bits,
+        write_bits,
+        close_bits,
+        abort_bits,
+        hwm,
+        f64::from_bits(TAG_UNDEFINED),
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
+    start_bits: f64,
+    write_bits: f64,
+    close_bits: f64,
+    abort_bits: f64,
+    hwm: f64,
+    sink_type: f64,
+) -> f64 {
+    if sink_type.to_bits() != TAG_UNDEFINED {
+        throw_range_error_with_code(
+            "The argument 'type' is invalid. Received a non-undefined value",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+
     ensure_gc_registered();
     let id = alloc_writable(
         closure_from_bits(write_bits.to_bits()),

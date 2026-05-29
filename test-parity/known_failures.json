@@ -614,12 +614,6 @@
     "category": "bug-open",
     "reason": "node:stream: 'readable' event with read() drain \u2014 chunk order or count wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/writable-stream-bytes-type": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: WritableStream({type:'bytes'}) \u2014 handling differs from Node (accept-and-ignore or throw). Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/web/from-promise-iterable": {
     "issue": "1545",
     "added": "2026-05-24",
