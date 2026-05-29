@@ -15,9 +15,9 @@ pub(crate) fn is_builtin_function(name: &str) -> bool {
     )
 }
 
-/// Built-in constructor / namespace identifiers that should resolve to
-/// a real `globalThis.<Name>` closure pointer when used as a bare
-/// expression value (e.g. `inst.constructor === Date`, drizzle's
+/// Built-in constructor / namespace identifiers, plus `globalThis` itself,
+/// that should resolve to a real `globalThis.<Name>` value when used as a
+/// bare expression value (e.g. `inst.constructor === Date`, drizzle's
 /// `value.constructor === Object`, lodash's `var A = context.Array`).
 /// Mirrors `populate_global_this_builtins` in
 /// `crates/perry-runtime/src/object.rs` and
@@ -31,7 +31,8 @@ pub(crate) fn is_builtin_function(name: &str) -> bool {
 pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
     matches!(
         name,
-        "Array"
+        "globalThis"
+            | "Array"
             | "Object"
             | "String"
             | "Number"

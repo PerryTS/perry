@@ -251,9 +251,10 @@ pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
 /// `globalThis.<Name>` should route through `js_get_global_this`
 /// (returning the populated backing-object) or fall through to the `0.0`
 /// no-value placeholder. Keep this list in sync with
-/// `GLOBAL_THIS_BUILTIN_CONSTRUCTORS` + `GLOBAL_THIS_BUILTIN_NAMESPACES`
-/// in object.rs — the codegen check and the runtime population together
-/// implement the lodash `runInContext` blocker fix.
+/// `GLOBAL_THIS_BUILTIN_CONSTRUCTORS` + `GLOBAL_THIS_BUILTIN_FUNCTIONS`
+/// + `GLOBAL_THIS_BUILTIN_NAMESPACES` + the singleton `globalThis`
+/// self-reference in object.rs — the codegen check and the runtime
+/// population together implement the lodash `runInContext` blocker fix.
 pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
     matches!(
         name,
@@ -311,7 +312,12 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            // Global functions (typeof === "function" in spec).
+            | "structuredClone"
+            | "atob"
+            | "btoa"
             // Namespaces (typeof === "object" in spec).
+            | "globalThis"
             | "console"
             | "Math"
             | "JSON"
@@ -330,7 +336,7 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
     is_global_this_builtin_name(name)
         && !matches!(
             name,
-            "console" | "Math" | "JSON" | "Reflect" | "performance" | "process"
+            "globalThis" | "console" | "Math" | "JSON" | "Reflect" | "performance" | "process"
         )
 }
 

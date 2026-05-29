@@ -154,6 +154,12 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] =
     &["console", "process", "Math", "JSON", "Reflect"];
 
+/// JS global built-in functions exposed as function-valued properties on
+/// `globalThis`. Unlike constructor sentinels, these call through to Perry's
+/// real direct-call runtime helpers so rebinding works:
+/// `const clone = globalThis.structuredClone; clone(value)`.
+pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &["structuredClone", "atob", "btoa"];
+
 /// No-op thunk used as the function body for most singleton globalThis
 /// built-in constructor values. Lets `globalThis.Array` carry a real
 /// ClosureHeader (so `typeof globalThis.Array === "function"`) without
@@ -177,6 +183,30 @@ extern "C" fn global_this_string_thunk(
 ) -> f64 {
     let string_ptr = crate::builtins::js_string_coerce(value);
     crate::value::js_nanbox_string(string_ptr as i64)
+}
+
+extern "C" fn global_this_structured_clone_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    _options: f64,
+) -> f64 {
+    crate::builtins::js_structured_clone(value)
+}
+
+extern "C" fn global_this_atob_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let decoded = crate::string::js_atob(value);
+    crate::value::js_nanbox_string(decoded as i64)
+}
+
+extern "C" fn global_this_btoa_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let encoded = crate::string::js_btoa(value);
+    crate::value::js_nanbox_string(encoded as i64)
 }
 
 /// Thunk for `Object.prototype.toString` exposed as a callable closure
@@ -499,6 +529,12 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     let proto_key_bytes = b"prototype";
     let proto_key =
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
+    {
+        let name = b"globalThis";
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = crate::value::js_nanbox_pointer(singleton as i64);
+        js_object_set_field_by_name(singleton, key, value);
+    }
     // #2145: pre-allocate the shared `%TypedArray%` intrinsic so per-kind
     // typed-array constructors can link their `__proto__` to it as they're
     // built below, and the per-kind `.prototype` objects can be flagged with
@@ -571,6 +607,29 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         js_object_set_field_by_name(singleton, name_key, ctor_value);
+    }
+    // Callable global functions: ClosureHeader-backed values with real
+    // dispatch so direct property reads and rebound calls match bare calls.
+    for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
+        let (func_ptr, arity) = match name {
+            "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2),
+            "atob" => (global_this_atob_thunk as *const u8, 1),
+            "btoa" => (global_this_btoa_thunk as *const u8, 1),
+            _ => continue,
+        };
+        let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
+        if closure_ptr.is_null() {
+            continue;
+        }
+        crate::closure::js_register_closure_arity(func_ptr, arity);
+        unsafe {
+            crate::builtins::js_register_function_name(func_ptr, name.as_ptr(), name.len() as u32);
+        }
+        let name_bytes = name.as_bytes();
+        let name_key =
+            crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+        let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
+        js_object_set_field_by_name(singleton, name_key, fn_value);
     }
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
