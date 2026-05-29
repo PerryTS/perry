@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1520 entries across 84 modules.
+Total: 1536 entries across 85 modules.
 
 ## Modules
 
@@ -79,6 +79,7 @@ Total: 1520 entries across 84 modules.
 - [`stream/promises`](#stream-promises)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
+- [`sys`](#sys)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -1940,6 +1941,33 @@ Total: 1520 entries across 84 modules.
 - `lastChar`
 - `lastNeed`
 - `lastTotal`
+
+## `sys`
+
+### Classes
+
+- `TextDecoder`
+- `TextEncoder`
+
+### Methods
+
+- `callbackify` — module
+- `deprecate` — module
+- `format` — module
+- `formatWithOptions` — module
+- `getSystemErrorMap` — module
+- `getSystemErrorMessage` — module
+- `getSystemErrorName` — module
+- `inherits` — module
+- `inspect` — module
+- `isDeepStrictEqual` — module
+- `parseArgs` — module
+- `promisify` — module
+- `stripVTControlCharacters` — module
+
+### Properties
+
+- `types`
 
 ## `tls`
 
