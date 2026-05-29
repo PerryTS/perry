@@ -2707,6 +2707,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("buffer", "File"),
     method("buffer", "resolveObjectURL", false, None),
     property("buffer", "constants"),
+    property("buffer", "INSPECT_MAX_BYTES"),
     property("buffer", "kMaxLength"),
     property("buffer", "kStringMaxLength"),
     // --- url (additional helpers) ---

@@ -1,16 +1,16 @@
 # Perry Runtime Parity Gap List
 
-This document is a structured gap analysis comparing the public Node.js + Bun runtime API surface (catalogued in `runtime-parity.md`) against the APIs Perry can dispatch at compile time. Coverage sources are: the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`, ~588 (module, method) entries), `Expr::*` HIR variants in `crates/perry-hir/src/ir.rs` that lower stdlib APIs directly to dedicated codegen arms (~301 stdlib-shaped variants), and `js_*` FFI exports across `perry-runtime` (~983), `perry-stdlib` (~631), and 35 `perry-ext-*` crates (~553). Output is intended for prioritizing which APIs to implement next.
+This document is a structured gap analysis comparing the public Node.js + Bun runtime API surface (catalogued in `runtime-parity.md`) against the APIs Perry can dispatch at compile time. Coverage sources are: the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`, ~589 (module, method) entries), `Expr::*` HIR variants in `crates/perry-hir/src/ir.rs` that lower stdlib APIs directly to dedicated codegen arms (~301 stdlib-shaped variants), and `js_*` FFI exports across `perry-runtime` (~983), `perry-stdlib` (~631), and 35 `perry-ext-*` crates (~553). Output is intended for prioritizing which APIs to implement next.
 
 ## Summary
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 20 | 484 | n/a |
-| Partial-module gaps | 29 | 1648 | 369 |
+| Partial-module gaps | 29 | 1647 | 370 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2414** |  |
+| **Total true gaps** |  | **2413** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -1578,7 +1578,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:buffer
 
-**Gap APIs: 40** · Already covered: 68
+**Gap APIs: 39** · Already covered: 69
 
 #### Missing from Perry
 
@@ -1613,7 +1613,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `buffer.isUtf8(input)`
 - `buffer.resolveObjectURL(id)`
 - `buffer.transcode(source, fromEnc, toEnc)`
-- `buffer.INSPECT_MAX_BYTES`
 - `buffer.kMaxLength`
 - `buffer.kStringMaxLength`
 - `buffer.constants.MAX_LENGTH`
@@ -1639,6 +1638,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `Buffer.from(object[, offsetOrEncoding[, length]])` | `manifest:buffer.from` |
 | `Buffer.from(string[, encoding])` | `manifest:buffer.from` |
 | `Buffer.isBuffer(obj)` | `manifest:buffer.isBuffer` |
+| `buffer.INSPECT_MAX_BYTES` | `manifest:buffer.INSPECT_MAX_BYTES` |
 | `buf.readDoubleBE([offset])` | `ffi:js_buffer_read_double_be` |
 | `buf.readDoubleLE([offset])` | `ffi:js_buffer_read_double_le` |
 | `buf.readFloatBE([offset])` | `ffi:js_buffer_read_float_be` |

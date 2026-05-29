@@ -262,6 +262,13 @@ mod tests {
     }
 
     #[test]
+    fn buffer_inspect_max_bytes_is_manifest_property() {
+        let entry = module_has_symbol("node:buffer", "INSPECT_MAX_BYTES")
+            .expect("buffer.INSPECT_MAX_BYTES should be in the manifest");
+        assert!(matches!(entry.kind, ApiKind::Property));
+    }
+
+    #[test]
     fn known_modules_consistent_with_manifest() {
         // Every entry's module must appear in NATIVE_MODULES.
         // Catches typos and entries on un-registered modules.

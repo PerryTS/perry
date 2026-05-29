@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1516 entries across 84 modules
+// Coverage: 1517 entries across 84 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -226,6 +226,8 @@ declare module "buffer" {
   export class Buffer { [key: string]: any; }
   /** stdlib */
   export class File { [key: string]: any; }
+  /** stdlib */
+  export const INSPECT_MAX_BYTES: any;
   /** stdlib */
   export const constants: any;
   /** stdlib */
