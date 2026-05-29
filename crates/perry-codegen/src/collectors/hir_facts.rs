@@ -15,8 +15,14 @@ pub(crate) struct NativeRegionFactGraph {
     pub bounds: BoundsFacts,
     pub alias_noalias: AliasNoAliasFacts,
     pub escape: EscapeFacts,
+    // #854: in-progress native-region fact subgraph; populated by the collector
+    // (Debug field) but not yet consumed by a codegen pass.
+    #[allow(dead_code)]
     pub purity: PurityFacts,
     pub platform_constants: PlatformConstantFacts,
+    // #854: in-progress native-region fact subgraph; populated by the collector
+    // (Debug field) but not yet consumed by a codegen pass.
+    #[allow(dead_code)]
     pub shape_stability: ShapeStabilityFacts,
     pub materialization_hazards: MaterializationHazardFacts,
 }
@@ -53,6 +59,9 @@ pub(crate) struct EscapeFacts {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PurityFacts {
+    // #854: in-progress purity subgraph; populated (Debug field) but no codegen
+    // consumer reads it yet.
+    #[allow(dead_code)]
     pub pure_helper_function_ids: HashSet<u32>,
 }
 
@@ -63,6 +72,9 @@ pub(crate) struct PlatformConstantFacts {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ShapeStabilityFacts {
+    // #854: in-progress shape-stability subgraph; populated (Debug field) but no
+    // codegen consumer reads it yet.
+    #[allow(dead_code)]
     pub scalar_replaceable_object_locals: HashSet<u32>,
 }
 
@@ -201,6 +213,9 @@ pub(crate) fn collect_native_region_fact_graph(
     graph
 }
 
+// #854: thin wrapper over collect_native_region_fact_graph, currently only
+// exercised by this module's unit tests; kept as the focused-collector entry seam.
+#[allow(dead_code)]
 pub(crate) fn collect_hir_facts(
     stmts: &[Stmt],
     flat_const_ids: &HashSet<u32>,

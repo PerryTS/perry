@@ -24,6 +24,9 @@ pub(super) struct FuncEmitCtx<'a> {
     /// Index of a temp i64 local
     pub(super) temp_local: u32,
     /// Index of a temp i32 local (for mem_call base address)
+    // #854: reserved temp-local slot for the mem_call base-address path;
+    // assigned in `new()` but not consumed by the current emitter.
+    #[allow(dead_code)]
     pub(super) temp_local_i32: u32,
     /// Index of a second temp i64 local for emit_store_arg
     pub(super) temp_store_local: u32,

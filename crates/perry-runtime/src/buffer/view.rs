@@ -69,6 +69,8 @@ pub(crate) fn lookup(view_ptr: usize) -> Option<ViewInfo> {
 }
 
 #[inline]
+// #854: buffer-view backing accessor retained for the view subsystem
+#[allow(dead_code)]
 pub(crate) fn backing_of(buf_ptr: usize) -> usize {
     lookup(buf_ptr).map(|v| v.backing).unwrap_or(buf_ptr)
 }

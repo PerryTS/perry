@@ -101,10 +101,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &s_handle))
         }
         Expr::ProcessChdir(p) => {
+            // #2013 — route through the f64-taking entry so a
+            // non-string argument throws TypeError ERR_INVALID_ARG_TYPE
+            // instead of dereferencing whatever NaN-boxed bits we'd
+            // have shoved into a `*const StringHeader`. The runtime
+            // entry validates and re-dispatches to the legacy
+            // string-only path.
             let p_box = lower_expr(ctx, p)?;
-            let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
-            blk.call_void("js_process_chdir", &[(I64, &p_handle)]);
+            ctx.block()
+                .call_void("js_process_chdir_jsv", &[(DOUBLE, &p_box)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         Expr::ProcessExit(code) => {

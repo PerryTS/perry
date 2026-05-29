@@ -7,6 +7,21 @@
 //! - Mark phase: precise thread-local roots + optional conservative stack scan + type-specific tracing
 //! - Sweep phase: free malloc objects; arena objects added to free list for reuse
 //! - Trigger: only checked on new arena block allocation or explicit gc() call
+//!
+//! Low-pause contract:
+//! - Normal automatic GC work and mutator assists must eventually advance in
+//!   bounded work-unit steps, independent of heap size.
+//! - Explicit `gc()` calls may synchronously run the configured collection
+//!   because the caller requested that pause; traces distinguish manual minor
+//!   work from explicit full collection.
+//! - Emergency full collections are reserved for allocation failure recovery,
+//!   only outside suppressed, reentrant, or unsafe regions, and must be
+//!   reported separately.
+//!
+//! Current threshold-triggered work in `gc_check_trigger()` is still a
+//! behavior-compatible synchronous collection. Trace output labels that path
+//! as `legacy_synchronous` until the cycle state machine and debt pacer turn
+//! allocation pressure into bounded progress.
 
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::{Cell, RefCell};

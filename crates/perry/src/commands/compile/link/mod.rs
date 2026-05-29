@@ -31,10 +31,10 @@ use crate::OutputFormat;
 
 use super::{
     apple_sdk_version, build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
-    find_geisterhand_ui, find_lld_link, find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe,
-    find_perry_windows_sdk, find_stdlib_library, find_ui_library, find_visionos_swift_runtime,
-    find_watchos_swift_runtime, rust_target_triple, strip_duplicate_objects_from_lib,
-    windows_pe_subsystem_flag, CompilationContext,
+    find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
+    find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
+    find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime, rust_target_triple,
+    strip_duplicate_objects_from_lib, windows_pe_subsystem_flag, CompilationContext,
 };
 
 mod platform_cmd;
@@ -1208,6 +1208,7 @@ pub(super) fn build_and_run_link(
         // Auto-build geisterhand libraries if any are missing
         let gh_missing = find_geisterhand_library(target).is_none()
             || find_geisterhand_runtime(target).is_none()
+            || (ctx.needs_stdlib && find_geisterhand_stdlib(target).is_none())
             || (ctx.needs_ui && find_geisterhand_ui(target).is_none());
         if gh_missing {
             build_geisterhand_libs(target, format)?;

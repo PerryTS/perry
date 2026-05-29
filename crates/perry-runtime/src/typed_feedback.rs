@@ -158,6 +158,8 @@ impl Observation {
         self.is_shape_keyed() && self.shape_addr != 0
     }
 
+    // #854: in-progress typed-feedback shape-change tracking
+    #[allow(dead_code)]
     fn affected_by_shape_change(&self, old_shape: usize, new_shape: usize, class_id: u32) -> bool {
         if !self.is_shape_keyed() {
             return false;
@@ -1677,6 +1679,8 @@ pub extern "C" fn js_typed_feedback_observe_helper_return(site_id: u64, value: f
     value
 }
 
+// #854: in-progress typed-feedback shape-change tracking
+#[allow(dead_code)]
 pub(crate) fn invalidate_shape_change(
     obj: *mut ObjectHeader,
     old_shape: *mut ArrayHeader,

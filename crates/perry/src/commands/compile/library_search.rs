@@ -580,6 +580,9 @@ fn read_registry_kits_root_10() -> Option<PathBuf> {
     None
 }
 
+// #854: cfg-symmetric stub — the Windows build calls this (line ~482); the
+// non-Windows build keeps the same signature so callers compile cross-platform.
+#[allow(dead_code)]
 #[cfg(not(target_os = "windows"))]
 fn read_registry_kits_root_10() -> Option<PathBuf> {
     None
@@ -1182,6 +1185,24 @@ pub(super) fn find_geisterhand_runtime(target: Option<&str>) -> Option<PathBuf> 
         "perry_runtime.lib"
     } else {
         "libperry_runtime.a"
+    };
+    find_geisterhand_lib(name, target)
+}
+
+pub(super) fn find_geisterhand_stdlib(target: Option<&str>) -> Option<PathBuf> {
+    // The geisterhand auto-build (`build_geisterhand_libs`) compiles
+    // perry-stdlib into target/geisterhand alongside the geisterhand-featured
+    // perry-runtime, so this archive carries perry-stdlib's full default
+    // feature set (incl. `async-runtime` → the `perry_ffi_promise_*` shims)
+    // and shares a hash-consistent `perry-runtime` with `find_geisterhand_runtime`.
+    // Only the geisterhand build dirs are searched (no `find_library` fallback)
+    // so we never select the auto-optimized stdlib, whose feature set is
+    // computed from the app's TS imports and omits async-runtime when the async
+    // surface comes from a native binding — the #1383 link failure.
+    let name = if matches!(target, Some("windows")) || cfg!(target_os = "windows") {
+        "perry_stdlib.lib"
+    } else {
+        "libperry_stdlib.a"
     };
     find_geisterhand_lib(name, target)
 }
