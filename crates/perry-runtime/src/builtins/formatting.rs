@@ -651,33 +651,24 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 let ta = ptr as *const crate::typedarray::TypedArrayHeader;
                 crate::typedarray::format_typed_array(ta)
             } else if crate::buffer::is_registered_buffer(ptr as usize) {
-                // Buffer/Uint8Array — Node prints as `<Buffer xx xx xx ...>`
-                // (lowercase hex bytes separated by single spaces). Buffer
-                // headers don't carry a GC header, so this check must happen
-                // BEFORE the GC_HEADER_SIZE pointer arithmetic below (which
+                // Buffer/Uint8Array — `<Buffer xx xx ...>`. No GC header, so
+                // this must precede the GC_HEADER_SIZE arithmetic below (which
                 // would read garbage one word before the BufferHeader).
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 format_buffer_value(buf_ptr)
             } else if crate::regex::is_registered_regex(ptr as usize) {
-                // RegExp literals are GC_TYPE_OBJECT allocations with no
-                // enumerable string keys, so the generic object formatter
-                // prints `{}`. Render the literal form `/source/flags`
-                // instead (registry-gated; #800). This check sits with the
-                // other registry pre-checks, before the GC-header read.
+                // RegExp literals are GC_TYPE_OBJECT with no enumerable keys
+                // (generic formatter prints `{}`); render `/source/flags`
+                // instead (registry-gated, before the GC-header read; #800).
                 collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
             } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
                 let target = crate::proxy::js_proxy_target(value);
                 format_jsvalue(target, depth)
             } else if (ptr as usize) < 0x100000 {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
-                // POINTER_TAG values whose unboxed payload is a small
-                // registry id (1, 2, 3, ...) — NOT a real heap pointer.
-                // Reading the GC header at `ptr - 8` would deref unmapped
-                // memory and SIGSEGV. Print a placeholder that distinguishes
-                // the value from "{}". A future enhancement can look up the
-                // specific registry (Request / Response / Headers / Blob /
-                // sockets / DB connections / etc.) and format with the type
-                // name and key fields the way Node does for those classes.
+                // POINTER_TAG values whose payload is a small registry id, NOT
+                // a heap pointer — reading the GC header at `ptr - 8` would
+                // SIGSEGV. Placeholder distinguishes it from "{}".
                 "{}".to_string()
             } else {
                 // Use GC header to determine the actual type of the object.
@@ -812,8 +803,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     // `[Object]` (#1204). The depth cap is overridable via
                     // INSPECT_DEPTH_LIMIT for `%o` / `console.dir(v, { depth })`.
                     let obj_ptr = ptr as *const crate::object::ObjectHeader;
-                    if let Some(label) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
-                        return format!("{label} {{}}");
+                    if let Some(body) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
+                        return body.to_string();
                     }
                     if let Err(id) = inspect_enter_circular(ptr as usize) {
                         return format!("[Circular *{}]", id);
@@ -851,6 +842,10 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
+            // Date → unquoted ISO string / `Invalid Date` (before is_nan).
+            if let Some(s) = collections::date_inspect(value) {
+                return s;
+            }
             // Regular number — but first check for raw (non-NaN-boxed) heap
             // pointers. The codegen sometimes returns a raw
             // i64 buffer pointer bitcast directly to f64 (no POINTER_TAG), so
@@ -1374,8 +1369,8 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT
                         // for `%o` / `console.dir(v, { depth })`.
                         let obj_ptr = ptr as *const crate::object::ObjectHeader;
-                        if let Some(label) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
-                            return format!("{label} {{}}");
+                        if let Some(body) = crate::weakref::weak_wrapper_inspect_label(obj_ptr) {
+                            return body.to_string();
                         }
                         if let Err(id) = inspect_enter_circular(ptr as usize) {
                             return format!("[Circular *{}]", id);
@@ -1410,6 +1405,10 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
+            // Date field → unquoted ISO string / `Invalid Date`.
+            if let Some(s) = collections::date_inspect(value) {
+                return s;
+            }
             // A TypedArray field is a RAW (non-NaN-boxed) heap pointer, so it
             // lands here, not in the pointer branch; redirect it (#800).
             if let Some(s) = collections::raw_heap_pointer_display(value, depth) {

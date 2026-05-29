@@ -152,6 +152,23 @@ pub(super) fn raw_heap_pointer_display(value: f64, depth: usize) -> Option<Strin
     }
 }
 
+/// If `value` is a Date (a raw f64 timestamp registered in `DATE_REGISTRY`),
+/// return its `util.inspect` rendering — the ISO string unquoted
+/// (`1970-01-01T00:00:00.000Z`) or `Invalid Date` for a NaN time. Returns
+/// `None` for an ordinary number so callers fall through to numeric output.
+pub(super) fn date_inspect(value: f64) -> Option<String> {
+    if !crate::date::is_registered_date_bits(value.to_bits()) {
+        return None;
+    }
+    let s = crate::date::js_date_to_iso_string(value);
+    let out = unsafe { read_string_header(s) };
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 /// Read a `StringHeader` into an owned `String` (empty on null).
 unsafe fn read_string_header(s: *const StringHeader) -> String {
     if s.is_null() {
@@ -183,6 +200,17 @@ pub(super) unsafe fn format_regexp(re: *const crate::regex::RegExpHeader) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn date_inspect_returns_iso_string_for_registered_date() {
+        let date_val = crate::date::js_date_new_from_timestamp(0.0);
+        assert_eq!(
+            date_inspect(date_val),
+            Some("1970-01-01T00:00:00.000Z".to_string())
+        );
+        // A plain number is not a Date — falls through to numeric formatting.
+        assert_eq!(date_inspect(42.0), None);
+    }
 
     #[test]
     fn map_formats_entries_with_size_prefix() {
