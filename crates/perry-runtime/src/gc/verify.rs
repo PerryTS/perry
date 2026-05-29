@@ -171,14 +171,15 @@ pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
     sticky
 }
 
-pub(super) unsafe fn remember_live_old_to_young_slots(
+pub(super) unsafe fn remember_retained_old_to_young_slots(
     sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
+    require_marked: bool,
 ) {
     if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
-    if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+    if require_marked && (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
         return;
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
@@ -191,16 +192,18 @@ pub(super) unsafe fn remember_live_old_to_young_slots(
     });
 }
 
-pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet {
+pub(super) fn rebuild_live_old_to_young_remembered_set(
+    require_marked: bool,
+) -> StickyRememberedSet {
     let mut sticky = StickyRememberedSet::default();
     crate::arena::old_arena_walk_objects(|hp| unsafe {
-        remember_live_old_to_young_slots(&mut sticky, hp as *mut GcHeader);
+        remember_retained_old_to_young_slots(&mut sticky, hp as *mut GcHeader, require_marked);
     });
     MALLOC_STATE.with(|s| {
         let s = s.borrow();
         for &header in s.objects.iter() {
             unsafe {
-                remember_live_old_to_young_slots(&mut sticky, header);
+                remember_retained_old_to_young_slots(&mut sticky, header, require_marked);
             }
         }
     });

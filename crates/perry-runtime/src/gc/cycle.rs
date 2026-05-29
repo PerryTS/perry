@@ -634,7 +634,7 @@ impl GcCycleState {
         } else {
             let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
             drain_incremental_mark_barrier_seeds(valid_ptrs);
-            self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set());
+            self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set(true));
             incremental_mark_barrier_disable();
         }
         self.phase = GcCyclePhase::Sweep;
@@ -729,7 +729,7 @@ impl GcCycleState {
 
         minor.evacuation = evacuation;
         minor.evacuation_sticky = evacuation_sticky;
-        self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set());
+        self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set(false));
     }
 
     fn step_sweep(&mut self) {
