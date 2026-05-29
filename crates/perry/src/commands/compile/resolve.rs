@@ -532,6 +532,19 @@ pub(super) fn is_ts_file(path: &Path) -> bool {
     }
 }
 
+pub(super) fn resolve_relative_import_path(
+    import_source: &str,
+    importer_path: &Path,
+) -> Option<PathBuf> {
+    if !import_source.starts_with("./") && !import_source.starts_with("../") {
+        return None;
+    }
+    let parent = importer_path.parent()?;
+    let resolved = parent.join(import_source);
+    let path = resolve_with_extensions(&resolved)?;
+    path.canonicalize().ok()
+}
+
 /// Resolve an import specifier to a file path
 pub(super) fn resolve_import(
     import_source: &str,
@@ -554,10 +567,7 @@ pub(super) fn resolve_import(
 
     // Handle relative imports (./ or ../)
     if import_source.starts_with("./") || import_source.starts_with("../") {
-        let parent = importer_path.parent()?;
-        let resolved = parent.join(import_source);
-        if let Some(path) = resolve_with_extensions(&resolved) {
-            let canonical = path.canonicalize().ok()?;
+        if let Some(canonical) = resolve_relative_import_path(import_source, importer_path) {
             // Refs #486: a relative `import './foo.js'` from inside a compile
             // package must classify as NativeCompiled even when the resolved
             // file lives outside the literal `node_modules/<pkg>/` substring

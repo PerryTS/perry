@@ -144,18 +144,18 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     // react/index.js — which has zero `exports.X =` patterns of its own —
     // produces zero named exports and downstream `import { useState } from
     // "react"` link-fails.
-    let parent = source_path.parent();
-    if let Some(parent) = parent {
-        for spec in &require_specs {
-            if !spec.starts_with("./") && !spec.starts_with("../") {
-                continue;
-            }
-            let target = parent.join(spec);
-            if let Ok(target_source) = std::fs::read_to_string(&target) {
-                for name in extract_exports_from_source(&target_source) {
-                    if !named_exports.contains(&name) {
-                        named_exports.push(name);
-                    }
+    for spec in &require_specs {
+        if !spec.starts_with("./") && !spec.starts_with("../") {
+            continue;
+        }
+        let Some(target) = super::super::resolve::resolve_relative_import_path(spec, source_path)
+        else {
+            continue;
+        };
+        if let Ok(target_source) = std::fs::read_to_string(&target) {
+            for name in extract_exports_from_source(&target_source) {
+                if !named_exports.contains(&name) {
+                    named_exports.push(name);
                 }
             }
         }

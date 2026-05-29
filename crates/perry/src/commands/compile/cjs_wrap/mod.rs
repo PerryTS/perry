@@ -68,6 +68,7 @@ mod tests {
         extract_require_aliases_with_ranges, extract_require_specifiers,
     };
     use super::wrap::wrap_commonjs;
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -379,6 +380,28 @@ module.exports = inner;
         let src = "module.exports = { foo: 1, bar: 2 };";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
         assert!(wrapped.contains("export default _cjs;"));
+    }
+
+    #[test]
+    fn wrap_copies_named_exports_from_extensionless_reexport_target() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let lib_dir = tmp.path().join("lib");
+        fs::create_dir_all(&lib_dir).expect("mkdir lib");
+        fs::write(
+            lib_dir.join("index.js"),
+            "module.exports.parse = function parse() {};",
+        )
+        .expect("write target");
+
+        let entry = tmp.path().join("index.js");
+        let src = "module.exports = require('./lib/index');";
+        let wrapped = wrap_commonjs(src, &entry);
+
+        assert!(
+            wrapped.contains("export const parse = _cjs.parse;"),
+            "expected named export copied through extensionless CJS re-export, got:\n{}",
+            wrapped
+        );
     }
 
     #[test]
