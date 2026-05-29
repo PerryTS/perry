@@ -315,6 +315,7 @@ fn pause_resume_track_readable_flowing_and_events() {
     STREAM_EVENT_ORDER.with(|events| events.borrow_mut().clear());
 
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    test_install_manual_read(stream);
     let handle = raw_ptr_from_value(stream) as i64;
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
     let pause = js_object_get_field_by_name_f64(obj, hidden_key(b"pause"));
@@ -378,6 +379,7 @@ fn readable_push_emits_data_with_stream_this_and_deferred_end() {
     READABLE_END_COUNT.with(|count| *count.borrow_mut() = 0);
 
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    test_install_manual_read(stream);
     let handle = raw_ptr_from_value(stream) as i64;
 
     let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
