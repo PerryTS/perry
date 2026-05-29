@@ -1026,6 +1026,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Uint8Array constructor wrapper that flags the resulting buffer so the
     // formatter prints `Uint8Array(N) [ ... ]` instead of `<Buffer ...>`.
     module.declare_function("js_uint8array_from_array", I64, &[I64]);
+    // `new Uint8Array(length)` — zero-filled BufferHeader marked as Uint8Array.
+    module.declare_function("js_uint8array_alloc", I64, &[I32]);
     // `new Uint8Array(x)` runtime dispatch — handles the non-literal case
     // where `x` could be a number (length) or an array (source data).
     module.declare_function("js_uint8array_new", I64, &[DOUBLE]);
