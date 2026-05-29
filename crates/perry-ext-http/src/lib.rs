@@ -63,6 +63,7 @@ const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
 // ------------------------------------------------------------------
 // Pending event queue + GC scanner
@@ -830,6 +831,140 @@ fn dispatch_request_over_socket(
     });
 }
 
+/// #2154 — invoke a user `createSocket(req, options, cb)` override on the
+/// request path (Node's `Agent.prototype.addRequest` semantics). Builds the
+/// three arguments Node passes:
+///
+/// - `req`  — the ClientRequest, NaN-boxed the same way every http handle
+///   value is (`POINTER_TAG | handle`), so an override that reads `req.method`
+///   etc. dispatches through the http native table.
+/// - `options` — the `{ host, port, path }` object (shared with the
+///   `createConnection` path).
+/// - `cb` — a native closure backed by [`http_create_socket_cb`]. When the
+///   override calls `cb(err, socket)`, the continuation surfaces the error or
+///   drives the HTTP/1.1 exchange over the delivered socket.
+///
+/// Must run on the main thread — it calls a JS closure, and arena-bound
+/// JSValues are invalid off-thread.
+unsafe fn invoke_create_socket(
+    request_handle: Handle,
+    agent_handle: Handle,
+    host: &str,
+    port: u16,
+    path: &str,
+) {
+    let cs = agent::create_socket_override(agent_handle);
+    if cs == 0 {
+        return;
+    }
+    // Register the continuation's arity as 2 so a 1-arg `cb(err)` pads the
+    // socket slot with `undefined` (via the runtime's arity dispatch) instead
+    // of reading an uninitialized register for the second parameter.
+    static REGISTER_ARITY: Once = Once::new();
+    REGISTER_ARITY.call_once(|| {
+        perry_runtime::closure::js_register_closure_arity(http_create_socket_cb as *const u8, 2);
+    });
+
+    let cb = perry_runtime::closure::js_closure_alloc(http_create_socket_cb as *const u8, 1);
+    if cb.is_null() {
+        return;
+    }
+    // Capture the ClientRequest handle so the continuation can re-read the
+    // (still-stored) method/url/headers/body and resume dispatch. Stored as an
+    // f64 (a small registry id, not a heap pointer) — pointer-free, so it
+    // needs no GC layout fixup, matching `sqlite_tx_wrapper`'s db-handle slot.
+    perry_runtime::closure::js_closure_set_capture_f64(cb, 0, request_handle as f64);
+
+    let cb_val = f64::from_bits(POINTER_TAG | (cb as usize as u64 & PTR_MASK));
+    let req_val = f64::from_bits(POINTER_TAG | (request_handle as u64 & PTR_MASK));
+    let options = agent::build_connect_options(host, port, path);
+
+    let closure = JsClosure::from_raw(cs as *const RawClosureHeader);
+    closure.call3(req_val, options, cb_val);
+}
+
+/// Continuation for a `createSocket` override's `cb(err, socket)` callback.
+/// Capture slot 0 holds the ClientRequest handle id (as f64).
+///
+/// Mirrors the socket-id extraction in `agent::try_create_connection_socket`:
+/// the override hands back a `net.Socket` (POINTER_TAG-boxed handle, or a bare
+/// small handle on some codegen paths).
+unsafe extern "C" fn http_create_socket_cb(
+    closure: *const perry_runtime::ClosureHeader,
+    err: f64,
+    socket: f64,
+) -> f64 {
+    let request_handle =
+        perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as i64 as Handle;
+
+    // Node calls `cb(err)` on failure, `cb(null, socket)` on success.
+    let err_bits = err.to_bits();
+    if err_bits != TAG_UNDEFINED && err_bits != TAG_NULL {
+        // Use the value only when it's genuinely a string (STRING_TAG); an
+        // `Error` object is a POINTER_TAG value that `extract_string_value`
+        // would misread as a `StringHeader`. Surfacing a full Error object on
+        // the request's `'error'` event would need object introspection Perry
+        // doesn't expose to this crate yet — a generic message keeps the event
+        // firing without a bogus read.
+        let error_message = if err_bits >> 48 == 0x7FFF {
+            extract_string_value(err).unwrap_or_else(|| "socket creation failed".to_string())
+        } else {
+            "socket creation failed".to_string()
+        };
+        push_event(PendingHttpEvent::Error {
+            request_handle,
+            error_message,
+        });
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+
+    let bits = socket.to_bits();
+    let upper = bits >> 48;
+    let socket_id = if upper == 0x7FFD {
+        (bits & PTR_MASK) as i64
+    } else if upper == 0 && bits >= 0x10000 {
+        bits as i64
+    } else {
+        0
+    };
+    if socket_id <= 0 {
+        push_event(PendingHttpEvent::Error {
+            request_handle,
+            error_message: "agent.createSocket callback did not provide a socket".to_string(),
+        });
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+
+    // The request fields were cloned (not cleared) by `request_end`, so they're
+    // still readable on the handle — re-snapshot and drive the exchange.
+    let snap = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+        (
+            req.method.clone(),
+            req.url.clone(),
+            req.headers.clone(),
+            req.body.clone(),
+            req.timeout_ms,
+        )
+    });
+    if let Some((method, url, headers, body, timeout_ms)) = snap {
+        // Attach raw mode on the main thread before the async task runs, to
+        // close the same data race the `createConnection` path guards against.
+        if let Some(vt) = perry_ffi::raw_net() {
+            (vt.attach)(socket_id);
+        }
+        dispatch_request_over_socket(
+            request_handle,
+            method,
+            url,
+            headers,
+            body,
+            timeout_ms,
+            socket_id,
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 // ------------------------------------------------------------------
 // FFI: http.request / https.request / http.get / https.get
 // ------------------------------------------------------------------
@@ -968,13 +1103,23 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
 
     let (method, url, headers, body, timeout_ms, agent_handle) = snapshot;
 
-    // #2154 — if the agent supplied a `createConnection` override, invoke it
-    // here on the main thread (JS closure calls must not run on a tokio
-    // worker) and run the HTTP exchange over the socket it returns instead of
-    // through reqwest. Falls back to the reqwest path when there's no override
-    // or it didn't yield a usable socket.
+    // #2154 — if the agent supplied a `createConnection` / `createSocket`
+    // override, invoke it here on the main thread (JS closure calls must not
+    // run on a tokio worker) and run the HTTP exchange over the socket it
+    // produces instead of through reqwest. Falls back to the reqwest path when
+    // there's no override or it didn't yield a usable socket.
     if agent_handle != 0 {
         if let Some((host, port, path)) = socket_connect_target(&url) {
+            // Node's `Agent.prototype.addRequest` calls
+            // `createSocket(req, options, cb)`; a user override is expected to
+            // deliver the socket via `cb(err, socket)`. Prefer it over
+            // `createConnection` — the cb continuation
+            // (`http_create_socket_cb`) resumes the exchange — so we don't
+            // fall through to reqwest after dispatching it.
+            if agent::create_socket_override(agent_handle) != 0 {
+                invoke_create_socket(handle, agent_handle, &host, port, &path);
+                return handle;
+            }
             if let Some(socket_id) =
                 agent::try_create_connection_socket(agent_handle, &host, port, &path)
             {

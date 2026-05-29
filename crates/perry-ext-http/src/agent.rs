@@ -22,14 +22,19 @@
 //! - **`createConnection` / `createSocket` setter storage** — the
 //!   user-supplied closure is stored and GC-rooted on the agent so later
 //!   code reading `agent.createConnection` gets back the same function.
-//! - **`createConnection` request-path invocation** — when `http.request`
-//!   services a request whose agent defines `createConnection`, the
-//!   override is invoked (on the main thread) to produce a `net.Socket`,
-//!   and the HTTP/1.1 exchange is driven over that socket via the raw-net
-//!   bridge (`perry_ffi::raw_net`, published by perry-ext-net) instead of
-//!   reqwest. See `try_create_connection_socket` here +
-//!   `dispatch_request_over_socket` in `lib.rs`. This is Node's full
-//!   socket-injection behavior (#2154).
+//! - **`createConnection` / `createSocket` request-path invocation** — when
+//!   `http.request` services a request whose agent defines a
+//!   `createConnection` or `createSocket` override, the override is invoked
+//!   (on the main thread) to produce a `net.Socket`, and the HTTP/1.1 exchange
+//!   is driven over that socket via the raw-net bridge (`perry_ffi::raw_net`,
+//!   published by perry-ext-net) instead of reqwest. `createConnection`
+//!   returns the socket synchronously (see `try_create_connection_socket`
+//!   here); `createSocket(req, options, cb)` follows Node's
+//!   `Agent.prototype.addRequest` contract and delivers the socket via its
+//!   `cb(err, socket)` callback (see `invoke_create_socket` +
+//!   `http_create_socket_cb` in `lib.rs`). `createSocket` takes precedence
+//!   when both are set, mirroring Node. This is Node's full socket-injection
+//!   behavior (#2154).
 //!
 //! The implementation is mirrored in `crates/perry-stdlib/src/http.rs`
 //! so the default `full` build (perry-stdlib's `http-client` feature)
@@ -931,10 +936,18 @@ pub(crate) unsafe fn try_create_connection_socket(
     (id > 0).then_some(id)
 }
 
+/// #2154 — the agent's `createSocket` override closure pointer (0 when no
+/// override is set). Node's `Agent.prototype.addRequest` calls
+/// `createSocket(req, options, cb)`; lib.rs prefers this over
+/// `createConnection` on the request path when it's set.
+pub(crate) fn create_socket_override(handle: Handle) -> i64 {
+    agent_field(handle, 0i64, |a| a.create_socket)
+}
+
 /// Build the `{ host, port, path }` options object handed to a
-/// `createConnection` override. Returns a NaN-boxed object pointer as `f64`,
-/// or NaN-boxed `undefined` on allocation failure.
-unsafe fn build_connect_options(host: &str, port: u16, path: &str) -> f64 {
+/// `createConnection` / `createSocket` override. Returns a NaN-boxed object
+/// pointer as `f64`, or NaN-boxed `undefined` on allocation failure.
+pub(crate) unsafe fn build_connect_options(host: &str, port: u16, path: &str) -> f64 {
     let keys = ["host", "port", "path"];
     let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
     let obj: *mut perry_ffi::ObjectHeader = perry_ffi::js_object_alloc_with_shape(
