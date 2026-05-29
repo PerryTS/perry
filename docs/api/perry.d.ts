@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1501 entries across 82 modules
+// Coverage: 1505 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2077,6 +2077,10 @@ declare module "util/types" {
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
   /** stdlib */
+  export function isBigInt64Array(...args: any[]): any;
+  /** stdlib */
+  export function isBigUint64Array(...args: any[]): any;
+  /** stdlib */
   export function isBooleanObject(...args: any[]): any;
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
@@ -2086,6 +2090,10 @@ declare module "util/types" {
   export function isFloat32Array(...args: any[]): any;
   /** stdlib */
   export function isFloat64Array(...args: any[]): any;
+  /** stdlib */
+  export function isGeneratorFunction(...args: any[]): any;
+  /** stdlib */
+  export function isGeneratorObject(...args: any[]): any;
   /** stdlib */
   export function isInt16Array(...args: any[]): any;
   /** stdlib */
