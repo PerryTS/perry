@@ -410,12 +410,6 @@
     "category": "bug-open",
     "reason": "node:stream: objectMode Readable.read() does not return single object per call. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/unshift-after-end": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: unshift() after end \u2014 does not emit 'error' / ERR_STREAM_PUSH_AFTER_EOF. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/async-handler-promise": {
     "issue": "1531",
     "added": "2026-05-24",
