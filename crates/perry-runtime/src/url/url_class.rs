@@ -73,6 +73,8 @@ fn url_can_have_credentials(url: *mut ObjectHeader) -> bool {
     let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
     let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
     !host.is_empty() && protocol != "file:"
+}
+
 fn normalize_hostname_value(raw: &str) -> Option<String> {
     if raw.is_empty()
         || raw.chars().any(|c| {
