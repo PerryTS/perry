@@ -623,6 +623,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("assert", "deepStrictEqual")
         | ("assert/strict", "deepStrictEqual")
         | ("assert/strict", "deepEqual") => js_assert_deep_strict_equal(arg(0), arg(1), arg(2)),
+        ("assert", "partialDeepStrictEqual") | ("assert/strict", "partialDeepStrictEqual") => {
+            js_assert_partial_deep_strict_equal(arg(0), arg(1), arg(2))
+        }
         ("assert", "notDeepStrictEqual")
         | ("assert/strict", "notDeepStrictEqual")
         | ("assert/strict", "notDeepEqual") => {
@@ -1034,6 +1037,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
         }
+        ("util.types", "isNativeError") => crate::object::js_util_types_is_native_error(arg(0)),
         ("util.types", "isNumberObject") => crate::object::js_util_types_is_number_object(arg(0)),
         ("util.types", "isStringObject") => crate::object::js_util_types_is_string_object(arg(0)),
         ("util.types", "isBooleanObject") => crate::object::js_util_types_is_boolean_object(arg(0)),
@@ -1106,6 +1110,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
         }
+        ("util/types", "isNativeError") => crate::object::js_util_types_is_native_error(arg(0)),
         ("util/types", "isNumberObject") => crate::object::js_util_types_is_number_object(arg(0)),
         ("util/types", "isStringObject") => crate::object::js_util_types_is_string_object(arg(0)),
         ("util/types", "isBooleanObject") => crate::object::js_util_types_is_boolean_object(arg(0)),
@@ -1199,6 +1204,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.
+        ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         ("stream", "Readable") => crate::node_stream::js_node_stream_readable_new(arg(0)),
         ("stream", "Writable") => crate::node_stream::js_node_stream_writable_new(arg(0)),
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),

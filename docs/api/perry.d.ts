@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1491 entries across 82 modules
+// Coverage: 1501 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -58,6 +58,8 @@ declare module "assert" {
   /** stdlib */
   export function ok(...args: any[]): any;
   /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
   export function strict(...args: any[]): any;
@@ -100,6 +102,8 @@ declare module "assert/strict" {
   export function notStrictEqual(...args: any[]): any;
   /** stdlib */
   export function ok(...args: any[]): any;
+  /** stdlib */
+  export function partialDeepStrictEqual(...args: any[]): any;
   /** stdlib */
   export function rejects(...args: any[]): any;
   /** stdlib */
@@ -183,6 +187,10 @@ declare module "buffer" {
   export function allocUnsafe(...args: any[]): any;
   /** stdlib */
   export function allocUnsafeSlow(...args: any[]): any;
+  /** stdlib */
+  export function atob(...args: any[]): any;
+  /** stdlib */
+  export function btoa(...args: any[]): any;
   /** stdlib */
   export function byteLength(...args: any[]): any;
   /** stdlib */
@@ -2075,13 +2083,21 @@ declare module "util/types" {
   /** stdlib */
   export function isDate(...args: any[]): any;
   /** stdlib */
+  export function isFloat32Array(...args: any[]): any;
+  /** stdlib */
   export function isFloat64Array(...args: any[]): any;
   /** stdlib */
+  export function isInt16Array(...args: any[]): any;
+  /** stdlib */
   export function isInt32Array(...args: any[]): any;
+  /** stdlib */
+  export function isInt8Array(...args: any[]): any;
   /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
   export function isMapIterator(...args: any[]): any;
+  /** stdlib */
+  export function isNativeError(...args: any[]): any;
   /** stdlib */
   export function isNumberObject(...args: any[]): any;
   /** stdlib */
@@ -2103,7 +2119,11 @@ declare module "util/types" {
   /** stdlib */
   export function isUint16Array(...args: any[]): any;
   /** stdlib */
+  export function isUint32Array(...args: any[]): any;
+  /** stdlib */
   export function isUint8Array(...args: any[]): any;
+  /** stdlib */
+  export function isUint8ClampedArray(...args: any[]): any;
 }
 
 declare module "uuid" {

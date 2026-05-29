@@ -224,6 +224,25 @@ mod parse_float_tests {
     }
 
     #[test]
+    fn number_coerce_arrays_via_tostring() {
+        // Number(array) = ToNumber(array.join(",")): [] -> "" -> 0,
+        // [5] -> "5" -> 5, [1,2] -> "1,2" -> NaN.
+        fn nc_arr(vals: &[f64]) -> f64 {
+            let arr = crate::array::js_array_alloc(vals.len().max(1) as u32);
+            for &v in vals {
+                crate::array::js_array_push_f64(arr, v);
+            }
+            let boxed = crate::value::js_nanbox_pointer(arr as i64);
+            super::js_number_coerce(boxed)
+        }
+        assert_eq!(nc_arr(&[]), 0.0);
+        assert_eq!(nc_arr(&[5.0]), 5.0);
+        assert_eq!(nc_arr(&[42.0]), 42.0);
+        assert!(nc_arr(&[1.0, 2.0]).is_nan()); // "1,2"
+        assert_eq!(nc_arr(&[0.0]), 0.0);
+    }
+
+    #[test]
     fn leading_whitespace() {
         assert_eq!(pf("  3.14"), 3.14_f64);
         assert_eq!(pf("\t3.14"), 3.14_f64);
@@ -347,6 +366,18 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // (UI widgets, drizzle, etc.) still fall through to toPrimitive.
         if id > 0 && id < 0x100000 && crate::timer::is_known_timer_id(id) {
             return id as f64;
+        }
+        // Array → ToPrimitive(number) finds no `valueOf` override, so it
+        // falls to `Array.prototype.toString` = `join(",")`, then ToNumber on
+        // that string: `Number([]) === 0`, `Number([5]) === 5`,
+        // `Number([1,2]) === NaN` ("1,2"). `js_to_primitive` doesn't apply
+        // this, so handle arrays explicitly before the generic path. #2378.
+        const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+        if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_BITS {
+            let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
+            let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
+            let joined = unsafe { crate::array::js_array_join(arr_ptr, comma) };
+            return js_number_coerce(crate::value::js_nanbox_string(joined as i64));
         }
         // Object → consult [Symbol.toPrimitive]("number") first; if the
         // object has a custom toPrimitive method, recurse with the result.

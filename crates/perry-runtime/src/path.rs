@@ -922,60 +922,82 @@ pub extern "C" fn js_path_win32_dirname(path_ptr: *const StringHeader) -> *mut S
             Some(s) => s,
             None => return string_to_js("."),
         };
-        if path_str.is_empty() {
-            return string_to_js(".");
-        }
-        let split = split_win32(&path_str);
-        let prefix = split.prefix;
-        let is_absolute = split.is_absolute;
-        let rest = split.rest;
-        let prefix_is_unc = prefix.starts_with('\\') || prefix.starts_with('/');
+        string_to_js(&win32_dirname_inner(&path_str))
+    }
+}
 
-        // Split `rest` into segments and drop the last one (the basename).
-        let mut segments: Vec<&str> = rest.split(is_win32_sep).filter(|s| !s.is_empty()).collect();
-        if segments.is_empty() {
-            // Path is just the root — dirname is the root itself.
-            return string_to_js(&path_str);
-        }
-        segments.pop();
+fn win32_dirname_inner(path_str: &str) -> String {
+    let bytes = path_str.as_bytes();
+    let len = bytes.len();
+    if len == 0 {
+        return ".".to_string();
+    }
+    if len == 1 {
+        return if is_win32_sep(bytes[0] as char) {
+            path_str.to_string()
+        } else {
+            ".".to_string()
+        };
+    }
 
-        if segments.is_empty() {
-            // Only one segment after the root.
-            if is_absolute {
-                // Drive-absolute or UNC: dirname is the root with separator.
-                let mut r = String::new();
-                if prefix_is_unc {
-                    for c in prefix.chars() {
-                        r.push(if c == '/' { '\\' } else { c });
-                    }
-                } else {
-                    r.push_str(prefix);
+    let mut root_end: Option<usize> = None;
+    let mut offset = 0usize;
+
+    if is_win32_sep(bytes[0] as char) {
+        root_end = Some(1);
+        offset = 1;
+        if is_win32_sep(bytes[1] as char) {
+            let mut j = 2usize;
+            let mut last = j;
+            while j < len && !is_win32_sep(bytes[j] as char) {
+                j += 1;
+            }
+            if j < len && j != last {
+                last = j;
+                while j < len && is_win32_sep(bytes[j] as char) {
+                    j += 1;
                 }
-                r.push('\\');
-                return string_to_js(&r);
+                if j < len && j != last {
+                    last = j;
+                    while j < len && !is_win32_sep(bytes[j] as char) {
+                        j += 1;
+                    }
+                    if j == len {
+                        return path_str.to_string();
+                    }
+                    if j != last {
+                        root_end = Some(j + 1);
+                        offset = j + 1;
+                    }
+                }
             }
-            // Drive-relative with one segment ("C:foo") → "C:".
-            if !prefix.is_empty() {
-                return string_to_js(prefix);
-            }
-            // Bare relative one-segment → ".".
-            return string_to_js(".");
         }
+    } else if len >= 2 && bytes[1] == b':' && (bytes[0] as char).is_ascii_alphabetic() {
+        let end = if len > 2 && is_win32_sep(bytes[2] as char) {
+            3
+        } else {
+            2
+        };
+        root_end = Some(end);
+        offset = end;
+    }
 
-        // Multi-segment: rejoin segments after the root.
-        let mut r = String::new();
-        if prefix_is_unc {
-            for c in prefix.chars() {
-                r.push(if c == '/' { '\\' } else { c });
+    let mut end = None;
+    let mut matched_slash = true;
+    for i in (offset..len).rev() {
+        if is_win32_sep(bytes[i] as char) {
+            if !matched_slash {
+                end = Some(i);
+                break;
             }
         } else {
-            r.push_str(prefix);
+            matched_slash = false;
         }
-        if is_absolute {
-            r.push('\\');
-        }
-        r.push_str(&segments.join("\\"));
-        string_to_js(&r)
+    }
+
+    match end.or(root_end) {
+        Some(end) => path_str[..end].to_string(),
+        None => ".".to_string(),
     }
 }
 
@@ -1472,7 +1494,8 @@ mod glob_tests {
 #[cfg(test)]
 mod win32_normalize_tests {
     use super::{
-        current_dir_as_win32, normalize_win32_str, win32_basename_inner, win32_to_namespaced_path,
+        current_dir_as_win32, normalize_win32_str, win32_basename_inner, win32_dirname_inner,
+        win32_to_namespaced_path,
     };
 
     #[test]
@@ -1519,6 +1542,16 @@ mod win32_normalize_tests {
         assert_eq!(win32_basename_inner("\\\\server\\share\\file"), "file");
         assert_eq!(win32_basename_inner("C:\\foo\\bar\\baz.txt"), "baz.txt");
         assert_eq!(win32_basename_inner("C:foo"), "foo");
+    }
+
+    #[test]
+    fn dirname_preserves_input_separator_style() {
+        assert_eq!(win32_dirname_inner("/foo/bar"), "/foo");
+        assert_eq!(win32_dirname_inner("/foo/bar/"), "/foo");
+        assert_eq!(win32_dirname_inner("foo/bar/baz"), "foo/bar");
+        assert_eq!(win32_dirname_inner("C:/foo/bar"), "C:/foo");
+        assert_eq!(win32_dirname_inner("//server/share"), "//server/share");
+        assert_eq!(win32_dirname_inner("//server/share/a"), "//server/share/");
     }
 
     #[test]
