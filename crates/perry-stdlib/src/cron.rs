@@ -59,6 +59,9 @@ pub struct CronJobHandle {
 }
 
 // Global callback counter
+// #854: reserved for cron callback-id allocation; not wired into the current
+// CRON_TIMERS path (callbacks are keyed by timer_id) but kept for that use.
+#[allow(dead_code)]
 static CALLBACK_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // ============================================================================
@@ -465,6 +468,9 @@ pub extern "C" fn js_cron_set_interval(_callback_id: f64, interval_ms: f64) -> H
 
     // Store running flag in a handle
     struct IntervalHandle {
+        // #854: the spawned task owns `running_clone`; this handle copy keeps
+        // the Arc alive for the handle's lifetime but isn't read back.
+        #[allow(dead_code)]
         running: Arc<AtomicBool>,
     }
 
@@ -498,6 +504,9 @@ pub extern "C" fn js_cron_set_timeout(_callback_id: f64, timeout_ms: f64) -> Han
     });
 
     struct TimeoutHandle {
+        // #854: the spawned task owns `cancelled_clone`; this handle copy keeps
+        // the Arc alive for the handle's lifetime but isn't read back.
+        #[allow(dead_code)]
         cancelled: Arc<AtomicBool>,
     }
 

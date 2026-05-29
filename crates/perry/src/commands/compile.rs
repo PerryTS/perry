@@ -24,6 +24,7 @@ mod bundle_ios;
 mod cjs_wrap;
 mod codegen_steps;
 mod collect_modules;
+mod env_fold;
 mod harmonyos_shim;
 mod host_config;
 mod i18n_emit;
@@ -36,6 +37,7 @@ mod optimized_libs;
 mod parse_cache;
 mod post_link;
 mod precompile_capture;
+mod reachability;
 mod resolve;
 mod resources;
 mod sandbox_buildrs;
@@ -291,6 +293,18 @@ pub fn run_with_parse_cache(
     )?;
 
     run_post_collect_preflight(&args, &mut ctx, format)?;
+
+    // #2309: tree-shake the final module graph — prune unreachable
+    // node_modules modules and re-raise any deferred refusal that survives.
+    // No-op unless tree-shaking is enabled (byte-identical to pre-#2309).
+    {
+        let entry_canonical = ctx.entry_canonical.clone().unwrap_or_else(|| {
+            args.input
+                .canonicalize()
+                .unwrap_or_else(|_| args.input.clone())
+        });
+        reachability::tree_shake(&mut ctx, &entry_canonical)?;
+    }
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
     if matches!(args.target.as_deref(), Some("web") | Some("wasm")) {
@@ -4290,7 +4304,10 @@ pub fn run_with_parse_cache(
     // layer (no `main` emission, `perry_module_init` entrypoint), but the
     // link step uses `ar` instead of `cc -shared`.
     let is_staticlib = args.output_type == "staticlib";
-    let is_library_output = is_dylib || is_staticlib;
+    // #854: kept as documentation of the library-output predicate; the
+    // exe_path closure below branches on is_dylib/is_staticlib directly,
+    // so this aggregate is currently unread.
+    let _is_library_output = is_dylib || is_staticlib;
     // Capture the args fields that helpers downstream of the
     // `args.output.unwrap_or_else(...)` partial-move still need.
     // Per the saved feedback note on this file: any helper extracted

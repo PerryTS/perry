@@ -15,6 +15,16 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[],
         ret: ReturnKind::F64,
     },
+    // #1475 — safe-area insets. Returns `{ top, right, bottom, left }` (points)
+    // read from `UIWindow.safeAreaInsets` (iOS) / `WindowInsets.systemBars()`
+    // (Android), zero on macOS/host. The platform FFI returns the object
+    // already NaN-boxed, so the row uses `ReturnKind::F64` (pass-through).
+    MethodRow {
+        method: "getSafeAreaInsets",
+        runtime: "perry_system_get_safe_area_insets",
+        args: &[],
+        ret: ReturnKind::F64,
+    },
     MethodRow {
         method: "openURL",
         runtime: "perry_system_open_url",

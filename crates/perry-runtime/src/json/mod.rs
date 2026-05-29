@@ -65,9 +65,9 @@ pub(crate) use simd::find_string_terminator;
 pub(crate) use stringify::{
     arm_to_json_result_guard, build_shape_prefix_template, estimate_json_size, is_closure_value,
     is_object_pointer, object_get_to_json, shape_template_for, stringify_array,
-    stringify_array_depth, stringify_buffer, stringify_object, stringify_object_inner,
-    stringify_value, stringify_value_depth, try_emit_shape_element, write_escaped_string,
-    write_number, ShapeTemplate,
+    stringify_array_depth, stringify_buffer, stringify_buffer_pretty, stringify_object,
+    stringify_object_inner, stringify_value, stringify_value_depth, try_emit_shape_element,
+    write_escaped_string, write_number, ShapeTemplate,
 };
 #[allow(unused_imports)]
 pub(crate) use stringify_api::{
@@ -517,6 +517,8 @@ pub(crate) fn nanbox_string_f64(ptr: *const StringHeader) -> f64 {
 
 /// NaN-box an object/array pointer as f64 (POINTER_TAG)
 #[inline]
+// #854: NaN-boxing pointer helper retained for the JSON subsystem (see CLAUDE.md)
+#[allow(dead_code)]
 pub(crate) fn nanbox_pointer_f64(ptr: *const u8) -> f64 {
     f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK))
 }
@@ -547,6 +549,51 @@ mod tests {
         let nested = (b.bits() & POINTER_MASK) as *const crate::ObjectHeader;
         unsafe {
             assert_eq!((*(*nested).keys_array).length, 1);
+        }
+    }
+
+    #[test]
+    fn stringify_set_serializes_as_empty_object() {
+        // Regression: a Set/Map header is NOT an ObjectHeader, so the old
+        // catch-all object path read its internals as a `keys_array` and
+        // segfaulted. Node serializes both as "{}".
+        unsafe {
+            let mut s = crate::set::js_set_alloc(4);
+            s = crate::set::js_set_add(s, 1.0);
+            s = crate::set::js_set_add(s, 2.0);
+            let boxed = f64::from_bits(POINTER_TAG | (s as u64 & POINTER_MASK));
+            let output = js_json_stringify(boxed, TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output).unwrap(), "{}");
+        }
+    }
+
+    #[test]
+    fn stringify_map_serializes_as_empty_object() {
+        unsafe {
+            let mut m = crate::map::js_map_alloc(4);
+            m = crate::map::js_map_set(m, 1.0, 2.0);
+            let boxed = f64::from_bits(POINTER_TAG | (m as u64 & POINTER_MASK));
+            let output = js_json_stringify(boxed, TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output).unwrap(), "{}");
+        }
+    }
+
+    #[test]
+    fn stringify_buffer_pretty_indents_type_and_data() {
+        // Regression (#2367): a Buffer in pretty-print mode used to reach
+        // `is_object_pointer` (no buffer guard in the pretty path) and SIGSEGV.
+        unsafe {
+            let b = crate::buffer::js_buffer_alloc(3, 0);
+            let data = (b as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+            *data = 1;
+            *data.add(1) = 2;
+            *data.add(2) = 3;
+            let mut out = String::new();
+            stringify_buffer_pretty(b as *const u8, &mut out, "  ", 0);
+            assert_eq!(
+                out,
+                "{\n  \"type\": \"Buffer\",\n  \"data\": [\n    1,\n    2,\n    3\n  ]\n}"
+            );
         }
     }
 

@@ -528,6 +528,21 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 ("HttpServer", "maxRequestsPerSocket") => {
                                     Some("__set_maxRequestsPerSocket")
                                 }
+                                // #2154 — `http.Agent` / `https.Agent` tunable
+                                // properties + the `createConnection` /
+                                // `createSocket` overrides. PR #2264 added the
+                                // FFI setters + native-table entries but never
+                                // wired the assignment path, so `agent.<prop> =
+                                // x` silently no-op'd. Route them to the
+                                // `__set_<name>` NativeMethodCall here.
+                                ("Agent", "protocol") => Some("__set_protocol"),
+                                ("Agent", "maxSockets") => Some("__set_maxSockets"),
+                                ("Agent", "maxFreeSockets") => Some("__set_maxFreeSockets"),
+                                ("Agent", "maxTotalSockets") => Some("__set_maxTotalSockets"),
+                                ("Agent", "keepAlive") => Some("__set_keepAlive"),
+                                ("Agent", "keepAliveMsecs") => Some("__set_keepAliveMsecs"),
+                                ("Agent", "createConnection") => Some("__set_createConnection"),
+                                ("Agent", "createSocket") => Some("__set_createSocket"),
                                 _ => None,
                             };
                             if let Some(method) = setter_method {
