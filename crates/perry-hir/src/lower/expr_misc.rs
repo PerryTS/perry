@@ -88,7 +88,18 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
         ast::UpdateOp::MinusMinus => BinaryOp::Sub,
     };
 
-    match update.arg.as_ref() {
+    // Unwrap compile-time-only wrappers: `obj.x!++` (TS non-null assertion) and
+    // `(obj.x)++` (parenthesized) are transparent to update-expression lowering.
+    let mut arg = update.arg.as_ref();
+    loop {
+        match arg {
+            ast::Expr::TsNonNull(inner) => arg = inner.expr.as_ref(),
+            ast::Expr::Paren(inner) => arg = inner.expr.as_ref(),
+            _ => break,
+        }
+    }
+
+    match arg {
         // Simple identifier: x++ or ++x
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
