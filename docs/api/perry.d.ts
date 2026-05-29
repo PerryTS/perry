@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1498 entries across 82 modules
+// Coverage: 1501 entries across 82 modules
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2096,6 +2096,8 @@ declare module "util/types" {
   export function isMap(...args: any[]): any;
   /** stdlib */
   export function isMapIterator(...args: any[]): any;
+  /** stdlib */
+  export function isNativeError(...args: any[]): any;
   /** stdlib */
   export function isNumberObject(...args: any[]): any;
   /** stdlib */
