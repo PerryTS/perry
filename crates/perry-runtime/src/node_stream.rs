@@ -1322,17 +1322,29 @@ fn propagate_stream_state(this: f64, opts: f64, result: f64) {
     }
 }
 
+fn drain_iter_helper_microtasks() {
+    for _ in 0..10_000 {
+        if crate::promise::js_promise_run_microtasks() == 0 {
+            break;
+        }
+    }
+}
+
+fn prepare_readable_for_iteration(stream: f64) {
+    invoke_read_once(stream);
+    drain_iter_helper_microtasks();
+}
+
 /// Resolve a callback result that may be a Promise (an async mapper /
 /// predicate) by draining microtasks until it settles, then reading the
-/// fulfilled value. Bounded so a never-settling promise can't hang the
-/// stub; an unresolved or rejected promise yields the original value.
-fn settle(value: f64) -> f64 {
+/// fulfilled value or preserving the rejection reason.
+fn settle_result(value: f64) -> Result<f64, f64> {
     if crate::promise::js_value_is_promise(value) == 0 {
-        return value;
+        return Ok(value);
     }
     let p = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
     if p.is_null() {
-        return value;
+        return Ok(value);
     }
     for _ in 0..10_000 {
         if unsafe { (*p).state } != crate::promise::PromiseState::Pending {
@@ -1343,18 +1355,18 @@ fn settle(value: f64) -> f64 {
         }
     }
     unsafe {
-        if (*p).state == crate::promise::PromiseState::Fulfilled {
-            (*p).value
-        } else {
-            value
+        match (*p).state {
+            crate::promise::PromiseState::Fulfilled => Ok((*p).value),
+            crate::promise::PromiseState::Rejected => Err((*p).reason),
+            crate::promise::PromiseState::Pending => Ok(value),
         }
     }
 }
 
 /// Invoke a single-argument stream callback and settle an async result.
 #[inline]
-fn call_settled(cb: *const ClosureHeader, arg: f64) -> f64 {
-    settle(crate::closure::js_closure_call1(cb, arg))
+fn call_settled_result(cb: *const ClosureHeader, arg: f64) -> Result<f64, f64> {
+    settle_result(crate::closure::js_closure_call1(cb, arg))
 }
 
 /// Coerce a `take(n)` / `drop(n)` count argument to a clamped element
@@ -1387,50 +1399,77 @@ fn extend_with_array(
 
 extern "C" fn ns_iter_to_array(closure: *const ClosureHeader, opts: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let mut out = crate::array::js_array_alloc(0);
     if !arr.is_null() {
         out = extend_with_array(out, arr);
     }
-    mark_stream_ended(this);
-    clear_readable_buffer(this);
-    destroy_stream(this, f64::from_bits(TAG_UNDEFINED));
-    settle_consuming(this, opts, box_pointer(out as *const u8))
+    let result = settle_consuming(this, opts, box_pointer(out as *const u8));
+    if readable_hidden_error(this).is_none() {
+        mark_stream_ended(this);
+        clear_readable_buffer(this);
+        destroy_stream(this, f64::from_bits(TAG_UNDEFINED));
+    }
+    result
 }
 
 extern "C" fn ns_iter_map(closure: *const ClosureHeader, mapper: f64, opts: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(mapper);
     let mut out = crate::array::js_array_alloc(0);
-    if !arr.is_null() && !cb.is_null() {
+    let mut callback_error = None;
+    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
         let len = crate::array::js_array_length(arr);
         for i in 0..len {
             let el = crate::array::js_array_get_f64(arr, i);
-            out = crate::array::js_array_push_f64(out, call_settled(cb, el));
-        }
-    }
-    let result = readable_from_chunks(out);
-    propagate_stream_state(this, opts, result);
-    result
-}
-
-extern "C" fn ns_iter_filter(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
-    let this = this_value(closure);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(predicate);
-    let mut out = crate::array::js_array_alloc(0);
-    if !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            if crate::value::js_is_truthy(call_settled(cb, el)) != 0 {
-                out = crate::array::js_array_push_f64(out, el);
+            match call_settled_result(cb, el) {
+                Ok(mapped) => out = crate::array::js_array_push_f64(out, mapped),
+                Err(err) => {
+                    callback_error = Some(err);
+                    break;
+                }
             }
         }
     }
     let result = readable_from_chunks(out);
     propagate_stream_state(this, opts, result);
+    if let Some(err) = callback_error {
+        set_hidden_value(result, hidden_error_key(), err);
+    }
+    result
+}
+
+extern "C" fn ns_iter_filter(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
+    let this = this_value(closure);
+    prepare_readable_for_iteration(this);
+    let arr = readable_chunks_array(this);
+    let cb = callback_closure(predicate);
+    let mut out = crate::array::js_array_alloc(0);
+    let mut callback_error = None;
+    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            let el = crate::array::js_array_get_f64(arr, i);
+            match call_settled_result(cb, el) {
+                Ok(value) if crate::value::js_is_truthy(value) != 0 => {
+                    out = crate::array::js_array_push_f64(out, el);
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    callback_error = Some(err);
+                    break;
+                }
+            }
+        }
+    }
+    let result = readable_from_chunks(out);
+    propagate_stream_state(this, opts, result);
+    if let Some(err) = callback_error {
+        set_hidden_value(result, hidden_error_key(), err);
+    }
     result
 }
 
@@ -1441,6 +1480,7 @@ extern "C" fn ns_iter_reduce(
     opts: f64,
 ) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(reducer);
     let len = if arr.is_null() {
@@ -1458,11 +1498,14 @@ extern "C" fn ns_iter_reduce(
         // the stub resolves undefined rather than crash.
         return settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED));
     };
-    if !cb.is_null() {
+    if readable_hidden_error(this).is_none() && !cb.is_null() {
         for i in start..len {
             let el = crate::array::js_array_get_f64(arr, i);
             // Node's stream reducer is (accumulator, current) — no index.
-            acc = settle(crate::closure::js_closure_call2(cb, acc, el));
+            match settle_result(crate::closure::js_closure_call2(cb, acc, el)) {
+                Ok(value) => acc = value,
+                Err(err) => return rejected_promise(err),
+            }
         }
     }
     settle_consuming(this, opts, acc)
@@ -1470,13 +1513,16 @@ extern "C" fn ns_iter_reduce(
 
 extern "C" fn ns_iter_for_each(closure: *const ClosureHeader, action: f64, opts: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(action);
-    if !arr.is_null() && !cb.is_null() {
+    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
         let len = crate::array::js_array_length(arr);
         for i in 0..len {
             let el = crate::array::js_array_get_f64(arr, i);
-            let _ = call_settled(cb, el);
+            if let Err(err) = call_settled_result(cb, el) {
+                return rejected_promise(err);
+            }
         }
     }
     settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED))
@@ -1484,16 +1530,21 @@ extern "C" fn ns_iter_for_each(closure: *const ClosureHeader, action: f64, opts:
 
 extern "C" fn ns_iter_find(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(predicate);
     let mut found = f64::from_bits(TAG_UNDEFINED);
-    if !arr.is_null() && !cb.is_null() {
+    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
         let len = crate::array::js_array_length(arr);
         for i in 0..len {
             let el = crate::array::js_array_get_f64(arr, i);
-            if crate::value::js_is_truthy(call_settled(cb, el)) != 0 {
-                found = el;
-                break;
+            match call_settled_result(cb, el) {
+                Ok(value) if crate::value::js_is_truthy(value) != 0 => {
+                    found = el;
+                    break;
+                }
+                Ok(_) => {}
+                Err(err) => return rejected_promise(err),
             }
         }
     }
@@ -1502,16 +1553,21 @@ extern "C" fn ns_iter_find(closure: *const ClosureHeader, predicate: f64, opts: 
 
 extern "C" fn ns_iter_some(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(predicate);
     let mut result = f64::from_bits(TAG_FALSE);
-    if !arr.is_null() && !cb.is_null() {
+    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
         let len = crate::array::js_array_length(arr);
         for i in 0..len {
             let el = crate::array::js_array_get_f64(arr, i);
-            if crate::value::js_is_truthy(call_settled(cb, el)) != 0 {
-                result = f64::from_bits(TAG_TRUE);
-                break;
+            match call_settled_result(cb, el) {
+                Ok(value) if crate::value::js_is_truthy(value) != 0 => {
+                    result = f64::from_bits(TAG_TRUE);
+                    break;
+                }
+                Ok(_) => {}
+                Err(err) => return rejected_promise(err),
             }
         }
     }
@@ -1520,16 +1576,21 @@ extern "C" fn ns_iter_some(closure: *const ClosureHeader, predicate: f64, opts: 
 
 extern "C" fn ns_iter_every(closure: *const ClosureHeader, predicate: f64, opts: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(predicate);
     let mut result = f64::from_bits(TAG_TRUE);
-    if !arr.is_null() && !cb.is_null() {
+    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
         let len = crate::array::js_array_length(arr);
         for i in 0..len {
             let el = crate::array::js_array_get_f64(arr, i);
-            if crate::value::js_is_truthy(call_settled(cb, el)) == 0 {
-                result = f64::from_bits(TAG_FALSE);
-                break;
+            match call_settled_result(cb, el) {
+                Ok(value) if crate::value::js_is_truthy(value) == 0 => {
+                    result = f64::from_bits(TAG_FALSE);
+                    break;
+                }
+                Ok(_) => {}
+                Err(err) => return rejected_promise(err),
             }
         }
     }
@@ -1538,14 +1599,22 @@ extern "C" fn ns_iter_every(closure: *const ClosureHeader, predicate: f64, opts:
 
 extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(mapper);
     let mut out = crate::array::js_array_alloc(0);
-    if !arr.is_null() && !cb.is_null() {
+    let mut callback_error = None;
+    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
         let len = crate::array::js_array_length(arr);
         for i in 0..len {
             let el = crate::array::js_array_get_f64(arr, i);
-            let mapped = call_settled(cb, el);
+            let mapped = match call_settled_result(cb, el) {
+                Ok(value) => value,
+                Err(err) => {
+                    callback_error = Some(err);
+                    break;
+                }
+            };
             // flatMap flattens one level: an array result is spread, a
             // Readable result contributes its retained chunks, an
             // async-iterable (e.g. an `async function*` mapper return —
@@ -1569,6 +1638,9 @@ extern "C" fn ns_iter_flat_map(closure: *const ClosureHeader, mapper: f64, opts:
     }
     let result = readable_from_chunks(out);
     propagate_stream_state(this, opts, result);
+    if let Some(err) = callback_error {
+        set_hidden_value(result, hidden_error_key(), err);
+    }
     result
 }
 
@@ -1617,6 +1689,7 @@ fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHe
 
 extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let mut out = crate::array::js_array_alloc(0);
     if !arr.is_null() {
@@ -1633,6 +1706,7 @@ extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {
 
 extern "C" fn ns_iter_drop(closure: *const ClosureHeader, count: f64) -> f64 {
     let this = this_value(closure);
+    prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let mut out = crate::array::js_array_alloc(0);
     if !arr.is_null() {
@@ -1762,6 +1836,17 @@ fn register_stub_arities() {
     register(ns_is_paused0 as *const u8, 0);
     register(ns_unpipe1 as *const u8, 1);
     register(ns_readable_resume_microtask as *const u8, 0);
+    register(ns_iter_to_array as *const u8, 1);
+    register(ns_iter_map as *const u8, 2);
+    register(ns_iter_filter as *const u8, 2);
+    register(ns_iter_reduce as *const u8, 3);
+    register(ns_iter_for_each as *const u8, 2);
+    register(ns_iter_find as *const u8, 2);
+    register(ns_iter_some as *const u8, 2);
+    register(ns_iter_every as *const u8, 2);
+    register(ns_iter_flat_map as *const u8, 2);
+    register(ns_iter_take as *const u8, 1);
+    register(ns_iter_drop as *const u8, 1);
     async_iterator::register_arities();
 }
 
