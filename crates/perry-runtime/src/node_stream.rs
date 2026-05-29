@@ -513,7 +513,29 @@ fn push_chunk_backpressure_result(stream: f64, total: f64) -> f64 {
 
 /// `readable.push(chunk)` for the untyped/`as any` object-method path.
 extern "C" fn ns_push1(closure: *const ClosureHeader, chunk: f64) -> f64 {
-    push_chunk(this_value(closure), chunk)
+    let stream = readable_push_receiver(closure);
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
+        throw_readable_push_invalid_receiver();
+    }
+    push_chunk(stream, chunk)
+}
+
+fn readable_push_receiver(closure: *const ClosureHeader) -> f64 {
+    let implicit = crate::object::js_implicit_this_get();
+    if implicit.to_bits() != TAG_UNDEFINED {
+        return implicit;
+    }
+    if closure.is_null() {
+        return this_value(closure);
+    }
+    throw_readable_push_invalid_receiver()
+}
+
+#[cold]
+fn throw_readable_push_invalid_receiver() -> ! {
+    crate::node_submodules::diagnostics::throw_type_error_no_code(
+        b"Cannot read properties of undefined (reading '_readableState')",
+    )
 }
 
 fn unshift_chunk(stream: f64, chunk: f64) -> f64 {

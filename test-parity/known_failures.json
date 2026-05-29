@@ -674,12 +674,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: BYOB reader missing methods (read/releaseLock) or .closed prop. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/instance-method-bind-this": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: detached instance method called without `this` \u2014 wrong behavior (Perry should throw). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/three-stages-order": {
     "issue": "1531",
     "added": "2026-05-24",
