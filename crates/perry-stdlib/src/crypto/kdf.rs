@@ -403,8 +403,8 @@ pub unsafe extern "C" fn js_crypto_secure_heap_used() -> *mut ObjectHeader {
     }
     set_object_value_field(obj, b"total", 0.0);
     set_object_value_field(obj, b"used", 0.0);
-    set_object_value_field(obj, b"utilization", 0.0);
-    set_object_value_field(obj, b"min", 0.0);
+    set_object_value_field(obj, b"utilization", f64::NAN);
+    set_object_value_field(obj, b"min", 2.0);
     obj
 }
 

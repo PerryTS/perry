@@ -41,9 +41,9 @@ pub use self::url_class::{
     js_url_can_parse, js_url_can_parse_with_base, js_url_get_hash, js_url_get_host,
     js_url_get_hostname, js_url_get_href, js_url_get_origin, js_url_get_pathname, js_url_get_port,
     js_url_get_protocol, js_url_get_search, js_url_get_search_params, js_url_new,
-    js_url_new_with_base, js_url_parse, js_url_set_hash, js_url_set_hostname, js_url_set_password,
-    js_url_set_pathname, js_url_set_port, js_url_set_protocol, js_url_set_search,
-    js_url_set_username,
+    js_url_new_with_base, js_url_parse, js_url_parse_with_base, js_url_set_hash,
+    js_url_set_hostname, js_url_set_password, js_url_set_pathname, js_url_set_port,
+    js_url_set_protocol, js_url_set_search, js_url_set_username,
 };
 
 // ---------------------------------------------------------------------------

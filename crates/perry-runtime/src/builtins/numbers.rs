@@ -334,6 +334,11 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         crate::bigint::js_bigint_to_f64(ptr)
     } else if jsval.is_pointer() {
         let id = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        // #2089: a Date is a NaN-boxed pointer to a `DateCell`. `Number(date)`
+        // / `+date` / `date - other` coerce to the millisecond timestamp.
+        if crate::date::is_date_cell_addr(id as usize) {
+            return crate::date::date_cell_timestamp(value);
+        }
         // Timer handles coerce numerically to their internal id (matches
         // Node's `+timeout` shape — Node returns `_idleTimeout`, Perry
         // returns the handle id; both are numbers and both are stable
@@ -345,13 +350,23 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         }
         // Object → consult [Symbol.toPrimitive]("number") first; if the
         // object has a custom toPrimitive method, recurse with the result.
-        // Otherwise returns NaN.
         let primitive = unsafe { crate::symbol::js_to_primitive(value, 1) };
         if primitive.to_bits() != value.to_bits() {
             // toPrimitive returned something different — re-coerce.
             return js_number_coerce(primitive);
         }
-        f64::NAN
+        // No custom [Symbol.toPrimitive]: complete OrdinaryToPrimitive by
+        // stringifying the object and re-running ToNumber on the result
+        // (#2378). `js_jsvalue_to_string` handles arrays via join(",") and
+        // objects via their own/inherited toString, so `Number([])` → "" → 0,
+        // `Number([5])` → "5" → 5, and `Number({})` → "[object Object]" → NaN
+        // all match Node. The result is a string, so the recursive call lands
+        // in the string branch — no infinite pointer-branch recursion.
+        let str_ptr = crate::value::js_jsvalue_to_string(value);
+        if str_ptr.is_null() {
+            return f64::NAN;
+        }
+        js_number_coerce(crate::value::js_nanbox_string(str_ptr as i64))
     } else {
         // Already a number
         value
