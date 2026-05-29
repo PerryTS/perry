@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::closure::ClosureHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
-use crate::value::POINTER_MASK;
+use crate::value::{POINTER_MASK, POINTER_TAG};
 
 mod callbacks;
 pub use callbacks::*;
@@ -52,6 +52,18 @@ pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
 }
 
+pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) != POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    if addr < 0x1000 {
+        return None;
+    }
+    FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().get(&addr).copied())
+}
+
 struct DirState {
     entries: Vec<f64>,
     index: usize,
@@ -80,6 +92,9 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
     if value.is_finite() && value >= 0.0 && value <= i32::MAX as f64 {
         Some(value as i32)
     } else {
+        if let Some(fd) = filehandle_object_fd(value) {
+            return Some(fd);
+        }
         unsafe {
             let bits = value.to_bits();
             let addr = if (bits >> 48) >= 0x7FF8 {
@@ -87,9 +102,6 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
             } else {
                 bits as usize
             };
-            if let Some(fd) = FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().get(&addr).copied()) {
-                return Some(fd);
-            }
             if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1
                 || !extract_string_ptr(value).is_null()
             {
