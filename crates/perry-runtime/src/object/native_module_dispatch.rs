@@ -618,6 +618,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("assert", "deepStrictEqual")
         | ("assert/strict", "deepStrictEqual")
         | ("assert/strict", "deepEqual") => js_assert_deep_strict_equal(arg(0), arg(1), arg(2)),
+        ("assert", "partialDeepStrictEqual") | ("assert/strict", "partialDeepStrictEqual") => {
+            js_assert_partial_deep_strict_equal(arg(0), arg(1), arg(2))
+        }
         ("assert", "notDeepStrictEqual")
         | ("assert/strict", "notDeepStrictEqual")
         | ("assert/strict", "notDeepEqual") => {
