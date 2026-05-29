@@ -88,6 +88,9 @@ pub use json::json_stringify;
 mod event_pump;
 pub use event_pump::notify_main_thread;
 
+mod raw_net;
+pub use raw_net::{raw_net, register_raw_net, RawNetVtable};
+
 // `runtime-link` gates this `extern crate` so external npm-packaged
 // wrappers (which lack perry-runtime in their Cargo graph) compile
 // without it. In-tree extension crates that need the runtime

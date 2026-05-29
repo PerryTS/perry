@@ -384,6 +384,9 @@ pub(crate) struct FnCtx<'a> {
     pub namespace_member_prefixes: &'a std::collections::HashMap<(String, String), String>,
     /// Names of imported functions that are async. Used to wrap
     /// cross-module calls in promise machinery.
+    // #854: cross-module async-import wrapping context; currently routed via
+    // other async-detection paths, so this borrowed field is not read yet.
+    #[allow(dead_code)]
     pub imported_async_funcs: &'a std::collections::HashSet<String>,
     /// FuncIds of locally-defined async functions in this module.
     /// Used by `is_promise_expr` to recognize that `let p = asyncFn();`
@@ -1709,6 +1712,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DecodeURI(..)
         | Expr::EncodeURIComponent(..)
         | Expr::DecodeURIComponent(..)
+        | Expr::DateToString(..)
         | Expr::DateToDateString(..)
         | Expr::DateToTimeString(..)
         | Expr::DateToLocaleDateString(..)
@@ -1745,6 +1749,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::AggregateErrorNew { .. }
         | Expr::RegExpLastIndex(..)
         | Expr::BufferConcat(..)
+        | Expr::BufferConcatWithLength { .. }
         | Expr::BufferSlice { .. }
         | Expr::BufferIsBuffer(..)
         | Expr::BufferIsEncoding(..)
@@ -1874,6 +1879,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::UrlCanParse(..)
         | Expr::UrlCanParseWithBase { .. }
         | Expr::UrlParse(..)
+        | Expr::UrlParseWithBase { .. }
         | Expr::UrlSearchParamsNew(..)
         | Expr::UrlSearchParamsGet { .. }
         | Expr::UrlSearchParamsHas { .. }

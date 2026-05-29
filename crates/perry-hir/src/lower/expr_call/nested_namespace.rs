@@ -265,12 +265,18 @@ pub(super) fn try_web_crypto_subtle(
                                         let allow_unimplemented =
                                             std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
                                         if !allow_unimplemented {
-                                            crate::lower_bail!(
-                                                outer_member.span,
+                                            let msg = format!(
                                                 "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt, generateKey, wrapKey, unwrapKey (HMAC + SHA-1/256/384/512; encrypt/decrypt/generateKey/wrapKey currently AES-GCM/AES-KW only). \
                                                  See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
                                                 method,
                                             );
+                                            // #2309: defer under tree-shaking.
+                                            if !crate::try_defer_refusal(
+                                                msg.clone(),
+                                                outer_member.span.lo.0,
+                                            ) {
+                                                crate::lower_bail!(outer_member.span, "{}", msg);
+                                            }
                                         }
                                     }
                                 }
@@ -317,12 +323,15 @@ pub(super) fn try_util_types_namespace(
                                 && perry_api_manifest::module_has_symbol("util/types", method_name)
                                     .is_none()
                             {
-                                crate::lower_bail!(
-                                    outer_member.span,
+                                let msg = format!(
                                     "`util.types.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
                                      or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)",
                                     method_name,
                                 );
+                                // #2309: defer under tree-shaking.
+                                if !crate::try_defer_refusal(msg.clone(), outer_member.span.lo.0) {
+                                    crate::lower_bail!(outer_member.span, "{}", msg);
+                                }
                             }
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "util/types".to_string(),

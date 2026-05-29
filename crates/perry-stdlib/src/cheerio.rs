@@ -466,6 +466,10 @@ pub unsafe extern "C" fn js_cheerio_selection_attrs(
 // doesn't belong to either registry so the caller falls through to the
 // next dispatcher.
 // ============================================================================
+// #854: runtime fallback dispatcher for any-typed cheerio intermediates; the
+// codegen path that routes here (see module doc above) is not yet wired, so
+// this is currently unreferenced but intentionally retained.
+#[allow(dead_code)]
 pub(crate) unsafe fn dispatch_cheerio(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
     use crate::common::with_handle;
     const TAG_UNDEFINED_F64: u64 = 0x7FFC_0000_0000_0001;

@@ -273,6 +273,35 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
     }
 }
 
+/// #1475 — safe-area insets. Reads `UIWindow.safeAreaInsets` from the key
+/// window and returns `{ top, right, bottom, left }` (points). Falls back to
+/// all-zero when no key window is attached yet (e.g. before the scene
+/// connects, in tests, or in headless CLI builds).
+#[no_mangle]
+pub extern "C" fn perry_system_get_safe_area_insets() -> f64 {
+    extern "C" {
+        fn perry_safe_area_insets_make(top: f64, right: f64, bottom: f64, left: f64) -> f64;
+    }
+    let mut insets = crate::widgets::vstack::UIEdgeInsets {
+        top: 0.0,
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+    };
+    unsafe {
+        if let Some(app_cls) = objc2::runtime::AnyClass::get(c"UIApplication") {
+            let app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_cls, sharedApplication];
+            if !app.is_null() {
+                let key_window: *mut objc2::runtime::AnyObject = objc2::msg_send![app, keyWindow];
+                if !key_window.is_null() {
+                    insets = objc2::msg_send![key_window, safeAreaInsets];
+                }
+            }
+        }
+        perry_safe_area_insets_make(insets.top, insets.right, insets.bottom, insets.left)
+    }
+}
+
 // ---- Network reachability (issue #582) ----
 #[no_mangle]
 pub extern "C" fn perry_system_network_get_status(callback: f64) {

@@ -691,7 +691,7 @@ pub extern "C" fn js_fs_cp_callback(from_value: f64, to_value: f64, arg2: f64, a
             return f64::from_bits(TAG_UNDEFINED);
         }
     }
-    let _ = js_fs_cp_sync_options(from_value, to_value, options);
+    let _ = js_fs_cp_async_options(from_value, to_value, options);
     call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
