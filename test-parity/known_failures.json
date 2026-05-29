@@ -14,12 +14,6 @@
     "category": "gap-categorical",
     "reason": "Lookbehind regex assertions \u2014 Rust's `regex` crate doesn't support `(?<=)` / `(?<!)`. Documented in CLAUDE.md as a known categorical gap. Unblocking requires swapping the regex backend or implementing a separate matcher for lookbehind."
   },
-  "test_harness_class_mixins": {
-    "issue": "806",
-    "added": "2026-05-24",
-    "category": "bug-stale",
-    "reason": "Re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS; #806 is closed. Deliberate failing repro/harness \u2014 kept as a regression canary. #806 harness for `class X extends Fn(...)<...>` patterns. Two sub-cases surface real Perry gaps today: (1) bare-factory subclass loses the base's field initializer (`bare.kind: undefined` vs Node's `bare.kind: bare`); (2) chained mixin `WithA(WithB(WithC(Base)))` throws `TypeError: value is not a function` at construction. Captured-factory + Effect double-call shapes pass post-#740 \u2014 the harness verifies that survives. Linked to #321 umbrella; will flip to PASS as each sub-case lands."
-  },
   "test_issue_422_socket_connect": {
     "issue": "1634",
     "added": "2026-05-15",

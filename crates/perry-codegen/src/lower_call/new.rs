@@ -853,7 +853,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 FieldInitMode::BetweenExclusiveTo(stop_at),
             )?;
         } else {
-            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
+            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
     if let Some(runtime_fn) = builtin_parent_runtime {
@@ -944,6 +944,11 @@ pub(crate) enum FieldInitMode {
     /// `stop_at` itself because that class's SelfOnly fields are
     /// applied via the SuperCall site inside the inlined body.
     BetweenExclusiveTo(String),
+    /// Apply every class after the root ancestor through the leaf. Used
+    /// when a default-derived constructor chain has no explicit inherited
+    /// constructor body, so there is no SuperCall site to apply intermediate
+    /// class fields.
+    AfterRoot,
 }
 
 pub(crate) fn apply_field_initializers_recursive(
@@ -987,6 +992,7 @@ pub(crate) fn apply_field_initializers_recursive(
     //   SelfOnly: keep only the leaf
     //   UpToInclusive(stop_at): keep chain[0..=index_of(stop_at)]
     //   BetweenExclusiveTo(stop_at): keep chain[index_of(stop_at)+1..]
+    //   AfterRoot: keep chain[1..]
     let chain: Vec<String> = match &mode {
         FieldInitMode::All => chain,
         FieldInitMode::AncestorsOnly => {
@@ -1031,6 +1037,13 @@ pub(crate) fn apply_field_initializers_recursive(
                 } else {
                     Vec::new()
                 }
+            } else {
+                Vec::new()
+            }
+        }
+        FieldInitMode::AfterRoot => {
+            if chain.len() > 1 {
+                chain[1..].to_vec()
             } else {
                 Vec::new()
             }
