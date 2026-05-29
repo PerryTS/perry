@@ -314,12 +314,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() \u2014 error in middle transform does not propagate to composite 'error' event. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/read-after-end": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: read() after end \u2014 does not consistently return null. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/transform-cancel-propagates": {
     "issue": "1545",
     "added": "2026-05-24",

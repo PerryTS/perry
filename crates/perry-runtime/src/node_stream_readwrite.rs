@@ -317,6 +317,7 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
             buffer_pending_readable_chunk(stream, chunk);
             continue;
         }
+        consume_readable_buffered_front(stream, chunk);
         emit_readable_data_unchecked(stream, chunk);
     }
     if stream_hidden_ended(stream)
@@ -836,6 +837,32 @@ pub(super) fn clear_pending_readable_chunks(stream: f64) {
     );
 }
 
+fn consume_readable_buffered_front(stream: f64, chunk: f64) {
+    let Some(chunks) = readable_hidden_chunks(stream) else {
+        return;
+    };
+    if !is_array_like_value(chunks) {
+        clear_readable_buffer(stream);
+        return;
+    }
+    let arr = raw_ptr_from_value(chunks) as *mut crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    if len == 0 {
+        clear_readable_buffer(stream);
+        return;
+    }
+    let _ = crate::array::js_array_shift_f64(arr);
+    if len == 1 {
+        clear_readable_buffer(stream);
+        return;
+    }
+    let consumed = chunk_byte_len(chunk) as f64;
+    let remaining =
+        (get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) - consumed).max(0.0);
+    set_hidden_value(stream, hidden_buffered_key(), remaining);
+    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
+}
+
 pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
     let size_value = JSValue::from_bits(size.to_bits());
     if size_value.is_undefined() || !size_value.is_number() {
@@ -1027,9 +1054,11 @@ pub(super) fn drain_readable_from_events(stream: f64) {
                 if !emit_destroyed_tail {
                     return;
                 }
+                consume_readable_buffered_front(stream, chunk);
                 emit_readable_data_unchecked(stream, chunk);
                 return;
             }
+            consume_readable_buffered_front(stream, chunk);
             emit_readable_data_unchecked(stream, chunk);
             if stream_destroyed(stream) {
                 emit_destroyed_tail = true;
