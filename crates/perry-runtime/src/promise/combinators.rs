@@ -521,7 +521,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         || crate::map::is_registered_map(raw_ptr)
         || crate::symbol::is_registered_symbol(raw_ptr)
         || crate::regex::is_regex_pointer(raw_ptr as *const u8)
-        || crate::date::is_registered_date_bits(bits)
+        || crate::date::is_date_cell_addr(raw_ptr)
     {
         return value;
     }
