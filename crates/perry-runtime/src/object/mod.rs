@@ -1731,6 +1731,8 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
 }
 
 #[inline]
+// #854: object field-slot bookkeeping helper retained for shape tracking
+#[allow(dead_code)]
 pub(super) unsafe fn note_object_field_slot(
     obj: *mut ObjectHeader,
     field_index: usize,

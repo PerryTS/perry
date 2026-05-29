@@ -588,6 +588,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 return Ok(Expr::EnvGet(var_name));
                             }
                             ast::MemberProp::Computed(computed) => {
+                                // process.env["NAME"] with a string-literal key
+                                // is a *static* access — lower to EnvGet so it
+                                // matches the dot form (and #2309 build-time
+                                // folding sees it). Non-literal keys stay
+                                // dynamic.
+                                if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
+                                    if let Some(name) = s.value.as_str() {
+                                        return Ok(Expr::EnvGet(name.to_string()));
+                                    }
+                                }
                                 // process.env[expr] (dynamic key)
                                 let key_expr = Box::new(lower_expr(ctx, &computed.expr)?);
                                 return Ok(Expr::EnvGetDynamic(key_expr));
@@ -1301,14 +1311,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             let hint = super::unimpl_hints::module_member_hint(module, prop)
                 .map(|h| format!(" {h}"))
                 .unwrap_or_default();
-            crate::lower_bail!(
-                member.span,
+            let msg = format!(
                 "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
-                module,
-                prop,
-                hint,
+                module, prop, hint,
             );
+            // #2309: defer when tree-shaking (sink armed for this node_modules
+            // module); re-raised only if the module survives pruning.
+            if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                crate::lower_bail!(member.span, "{}", msg);
+            }
         }
     }
 

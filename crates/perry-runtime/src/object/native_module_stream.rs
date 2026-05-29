@@ -64,5 +64,9 @@ mod tests {
             js_instanceof_dynamic(stream_proto, event_emitter).to_bits(),
             crate::value::TAG_TRUE,
         );
+        assert_eq!(
+            js_instanceof(stream_proto, 0xFFFF0076).to_bits(),
+            crate::value::TAG_TRUE,
+        );
     }
 }

@@ -86,6 +86,10 @@ pub(crate) struct ClassSpecRequest {
     /// Type arguments to substitute
     pub(crate) type_args: Vec<Type>,
     /// New class name for the specialized version
+    // #854: retained for the class-monomorphization spec record; not yet read
+    // by the (currently func-only) specialization driver. Mirrors the
+    // field-level allow on `FuncSpecRequest::original_name` above.
+    #[allow(dead_code)]
     pub(crate) new_name: String,
 }
 

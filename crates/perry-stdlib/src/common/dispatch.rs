@@ -1101,6 +1101,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             "emit" => Some(b"emit"),
             "pipe" => Some(b"pipe"),
             "flush" => Some(b"flush"),
+            "close" => Some(b"close"),
+            "destroy" => Some(b"destroy"),
             "params" => Some(b"params"),
             "reset" => Some(b"reset"),
             "removeListener" => Some(b"removeListener"),
@@ -1697,10 +1699,25 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         fn js_register_handle_property_set_dispatch(
             f: unsafe extern "C" fn(i64, *const u8, usize, f64),
         );
+        fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
+        // `crate::events` only exists with the `bundled-events` feature; when
+        // it's compiled out there are no EventEmitter handles to recognize.
+        #[cfg(feature = "bundled-events")]
+        {
+            crate::events::is_event_emitter_handle(handle)
+        }
+        #[cfg(not(feature = "bundled-events"))]
+        {
+            let _ = handle;
+            false
+        }
+    }
+    js_register_event_emitter_handle_probe(event_emitter_probe);
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);

@@ -165,6 +165,11 @@ jobs:
         #   image doesn't have libgtk-4-dev installed by default.
         # - perry-ui-android: needs Android NDK.
         # - perry-ui-windows: needs win32 headers.
+        env:
+          # Rust's Ubuntu target can drive `cc` with `-fuse-ld=lld`; on the
+          # shared runner this has repeatedly terminated large test links with
+          # SIGBUS. Use the system linker for the cargo-test gate.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
         run: |
           (
             while sleep 60; do
@@ -183,8 +188,8 @@ jobs:
           # Run perry-runtime single-threaded so the tests can't interfere.
           RUST_TEST_THREADS=1 cargo test -p perry-runtime
           # The remaining workspace includes large `perry` / `perry-stdlib`
-          # test binaries. On ubuntu-latest, concurrent links have crashed lld
-          # with SIGBUS, so keep Cargo build jobs serialized for this phase.
+          # test binaries. Keep Cargo build jobs serialized so the runner
+          # does not link several of those large test binaries at once.
           export CARGO_BUILD_JOBS=1
           cargo test --workspace \
             --exclude perry-runtime \
