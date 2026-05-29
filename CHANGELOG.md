@@ -2,6 +2,40 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1037 — split `node_stream.rs` into topical sub-modules (#1987)
+
+`crates/perry-runtime/src/node_stream.rs` had grown to ~5,980 lines during
+the node:stream parity wave and was allowlisted out of the 2,000-line
+file-size gate. With the wave's in-flight PRs landed, this splits the monolith
+into topical sibling modules and removes the allowlist entries (both
+`node_stream.rs` and the co-allowlisted `node_stream_tests.rs`, now under the
+limit too).
+
+Pure code-motion — no behavioral change. The parent `node_stream.rs` (~1,540
+lines) keeps the shared vocabulary (NaN-box tag constants, hidden-key
+byte-string constants, the closure/microtask stubs, the
+`js_node_stream_method_*` FFI getters, and JSON-stringify hooks) and re-globs
+each child with `pub use <child>::*` so every existing call site keeps
+resolving by bare name while the `pub extern "C"` FFI entry points stay
+reachable at `perry_runtime::node_stream::*` for the other crates. Each child
+opens with `use super::*`. New sibling files:
+
+- `node_stream_keys.rs` — the `hidden_*_key()` property-key accessors.
+- `node_stream_pipeline.rs` — `pipeline()` / `stream.compose()` data-flow engine.
+- `node_stream_iter_helpers.rs` — async-consume + iterator-helper machinery
+  (`map`/`filter`/`reduce`/`compose_readable_snapshot`/…).
+- `node_stream_dispatch.rs` — method-table builders, stub-arity registration,
+  pointer/GC helpers.
+- `node_stream_readwrite.rs` — readable/writable state machine (flow control,
+  pipes, read/write/transform implementation).
+- `node_stream_constructors.rs` — constructors, init/option-parsing, and the
+  module-level FFI entry points.
+
+Every resulting file is under the 2,000-line gate (largest: readwrite at
+~1,865). Validated: full `perry-runtime`/`perry-stdlib`/`perry` release build,
+all `node_stream` unit tests, and a cross-category node-suite stream parity
+sample byte-identical to Node.
+
 ## v0.5.1036 — node:http/https: emit default `Connection` / `Keep-Alive` response headers (#2132)
 
 Perry's `node:http` / `node:https` server serializes responses through hyper,

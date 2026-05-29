@@ -92,7 +92,8 @@ extern "C" fn readable_stream_pipe_to_microtask(closure: *const ClosureHeader) -
             reader_id: capture_f64(closure, 3) as usize,
             writer_id: capture_f64(closure, 4) as usize,
         };
-        let result = run_readable_stream_pipe_to(r_id, w_id);
+        let prevent_close = perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0;
+        let result = run_readable_stream_pipe_to(r_id, w_id, prevent_close);
         release_pipe_locks(r_id, w_id, locks);
         match result {
             Ok(()) => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
@@ -102,7 +103,11 @@ extern "C" fn readable_stream_pipe_to_microtask(closure: *const ClosureHeader) -
     f64::from_bits(TAG_UNDEFINED)
 }
 
-unsafe fn run_readable_stream_pipe_to(readable_id: usize, writable_id: usize) -> Result<(), u64> {
+unsafe fn run_readable_stream_pipe_to(
+    readable_id: usize,
+    writable_id: usize,
+    prevent_close: bool,
+) -> Result<(), u64> {
     loop {
         let chunk_or_done: Result<u64, bool> = {
             let mut g = READABLE_STREAMS.lock().unwrap();
@@ -143,6 +148,10 @@ unsafe fn run_readable_stream_pipe_to(readable_id: usize, writable_id: usize) ->
         }
     }
 
+    if prevent_close {
+        return Ok(());
+    }
+
     if TRANSFORM_PAIRS.lock().unwrap().contains_key(&writable_id) {
         let _ = transform_close(writable_id);
     } else {
@@ -173,10 +182,12 @@ unsafe fn run_readable_stream_pipe_to(readable_id: usize, writable_id: usize) ->
 pub unsafe extern "C" fn js_readable_stream_pipe_to(
     readable_handle: f64,
     writable_handle: f64,
+    options: f64,
 ) -> *mut Promise {
     let promise = js_promise_new();
     let r_id = readable_handle as usize;
     let w_id = writable_handle as usize;
+    let prevent_close = pipe_option_truthy(options, b"preventClose");
 
     let locks = match acquire_pipe_locks(r_id, w_id) {
         Ok(locks) => locks,
@@ -187,7 +198,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     };
 
     let closure =
-        perry_runtime::closure::js_closure_alloc(readable_stream_pipe_to_microtask as *const u8, 5);
+        perry_runtime::closure::js_closure_alloc(readable_stream_pipe_to_microtask as *const u8, 6);
     perry_runtime::closure::js_register_closure_arity(
         readable_stream_pipe_to_microtask as *const u8,
         0,
@@ -209,7 +220,18 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
         4,
         (locks.writer_id as f64).to_bits() as i64,
     );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        5,
+        (if prevent_close { 1.0 } else { 0.0f64 }).to_bits() as i64,
+    );
     perry_runtime::builtins::js_queue_microtask(closure as i64);
 
     promise
+}
+
+unsafe fn pipe_option_truthy(options: f64, name: &[u8]) -> bool {
+    let value =
+        perry_runtime::value::js_get_property(options, name.as_ptr() as i64, name.len() as i64);
+    perry_runtime::value::js_is_truthy(value) != 0
 }

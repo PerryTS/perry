@@ -216,6 +216,7 @@ fn readable_set_encoding_emits_buffer_chunks_as_strings() {
     READABLE_DATA_STRING_FLAGS.with(|flags| flags.borrow_mut().clear());
 
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    test_install_manual_read(stream);
     let handle = raw_ptr_from_value(stream) as i64;
     js_node_stream_method_set_encoding(handle, string_value("base64"));
 
