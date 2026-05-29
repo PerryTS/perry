@@ -53,7 +53,7 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
     // closure so `typeof` reports "function" and the value stays callable —
     // calling it routes back through `js_native_call_method` → small-handle →
     // `dispatch_request_method`. Mirrors #1670's stream property dispatch.
-    if matches!(prop, "json" | "text" | "arrayBuffer") {
+    if matches!(prop, "json" | "text" | "arrayBuffer" | "clone") {
         // Membership check first so a non-Request id falls through.
         REQUEST_REGISTRY.lock().unwrap().get(&req_id)?;
         extern "C" {
@@ -67,6 +67,7 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
             "json" => b"json",
             "text" => b"text",
             "arrayBuffer" => b"arrayBuffer",
+            "clone" => b"clone",
             _ => unreachable!(),
         };
         return Some(unsafe {
@@ -91,6 +92,9 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
             }
             None => TAG_NULL,
         },
+        "bodyUsed" => {
+            return Some(tagged_bool(req.body_used));
+        }
         // Other Request properties not yet wired — fall through so other
         // dispatchers (or the final undefined fallback) can answer.
         _ => return None,
@@ -130,6 +134,7 @@ pub fn dispatch_request_method(req_id: usize, method: &str, _args: &[f64]) -> Op
                 let promise = js_request_array_buffer(req_f64);
                 Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
             }
+            "clone" => Some(js_request_clone(req_f64)),
             _ => None,
         }
     }
@@ -199,6 +204,7 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
                 TAG_FALSE
             }))
         }
+        "bodyUsed" => return Some(tagged_bool(resp.body_used)),
         _ => return None,
     };
     Some(f64::from_bits(bits))

@@ -74,6 +74,8 @@ struct FetchResponse {
     status_text: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
+    body_present: bool,
+    body_used: bool,
     /// Cached Headers handle id, allocated on first `response.headers`
     /// access. None until a property/method dispatcher needs to expose
     /// the headers as a Headers instance. The Vec form (insertion-ordered
@@ -163,6 +165,27 @@ unsafe fn fetch_error_bits<S: AsRef<str>>(msg: S) -> u64 {
     JSValue::pointer(err as *const u8).bits()
 }
 
+const BODY_ALREADY_USED_MESSAGE: &str = "Body is unusable: Body has already been read";
+
+unsafe fn fetch_type_error_bits<S: AsRef<str>>(msg: S) -> u64 {
+    let s = msg.as_ref();
+    let msg_str = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    let err = perry_runtime::error::js_typeerror_new(msg_str);
+    JSValue::pointer(err as *const u8).bits()
+}
+
+unsafe fn reject_fetch_type_error(promise: *mut perry_runtime::Promise, msg: &str) {
+    perry_runtime::js_promise_reject(promise, f64::from_bits(fetch_type_error_bits(msg)));
+}
+
+unsafe fn throw_fetch_type_error(msg: &str) -> ! {
+    perry_runtime::exception::js_throw(f64::from_bits(fetch_type_error_bits(msg)))
+}
+
+fn tagged_bool(value: bool) -> f64 {
+    f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE })
+}
+
 /// Perform a GET request
 /// fetch(url) -> Promise<Response>
 #[no_mangle]
@@ -212,6 +235,8 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                         status_text,
                         headers,
                         body,
+                        body_present: true,
+                        body_used: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -290,6 +315,8 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                         status_text,
                         headers,
                         body,
+                        body_present: true,
+                        body_used: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -370,6 +397,8 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                         status_text,
                         headers,
                         body,
+                        body_present: true,
+                        body_used: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -453,6 +482,8 @@ pub unsafe extern "C" fn js_fetch_post(
                         status_text,
                         headers,
                         body,
+                        body_present: true,
+                        body_used: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -555,6 +586,8 @@ pub unsafe extern "C" fn js_fetch_with_options(
                         status_text,
                         headers,
                         body,
+                        body_present: true,
+                        body_used: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -619,6 +652,35 @@ pub extern "C" fn js_fetch_response_ok(handle: f64) -> f64 {
     }
 }
 
+/// response.bodyUsed -> boolean
+#[no_mangle]
+pub extern "C" fn js_response_body_used(handle: f64) -> f64 {
+    let response_id = handle_id(handle);
+    let guard = FETCH_RESPONSES.lock().unwrap();
+    tagged_bool(
+        guard
+            .get(&response_id)
+            .map(|resp| resp.body_used)
+            .unwrap_or(false),
+    )
+}
+
+fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
+    let response_id = handle_id(handle);
+    let mut guard = FETCH_RESPONSES.lock().unwrap();
+    let resp = guard
+        .get_mut(&response_id)
+        .ok_or("Invalid response handle")?;
+    if !resp.body_present {
+        return Ok(Vec::new());
+    }
+    if resp.body_used {
+        return Err(BODY_ALREADY_USED_MESSAGE);
+    }
+    resp.body_used = true;
+    Ok(resp.body.clone())
+}
+
 /// Get response body as text
 /// response.text() -> Promise<string>
 ///
@@ -631,22 +693,16 @@ pub extern "C" fn js_fetch_response_ok(handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_text(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
-    let response_id = handle_id(handle);
-
-    // Clone the body — JS spec says each body is readable once, but other
-    // accessors (status, headers) may still be used afterwards. The Response
-    // entry stays in FETCH_RESPONSES until cleanup; in practice the test suite
-    // doesn't accumulate enough responses to matter.
-    let body = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        match guard.get(&response_id) {
-            Some(resp) => resp.body.clone(),
-            None => {
-                let err_msg = "Invalid response handle";
-                let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-                perry_runtime::js_promise_reject(promise, err_nan);
-                return promise;
-            }
+    let body = match consume_response_body(handle) {
+        Ok(body) => body,
+        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+            return promise;
+        }
+        Err(err_msg) => {
+            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
+            perry_runtime::js_promise_reject(promise, err_nan);
+            return promise;
         }
     };
 
@@ -706,19 +762,16 @@ unsafe fn json_value_to_jsvalue(value: &serde_json::Value) -> JSValue {
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_json(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
-    let response_id = handle_id(handle);
-
-    // Take (not clone) the body — consumes the FETCH_RESPONSES entry.
-    let body = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        match guard.get(&response_id) {
-            Some(resp) => resp.body.clone(),
-            None => {
-                let err_msg = "Invalid response handle";
-                let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-                perry_runtime::js_promise_reject(promise, err_nan);
-                return promise;
-            }
+    let body = match consume_response_body(handle) {
+        Ok(body) => body,
+        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+            return promise;
+        }
+        Err(err_msg) => {
+            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
+            perry_runtime::js_promise_reject(promise, err_nan);
+            return promise;
         }
     };
 
@@ -1002,6 +1055,7 @@ struct RequestRecord {
     url: String,
     method: String,
     body: Option<String>,
+    body_used: bool,
     headers: HeadersStore,
     /// Cached Headers handle id, allocated on first `request.headers` read so
     /// repeat reads return the same handle (preserves `req.headers ===
@@ -1054,7 +1108,13 @@ fn alloc_headers(store: HeadersStore) -> usize {
     id
 }
 
-fn alloc_response(status: u16, status_text: String, headers: HeadersStore, body: Vec<u8>) -> usize {
+fn alloc_response(
+    status: u16,
+    status_text: String,
+    headers: HeadersStore,
+    body: Vec<u8>,
+    body_present: bool,
+) -> usize {
     let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
     let id = *id_guard;
     *id_guard += 1;
@@ -1067,6 +1127,8 @@ fn alloc_response(status: u16, status_text: String, headers: HeadersStore, body:
             status_text,
             headers: hdr_map,
             body,
+            body_present,
+            body_used: false,
             cached_headers_id: None,
             cached_body_stream_id: None,
         },
@@ -1092,7 +1154,9 @@ pub unsafe extern "C" fn js_response_new(
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
-    let body_str = string_from_header(body_ptr).unwrap_or_default();
+    let body_opt = string_from_header(body_ptr);
+    let body_present = body_opt.is_some();
+    let body_str = body_opt.unwrap_or_default();
     let body = body_str.into_bytes();
     let status_u16 = if status.is_nan() || status == 0.0 {
         200
@@ -1112,7 +1176,13 @@ pub unsafe extern "C" fn js_response_new(
     } else {
         HeadersStore::default()
     };
-    handle_to_f64(alloc_response(status_u16, status_text, headers, body))
+    handle_to_f64(alloc_response(
+        status_u16,
+        status_text,
+        headers,
+        body,
+        body_present,
+    ))
 }
 
 fn canonical_reason(status: u16) -> &'static str {
@@ -1153,13 +1223,22 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     let id = handle_id(handle);
     let cloned = {
         let guard = FETCH_RESPONSES.lock().unwrap();
-        guard.get(&id).map(|resp| FetchResponse {
-            status: resp.status,
-            status_text: resp.status_text.clone(),
-            headers: resp.headers.clone(),
-            body: resp.body.clone(),
-            cached_headers_id: None,
-            cached_body_stream_id: None,
+        guard.get(&id).map(|resp| {
+            if resp.body_present && resp.body_used {
+                unsafe {
+                    throw_fetch_type_error("Response.clone: Body has already been consumed.")
+                };
+            }
+            FetchResponse {
+                status: resp.status,
+                status_text: resp.status_text.clone(),
+                headers: resp.headers.clone(),
+                body: resp.body.clone(),
+                body_present: resp.body_present,
+                body_used: false,
+                cached_headers_id: None,
+                cached_body_stream_id: None,
+            }
         })
     };
     if let Some(new_resp) = cloned {
@@ -1182,12 +1261,16 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
-    let id = handle_id(handle);
-    let body: Vec<u8> = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        match guard.get(&id) {
-            Some(resp) => resp.body.clone(),
-            None => Vec::new(),
+    let body = match consume_response_body(handle) {
+        Ok(body) => body,
+        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+            return promise;
+        }
+        Err(err_msg) => {
+            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
+            perry_runtime::js_promise_reject(promise, err_nan);
+            return promise;
         }
     };
     let buf = perry_runtime::buffer::buffer_alloc(body.len() as u32);
@@ -1217,21 +1300,31 @@ pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_run
 pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let id = handle_id(handle);
-    let data = {
+    let content_type = {
         let guard = FETCH_RESPONSES.lock().unwrap();
-        match guard.get(&id) {
-            Some(resp) => {
-                let ct = resp
-                    .headers
+        guard
+            .get(&id)
+            .and_then(|resp| {
+                resp.headers
                     .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
                     .map(|(_, v)| v.clone())
-                    .unwrap_or_default();
-                BlobData::blob(resp.body.clone(), ct)
-            }
-            None => BlobData::blob(Vec::new(), String::new()),
+            })
+            .unwrap_or_default()
+    };
+    let body = match consume_response_body(handle) {
+        Ok(body) => body,
+        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+            return promise;
+        }
+        Err(err_msg) => {
+            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
+            perry_runtime::js_promise_reject(promise, err_nan);
+            return promise;
         }
     };
+    let data = BlobData::blob(body, content_type);
     let blob_id = alloc_blob(data);
     perry_runtime::js_promise_resolve(promise, handle_to_f64(blob_id));
     promise
@@ -1440,12 +1533,10 @@ fn response_body_stream(resp_id: usize) -> f64 {
         return id as f64;
     }
     let bytes = match FETCH_RESPONSES.lock().unwrap().get(&resp_id) {
-        Some(r) => r.body.clone(),
+        Some(r) if r.body_present => r.body.clone(),
+        Some(_) => return f64::from_bits(TAG_NULL),
         None => return f64::from_bits(TAG_NULL),
     };
-    if bytes.is_empty() {
-        return f64::from_bits(TAG_NULL);
-    }
     let stream_id = crate::streams::alloc_readable_from_bytes(bytes);
     if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
         resp.cached_body_stream_id = Some(stream_id);
@@ -1483,6 +1574,7 @@ pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
         "OK".to_string(),
         headers,
         body_str.into_bytes(),
+        true,
     ))
 }
 
@@ -1505,6 +1597,7 @@ pub unsafe extern "C" fn js_response_static_redirect(
         canonical_reason(status_u16).to_string(),
         headers,
         Vec::new(),
+        false,
     ))
 }
 
@@ -1542,6 +1635,7 @@ pub unsafe extern "C" fn js_request_new(
             url,
             method,
             body,
+            body_used: false,
             headers,
             cached_headers_id: None,
         },
@@ -1624,15 +1718,60 @@ pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
     }
 }
 
-/// Read a request's stored body (or empty for a bodiless request). Returns
-/// `None` only for an invalid handle, so callers can reject the promise.
-fn request_body_bytes(handle: f64) -> Option<Vec<u8>> {
+/// request.bodyUsed -> boolean
+#[no_mangle]
+pub extern "C" fn js_request_body_used(handle: f64) -> f64 {
     let id = handle_id(handle);
-    REQUEST_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|req| req.body.clone().unwrap_or_default().into_bytes())
+    let guard = REQUEST_REGISTRY.lock().unwrap();
+    tagged_bool(guard.get(&id).map(|req| req.body_used).unwrap_or(false))
+}
+
+/// request.clone() — duplicates the request unless its body was consumed.
+#[no_mangle]
+pub extern "C" fn js_request_clone(handle: f64) -> f64 {
+    let id = handle_id(handle);
+    let cloned = {
+        let guard = REQUEST_REGISTRY.lock().unwrap();
+        guard.get(&id).map(|req| {
+            if req.body.is_some() && req.body_used {
+                unsafe { throw_fetch_type_error("unusable") };
+            }
+            RequestRecord {
+                url: req.url.clone(),
+                method: req.method.clone(),
+                body: req.body.clone(),
+                body_used: false,
+                headers: req.headers.clone(),
+                cached_headers_id: None,
+            }
+        })
+    };
+    if let Some(new_req) = cloned {
+        let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
+        let new_id = *id_guard;
+        *id_guard += 1;
+        drop(id_guard);
+        REQUEST_REGISTRY.lock().unwrap().insert(new_id, new_req);
+        return handle_to_f64(new_id);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Read and consume a request's stored body. Bodiless requests are reusable and
+/// resolve to an empty body, matching Node's Fetch Body behavior.
+fn consume_request_body(handle: f64) -> Result<Vec<u8>, &'static str> {
+    let id = handle_id(handle);
+    let mut guard = REQUEST_REGISTRY.lock().unwrap();
+    let req = guard.get_mut(&id).ok_or("Invalid request handle")?;
+    let body = match &req.body {
+        Some(body) => body.clone(),
+        None => return Ok(Vec::new()),
+    };
+    if req.body_used {
+        return Err(BODY_ALREADY_USED_MESSAGE);
+    }
+    req.body_used = true;
+    Ok(body.into_bytes())
 }
 
 /// request.text() -> Promise<string>. Mirrors `js_fetch_response_text`: the
@@ -1642,15 +1781,18 @@ fn request_body_bytes(handle: f64) -> Option<Vec<u8>> {
 #[no_mangle]
 pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
-    match request_body_bytes(handle) {
-        Some(body) => {
+    match consume_request_body(handle) {
+        Ok(body) => {
             let text = String::from_utf8_lossy(&body).to_string();
             let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
             let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
             perry_runtime::js_promise_resolve(promise, result_nan);
         }
-        None => {
-            let err_nan = f64::from_bits(fetch_error_bits("Invalid request handle"));
+        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+        }
+        Err(err_msg) => {
+            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
             perry_runtime::js_promise_reject(promise, err_nan);
         }
     }
@@ -1662,10 +1804,14 @@ pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Pro
 #[no_mangle]
 pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
-    let body = match request_body_bytes(handle) {
-        Some(b) => b,
-        None => {
-            let err_nan = f64::from_bits(fetch_error_bits("Invalid request handle"));
+    let body = match consume_request_body(handle) {
+        Ok(b) => b,
+        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+            return promise;
+        }
+        Err(err_msg) => {
+            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
             perry_runtime::js_promise_reject(promise, err_nan);
             return promise;
         }
@@ -1689,10 +1835,14 @@ pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Pro
 #[no_mangle]
 pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
-    let body = match request_body_bytes(handle) {
-        Some(b) => b,
-        None => {
-            let err_nan = f64::from_bits(fetch_error_bits("Invalid request handle"));
+    let body = match consume_request_body(handle) {
+        Ok(b) => b,
+        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+            return promise;
+        }
+        Err(err_msg) => {
+            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
             perry_runtime::js_promise_reject(promise, err_nan);
             return promise;
         }

@@ -1716,6 +1716,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_request_get_url", I64, &[DOUBLE]);
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_request_body_used", DOUBLE, &[DOUBLE]);
     // #1649: `req.headers` → NaN-boxed Headers handle.
     module.declare_function("js_request_get_headers", DOUBLE, &[DOUBLE]);
     // #1688: request body-consuming methods. text/json/arrayBuffer return a
@@ -1723,6 +1724,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_request_text", I64, &[DOUBLE]);
     module.declare_function("js_request_json", I64, &[DOUBLE]);
     module.declare_function("js_request_array_buffer", I64, &[DOUBLE]);
+    module.declare_function("js_request_clone", DOUBLE, &[DOUBLE]);
 
     // Response body getters — handles flow as NaN-boxed POINTER_TAG f64
     // (Phase 1 unification, refs #421). Accessors call `handle_id` to
@@ -1730,6 +1732,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fetch_response_status", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fetch_response_status_text", I64, &[DOUBLE]);
     module.declare_function("js_fetch_response_ok", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_response_body_used", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fetch_response_text", I64, &[DOUBLE]);
     module.declare_function("js_fetch_response_json", I64, &[DOUBLE]);
     // response.headers / .clone() / .arrayBuffer() / .blob() — all take

@@ -8,13 +8,13 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 20 | 484 | n/a |
 | Partial-module gaps | 29 | 1648 | 369 |
-| Web-global gaps | — | 284 | 105 |
+| Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2416** |  |
+| **Total true gaps** |  | **2414** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
-- `Web / Global APIs` — 284
+- `Web / Global APIs` — 282
 - `node:os` — 195
 - `node:fs` — 139
 - `node:crypto` — 128
@@ -2036,7 +2036,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ## Web globals
 
-**Total APIs: 389** · Perry covers: 105 · Gap: 284
+**Total APIs: 389** · Perry covers: 107 · Gap: 282
 
 Web-global coverage is determined heuristically — Perry implements many of these via dedicated `Expr::*` lowering (e.g. `Expr::FetchWithOptions`, `Expr::TextEncoderEncode`, `Expr::UrlNew`) and `js_*` FFI surfaces (Headers/Request/Response/Blob via perry-ext-fetch and perry-stdlib). The covered list below is curated; the gap list is everything else in the parity reference's Web / Global APIs section.
 
@@ -2100,12 +2100,14 @@ Web-global coverage is determined heuristically — Perry implements many of the
 | `request.url` | `ffi:js_request_get_url` |
 | `request.headers` | `ffi:js_request_get_headers` |
 | `request.body` | `ffi:js_request_get_body` |
+| `request.bodyUsed` | `ffi:js_request_body_used` |
 | `request.arrayBuffer()` | `ffi:js_request_array_buffer` |
 | `request.clone()` | `ffi:js_request_clone` |
 | `request.json()` | `ffi:js_request_json` |
 | `request.text()` | `ffi:js_request_text` |
 | `new Response(body?, init?)` | `ffi:js_response_new` |
 | `response.body` | `ffi:js_response_body` |
+| `response.bodyUsed` | `ffi:js_response_body_used` |
 | `response.headers` | `ffi:js_response_get_headers` |
 | `response.ok` | `ffi:js_fetch_response_ok` |
 | `response.status` | `ffi:js_fetch_response_status` |
@@ -2152,7 +2154,7 @@ Web-global coverage is determined heuristically — Perry implements many of the
 
 ### Web globals — gaps
 
-Total gaps: 284. First 100 entries:
+Total gaps: 282. First 100 entries:
 
 - `reportError(err)`
 - `setImmediate(cb, ...args)`
@@ -2186,7 +2188,6 @@ Total gaps: 284. First 100 entries:
 - `request.integrity`
 - `request.keepalive`
 - `request.signal`
-- `request.bodyUsed`
 - `request.duplex`
 - `request.blob()`
 - `request.bytes()`
@@ -2194,7 +2195,6 @@ Total gaps: 284. First 100 entries:
 - `Response.error()`
 - `Response.json(data, init?)`
 - `Response.redirect(url, status?)`
-- `response.bodyUsed`
 - `response.redirected`
 - `response.type`
 - `response.url`

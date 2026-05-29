@@ -249,6 +249,12 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     .call(DOUBLE, "js_request_get_body", &[(DOUBLE, &h_handle)]);
                 return Ok(Some(val));
             }
+            "bodyUsed" => {
+                let out = ctx
+                    .block()
+                    .call(DOUBLE, "js_request_body_used", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(out));
+            }
             // #1649: `req.headers` returns a `Headers` object (NaN-boxed
             // handle), not the raw numeric request handle. Without this the
             // typed path fell through to `Ok(None)` → the receiver handle
@@ -278,6 +284,12 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let blk = ctx.block();
                 let promise = blk.call(I64, "js_request_array_buffer", &[(DOUBLE, &h_handle)]);
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
+            "clone" => {
+                let out = ctx
+                    .block()
+                    .call(DOUBLE, "js_request_clone", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(out));
             }
             _ => return Ok(None),
         }
@@ -335,6 +347,12 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     crate::nanbox::TAG_FALSE_I64,
                 );
                 return Ok(Some(blk.bitcast_i64_to_double(&tagged)));
+            }
+            "bodyUsed" => {
+                let out =
+                    ctx.block()
+                        .call(DOUBLE, "js_response_body_used", &[(DOUBLE, &recv_handle)]);
+                return Ok(Some(out));
             }
             "headers" => {
                 let out =
