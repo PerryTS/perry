@@ -303,6 +303,21 @@ pub(super) fn try_native_module_methods(
                                 args,
                             }));
                         }
+                        // #2135: process.setgroups(groups[]) takes an
+                        // array of numeric GIDs; process.initgroups(user,
+                        // extra_gid) takes a username string + numeric
+                        // GID. The runtime decodes the JSValues itself, so
+                        // both pass through the generic NativeMethodCall.
+                        "setgroups" | "initgroups" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
                         "emitWarning" => {
                             // process.emitWarning(warning[, type, code, ctor])
                             // — writes a formatted warning to stderr. Perry
@@ -462,6 +477,12 @@ pub(super) fn try_native_module_methods(
                         }
                         "concat" => {
                             let list = args.first().cloned().unwrap_or(Expr::Array(vec![]));
+                            if let Some(total_length) = args.get(1).cloned() {
+                                return Ok(Ok(Expr::BufferConcatWithLength {
+                                    list: Box::new(list),
+                                    total_length: Box::new(total_length),
+                                }));
+                            }
                             return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                         }
                         "of" => {
@@ -1113,7 +1134,35 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            if let Some((module_name, _imported_method)) = ctx.lookup_native_module(&obj_name) {
+            if let Some((module_name, imported_method)) = ctx.lookup_native_module(&obj_name) {
+                if module_name == "url" && imported_method == Some("URL") {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.as_ref();
+                        if method_name == "canParse" && !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let input = iter.next().unwrap();
+                            if let Some(base) = iter.next() {
+                                return Ok(Ok(Expr::UrlCanParseWithBase {
+                                    input: Box::new(input),
+                                    base: Box::new(base),
+                                }));
+                            }
+                            return Ok(Ok(Expr::UrlCanParse(Box::new(input))));
+                        }
+                        if method_name == "parse" && !args.is_empty() {
+                            let mut iter = args.into_iter();
+                            let input = iter.next().unwrap();
+                            if let Some(base) = iter.next() {
+                                return Ok(Ok(Expr::UrlParseWithBase {
+                                    input: Box::new(input),
+                                    base: Box::new(base),
+                                }));
+                            }
+                            return Ok(Ok(Expr::UrlParse(Box::new(input))));
+                        }
+                    }
+                }
+
                 // Skip modules handled specifically below (path, fs, child_process, etc.)
                 // `net` used to be in this list back when its method calls
                 // were short-circuited into `Expr::NetCreateConnection` etc.
@@ -1158,14 +1207,16 @@ pub(super) fn try_native_module_methods(
                             )
                             .map(|h| format!(" {h}"))
                             .unwrap_or_default();
-                            crate::lower_bail!(
-                                member.span,
+                            let msg = format!(
                                 "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
                                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
-                                module_name,
-                                method_name,
-                                hint,
+                                module_name, method_name, hint,
                             );
+                            // #2309: defer under tree-shaking; re-raised only
+                            // if the module survives pruning.
+                            if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                                crate::lower_bail!(member.span, "{}", msg);
+                            }
                         }
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: module_name.to_string(),

@@ -17,6 +17,9 @@ const DEFAULT_TIMEOUT_SECS: u64 = 10;
 
 /// Redis client handle - stores connection URL and cached connection
 pub(crate) struct RedisClient {
+    // #854: connection URL is read back via the `URLS` handle->url map at
+    // connect time; this field mirrors it for the handle but isn't read.
+    #[allow(dead_code)]
     url: String,
 }
 

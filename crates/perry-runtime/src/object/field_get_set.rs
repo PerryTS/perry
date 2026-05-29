@@ -954,6 +954,40 @@ pub extern "C" fn js_object_get_field_by_name(
             return JSValue::undefined();
         }
     }
+    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. A
+    // generic property read on it (`date.constructor`, `date[k]`, a method
+    // read as a value) must NOT fall through to the object-deref path below —
+    // the cell is far smaller than an `ObjectHeader`, so reading its
+    // `keys_array`/field slots would deref unmapped memory. Resolve the few
+    // meaningful reads here and return `undefined` for everything else
+    // (matching property reads on the old value-type Date). `obj` may arrive
+    // NaN-boxed (top16 == 0x7FFD) or as a raw-I64 pointer (top16 == 0).
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::date::is_date_cell_addr(addr) {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if key_bytes == b"constructor" {
+                        let v = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
     // Issue #818 (Effect class-instance pattern): a V8 handle (JS_HANDLE_TAG
     // = 0x7FFB) reaches here when codegen routes a generic `PropertyGet`
     // through this slow path — e.g. `Effect.succeed(42).value` where the
@@ -1185,14 +1219,10 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         let bits = obj as u64;
         let f = f64::from_bits(bits);
-        // Registered Date timestamps are also raw finite f64 — leave them to
-        // the existing Date handling (the `_f64` wrapper above already routed
-        // `date.constructor`), so this branch never changes Date behavior.
-        if !key.is_null()
-            && f.is_finite()
-            && (bits >> 48) != 0
-            && !crate::date::is_registered_date_bits(bits)
-        {
+        // A Date is now a NaN-boxed `DateCell` pointer (non-finite bit
+        // pattern), intercepted earlier in this function, so it never reaches
+        // this finite-number branch.
+        if !key.is_null() && f.is_finite() && (bits >> 48) != 0 {
             unsafe {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
@@ -2262,26 +2292,10 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
-    // date-fns `constructFrom`: the parameter is statically Any so the
-    // codegen Date intercept doesn't fire here. Detect Date instances
-    // by their registered f64 bit pattern and route `.constructor` to
-    // the global Date constructor closure — same value the bare `Date`
-    // identifier produces, so `date instanceof Date` followed by `new
-    // date.constructor(value)` lands on the right factory inside
-    // `js_new_function_construct`.
-    if !key.is_null() {
-        let obj_bits = obj as u64;
-        if crate::date::is_registered_date_bits(obj_bits) {
-            unsafe {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if key_bytes == b"constructor" {
-                    return js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-                }
-            }
-        }
-    }
+    // date-fns `constructFrom`: `new date.constructor(value)`. A Date is a
+    // NaN-boxed `DateCell` pointer (#2089); `js_object_get_field_by_name`
+    // routes `.constructor` to the global Date constructor closure and every
+    // other key to `undefined` without derefing the small cell as an object.
     let value = js_object_get_field_by_name(obj, key);
     f64::from_bits(value.bits())
 }

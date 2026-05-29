@@ -283,7 +283,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("buffer.Buffer", "concat") => {
             let arr = ptr_addr(arg(0)) as *const crate::array::ArrayHeader;
-            ptr_to_f64(crate::buffer::js_buffer_concat(arr) as *const u8)
+            let buf = if args_len >= 2 {
+                crate::buffer::js_buffer_concat_with_length(arr, arg(1))
+            } else {
+                crate::buffer::js_buffer_concat(arr)
+            };
+            ptr_to_f64(buf as *const u8)
         }
         ("buffer.Buffer", "of") => {
             let arr = pack_args();
@@ -373,6 +378,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("process", "setegid") => {
             crate::process::js_process_setegid(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "setgroups") => {
+            crate::process::js_process_setgroups(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "initgroups") => {
+            crate::process::js_process_initgroups(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "kill") => {
@@ -897,7 +910,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_strip_vt_control_characters(arg(0))
         }
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
+        ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
+        ("util", "parseArgs") => crate::util_parse_args::js_util_parse_args(arg(0)),
 
         ("util", "isPromise") => {
             let v = JSValue::from_bits(arg(0).to_bits());
@@ -927,14 +942,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
         }
+        ("util", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
+        }
         ("util", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
         }
         ("util", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+        }
+        ("util", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
         ("util", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
@@ -970,23 +1000,36 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
         }
+        ("util.types", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util.types", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
+        }
         ("util.types", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
         }
         ("util.types", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util.types", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util.types", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util.types", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+        }
+        ("util.types", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
         ("util.types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util.types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
         ("util.types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
         ("util.types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
         ("util.types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
-        ("util.types", "isDate") => {
-            bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
-        }
+        ("util.types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
         ("util.types", "isRegExp") => {
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
@@ -1029,23 +1072,36 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isUint8Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
         }
+        ("util/types", "isInt8Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+        }
+        ("util/types", "isInt16Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
+        }
         ("util/types", "isUint16Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
         }
         ("util/types", "isInt32Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
         }
+        ("util/types", "isUint32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+        }
+        ("util/types", "isFloat32Array") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+        }
         ("util/types", "isFloat64Array") => {
             bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+        }
+        ("util/types", "isUint8ClampedArray") => {
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
         }
         ("util/types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util/types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
         ("util/types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
         ("util/types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
         ("util/types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
-        ("util/types", "isDate") => {
-            bool_tag(crate::date::is_registered_date_bits(arg(0).to_bits()))
-        }
+        ("util/types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
         ("util/types", "isRegExp") => {
             let v = JSValue::from_bits(arg(0).to_bits());
             bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
@@ -1063,7 +1119,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
         ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
-        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1)),
+        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),
         ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
 
         // ── console module namespace (`node:console` / `console`) ──

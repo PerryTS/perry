@@ -49,11 +49,19 @@ fn test_json_reviver_runtime_handles_survive_copied_minor_gc() {
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
 
     let input = br#"{"a":[{"b":"c"}],"d":1}"#;
+    let setup_scope = RuntimeHandleScope::new();
     let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    let text_handle = setup_scope.root_string_ptr(text);
     let reviver = crate::closure::js_closure_alloc(test_reviver_force_minor_gc as *const u8, 0);
+    let reviver_handle = setup_scope.root_raw_const_ptr(reviver);
 
     let before = gc_collection_count();
-    let parsed = unsafe { crate::json::js_json_parse_with_reviver(text, reviver as i64) };
+    let parsed = unsafe {
+        crate::json::js_json_parse_with_reviver(
+            text_handle.get_raw_const_ptr::<crate::StringHeader>(),
+            reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
+        )
+    };
     assert!(
         gc_collection_count() > before,
         "reviver callback should force copied-minor GC during traversal"
@@ -91,11 +99,19 @@ fn test_geisterhand_callback_then_json_reviver_copied_minor_gc() {
     gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     let input = br#"{"a":[{"b":"c"}],"d":1}"#;
+    let setup_scope = RuntimeHandleScope::new();
     let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    let text_handle = setup_scope.root_string_ptr(text);
     let reviver = crate::closure::js_closure_alloc(test_reviver_force_minor_gc as *const u8, 0);
+    let reviver_handle = setup_scope.root_raw_const_ptr(reviver);
 
     let before = gc_collection_count();
-    let parsed = unsafe { crate::json::js_json_parse_with_reviver(text, reviver as i64) };
+    let parsed = unsafe {
+        crate::json::js_json_parse_with_reviver(
+            text_handle.get_raw_const_ptr::<crate::StringHeader>(),
+            reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
+        )
+    };
     assert!(
         gc_collection_count() > before,
         "reviver callback should force copied-minor GC after Geisterhand scanner activity"

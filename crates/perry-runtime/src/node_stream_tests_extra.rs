@@ -450,6 +450,32 @@ fn readable_read_default_size_drains_buffer_as_buffer_then_null() {
     });
 }
 
+#[test]
+fn readable_unshift_prepends_chunk_and_returns_hwm_signal() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+
+    let _ = js_node_stream_method_push(handle, string_value("world"));
+    assert_eq!(
+        js_node_stream_method_unshift(handle, string_value("hello ")).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(js_node_stream_method_readable_length(handle), 11.0);
+
+    let joined = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(joined), b"hello world");
+    assert_eq!(js_node_stream_method_readable_length(handle), 0.0);
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"highWaterMark"), 2.0);
+    let low_hwm = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let low_handle = raw_ptr_from_value(low_hwm) as i64;
+    assert_eq!(
+        js_node_stream_method_unshift(low_handle, string_value("abc")).to_bits(),
+        TAG_FALSE
+    );
+}
+
 fn stream_test_buffer_bytes(value: f64) -> Vec<u8> {
     let len = crate::buffer::js_native_buffer_byte_len(value);
     let data = crate::buffer::js_native_buffer_data_ptr(value);
@@ -621,6 +647,35 @@ fn stream_object_mode_fields_reflect_defaults_and_options() {
         js_node_stream_method_readable_hwm(raw_ptr_from_value(object_readable) as i64),
         16.0
     );
+}
+
+#[test]
+fn readable_from_uses_node_object_mode_and_high_water_mark_defaults() {
+    let mut default_chunks = crate::array::js_array_alloc(1);
+    default_chunks = crate::array::js_array_push_f64(default_chunks, string_value("a"));
+    let default_readable = js_node_stream_readable_from(box_pointer(default_chunks as *const u8));
+    let default_handle = raw_ptr_from_value(default_readable) as i64;
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(default_handle).to_bits(),
+        TAG_TRUE
+    );
+    assert_eq!(js_node_stream_method_readable_hwm(default_handle), 1.0);
+
+    let mut byte_chunks = crate::array::js_array_alloc(1);
+    byte_chunks = crate::array::js_array_push_f64(byte_chunks, string_value("b"));
+    let opts = crate::object::js_object_alloc(0, 2);
+    js_object_set_field_by_name(opts, hidden_key(b"objectMode"), f64::from_bits(TAG_FALSE));
+    js_object_set_field_by_name(opts, hidden_key(b"highWaterMark"), 1.0);
+    let byte_readable = js_node_stream_readable_from_options(
+        box_pointer(byte_chunks as *const u8),
+        box_pointer(opts as *const u8),
+    );
+    let byte_handle = raw_ptr_from_value(byte_readable) as i64;
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(byte_handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(js_node_stream_method_readable_hwm(byte_handle), 1.0);
 }
 
 #[test]

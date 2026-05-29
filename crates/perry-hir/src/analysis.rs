@@ -748,6 +748,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::BufferLength(expr) => {
             collect_assigned_locals_expr(expr, assigned);
         }
+        Expr::BufferConcatWithLength { list, total_length } => {
+            collect_assigned_locals_expr(list, assigned);
+            collect_assigned_locals_expr(total_length, assigned);
+        }
         Expr::BufferByteLength { data, encoding } => {
             collect_assigned_locals_expr(data, assigned);
             if let Some(enc) = encoding {
@@ -953,6 +957,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(input, assigned);
             collect_assigned_locals_expr(base, assigned);
         }
+        Expr::UrlParseWithBase { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            collect_assigned_locals_expr(base, assigned);
+        }
         // URLSearchParams operations
         Expr::UrlSearchParamsNew(init) => {
             if let Some(init_expr) = init {
@@ -994,9 +1002,16 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(name, assigned);
             collect_assigned_locals_expr(value, assigned);
         }
-        Expr::UrlSearchParamsForEach { params, callback } => {
+        Expr::UrlSearchParamsForEach {
+            params,
+            callback,
+            this_arg,
+        } => {
             collect_assigned_locals_expr(params, assigned);
             collect_assigned_locals_expr(callback, assigned);
+            if let Some(this_arg) = this_arg {
+                collect_assigned_locals_expr(this_arg, assigned);
+            }
         }
         Expr::UrlSearchParamsToString(params)
         | Expr::UrlSearchParamsEntries(params)

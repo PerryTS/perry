@@ -361,6 +361,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "seteuid")
             | ("process", "setgid")
             | ("process", "setegid")
+            | ("process", "setgroups")
+            | ("process", "initgroups")
             | ("process", "emitWarning")
             | ("process", "on")
             | ("process", "addListener")
@@ -632,6 +634,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "promisify")
             | ("util", "callbackify")
+            | ("util", "parseArgs")
             | ("util", "deprecate")
             | ("util", "inherits")
             | ("util", "isDeepStrictEqual")
@@ -656,9 +659,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util.types", "isArrayBufferView")
             | ("util.types", "isTypedArray")
             | ("util.types", "isUint8Array")
+            | ("util.types", "isInt8Array")
+            | ("util.types", "isInt16Array")
             | ("util.types", "isUint16Array")
             | ("util.types", "isInt32Array")
+            | ("util.types", "isUint32Array")
+            | ("util.types", "isFloat32Array")
             | ("util.types", "isFloat64Array")
+            | ("util.types", "isUint8ClampedArray")
             | ("util.types", "isMap")
             | ("util.types", "isMapIterator")
             | ("util.types", "isProxy")
@@ -686,9 +694,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isArrayBufferView")
             | ("util/types", "isTypedArray")
             | ("util/types", "isUint8Array")
+            | ("util/types", "isInt8Array")
+            | ("util/types", "isInt16Array")
             | ("util/types", "isUint16Array")
             | ("util/types", "isInt32Array")
+            | ("util/types", "isUint32Array")
+            | ("util/types", "isFloat32Array")
             | ("util/types", "isFloat64Array")
+            | ("util/types", "isUint8ClampedArray")
             | ("util/types", "isMap")
             | ("util/types", "isMapIterator")
             | ("util/types", "isProxy")
@@ -1928,6 +1941,8 @@ unsafe fn http_methods_array() -> f64 {
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.
+// #854: fs.constants object builder retained for the native fs module
+#[allow(dead_code)]
 unsafe fn create_fs_constants_object() -> f64 {
     let cached = FS_CONSTANTS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {

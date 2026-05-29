@@ -27,13 +27,14 @@
 
 use crate::common::handle::Handle;
 use std::borrow::Cow;
+use std::os::raw::c_int;
 
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
 use perry_runtime::closure::{is_closure_ptr, js_closure_call1, ClosureHeader};
 use perry_runtime::{
     js_object_alloc_null_proto, js_object_get_field_by_name, js_object_get_own_field_or_undef,
-    js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader,
-    StringHeader,
+    js_object_keys, js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue,
+    ObjectHeader, StringHeader,
 };
 
 // Suppress unused — `Handle` is re-exported for symmetry with other modules.
@@ -232,20 +233,8 @@ pub unsafe extern "C" fn js_querystring_parse(
                 None => (pair, ""),
             }
         };
-        let key = match decode {
-            Some(cb) => {
-                let normalized = normalize_decode_component_input(key_raw);
-                apply_codec(cb, normalized.as_ref())
-            }
-            None => percent_decode(key_raw, true),
-        };
-        let value = match decode {
-            Some(cb) => {
-                let normalized = normalize_decode_component_input(val_raw);
-                apply_codec(cb, normalized.as_ref())
-            }
-            None => percent_decode(val_raw, true),
-        };
+        let key = decode_parse_component(key_raw, decode);
+        let value = decode_parse_component(val_raw, decode);
         push_parsed_pair(obj, &key, &value);
         parsed += 1;
     }
@@ -285,6 +274,27 @@ fn normalize_decode_component_input(input: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(input)
     }
+}
+
+unsafe fn decode_parse_component(raw: &str, decode: Option<*const ClosureHeader>) -> String {
+    let Some(callback) = decode else {
+        return percent_decode(raw, true);
+    };
+    let normalized = normalize_decode_component_input(raw);
+    apply_decode_codec(callback, normalized.as_ref()).unwrap_or_else(|| percent_decode(raw, true))
+}
+
+unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Option<String> {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = unsafe { perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    let result = if jumped == 0 {
+        Some(apply_codec(callback, raw))
+    } else {
+        perry_runtime::exception::js_clear_exception();
+        None
+    };
+    perry_runtime::exception::js_try_end();
+    result
 }
 
 /// Call a user-supplied codec closure with `raw` and decode the return.
@@ -423,7 +433,7 @@ pub unsafe extern "C" fn js_querystring_stringify(
     }
     let obj = addr as *mut ObjectHeader;
 
-    let keys = (*obj).keys_array;
+    let keys = js_object_keys(obj as *const ObjectHeader);
     if keys.is_null() {
         return nanbox_string(intern_string(""));
     }
@@ -513,7 +523,7 @@ fn querystring_scalar_to_string(value_bits: u64) -> String {
     if value.is_undefined() || value.is_null() {
         return String::new();
     }
-    if perry_runtime::date::is_registered_date_bits(value_bits) {
+    if perry_runtime::date::is_date_value(f64::from_bits(value_bits)) {
         return String::new();
     }
     if value.is_bool() {
