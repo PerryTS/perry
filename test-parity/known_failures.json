@@ -188,12 +188,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncIterable) \u2192 data event chain doesn't deliver. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-generator": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(generator) \u2192 data event chain doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/events/readable-event": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -326,12 +320,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw \u2014 composite does not emit 'error'. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/from-iterable-object": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(POJO-with-Symbol.iterator) \u2014 does not iterate the custom iterable. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/buffer-preserves": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -397,12 +385,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(array with one Promise.reject) \u2014 error not emitted at the right point. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-gen-yield-order": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(gen()) \u2014 yield order lost. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/double-pipe-through": {
     "issue": "1545",
@@ -493,18 +475,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: pipeThrough().pipeThrough() \u2014 second transform output wrong. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/from-gen-with-early-return": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: generator with explicit return \u2014 values yielded after return statement aren't reached. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-gen-return-value-ignored": {
-    "issue": "1532",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: gen 'return value' included as chunk (should be ignored). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/composite-end-event": {
     "issue": "1531",

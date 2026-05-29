@@ -61,7 +61,7 @@ pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
 // protocol instead of being appended as a single chunk.
 pub(crate) use self::iterator::{
     async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
-    has_iterator_next,
+    has_iterator_next, sync_iterator_to_array_if_not_async,
 };
 pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
