@@ -51,6 +51,23 @@ fn object_class_id(value: f64) -> Option<u32> {
     Some(unsafe { (*ptr).class_id })
 }
 
+#[inline]
+fn value_is_closure(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return false;
+    }
+    let ptr = v.as_pointer::<crate::closure::ClosureHeader>();
+    !crate::closure::get_valid_func_ptr(ptr).is_null()
+}
+
+#[inline]
+fn object_field_is_closure(obj: *const ObjectHeader, key: &[u8]) -> bool {
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
+    value_is_closure(value)
+}
+
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
@@ -185,6 +202,39 @@ pub extern "C" fn js_util_types_is_date(value: f64) -> f64 {
 pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
     nanbox_bool(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_generator_function(value: f64) -> f64 {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return nanbox_bool(false);
+    }
+    let closure = v.as_pointer::<crate::closure::ClosureHeader>();
+    let func_ptr = crate::closure::get_valid_func_ptr(closure);
+    nanbox_bool(!func_ptr.is_null() && crate::closure::is_registered_generator_function(func_ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_generator_object(value: f64) -> f64 {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return nanbox_bool(false);
+    }
+    let obj = v.as_pointer::<ObjectHeader>();
+    if obj.is_null() || crate::closure::is_closure_ptr(obj as usize) {
+        return nanbox_bool(false);
+    }
+    if !crate::object::is_valid_obj_ptr(obj as *const u8) {
+        return nanbox_bool(false);
+    }
+    // Perry lowers generator calls to a plain iterator-shaped object with
+    // closure-valued own next/return/throw methods. Match that generated shape.
+    nanbox_bool(
+        object_field_is_closure(obj, b"next")
+            && object_field_is_closure(obj, b"return")
+            && object_field_is_closure(obj, b"throw"),
+    )
 }
 
 #[no_mangle]

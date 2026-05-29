@@ -61,6 +61,8 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isSetIterator" => Some("js_util_types_is_set_iterator"),
         "isDate" => Some("js_util_types_is_date"),
         "isRegExp" => Some("js_util_types_is_reg_exp"),
+        "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
+        "isGeneratorObject" => Some("js_util_types_is_generator_object"),
         "isNativeError" => Some("js_util_types_is_native_error"),
         _ => None,
     }) else {
