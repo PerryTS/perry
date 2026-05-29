@@ -9,8 +9,14 @@
 use super::println;
 use super::*;
 
+mod array_buffer;
 mod boxed_primitives;
+pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 mod collections;
+mod identity_equality;
+mod strip_vt;
+
+pub use strip_vt::js_util_strip_vt_control_characters;
 
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
@@ -664,6 +670,19 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // Typed array — Int32Array(N) [ a, b, c ] etc.
                 let ta = ptr as *const crate::typedarray::TypedArrayHeader;
                 crate::typedarray::format_typed_array(ta)
+            } else if crate::buffer::is_data_view(ptr as usize) {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                array_buffer::format_data_view_value(buf_ptr)
+            } else if crate::buffer::is_any_array_buffer(ptr as usize)
+                && !crate::buffer::is_uint8array_buffer(ptr as usize)
+            {
+                let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+                let label = if crate::buffer::is_shared_array_buffer(ptr as usize) {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                };
+                array_buffer::format_array_buffer_value(buf_ptr, label)
             } else if crate::buffer::is_registered_buffer(ptr as usize) {
                 // Buffer/Uint8Array — `<Buffer xx xx ...>`. No GC header, so
                 // this must precede the GC_HEADER_SIZE arithmetic below (which
@@ -862,10 +881,6 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
-            // Date → unquoted ISO string / `Invalid Date` (before is_nan).
-            if let Some(s) = collections::date_inspect(value) {
-                return s;
-            }
             // Regular number — but first check for raw (non-NaN-boxed) heap
             // pointers. The codegen sometimes returns a raw
             // i64 buffer pointer bitcast directly to f64 (no POINTER_TAG), so
@@ -1061,6 +1076,7 @@ unsafe fn format_object_as_json(
         }
     }
 
+    let boxed_base = boxed_primitives::boxed_primitive_base_for_object(obj_ptr);
     let class_name = {
         let class_id = (*obj_ptr).class_id;
         if class_id == 0 {
@@ -1070,20 +1086,22 @@ unsafe fn format_object_as_json(
         }
     };
     let class_name_ref = class_name.as_deref();
-    let empty_object = || match class_name_ref {
-        Some(name) => format!("{name} {{}}"),
-        None => "{}".to_string(),
+    let empty_object = || {
+        if let Some(base) = boxed_base.as_deref() {
+            return base.to_string();
+        }
+        match class_name_ref {
+            Some(name) => format!("{name} {{}}"),
+            None => "{}".to_string(),
+        }
     };
 
     let keys_array = (*obj_ptr).keys_array;
-    if keys_array.is_null() {
-        return empty_object();
-    }
-
-    let key_count = crate::array::js_array_length(keys_array) as usize;
-    if key_count == 0 {
-        return empty_object();
-    }
+    let key_count = if keys_array.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(keys_array) as usize
+    };
 
     // Honor `Object.defineProperty(..., { enumerable: false })`. By default
     // we include every key in the `keys_array` (enumerability is rarely
@@ -1187,9 +1205,10 @@ unsafe fn format_object_as_json(
     if parts.is_empty() {
         return empty_object();
     }
-    let single_line = match class_name_ref {
-        Some(name) => format!("{} {{ {} }}", name, parts.join(", ")),
-        None => format!("{{ {} }}", parts.join(", ")),
+    let single_line = match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{ {} }}", base, parts.join(", ")),
+        (None, Some(name)) => format!("{} {{ {} }}", name, parts.join(", ")),
+        (None, None) => format!("{{ {} }}", parts.join(", ")),
     };
     // Node's `util.inspect` switches to multi-line layout when the single-line
     // rendering would exceed `breakLength` (default 80). The threshold is
@@ -1213,9 +1232,10 @@ unsafe fn format_object_as_json(
         .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
-    match class_name_ref {
-        Some(name) => format!("{} {{\n{}\n}}", name, body),
-        None => format!("{{\n{}\n}}", body),
+    match (boxed_base.as_deref(), class_name_ref) {
+        (Some(base), _) => format!("{} {{\n{}\n}}", base, body),
+        (None, Some(name)) => format!("{} {{\n{}\n}}", name, body),
+        (None, None) => format!("{{\n{}\n}}", body),
     }
 }
 
@@ -1430,10 +1450,6 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
         } else if jsval.is_int32() {
             jsval.as_int32().to_string()
         } else {
-            // Date field → unquoted ISO string / `Invalid Date`.
-            if let Some(s) = collections::date_inspect(value) {
-                return s;
-            }
             // A TypedArray field is a RAW (non-NaN-boxed) heap pointer, so it
             // lands here, not in the pointer branch; redirect it (#800).
             if let Some(s) = collections::raw_heap_pointer_display(value, depth) {
@@ -1916,6 +1932,13 @@ pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
         };
         return f64::from_bits(crate::value::JSValue::bool(equal).bits());
     }
+    if identity_equality::is_identity_only_deep_equal_value(left)
+        || identity_equality::is_identity_only_deep_equal_value(right)
+    {
+        return f64::from_bits(
+            crate::value::JSValue::bool(left.to_bits() == right.to_bits()).bits(),
+        );
+    }
     let has_tagged_heap_operand = left_value.is_pointer() || right_value.is_pointer();
     let has_raw_heap_operand =
         looks_like_raw_heap_pointer(left) || looks_like_raw_heap_pointer(right);
@@ -1928,77 +1951,6 @@ pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
             || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
     };
     f64::from_bits(crate::value::JSValue::bool(equal).bits())
-}
-
-#[no_mangle]
-pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
-    unsafe {
-        let s_ptr = crate::value::js_jsvalue_to_string(value);
-        let input = if s_ptr.is_null() {
-            String::new()
-        } else {
-            let len = (*s_ptr).byte_len as usize;
-            let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            std::str::from_utf8(bytes).unwrap_or("").to_string()
-        };
-        let mut out = String::with_capacity(input.len());
-        let bytes = input.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == 0x1b {
-                let start = i;
-                i += 1;
-                if i < bytes.len() && bytes[i] == b'[' {
-                    i += 1;
-                    while i < bytes.len() {
-                        let b = bytes[i];
-                        i += 1;
-                        if (0x40..=0x7e).contains(&b) {
-                            break;
-                        }
-                    }
-                    continue;
-                } else if i < bytes.len() && bytes[i] == b']' {
-                    i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                    continue;
-                }
-                out.push_str(&input[start..i]);
-            } else {
-                // Preserve multi-byte UTF-8 sequences: advance by the
-                // full code-point width instead of casting one byte to
-                // char (which mangles non-ASCII, e.g. "café" → "cafÃ©").
-                let lead = bytes[i];
-                let width = if lead < 0x80 {
-                    1
-                } else if lead < 0xc0 {
-                    1 // stray continuation byte; copy verbatim
-                } else if lead < 0xe0 {
-                    2
-                } else if lead < 0xf0 {
-                    3
-                } else {
-                    4
-                };
-                let end = (i + width).min(bytes.len());
-                out.push_str(std::str::from_utf8(&bytes[i..end]).unwrap_or(""));
-                i = end;
-            }
-        }
-        let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
-        f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
-    }
 }
 
 /// Print an array in the format [element1, element2, ...]

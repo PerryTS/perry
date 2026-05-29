@@ -49,6 +49,13 @@ thread_local! {
     static CLOSURE_ARITY_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// Side-table mapping closure body `func_ptr` -> true when the source
+    /// function was a plain generator function. The generator transform clears
+    /// HIR's `is_generator` flag after lowering to a state machine, so codegen
+    /// registers the wrapper/closure symbols here for util.types identity tests.
+    static CLOSURE_GENERATOR_FUNCTION_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, bool>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
     /// Unified dispatch lookup, populated lazily on first call to a func_ptr.
     /// Cuts the per-call cost from TWO RefCell::borrow + HashMap::get
     /// (one each for rest and arity) down to ONE — material on hot paths
@@ -207,6 +214,23 @@ pub extern "C" fn js_register_closure_arity(func_ptr: *const u8, arity: u32) {
 #[inline(always)]
 pub fn lookup_closure_arity(func_ptr: *const u8) -> Option<u32> {
     CLOSURE_ARITY_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
+}
+
+#[no_mangle]
+pub extern "C" fn js_register_closure_generator_function(func_ptr: *const u8) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_GENERATOR_FUNCTION_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, true);
+    });
+}
+
+#[inline(always)]
+pub fn is_registered_generator_function(func_ptr: *const u8) -> bool {
+    CLOSURE_GENERATOR_FUNCTION_REGISTRY
+        .with(|r| r.borrow().get(&(func_ptr as usize)).copied())
+        .unwrap_or(false)
 }
 
 /// Public helper: given a `*const ClosureHeader` pointer, return the

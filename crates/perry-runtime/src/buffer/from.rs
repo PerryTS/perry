@@ -490,19 +490,21 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
         let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
         if is_registered_buffer(raw) {
             // Issue #579: ArrayBuffer / SharedArrayBuffer sources alias
-            // the storage — every `new Uint8Array(ab)` view shares the
-            // same `BufferHeader` pointer so writes through one view are
-            // visible through every other. The decision is gated on the
-            // ArrayBuffer registries (set at constructor time) so
-            // it survives the `mark_as_uint8array` side-effect — a second
-            // view's `is_uint8array_buffer` would otherwise return true
-            // and incorrectly fall into the spec-mandated COPY branch.
+            // the storage via a registered view so writes through the
+            // Uint8Array are visible through the backing ArrayBuffer while
+            // the original value still formats as ArrayBuffer.
             //
             // Issue #227 (the prior memcpy branch) was about avoiding
             // f64-misinterpretation; aliasing also avoids it.
             if is_any_array_buffer(raw) {
-                mark_as_uint8array(raw);
-                return raw as *mut BufferHeader;
+                let src = raw as *const BufferHeader;
+                unsafe {
+                    let len = (*src).length as i32;
+                    let view = js_buffer_slice(src, 0, len);
+                    mark_as_uint8array(view as usize);
+                    set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(raw));
+                    return view;
+                }
             }
             // Source is itself a Uint8Array → ECMAScript spec copies the
             // bytes into a fresh storage region.
@@ -533,6 +535,40 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
     // Any other tag (undefined/null/bool/string/bigint) → empty buffer,
     // matching the JS semantics of `new Uint8Array(undefined)` et al.
     js_uint8array_alloc(0)
+}
+
+/// `new Uint8Array(buffer, byteOffset, length)` — create a Uint8Array view
+/// over ArrayBuffer-like storage. Perry's BufferHeader model represents the
+/// view with a sliced buffer registered against the original backing store.
+#[no_mangle]
+pub extern "C" fn js_uint8array_view(
+    source: f64,
+    byte_offset: i32,
+    requested_length: i32,
+) -> *mut BufferHeader {
+    let bits = source.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return js_uint8array_new(source);
+    }
+    let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if !is_registered_buffer(raw) || !is_any_array_buffer(raw) {
+        return js_uint8array_new(source);
+    }
+    let src = raw as *const BufferHeader;
+    unsafe {
+        let total_len = (*src).length as i32;
+        let start = byte_offset.clamp(0, total_len);
+        let len = if requested_length < 0 {
+            total_len.saturating_sub(start)
+        } else {
+            requested_length.max(0)
+        };
+        let end = start.saturating_add(len).min(total_len);
+        let view = js_buffer_slice(src, start, end);
+        mark_as_uint8array(view as usize);
+        set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(raw));
+        view
+    }
 }
 
 fn zeroed_array_buffer_storage(size: i32) -> *mut BufferHeader {

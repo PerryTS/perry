@@ -12,6 +12,8 @@ thread_local! {
     static WRITE_CHUNK_STRING_FLAGS: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static WRITE_CALLBACK_COUNT: RefCell<usize> = const { RefCell::new(0) };
     pub(super) static READABLE_DATA_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static READABLE_DATA_TEXT_CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static READABLE_DATA_STRING_FLAGS: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     pub(super) static READABLE_READ_CAPTURED: RefCell<Vec<Option<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
     pub(super) static READABLE_THIS_MATCHES: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     pub(super) static READABLE_END_COUNT: RefCell<usize> = const { RefCell::new(0) };
@@ -172,6 +174,16 @@ pub(super) extern "C" fn capture_data_listener(closure: *const ClosureHeader, ch
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn capture_data_text_listener(_closure: *const ClosureHeader, chunk: f64) -> f64 {
+    READABLE_DATA_STRING_FLAGS.with(|flags| {
+        flags
+            .borrow_mut()
+            .push(JSValue::from_bits(chunk.to_bits()).is_any_string())
+    });
+    READABLE_DATA_TEXT_CAPTURED.with(|captured| captured.borrow_mut().push(string_contents(chunk)));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 pub(super) extern "C" fn capture_readable_listener(closure: *const ClosureHeader) -> f64 {
     let stream = crate::closure::js_closure_get_capture_f64(closure, 0);
     let got = js_node_stream_method_read(raw_ptr_from_value(stream) as i64, f64::NAN);
@@ -196,6 +208,51 @@ pub(super) extern "C" fn capture_end_listener(closure: *const ClosureHeader) -> 
     });
     READABLE_END_COUNT.with(|count| *count.borrow_mut() += 1);
     f64::from_bits(TAG_UNDEFINED)
+}
+
+#[test]
+fn readable_set_encoding_emits_buffer_chunks_as_strings() {
+    READABLE_DATA_TEXT_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    READABLE_DATA_STRING_FLAGS.with(|flags| flags.borrow_mut().clear());
+
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    js_node_stream_method_set_encoding(handle, string_value("base64"));
+
+    let data_closure = js_closure_alloc(capture_data_text_listener as *const u8, 0);
+    crate::closure::js_register_closure_arity(capture_data_text_listener as *const u8, 1);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("data"),
+        box_pointer(data_closure as *const u8),
+    );
+
+    let _ = js_node_stream_method_push(handle, buffer_value(b"hello"));
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+
+    READABLE_DATA_STRING_FLAGS.with(|flags| {
+        assert_eq!(flags.borrow().as_slice(), &[true, true]);
+    });
+    READABLE_DATA_TEXT_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &["aGVs".to_string(), "bG8=".to_string()]
+        );
+    });
+}
+
+#[test]
+fn readable_set_encoding_read_returns_decoded_string() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    js_node_stream_method_set_encoding(handle, string_value("hex"));
+
+    let _ = js_node_stream_method_push(handle, buffer_value(&[0xab, 0xcd]));
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+
+    let got = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert!(JSValue::from_bits(got.to_bits()).is_any_string());
+    assert_eq!(string_contents(got), "abcd");
 }
 
 extern "C" fn capture_error_listener(_closure: *const ClosureHeader, _err: f64) -> f64 {
@@ -756,7 +813,10 @@ fn callable_stream_constructor_autoinstantiates_passthrough() {
 fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
     let dest = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
 
-    assert_eq!(ns_pipe1(std::ptr::null(), dest).to_bits(), dest.to_bits());
+    assert_eq!(
+        ns_pipe2(std::ptr::null(), dest, f64::from_bits(TAG_UNDEFINED)).to_bits(),
+        dest.to_bits()
+    );
     assert!(pipe_destination_is_missing(f64::from_bits(TAG_UNDEFINED)));
     assert!(pipe_destination_is_missing(f64::from_bits(TAG_NULL)));
     assert!(!pipe_destination_is_missing(dest));

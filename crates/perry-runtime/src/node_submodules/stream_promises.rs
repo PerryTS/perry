@@ -18,6 +18,7 @@ use crate::closure::{
 use crate::object::{js_object_get_field_by_name_f64, ObjectHeader};
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
+use std::os::raw::c_int;
 
 #[inline]
 pub(crate) fn undefined_value() -> f64 {
@@ -67,6 +68,29 @@ pub(crate) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
         }
     }
     Some(raw as *mut ObjectHeader)
+}
+
+fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> {
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+        return None;
+    }
+    unsafe {
+        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_ARRAY) {
+            return None;
+        }
+    }
+    Some(raw as *const crate::array::ArrayHeader)
+}
+
+fn array_values(value: f64) -> Option<Vec<f64>> {
+    let arr = array_ptr_from_value(value)?;
+    let len = crate::array::js_array_length(arr);
+    let mut values = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        values.push(crate::array::js_array_get_f64(arr, i));
+    }
+    Some(values)
 }
 
 pub(crate) fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
@@ -256,12 +280,7 @@ fn write_chunks_to_destination(destination: f64, chunks: &[f64]) {
     let _ = invoke_destination_method(destination, b"end", &end_args);
 }
 
-pub(crate) extern "C" fn thunk_streamP_pipeline(
-    _closure: *const ClosureHeader,
-    source: f64,
-    destination: f64,
-    options: f64,
-) -> f64 {
+fn direct_stream_promises_pipeline(source: f64, destination: f64, options: f64) -> f64 {
     let signal = options_signal(options);
     if let Some(signal) = signal {
         if signal_aborted(signal) {
@@ -292,6 +311,73 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
             }
         }
     }
+}
+
+extern "C" fn stream_promises_pipeline_callback(closure: *const ClosureHeader, err: f64) -> f64 {
+    if closure.is_null() {
+        return undefined_value();
+    }
+    let promise_value = js_closure_get_capture_f64(closure, 0);
+    let promise =
+        crate::value::js_nanbox_get_pointer(promise_value) as *mut crate::promise::Promise;
+    let err_value = JSValue::from_bits(err.to_bits());
+    if err_value.is_undefined() || err_value.is_null() {
+        crate::promise::js_promise_resolve(promise, undefined_value());
+    } else {
+        crate::promise::js_promise_reject(promise, err);
+    }
+    undefined_value()
+}
+
+fn catch_stream_promises_throw(call: impl FnOnce()) -> Result<(), f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    if jumped == 0 {
+        call();
+        crate::exception::js_try_end();
+        Ok(())
+    } else {
+        let err = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        crate::exception::js_try_end();
+        Err(err)
+    }
+}
+
+pub(crate) extern "C" fn thunk_streamP_pipeline(
+    _closure: *const ClosureHeader,
+    source: f64,
+    destination: f64,
+    options_or_rest: f64,
+) -> f64 {
+    let rest_values = match array_values(options_or_rest) {
+        Some(values) => values,
+        None => return direct_stream_promises_pipeline(source, destination, options_or_rest),
+    };
+
+    let promise = crate::promise::js_promise_new();
+    let promise_value = promise_value_from_ptr(promise);
+
+    crate::closure::js_register_closure_arity(stream_promises_pipeline_callback as *const u8, 1);
+    let callback = js_closure_alloc(stream_promises_pipeline_callback as *const u8, 1);
+    js_closure_set_capture_f64(callback, 0, promise_value);
+
+    let mut args = crate::array::js_array_alloc(4);
+    args = crate::array::js_array_push_f64(args, source);
+    args = crate::array::js_array_push_f64(args, destination);
+
+    for value in rest_values {
+        args = crate::array::js_array_push_f64(args, value);
+    }
+    args = crate::array::js_array_push_f64(args, value_from_ptr(callback as *const u8));
+
+    if let Err(err) = catch_stream_promises_throw(|| {
+        crate::node_stream::js_node_stream_pipeline(args as *const crate::array::ArrayHeader);
+    }) {
+        crate::promise::js_promise_reject(promise, err);
+    }
+
+    promise_value
 }
 
 pub(crate) extern "C" fn thunk_streamP_finished(

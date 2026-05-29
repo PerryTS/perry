@@ -676,10 +676,14 @@ fn ensure_export_singleton(
     }
     let thunk_ptr = export.thunk.as_ptr();
     let allocated = js_closure_alloc(thunk_ptr, 0);
-    // Arity is encoded in the ExportThunk variant, so the closure dispatch
-    // pads missing args with undefined for variadic-friendly thunks. This
-    // replaces the per-submodule arity tables in earlier revisions.
-    crate::closure::js_register_closure_arity(thunk_ptr, export.thunk.arity());
+    if submod.key == "stream_promises" && export.name == "pipeline" {
+        crate::closure::js_register_closure_rest(thunk_ptr, 2);
+    } else {
+        // Arity is encoded in the ExportThunk variant, so the closure dispatch
+        // pads missing args with undefined for variadic-friendly thunks. This
+        // replaces the per-submodule arity tables in earlier revisions.
+        crate::closure::js_register_closure_arity(thunk_ptr, export.thunk.arity());
+    }
     if submod.key == "timers_promises" && export.name == "scheduler" {
         let wait = js_closure_alloc(timers_promises_scheduler_wait as *const u8, 0);
         crate::closure::js_register_closure_arity(timers_promises_scheduler_wait as *const u8, 2);

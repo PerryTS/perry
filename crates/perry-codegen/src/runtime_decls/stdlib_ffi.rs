@@ -526,6 +526,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_set_port", VOID, &[I64, I64]);
     module.declare_function("js_url_set_username", VOID, &[I64, I64]);
     module.declare_function("js_url_set_password", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_href", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
@@ -907,6 +908,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_add_abort_signal", DOUBLE, &[DOUBLE, DOUBLE]);
     // #1539: compose(...streams) -> new Duplex; duplexPair(opts) -> [Duplex, Duplex].
     module.declare_function("js_node_stream_compose", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_node_stream_pipeline", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_duplex_pair", DOUBLE, &[DOUBLE]);
     // #1540: Readable/Writable .toWeb / .fromWeb — return fresh Duplex stubs.
     module.declare_function("js_node_stream_to_web", DOUBLE, &[DOUBLE]);
@@ -923,7 +925,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_readable_flowing", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_readable_ended", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_readable_object_mode", DOUBLE, &[I64]);
-    module.declare_function("js_node_stream_method_pipe", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_node_stream_method_pipe", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_node_stream_method_unpipe", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_node_stream_method_pause", DOUBLE, &[I64]);
     module.declare_function("js_node_stream_method_is_paused", DOUBLE, &[I64]);
