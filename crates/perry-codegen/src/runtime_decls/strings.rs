@@ -284,6 +284,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_has", I32, &[I64, DOUBLE]);
     module.declare_function("js_map_delete", I32, &[I64, DOUBLE]);
     module.declare_function("js_object_keys", I64, &[I64]);
+    module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
     module.declare_function("js_is_finite", DOUBLE, &[DOUBLE]);
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);
@@ -915,7 +916,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_value_to_string_with_encoding", I64, &[DOUBLE, I32]);
     module.declare_function("js_fs_unlink_sync", I32, &[DOUBLE]);
     module.declare_function("js_object_values", I64, &[I64]);
+    module.declare_function("js_object_values_value", I64, &[DOUBLE]);
     module.declare_function("js_object_entries", I64, &[I64]);
+    module.declare_function("js_object_entries_value", I64, &[DOUBLE]);
     module.declare_function("js_path_join", I64, &[I64, I64]);
     module.declare_function("js_path_win32_join", I64, &[I64, I64]);
     // path.win32 sub-namespace (issue #1162)

@@ -212,8 +212,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ObjectKeys(obj) => {
             let obj_box = lower_expr(ctx, obj)?;
             let blk = ctx.block();
-            let obj_handle = unbox_to_i64(blk, &obj_box);
-            let arr_handle = blk.call(I64, "js_object_keys", &[(I64, &obj_handle)]);
+            // Pass the NaN-boxed value (not an unboxed pointer) so the runtime
+            // can dispatch on its tag — a string receiver yields index keys and
+            // a primitive yields [], instead of crashing on a bad deref.
+            let arr_handle = blk.call(I64, "js_object_keys_value", &[(DOUBLE, &obj_box)]);
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
