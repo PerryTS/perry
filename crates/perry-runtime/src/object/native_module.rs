@@ -123,6 +123,26 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        "util" => Some(&[
+            b"callbackify",
+            b"debuglog",
+            b"deprecate",
+            b"format",
+            b"formatWithOptions",
+            b"getSystemErrorMap",
+            b"getSystemErrorName",
+            b"getSystemErrorMessage",
+            b"inherits",
+            b"inspect",
+            b"isArray",
+            b"isDeepStrictEqual",
+            b"promisify",
+            b"stripVTControlCharacters",
+            b"types",
+            b"parseArgs",
+            b"TextDecoder",
+            b"TextEncoder",
+        ]),
         _ => None,
     }
 }
@@ -531,6 +551,7 @@ pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32
     let (module, method) = bound_native_callable_module_and_method(value)?;
     match (module.as_str(), method.as_str()) {
         ("console", "Console") => Some(1),
+        ("util", "isArray") => Some(1),
         _ => None,
     }
 }

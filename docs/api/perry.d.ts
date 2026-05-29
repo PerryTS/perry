@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1520 entries across 84 modules
+// Coverage: 1521 entries across 84 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2144,6 +2144,8 @@ declare module "util" {
   export function inherits(...args: any[]): any;
   /** stdlib */
   export function inspect(...args: any[]): any;
+  /** stdlib */
+  export function isArray(value: any): boolean;
   /** stdlib */
   export function isDeepStrictEqual(...args: any[]): any;
   /** stdlib */

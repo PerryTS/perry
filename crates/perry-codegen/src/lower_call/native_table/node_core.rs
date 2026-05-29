@@ -962,6 +962,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "util",
         has_receiver: false,
+        method: "isArray",
+        class_filter: None,
+        runtime: "js_array_is_array",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
         method: "isDeepStrictEqual",
         class_filter: None,
         runtime: "js_util_is_deep_strict_equal",
