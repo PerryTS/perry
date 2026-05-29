@@ -222,7 +222,7 @@ impl SH for Expr {
             Expr::Btoa(e) => { tag(h, 178); e.as_ref().hash(h); }
             Expr::TextEncoderNew => tag(h, 179),
             Expr::TextEncoderEncode(e) => { tag(h, 180); e.as_ref().hash(h); }
-            Expr::TextEncoderEncodeInto { source, dest } => { tag(h, 12031); source.as_ref().hash(h); dest.as_ref().hash(h); }
+            Expr::TextEncoderEncodeInto { source, dest } => { tag(h, 12040); source.as_ref().hash(h); dest.as_ref().hash(h); }
             Expr::TextDecoderNew => tag(h, 181),
             Expr::TextDecoderDecode(e) => { tag(h, 182); e.as_ref().hash(h); }
             Expr::EncodeURI(e) => { tag(h, 183); e.as_ref().hash(h); }
