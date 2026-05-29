@@ -1,4 +1,5 @@
 import * as fsp from "node:fs/promises";
+import { open as openFile } from "node:fs/promises";
 
 (process as any).emitWarning = () => {};
 
@@ -46,6 +47,14 @@ for await (const line of early.readLines()) {
 }
 console.log("fh readLines early break:", JSON.stringify(earlyLines), early.fd >= 0 ? "open" : "closed");
 await early.close();
+
+const named = await openFile(multi, "r");
+const namedLines: string[] = [];
+for await (const line of named.readLines()) {
+  namedLines.push(line);
+}
+console.log("fh readLines named import:", JSON.stringify(namedLines));
+await named.close();
 
 const closed = await fsp.open(multi, "r");
 await closed.close();

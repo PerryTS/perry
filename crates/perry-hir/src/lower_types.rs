@@ -12,6 +12,14 @@ use crate::lower_patterns::{get_pat_name, lower_lit};
 
 pub(crate) const FILEHANDLE_READLINES_ITERATOR_TYPE: &str = "__PerryFileHandleReadLinesIterator";
 
+fn is_fs_promises_module(module: &str) -> bool {
+    module.strip_prefix("node:").unwrap_or(module) == "fs/promises"
+}
+
+fn filehandle_type() -> Type {
+    Type::Named("FileHandle".to_string())
+}
+
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     match expr {
         // Literals
@@ -536,6 +544,12 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
         // Direct function call: foo()
         ast::Expr::Ident(ident) => {
             let name = ident.sym.as_ref();
+            if matches!(
+                ctx.lookup_native_module(name),
+                Some((module, Some("open"))) if is_fs_promises_module(module)
+            ) {
+                return Type::Promise(Box::new(filehandle_type()));
+            }
             // Check user-defined function return types
             if let Some(ty) = ctx.lookup_func_return_type(name) {
                 return ty.clone();
@@ -554,6 +568,19 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
         ast::Expr::Member(member) => {
             if let ast::MemberProp::Ident(method) = &member.prop {
                 let method_name = method.sym.as_ref();
+                if method_name == "open" {
+                    if let ast::Expr::Ident(obj) = member.obj.as_ref() {
+                        let namespace_is_fs_promises = matches!(
+                            ctx.lookup_native_module(obj.sym.as_ref()),
+                            Some((module, None)) if is_fs_promises_module(module)
+                        ) || ctx
+                            .lookup_builtin_module_alias(obj.sym.as_ref())
+                            .is_some_and(is_fs_promises_module);
+                        if namespace_is_fs_promises {
+                            return Type::Promise(Box::new(filehandle_type()));
+                        }
+                    }
+                }
                 let obj_ty = infer_type_from_expr(&member.obj, ctx);
 
                 // Phase 4.1: user class methods. When the receiver is typed
@@ -578,6 +605,9 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     match (class_name.as_str(), method_name) {
                         ("TextEncoder", "encode") => return Type::Named("Uint8Array".into()),
                         ("TextDecoder", "decode") => return Type::String,
+                        ("FileHandle", "readLines") => {
+                            return Type::Named(FILEHANDLE_READLINES_ITERATOR_TYPE.to_string());
+                        }
                         (
                             "Readable",
                             "map" | "filter" | "flatMap" | "take" | "drop" | "compose",
@@ -612,13 +642,6 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                         }
                         _ => {}
                     }
-                }
-
-                // `FileHandle.readLines()` returns a readline interface whose
-                // async iterator lives behind `[Symbol.asyncIterator]()`, not
-                // as a public `.next()` method on the returned object.
-                if method_name == "readLines" {
-                    return Type::Named(FILEHANDLE_READLINES_ITERATOR_TYPE.to_string());
                 }
 
                 // String methods

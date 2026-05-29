@@ -259,6 +259,9 @@ pub(crate) fn lower_module_decl(
                         } else {
                             // Namespace import from JS module - register so calls resolve to ExternFuncRef
                             ctx.register_imported_func(local.clone(), local.clone());
+                            if source == "fs/promises" {
+                                ctx.register_builtin_module_alias(local.clone(), source.clone());
+                            }
                             // Record that `local` is a module namespace (not a
                             // class). `local.member(args)` must call the member,
                             // not lower to StaticMethodCall — see the heuristic
