@@ -5,6 +5,8 @@ use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::ffi::CStr;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -423,7 +425,55 @@ pub extern "C" fn js_os_loadavg() -> *mut ArrayHeader {
 /// Get the operating system version string.
 #[no_mangle]
 pub extern "C" fn js_os_version() -> *mut StringHeader {
-    js_os_release()
+    #[cfg(unix)]
+    {
+        unsafe {
+            let mut info: libc::utsname = std::mem::zeroed();
+            if libc::uname(&mut info) == 0 {
+                let version = CStr::from_ptr(info.version.as_ptr()).to_string_lossy();
+                let bytes = version.as_bytes();
+                return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            }
+        }
+
+        let fallback = "unknown";
+        js_string_from_bytes(fallback.as_ptr(), fallback.len() as u32)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        #[repr(C)]
+        struct RTL_OSVERSIONINFOW {
+            dw_os_version_info_size: u32,
+            dw_major_version: u32,
+            dw_minor_version: u32,
+            dw_build_number: u32,
+            dw_platform_id: u32,
+            sz_csd_version: [u16; 128],
+        }
+        extern "system" {
+            fn RtlGetVersion(lpVersionInformation: *mut RTL_OSVERSIONINFOW) -> i32;
+        }
+        unsafe {
+            let mut info: RTL_OSVERSIONINFOW = std::mem::zeroed();
+            info.dw_os_version_info_size = std::mem::size_of::<RTL_OSVERSIONINFOW>() as u32;
+            if RtlGetVersion(&mut info) == 0 {
+                let version = format!(
+                    "Windows {}.{}.{}",
+                    info.dw_major_version, info.dw_minor_version, info.dw_build_number
+                );
+                let bytes = version.as_bytes();
+                return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            }
+        }
+
+        let fallback = "Windows";
+        js_string_from_bytes(fallback.as_ptr(), fallback.len() as u32)
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        let fallback = "unknown";
+        js_string_from_bytes(fallback.as_ptr(), fallback.len() as u32)
+    }
 }
 
 /// Get the process uptime in seconds (time since process started)
@@ -1931,6 +1981,12 @@ mod tests {
     fn test_os_release() {
         let release = js_os_release();
         assert!(!release.is_null());
+    }
+
+    #[test]
+    fn test_os_version() {
+        let version = js_os_version();
+        assert!(!version.is_null());
     }
 
     #[test]
