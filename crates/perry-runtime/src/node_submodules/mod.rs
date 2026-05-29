@@ -643,7 +643,7 @@ thread_local! {
 static ANY_SINGLETON_ALLOCATED: AtomicI64 = AtomicI64::new(0);
 static SYS_DEPRECATION_WARNED: AtomicI64 = AtomicI64::new(0);
 
-fn emit_sys_deprecation_warning_once() {
+pub(crate) fn emit_sys_deprecation_warning_once() {
     if SYS_DEPRECATION_WARNED
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -657,12 +657,26 @@ fn emit_sys_deprecation_warning_once() {
     eprintln!("(Use `node --trace-deprecation ...` to show where the warning was created)");
 }
 
+fn sys_util_namespace_value() -> f64 {
+    crate::object::js_create_native_module_namespace(b"util".as_ptr(), "util".len())
+}
+
 fn sys_util_export_value(name: &str) -> Option<f64> {
-    match name {
-        "format" | "inspect" | "deprecate" | "promisify" | "callbackify" => Some(
-            crate::object::bound_native_callable_export_value("util", name),
-        ),
-        _ => None,
+    if name == "default" {
+        return Some(sys_util_namespace_value());
+    }
+    let value = unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"util".as_ptr(),
+            "util".len(),
+            name.as_ptr(),
+            name.len(),
+        )
+    };
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        None
+    } else {
+        Some(value)
     }
 }
 
@@ -946,6 +960,20 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
         Some(s) => s,
         None => return f64::from_bits(crate::value::TAG_UNDEFINED),
     };
+    if submod.key == "sys" {
+        emit_sys_deprecation_warning_once();
+        if name == "default" {
+            return sys_util_namespace_value();
+        }
+        return unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"util".as_ptr(),
+                "util".len(),
+                name.as_ptr(),
+                name.len(),
+            )
+        };
+    }
     if submod.key == "stream_promises" && name == "default" {
         let obj = ensure_namespace_singleton(submod);
         return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
@@ -985,6 +1013,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
     };
     if submod.key == "sys" {
         emit_sys_deprecation_warning_once();
+        return sys_util_namespace_value();
     }
     let obj = ensure_namespace_singleton(submod);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
@@ -1192,6 +1221,44 @@ mod tests {
         };
 
         assert_eq!(sys_inspect.to_bits(), util_inspect.to_bits());
+    }
+
+    #[test]
+    fn sys_default_export_is_util_namespace() {
+        let sys_default = unsafe {
+            js_node_submodule_export_as_function(
+                b"sys".as_ptr(),
+                "sys".len() as u32,
+                b"default".as_ptr(),
+                "default".len() as u32,
+            )
+        };
+        let util_default =
+            crate::object::js_create_native_module_namespace(b"util".as_ptr(), "util".len());
+
+        assert_eq!(sys_default.to_bits(), util_default.to_bits());
+    }
+
+    #[test]
+    fn sys_namespace_types_member_reuses_util_types() {
+        let sys_types = unsafe {
+            js_node_submodule_namespace_member(
+                b"sys".as_ptr(),
+                "sys".len() as u32,
+                b"types".as_ptr(),
+                "types".len() as u32,
+            )
+        };
+        let util_types = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"util".as_ptr(),
+                "util".len(),
+                b"types".as_ptr(),
+                "types".len(),
+            )
+        };
+
+        assert_eq!(sys_types.to_bits(), util_types.to_bits());
     }
 
     #[test]

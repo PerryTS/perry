@@ -3032,11 +3032,13 @@ pub fn run_with_parse_cache(
                             // submodules (`timers/promises` etc.) keep the
                             // function-singleton routing because no real
                             // code reads them as namespace objects.
-                            if submod_key == "diagnostics_channel" || submod_key == "timers" {
-                                // Default import of node:timers is the module
-                                // object — route to the namespace so
-                                // `import timers from "node:timers"` works
-                                // like `import * as timers` (#1213).
+                            if matches!(
+                                submod_key.as_str(),
+                                "diagnostics_channel" | "timers" | "sys"
+                            ) {
+                                // Default imports of these modules are module
+                                // objects — route to the namespace so they work
+                                // like `import * as ...` (#1213, #2629).
                                 namespace_node_submodules
                                     .insert(local.clone(), submod_key.clone());
                                 if !namespace_imports.contains(local) {

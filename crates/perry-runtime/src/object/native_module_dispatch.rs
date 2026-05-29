@@ -910,6 +910,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
+        ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
+        ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
             crate::builtins::js_util_is_deep_strict_equal(arg(0), arg(1))
         }

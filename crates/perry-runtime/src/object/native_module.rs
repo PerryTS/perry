@@ -14,6 +14,8 @@ thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
+    static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -28,6 +30,12 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
             slot.set(value_bits);
+        }
+    });
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
         }
     });
     scan_stream_event_emitter_prototype_roots_mut(visitor);
@@ -61,14 +69,28 @@ pub extern "C" fn js_create_native_module_namespace(
     module_name_ptr: *const u8,
     module_name_len: usize,
 ) -> f64 {
+    let module_name = unsafe {
+        std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
+            .unwrap_or("")
+    };
+    let module_name = normalize_native_module_alias(module_name);
+    if should_cache_native_module_namespace(module_name) {
+        if let Some(bits) =
+            NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(module_name).copied())
+        {
+            return f64::from_bits(bits);
+        }
+    }
+
     // Create an object with one field to store the module name
     let obj = js_object_alloc(NATIVE_MODULE_CLASS_ID, 1);
 
     // Create a string from the module name
-    let module_name = crate::string::js_string_from_bytes(module_name_ptr, module_name_len as u32);
+    let module_name_header =
+        crate::string::js_string_from_bytes(module_name.as_ptr(), module_name.len() as u32);
 
     // Store the module name in the first field
-    js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
+    js_object_set_field(obj, 0, JSValue::string_ptr(module_name_header));
 
     // Create a keys array with one key: "__module__"
     let keys_array = crate::array::js_array_alloc(1);
@@ -78,7 +100,28 @@ pub extern "C" fn js_create_native_module_namespace(
     js_object_set_keys(obj, keys_array);
 
     // Return as NaN-boxed pointer
-    crate::value::js_nanbox_pointer(obj as i64)
+    let value = crate::value::js_nanbox_pointer(obj as i64);
+    if should_cache_native_module_namespace(module_name) {
+        NATIVE_MODULE_NAMESPACES.with(|cache| {
+            cache
+                .borrow_mut()
+                .insert(module_name.to_string(), value.to_bits());
+        });
+    }
+    value
+}
+
+fn normalize_native_module_alias(module_name: &str) -> &str {
+    if module_name == "sys" {
+        crate::node_submodules::emit_sys_deprecation_warning_once();
+        "util"
+    } else {
+        module_name
+    }
+}
+
+fn should_cache_native_module_namespace(module_name: &str) -> bool {
+    matches!(module_name, "util" | "util.types")
 }
 
 /// #1479: read the module-name string stored in field 0 of a
@@ -120,6 +163,7 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     let module_name =
         std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
             .unwrap_or("");
+    let module_name = normalize_native_module_alias(module_name);
     let property_name = std::str::from_utf8(std::slice::from_raw_parts(
         property_name_ptr,
         property_name_len,
@@ -369,6 +413,21 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         slot.set(value.to_bits());
         value
     })
+}
+
+extern "C" fn util_debuglog_logger_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn util_debuglog_logger_value() -> f64 {
+    let func_ptr = util_debuglog_logger_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+    set_bound_native_closure_name(closure, "debuglog");
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 fn fn_value(func_ptr: *const u8, name: &str) -> f64 {
@@ -798,6 +857,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
+            | ("util", "debuglog")
+            | ("util", "isArray")
             | ("util", "promisify")
             | ("util", "callbackify")
             | ("util", "parseArgs")
@@ -1238,7 +1299,7 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'sta
 pub(crate) unsafe fn get_native_module_constant(
     module_name: &str,
     property: &str,
-    _namespace_obj: f64,
+    namespace_obj: f64,
 ) -> Option<f64> {
     let str_val = |s: &str| -> f64 {
         let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -1924,7 +1985,16 @@ pub(crate) unsafe fn get_native_module_constant(
         "os.constants.priority" => os_priority_const(property),
         "os.constants.dlopen" => os_dlopen_const(property),
         "util" => match property {
+            "default" => Some(native_namespace_or_create("util", namespace_obj)),
             "types" => Some(create_sub_namespace("util.types")),
+            "TextEncoder" => Some(crate::object::js_get_global_this_builtin_value(
+                b"TextEncoder".as_ptr(),
+                "TextEncoder".len(),
+            )),
+            "TextDecoder" => Some(crate::object::js_get_global_this_builtin_value(
+                b"TextDecoder".as_ptr(),
+                "TextDecoder".len(),
+            )),
             _ => None,
         },
         "assert" => match property {
@@ -2068,6 +2138,23 @@ pub(crate) unsafe fn get_native_module_constant(
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
 fn create_sub_namespace(name: &str) -> f64 {
     js_create_native_module_namespace(name.as_ptr(), name.len())
+}
+
+fn native_namespace_or_create(module_name: &str, namespace_obj: f64) -> f64 {
+    let value = JSValue::from_bits(namespace_obj.to_bits());
+    if value.is_pointer() {
+        let obj = value.as_pointer::<ObjectHeader>();
+        if !obj.is_null() {
+            let is_matching_namespace = unsafe {
+                (*obj).class_id == NATIVE_MODULE_CLASS_ID
+                    && read_native_module_name(obj).as_deref() == Some(module_name)
+            };
+            if is_matching_namespace {
+                return namespace_obj;
+            }
+        }
+    }
+    js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
 }
 
 fn create_cached_sub_namespace(name: &str, cache: &std::sync::atomic::AtomicU64) -> f64 {
