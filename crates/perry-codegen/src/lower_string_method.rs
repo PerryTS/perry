@@ -344,21 +344,42 @@ pub(crate) fn lower_string_method(
             ))
         }
         "lastIndexOf" => {
-            if args.len() != 1 {
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.lastIndexOf expects 1 arg, got {}",
+                    "perry-codegen: String.lastIndexOf expects 1 or 2 args, got {}",
                     args.len()
                 );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
+            // Optional `position` (2nd arg). Without it, use the plain
+            // last-index-of (search to the end); with it, the position-aware
+            // variant. Mirrors the `indexOf` arm.
+            let pos_double = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let needle_handle = unbox_str_handle(blk, &needle_box);
-            let i32_v = blk.call(
-                I32,
-                "js_string_last_index_of",
-                &[(I64, &recv_handle), (I64, &needle_handle)],
-            );
+            let i32_v = if let Some(pos_d) = pos_double {
+                blk.call(
+                    I32,
+                    "js_string_last_index_of_from",
+                    &[
+                        (I64, &recv_handle),
+                        (I64, &needle_handle),
+                        (DOUBLE, &pos_d),
+                        (I32, "1"),
+                    ],
+                )
+            } else {
+                blk.call(
+                    I32,
+                    "js_string_last_index_of",
+                    &[(I64, &recv_handle), (I64, &needle_handle)],
+                )
+            };
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "padStart" | "padEnd" => {

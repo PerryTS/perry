@@ -1,68 +1,117 @@
 //! Date operations runtime support
 //!
 //! Provides JavaScript Date functionality using system time.
-//! Dates are represented internally as i64 timestamps (milliseconds since Unix epoch).
+//!
+//! A `Date` is a **reference type**: a NaN-boxed pointer to a 1-slot mutable
+//! [`DateCell`] holding the millisecond timestamp. This gives JS-correct
+//! aliasing semantics — a setter mutation made through any binding (alias,
+//! function parameter, closure capture) is visible through all of them
+//! (#2089). Getters dereference the cell; setters mutate it in place.
 
-use std::cell::RefCell;
-use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-thread_local! {
-    /// Bit patterns of f64 values that came from a `new Date(...)` constructor
-    /// (or `Date.now()` / a Date method). `instanceof Date` consults this set
-    /// — without it, every finite number would match because Perry stores
-    /// Date as a raw f64 timestamp with no tag.
-    ///
-    /// False positives are possible (a regular number equal to a registered
-    /// Date timestamp), but in practice the set is small and dominated by
-    /// recently-minted Date timestamps.
-    static DATE_REGISTRY: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+const NANBOX_PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+/// A `Date` is a **reference type**: a NaN-boxed POINTER (POINTER_TAG) to
+/// this 1-slot mutable heap cell, *not* a raw f64 timestamp. Aliases
+/// (`const b = a`), function parameters, and closure captures all share
+/// the same cell, so an in-place setter mutation is visible through every
+/// binding — this is what fixes #2089 (effect `DateTime.add`). The cell is
+/// arena-allocated as `GC_TYPE_DATE_CELL`: non-movable (a NaN-boxed pointer
+/// living in a plain f64/DOUBLE local is kept alive by the conservative
+/// stack scan, and the stable address means that un-shadow-rooted pointer
+/// never goes stale across a GC) and pointer-free (`ts` is a raw IEEE
+/// double, so no write barrier is needed when a setter mutates it).
+#[repr(C)]
+pub struct DateCell {
+    pub ts: f64,
 }
 
-/// Canonical "Invalid Date" bit pattern.
-///
-/// An *Invalid Date* (`new Date(NaN)`, `new Date("nope")`, the zero-date
-/// branch of `@perryts/mysql`'s `MyDateTime.toDate()`, …) is still a Date
-/// object per ECMA-262 §21.4.1.1 — `typeof` must be `"object"` and
-/// `instanceof Date` must be `true`, even though its time value is NaN.
-///
-/// Perry stores Date as a raw f64 with no tag and tracks finite Dates in
-/// the thread-local `DATE_REGISTRY`. A NaN can't go in that value-keyed
-/// set: NaN never compares equal, the bit pattern isn't stable, and the
-/// set is thread-local so a Date minted on a socket/worker thread (mysql
-/// row decode) wouldn't be seen on the main thread anyway. So Invalid
-/// Date gets a single canonical sentinel recognized *by bit pattern*,
-/// globally, with no registration step — it works across threads for
-/// free because it is a constant, not a tracked value.
-///
-/// The pattern is a quiet NaN (exponent all ones, mantissa MSB set so it
-/// stays quiet per IEEE-754 §6.2.1 and arithmetic propagates instead of
-/// trapping). It lives in the 0x7FF8 space, which `JSValue::is_number`
-/// treats as a plain number rather than a NaN-box tag, so the value
-/// flows through arithmetic and the existing `if timestamp.is_nan()`
-/// guards in every Date getter exactly like a bare NaN — only `typeof` /
-/// `instanceof` / dynamic dispatch get to see that it is really a Date.
-/// The low payload `0x0DA7` just distinguishes it from the FPU's
-/// canonical `0x7FF8_0000_0000_0000`.
-pub const DATE_NAN_BITS: u64 = 0x7FF8_0000_0000_0DA7;
+/// Allocate a fresh Date cell holding `ts` and return it as a NaN-boxed
+/// pointer (an f64 carrying POINTER_TAG). `ts` may be NaN — that is an
+/// *Invalid Date*, still a real Date object for `typeof` / `instanceof`
+/// (the cell pointer is what makes it a Date, independent of its time
+/// value), so unlike the old value-type representation there is no need
+/// for a separate NaN sentinel bit pattern.
+pub fn alloc_date_cell(ts: f64) -> f64 {
+    unsafe {
+        let ptr = crate::arena::arena_alloc_gc(
+            std::mem::size_of::<DateCell>(),
+            8,
+            crate::gc::GC_TYPE_DATE_CELL,
+        ) as *mut DateCell;
+        (*ptr).ts = ts;
+        f64::from_bits(crate::value::JSValue::pointer(ptr as *const u8).bits())
+    }
+}
 
-/// The canonical Invalid Date value.
+/// The canonical Invalid Date value — a fresh cell whose time value is NaN.
 #[inline]
 pub fn date_invalid() -> f64 {
-    f64::from_bits(DATE_NAN_BITS)
+    alloc_date_cell(f64::NAN)
 }
 
-/// Map any NaN result to the canonical Invalid-Date sentinel; pass
-/// finite values through untouched. Used by the `new Date(...)`
-/// constructors so an invalid time value is still a recognizable Date
-/// object instead of a bare, type-less NaN.
+/// True if `addr` (a cleaned heap address, NOT NaN-boxed bits) points at a
+/// `DateCell`. Reads the `GcHeader.obj_type`: for any live `is_pointer()`
+/// value the header is always present and valid, and because `DateCell` is
+/// non-movable its address is stable, so this is an exact identity check
+/// with no side-table registry to keep in sync.
 #[inline]
-fn date_or_invalid(v: f64) -> f64 {
-    if v.is_nan() {
-        date_invalid()
-    } else {
-        v
+pub fn is_date_cell_addr(addr: usize) -> bool {
+    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+        return false;
     }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*header).obj_type == crate::gc::GC_TYPE_DATE_CELL
+    }
+}
+
+/// True if `value` is a Date — i.e. a NaN-boxed pointer to a `DateCell`.
+/// Replaces the old value-keyed `is_registered_date_bits`.
+#[inline]
+pub fn is_date_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    if !crate::value::JSValue::from_bits(bits).is_pointer() {
+        return false;
+    }
+    is_date_cell_addr((bits & NANBOX_PTR_MASK) as usize)
+}
+
+/// Read the timestamp out of a Date value. If `value` is a `DateCell`
+/// pointer, dereference it; otherwise (a raw numeric timestamp handed to a
+/// Date method directly — e.g. via `Date.UTC()` or a legacy path) pass it
+/// through unchanged. Every public Date getter/formatter funnels its
+/// receiver through this so it works whether it was given a cell or a bare
+/// number.
+#[inline]
+pub fn date_cell_timestamp(value: f64) -> f64 {
+    let bits = value.to_bits();
+    if crate::value::JSValue::from_bits(bits).is_pointer() {
+        let addr = (bits & NANBOX_PTR_MASK) as usize;
+        if is_date_cell_addr(addr) {
+            return unsafe { (*(addr as *const DateCell)).ts };
+        }
+    }
+    value
+}
+
+/// Mutate the `DateCell` `value` points at, writing `ts` into it. No-op if
+/// `value` is not a cell (e.g. a raw timestamp). Returns `ts` — the numeric
+/// millisecond value a JS Date setter evaluates to. `DateCell` is
+/// pointer-free, so this raw f64 store needs no GC write barrier.
+#[inline]
+fn date_cell_store(value: f64, ts: f64) -> f64 {
+    let bits = value.to_bits();
+    if crate::value::JSValue::from_bits(bits).is_pointer() {
+        let addr = (bits & NANBOX_PTR_MASK) as usize;
+        if is_date_cell_addr(addr) {
+            unsafe {
+                (*(addr as *mut DateCell)).ts = ts;
+            }
+        }
+    }
+    ts
 }
 
 /// The string every Date string-method returns when the time value is
@@ -82,18 +131,24 @@ fn throw_invalid_time_value() -> ! {
     crate::exception::js_throw(f64::from_bits(err_value))
 }
 
-/// Mark `bits` as a Date so future `instanceof Date` checks can recognize it.
-pub fn register_date_bits(bits: u64) {
-    DATE_REGISTRY.with(|r| {
-        r.borrow_mut().insert(bits);
-    });
+/// Coerce a value to a number for an ordered relational comparison
+/// (`date1 < date2`, `date < ms`, …). A Date is a NaN-boxed `DateCell`
+/// pointer whose raw bits are a NaN — bare `fcmp` would compare unordered
+/// (always false) — so codegen routes non-statically-numeric relational
+/// operands through here to dereference the timestamp first. Plain numbers
+/// pass straight through.
+#[no_mangle]
+pub extern "C" fn js_date_coerce_number(value: f64) -> f64 {
+    date_cell_timestamp(value)
 }
 
-/// True when `bits` are a Date: either the canonical Invalid-Date
-/// sentinel (recognized globally, no registration) or a finite timestamp
-/// previously registered by `new Date(...)` / `Date.now()` / a Date method.
+/// Back-compat shim for the old value-keyed identity check. Date is now a
+/// reference type, so identity is "the value is a pointer to a `DateCell`".
+/// Kept so external callers (e.g. `perry-stdlib`'s querystring) need only a
+/// trivial update. Prefer [`is_date_value`].
+#[inline]
 pub fn is_registered_date_bits(bits: u64) -> bool {
-    bits == DATE_NAN_BITS || DATE_REGISTRY.with(|r| r.borrow().contains(&bits))
+    is_date_value(f64::from_bits(bits))
 }
 
 /// Convert a UTC timestamp (seconds) to local-time components.
@@ -175,23 +230,17 @@ pub extern "C" fn js_performance_now() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Create a new Date from current time, returning timestamp in milliseconds
+/// Create a new Date from current time, returning a NaN-boxed DateCell pointer.
 #[no_mangle]
 pub extern "C" fn js_date_new() -> f64 {
-    let v = js_date_now();
-    register_date_bits(v.to_bits());
-    v
+    alloc_date_cell(js_date_now())
 }
 
 /// Create a new Date from a timestamp (milliseconds since epoch).
-/// A NaN timestamp produces a recognizable Invalid Date, not a bare NaN.
+/// A NaN timestamp produces a recognizable Invalid Date (a cell with NaN ts).
 #[no_mangle]
 pub extern "C" fn js_date_new_from_timestamp(timestamp: f64) -> f64 {
-    let result = date_or_invalid(timestamp);
-    if !result.is_nan() {
-        register_date_bits(result.to_bits());
-    }
-    result
+    alloc_date_cell(timestamp)
 }
 
 /// Create a new Date from a value that could be a number or a NaN-boxed string.
@@ -218,15 +267,15 @@ pub extern "C" fn js_date_new_from_value(value: f64) -> f64 {
                 }
             }
         }
+    } else if is_date_value(value) {
+        // `new Date(anotherDate)` copies the source's time value (and would
+        // otherwise read the pointer bits as a bogus timestamp).
+        date_cell_timestamp(value)
     } else {
         // Numeric timestamp
         value
     };
-    let result = date_or_invalid(result);
-    if !result.is_nan() {
-        register_date_bits(result.to_bits());
-    }
-    result
+    alloc_date_cell(result)
 }
 
 /// Parse a date string into a millisecond timestamp.
@@ -357,6 +406,7 @@ fn components_to_timestamp(
 /// Since we store dates as timestamps, this is an identity function
 #[no_mangle]
 pub extern "C" fn js_date_get_time(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     timestamp
 }
 
@@ -364,6 +414,7 @@ pub extern "C" fn js_date_get_time(timestamp: f64) -> f64 {
 /// Returns a pointer to a StringHeader
 #[no_mangle]
 pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return invalid_date_string();
     }
@@ -388,6 +439,7 @@ pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHea
 /// JSON internals, the public method must throw RangeError for Invalid Date.
 #[no_mangle]
 pub extern "C" fn js_date_to_iso_string_or_throw(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         throw_invalid_time_value();
     }
@@ -397,6 +449,7 @@ pub extern "C" fn js_date_to_iso_string_or_throw(timestamp: f64) -> *mut crate::
 /// Get the full year (date.getFullYear()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_full_year(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -409,6 +462,7 @@ pub extern "C" fn js_date_get_full_year(timestamp: f64) -> f64 {
 /// Get the month (0-11) (date.getMonth()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_month(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -421,6 +475,7 @@ pub extern "C" fn js_date_get_month(timestamp: f64) -> f64 {
 /// Get the day of month (1-31) (date.getDate()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_date(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -433,6 +488,7 @@ pub extern "C" fn js_date_get_date(timestamp: f64) -> f64 {
 /// Get the hour (0-23) (date.getHours()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_hours(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -445,6 +501,7 @@ pub extern "C" fn js_date_get_hours(timestamp: f64) -> f64 {
 /// Get the minutes (0-59) (date.getMinutes()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_minutes(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -457,6 +514,7 @@ pub extern "C" fn js_date_get_minutes(timestamp: f64) -> f64 {
 /// Get the seconds (0-59) (date.getSeconds()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_seconds(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -469,6 +527,7 @@ pub extern "C" fn js_date_get_seconds(timestamp: f64) -> f64 {
 /// Get the milliseconds (0-999) (date.getMilliseconds())
 #[no_mangle]
 pub extern "C" fn js_date_get_milliseconds(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -479,6 +538,7 @@ pub extern "C" fn js_date_get_milliseconds(timestamp: f64) -> f64 {
 /// Get the day of week (0-6, Sunday=0) in LOCAL time (date.getDay()).
 #[no_mangle]
 pub extern "C" fn js_date_get_day(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -565,8 +625,8 @@ pub extern "C" fn js_date_utc(
 /// up reading garbage out of a `getTime()` like `1.9e+214` and reports the
 /// year as `292278994`.
 ///
-/// Returns a millisecond timestamp; the caller registers it in the
-/// DATE_REGISTRY so future `instanceof Date` checks succeed.
+/// Returns a NaN-boxed `DateCell` pointer; `instanceof Date` recognizes it
+/// by the cell's `GcHeader` type.
 #[no_mangle]
 pub extern "C" fn js_date_new_local_components(
     year: f64,
@@ -624,7 +684,7 @@ pub extern "C" fn js_date_new_local_components(
         || s.is_nan()
         || ms.is_nan()
     {
-        return f64::NAN;
+        return alloc_date_cell(f64::NAN);
     }
     let mut year_i = y as i32;
     // ECMA-262: if 0 <= year < 100, year = 1900 + year.
@@ -652,18 +712,14 @@ pub extern "C" fn js_date_new_local_components(
     // (treated as a UTC epoch); the resulting tz_offset is the delta.
     let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
     let utc_secs = local_secs - tz_offset;
-    let result = (utc_secs * 1000 + ms_i) as f64;
-    let result = date_or_invalid(result);
-    if !result.is_nan() {
-        register_date_bits(result.to_bits());
-    }
-    result
+    alloc_date_cell((utc_secs * 1000 + ms_i) as f64)
 }
 
 // --- UTC getters: same impl as the regular getters since we store UTC internally ---
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_day(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -674,21 +730,25 @@ pub extern "C" fn js_date_get_utc_day(timestamp: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_full_year(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     js_date_get_full_year(timestamp)
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_month(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     js_date_get_month(timestamp)
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_date(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     js_date_get_date(timestamp)
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_hours(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -700,6 +760,7 @@ pub extern "C" fn js_date_get_utc_hours(timestamp: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_minutes(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -711,6 +772,7 @@ pub extern "C" fn js_date_get_utc_minutes(timestamp: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_seconds(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -722,12 +784,14 @@ pub extern "C" fn js_date_get_utc_seconds(timestamp: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_milliseconds(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     js_date_get_milliseconds(timestamp)
 }
 
 /// date.valueOf() — same as getTime(), returns ms timestamp.
 #[no_mangle]
 pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     timestamp
 }
 
@@ -736,6 +800,7 @@ pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
 /// west of UTC, negative for those east (matches the JS/Node convention).
 #[no_mangle]
 pub extern "C" fn js_date_get_timezone_offset(timestamp: f64) -> f64 {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return f64::NAN;
     }
@@ -749,9 +814,15 @@ pub extern "C" fn js_date_get_timezone_offset(timestamp: f64) -> f64 {
 }
 
 // --- UTC setters: rebuild the timestamp with one component replaced ---
+//
+// `date` is the receiver — a NaN-boxed DateCell pointer. We dereference its
+// current time value, rebuild, then write the new value back INTO the same
+// cell so the mutation is visible through every alias/param/closure that
+// holds this Date (#2089). The numeric ms is returned (what a JS setter
+// evaluates to).
 
 fn rebuild_with(
-    timestamp: f64,
+    date: f64,
     year: Option<i32>,
     month: Option<u32>,
     day: Option<u32>,
@@ -760,6 +831,10 @@ fn rebuild_with(
     second: Option<u32>,
     millisecond: Option<i64>,
 ) -> f64 {
+    // A NaN time value coerces to 0 via `as i64`, matching the prior
+    // value-type behavior (e.g. `setUTCFullYear` reviving an Invalid Date
+    // from the epoch per ECMA-262 §21.4.4.40's "if t is NaN, set t to +0").
+    let timestamp = date_cell_timestamp(date);
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let cur_ms = ts_ms.rem_euclid(1000);
@@ -773,7 +848,7 @@ fn rebuild_with(
         second.unwrap_or(cs),
     );
     let new_ms = millisecond.unwrap_or(cur_ms);
-    (new_secs * 1000 + new_ms) as f64
+    date_cell_store(date, (new_secs * 1000 + new_ms) as f64)
 }
 
 #[no_mangle]
@@ -886,7 +961,7 @@ pub extern "C" fn js_date_set_utc_milliseconds(timestamp: f64, value: f64) -> f6
 // through untouched so an Invalid Date stays an Invalid Date.
 
 fn rebuild_local_with(
-    timestamp: f64,
+    date: f64,
     year: Option<i32>,
     month: Option<u32>,
     day: Option<u32>,
@@ -895,8 +970,10 @@ fn rebuild_local_with(
     second: Option<u32>,
     millisecond: Option<i64>,
 ) -> f64 {
+    let timestamp = date_cell_timestamp(date);
     if timestamp.is_nan() {
-        return timestamp;
+        // Setting a component on an Invalid Date leaves it invalid.
+        return date_cell_store(date, timestamp);
     }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
@@ -914,12 +991,9 @@ fn rebuild_local_with(
     );
     let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
     let utc_secs = local_secs - tz_offset;
-    let result = (utc_secs * 1000 + new_ms) as f64;
-    let result = date_or_invalid(result);
-    if !result.is_nan() {
-        register_date_bits(result.to_bits());
-    }
-    result
+    // Write the rebuilt value back into the receiver's cell and return the
+    // numeric ms (what a JS Date setter evaluates to).
+    date_cell_store(date, (utc_secs * 1000 + new_ms) as f64)
 }
 
 #[no_mangle]
@@ -1021,16 +1095,11 @@ pub extern "C" fn js_date_set_milliseconds(timestamp: f64, value: f64) -> f64 {
     )
 }
 
-/// `date.setTime(ms)` — replace the entire time value. NaN in produces an
-/// Invalid Date; otherwise the new ms timestamp is registered so future
-/// `instanceof Date` checks succeed.
+/// `date.setTime(ms)` — replace the entire time value in place. A NaN `value`
+/// makes the receiver an Invalid Date. Returns the numeric ms.
 #[no_mangle]
-pub extern "C" fn js_date_set_time(_timestamp: f64, value: f64) -> f64 {
-    let result = date_or_invalid(value);
-    if !result.is_nan() {
-        register_date_bits(result.to_bits());
-    }
-    result
+pub extern "C" fn js_date_set_time(date: f64, value: f64) -> f64 {
+    date_cell_store(date, value)
 }
 
 // --- String-returning Date methods ---
@@ -1040,9 +1109,48 @@ const MONTH_NAMES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+/// `date.toString()` / `String(date)` / `` `${date}` `` — the full local
+/// date+time string, e.g. "Mon Jan 15 2024 12:30:45 GMT+0100 (local)", or
+/// "Invalid Date". #2089: Date is a reference type now, so the generic
+/// object-to-string path would otherwise print "[object Object]" (the old
+/// value-type rep printed the bare millisecond number — also non-conformant).
+/// The timezone long-name isn't reproduced (Perry has no tz database), so this
+/// is close to but not byte-identical with Node for valid dates; Invalid Date
+/// matches exactly.
+#[no_mangle]
+pub extern "C" fn js_date_to_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
+    if timestamp.is_nan() {
+        return invalid_date_string();
+    }
+    let ts_ms = timestamp as i64;
+    let secs = ts_ms.div_euclid(1000);
+    let (year, month, day, hour, minute, second, tz_offset) = timestamp_to_local_components(secs);
+    let dow = weekday_from_timestamp(secs + tz_offset) as usize;
+    let sign = if tz_offset >= 0 { '+' } else { '-' };
+    let abs_off = tz_offset.abs();
+    let off_h = abs_off / 3600;
+    let off_m = (abs_off % 3600) / 60;
+    let s = format!(
+        "{} {} {:02} {:04} {:02}:{:02}:{:02} GMT{}{:02}{:02} (local)",
+        WEEKDAY_NAMES[dow],
+        MONTH_NAMES[(month - 1) as usize],
+        day,
+        year,
+        hour,
+        minute,
+        second,
+        sign,
+        off_h,
+        off_m
+    );
+    alloc_runtime_string(&s)
+}
+
 /// date.toDateString() — e.g. "Mon Jan 15 2024" (local time).
 #[no_mangle]
 pub extern "C" fn js_date_to_date_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return invalid_date_string();
     }
@@ -1063,6 +1171,7 @@ pub extern "C" fn js_date_to_date_string(timestamp: f64) -> *mut crate::StringHe
 /// date.toTimeString() — e.g. "12:30:45 GMT+0100 (local)" (local time).
 #[no_mangle]
 pub extern "C" fn js_date_to_time_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return invalid_date_string();
     }
@@ -1083,6 +1192,7 @@ pub extern "C" fn js_date_to_time_string(timestamp: f64) -> *mut crate::StringHe
 /// date.toLocaleDateString() — simple en-US-style date (local time).
 #[no_mangle]
 pub extern "C" fn js_date_to_locale_date_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return invalid_date_string();
     }
@@ -1096,6 +1206,7 @@ pub extern "C" fn js_date_to_locale_date_string(timestamp: f64) -> *mut crate::S
 /// date.toLocaleTimeString() — simple H:MM:SS AM/PM en-US style (local time).
 #[no_mangle]
 pub extern "C" fn js_date_to_locale_time_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return invalid_date_string();
     }
@@ -1173,6 +1284,7 @@ pub extern "C" fn js_number_to_locale_string(n: f64) -> *mut crate::StringHeader
 /// date.toLocaleString() — combined date and time (local time).
 #[no_mangle]
 pub extern "C" fn js_date_to_locale_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return invalid_date_string();
     }
@@ -1198,6 +1310,7 @@ pub extern "C" fn js_date_to_locale_string(timestamp: f64) -> *mut crate::String
 /// date.toJSON() — null for Invalid Date, otherwise the ISO string.
 #[no_mangle]
 pub extern "C" fn js_date_to_json(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
     if timestamp.is_nan() {
         return std::ptr::null_mut();
     }

@@ -505,13 +505,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_array_buffer_view", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_typed_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint8_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_int8_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_int16_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint16_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_int32_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_uint32_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_float32_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_float64_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_uint8_clamped_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_native_error", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_number_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
@@ -686,6 +692,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_get_utc_milliseconds", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_value_of", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_timezone_offset", DOUBLE, &[DOUBLE]);
+    // #2089: deref a Date (NaN-boxed DateCell pointer) to its ms timestamp for
+    // ordered relational compares; a plain number passes through unchanged.
+    module.declare_function("js_date_coerce_number", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_date_to_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string_or_throw", I64, &[DOUBLE]);
     module.declare_function("js_date_new_from_timestamp", DOUBLE, &[DOUBLE]);
@@ -1033,9 +1043,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Uint8Array constructor wrapper that flags the resulting buffer so the
     // formatter prints `Uint8Array(N) [ ... ]` instead of `<Buffer ...>`.
     module.declare_function("js_uint8array_from_array", I64, &[I64]);
+    // `new Uint8Array(length)` — zero-filled BufferHeader marked as Uint8Array.
+    module.declare_function("js_uint8array_alloc", I64, &[I32]);
     // `new Uint8Array(x)` runtime dispatch — handles the non-literal case
     // where `x` could be a number (length) or an array (source data).
     module.declare_function("js_uint8array_new", I64, &[DOUBLE]);
+    module.declare_function("js_uint8array_view", I64, &[DOUBLE, I32, I32]);
     // Generic typed array runtime (Int8/16/32, Uint16/32, Float32/64, Uint8Clamped).
     // Uint8Array piggybacks on the BufferHeader path.
     module.declare_function("js_typed_array_new_empty", I64, &[I32, I32]);
@@ -1174,6 +1187,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_from_char_code", I64, &[I32]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
+    module.declare_function(
+        "js_string_last_index_of_from",
+        I32,
+        &[I64, I64, DOUBLE, I32],
+    );
     module.declare_function("js_string_locale_compare", DOUBLE, &[I64, I64]);
     module.declare_function("js_string_normalize", I64, &[I64, I64]);
     module.declare_function("js_string_pad_start", I64, &[I64, DOUBLE, I64]);

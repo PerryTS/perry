@@ -1492,6 +1492,7 @@ pub enum Expr {
 
     // Date misc
     DateValueOf(Box<Expr>),      // date.valueOf() -> number (same as getTime)
+    DateToString(Box<Expr>),     // date.toString() / String(date) -> full date string
     DateToDateString(Box<Expr>), // date.toDateString() -> string
     DateToTimeString(Box<Expr>), // date.toTimeString() -> string
     DateToLocaleDateString(Box<Expr>), // date.toLocaleDateString() -> string
@@ -1559,6 +1560,11 @@ pub enum Expr {
     /// URL.parse(input) -> URL | null. Issue #650: non-throwing variant
     /// of `new URL()` added in Node 22. Returns null when parsing fails.
     UrlParse(Box<Expr>),
+    /// URL.parse(input, base) -> URL | null.
+    UrlParseWithBase {
+        input: Box<Expr>,
+        base: Box<Expr>,
+    },
     /// `urlInstance.toString()` -> string. Issue #650: WHATWG `URL.prototype.toString`
     /// is `URL.prototype.toJSON` is alias for `href`. Without this variant the
     /// call fell through to the generic Object.prototype.toString and returned
@@ -1609,6 +1615,11 @@ pub enum Expr {
     },
     /// `urlInstance.password = value` — updates userinfo and rebuilds href.
     UrlSetPassword {
+        url: Box<Expr>,
+        value: Box<Expr>,
+    },
+    /// `urlInstance.href = value` — reparses the full URL or throws.
+    UrlSetHref {
         url: Box<Expr>,
         value: Box<Expr>,
     },
@@ -1665,10 +1676,11 @@ pub enum Expr {
     UrlSearchParamsValues(Box<Expr>),
     /// params.sort() -> undefined (mutates in place)
     UrlSearchParamsSort(Box<Expr>),
-    /// params.forEach(callback) -> undefined
+    /// params.forEach(callback[, thisArg]) -> undefined
     UrlSearchParamsForEach {
         params: Box<Expr>,
         callback: Box<Expr>,
+        this_arg: Option<Box<Expr>>,
     },
 
     // Delete operator

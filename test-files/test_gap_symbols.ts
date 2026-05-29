@@ -87,6 +87,27 @@ console.log(+currency);           // 100
 console.log(`${currency}`);       // 100 USD
 console.log(currency + 0);        // 100
 
+// --- Symbol.toPrimitive on a CLASS instance (#2374) ---
+// The method lives on the prototype, not as an own symbol property, so the
+// coercion paths must resolve it through the class vtable.
+class Temperature {
+  celsius: number;
+  constructor(celsius: number) {
+    this.celsius = celsius;
+  }
+  [Symbol.toPrimitive](hint: string): string | number {
+    if (hint === "number") return this.celsius;
+    if (hint === "string") return `${this.celsius}°C`;
+    return this.celsius; // default
+  }
+}
+
+const t = new Temperature(42);
+console.log(+t);            // 42
+console.log(`${t}`);        // 42°C
+console.log(String(t));     // 42°C
+console.log(t + 0);         // 42 (default hint → number)
+
 // --- Symbol.hasInstance — customize instanceof ---
 class EvenChecker {
   static [Symbol.hasInstance](value: any): boolean {
