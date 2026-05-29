@@ -362,12 +362,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() error does not destroy source. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/compose/single-stream-arg": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose(stream) \u2014 single-stream form does not return Duplex wrap. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/web/desired-size-restores-after-drain": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -517,12 +511,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: pipeThrough().pipeThrough() \u2014 second transform output wrong. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/compose/just-source-only": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose(src) \u2014 only source given, Duplex output empty. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/readable/from-gen-with-early-return": {
     "issue": "1532",
