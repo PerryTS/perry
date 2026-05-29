@@ -518,12 +518,6 @@
     "category": "bug-open",
     "reason": "node:stream: pause() inside 'data' listener \u2014 does not stop further synchronous emits. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/web/transform-stream-with-strategies": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TransformStream(t, writableStrategy, readableStrategy) \u2014 3-arg constructor form not honored. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/readable/compose-multi-async-fn": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -733,12 +727,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) \u2014 chain produces wrong output. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/transform-stream-instanceof-check": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TransformStream instance \u2014 fails instanceof checks vs RS/WS for readable/writable sides. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/readable/readable-stream-id-properties": {
     "issue": "1532",

@@ -211,16 +211,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // stdlib kind-probe (1 = readable, 2 = writable) rather than the class
     // chain. Covers `ts.readable instanceof ReadableStream`,
     // `rs.pipeThrough(ts) instanceof ReadableStream`, etc.
+    // kind probe values: 1 = readable, 2 = writable, 5 = transform
+    // (3 = reader, 4 = writer — not user-facing instanceof targets here).
     const CLASS_ID_READABLE_STREAM: u32 = 0xFFFF0060;
     const CLASS_ID_WRITABLE_STREAM: u32 = 0xFFFF0061;
-    if class_id == CLASS_ID_READABLE_STREAM || class_id == CLASS_ID_WRITABLE_STREAM {
+    const CLASS_ID_TRANSFORM_STREAM: u32 = 0xFFFF0062;
+    if class_id == CLASS_ID_READABLE_STREAM
+        || class_id == CLASS_ID_WRITABLE_STREAM
+        || class_id == CLASS_ID_TRANSFORM_STREAM
+    {
         if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
             if let Some(probe) = crate::object::stream_handle_kind_probe() {
                 let kind = unsafe { probe(value as usize) };
-                let want = if class_id == CLASS_ID_READABLE_STREAM {
-                    1
-                } else {
-                    2
+                let want = match class_id {
+                    CLASS_ID_READABLE_STREAM => 1,
+                    CLASS_ID_WRITABLE_STREAM => 2,
+                    _ => 5, // CLASS_ID_TRANSFORM_STREAM
                 };
                 if kind == want {
                     return true_val;
