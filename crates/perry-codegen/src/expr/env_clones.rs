@@ -164,19 +164,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             options,
             connection_listener,
         } => {
-            let options_i64 = if let Some(opts_expr) = options {
-                let opts_box = lower_expr(ctx, opts_expr)?;
-                let blk = ctx.block();
-                unbox_to_i64(blk, &opts_box)
-            } else {
-                "0".to_string()
+            // Lower each arg at most once (avoid double-evaluating a side-
+            // effecting argument expression), then derive the i64 forms.
+            let options_box = match options {
+                Some(opts_expr) => Some(lower_expr(ctx, opts_expr)?),
+                None => None,
             };
-            let listener_i64 = if let Some(cb_expr) = connection_listener {
-                let cb_box = lower_expr(ctx, cb_expr)?;
+            let listener_box = match connection_listener {
+                Some(cb_expr) => Some(lower_expr(ctx, cb_expr)?),
+                None => None,
+            };
+            // #2013: validate the first positional argument — `options` when
+            // present (the 2-arg form), otherwise the single arg (which the
+            // HIR routed to `connection_listener`). It must be a function or
+            // object; a number/boolean/string throws ERR_INVALID_ARG_TYPE.
+            if let Some(first) = options_box.as_ref().or(listener_box.as_ref()) {
                 let blk = ctx.block();
-                unbox_to_i64(blk, &cb_box)
-            } else {
-                "0".to_string()
+                blk.call_void("js_net_validate_create_server_options", &[(DOUBLE, first)]);
+            }
+            let options_i64 = match &options_box {
+                Some(opts_box) => {
+                    let blk = ctx.block();
+                    unbox_to_i64(blk, opts_box)
+                }
+                None => "0".to_string(),
+            };
+            let listener_i64 = match &listener_box {
+                Some(cb_box) => {
+                    let blk = ctx.block();
+                    unbox_to_i64(blk, cb_box)
+                }
+                None => "0".to_string(),
             };
             // Issue #1123 followup — call returns the raw handle as `i64`
             // (runtime_decls.rs declares `(I64, I64) -> I64`); NaN-box

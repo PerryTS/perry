@@ -325,8 +325,10 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "setTimeout",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
+        // #2013: validate `msecs` (number, non-negative finite); the optional
+        // callback is passed through but ignored. Returns the socket handle.
+        runtime: "js_net_socket_set_timeout",
+        args: &[NA_F64, NA_PTR],
         ret: NR_PTR,
     },
     NativeModSig {

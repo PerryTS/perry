@@ -34,7 +34,8 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::ensure_gc_scanner_registered;
 use crate::request::{
-    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, IncomingMessage,
+    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
+    IncomingMessage,
 };
 use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
 use crate::server::{synthesize_default_response_if_needed, HttpPendingRequest, HttpServer};
@@ -238,15 +239,21 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
         });
     });
 
+    // Bind `this` to the server for the `'listening'` listeners + the
+    // optional `cb` so `this.address().port` resolves inside the listen
+    // callback, matching Node (#2132).
+    let this_val = handle_to_pointer_f64(server_handle);
     let listening_listeners = get_handle::<Http2SecureServer>(server_handle)
         .and_then(|s| s.base.listeners.get("listening").cloned())
         .unwrap_or_default();
-    emit_no_arg_to_listeners(&listening_listeners);
+    with_implicit_this(this_val, || emit_no_arg_to_listeners(&listening_listeners));
     if callback != 0 {
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call0();
+            with_implicit_this(this_val, || {
+                let _ = closure.call0();
+            });
         }
     }
 

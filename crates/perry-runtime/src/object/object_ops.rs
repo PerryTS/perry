@@ -589,6 +589,76 @@ pub extern "C" fn js_object_define_property(
     }
 }
 
+/// Object-literal accessor installer for `{ get k(){}, set k(v){} }` (#2442).
+///
+/// Installs — or *merges into* — the accessor descriptor for `(obj, key)`.
+/// Two semantic differences from `Object.defineProperty`:
+///
+///  1. Object-literal accessors are **enumerable** and **configurable** (JS
+///     spec), whereas `defineProperty`'s omitted attrs default to `false`.
+///  2. A separate `get k` and `set k` for the *same* key must merge into one
+///     accessor rather than clobber each other — so a `js_value_undefined`
+///     `getter`/`setter` leaves the existing half of the descriptor untouched.
+///
+/// `getter` / `setter` are NaN-boxed closure values, or `undefined` to skip.
+/// Each present closure is cloned and rebound so it runs with `this === obj`
+/// (the same #450 model `js_object_define_property` uses for its accessors).
+#[no_mangle]
+pub extern "C" fn js_object_define_accessor(
+    obj_value: f64,
+    key_value: f64,
+    getter: f64,
+    setter: f64,
+) -> f64 {
+    unsafe {
+        let obj = extract_obj_ptr(obj_value);
+        if obj.is_null() {
+            return obj_value;
+        }
+        let key_str = crate::builtins::js_string_coerce(key_value);
+        if key_str.is_null() {
+            return obj_value;
+        }
+        super::mark_object_dynamic_shape_unknown(obj);
+        let key_rust: Option<String> = {
+            let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key_str).byte_len as usize;
+            let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+            std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
+        };
+        ensure_key_in_keys_array(obj, key_str);
+        let Some(k) = key_rust else {
+            return obj_value;
+        };
+        let recv_box = crate::value::js_nanbox_pointer(obj as i64);
+        let existing = get_accessor_descriptor(obj as usize, &k).unwrap_or_default();
+        let undef = crate::value::TAG_UNDEFINED;
+        let get_bits = if getter.to_bits() == undef {
+            existing.get
+        } else {
+            crate::closure::clone_closure_rebind_this(getter.to_bits(), recv_box)
+        };
+        let set_bits = if setter.to_bits() == undef {
+            existing.set
+        } else {
+            crate::closure::clone_closure_rebind_this(setter.to_bits(), recv_box)
+        };
+        set_accessor_descriptor(
+            obj as usize,
+            k.clone(),
+            AccessorDescriptor {
+                get: get_bits,
+                set: set_bits,
+            },
+        );
+        // Object-literal accessors are enumerable + configurable (spec).
+        // `writable` is meaningless for accessors; pass `true` so any data
+        // fallthrough write before the accessor override isn't rejected.
+        set_property_attrs(obj as usize, k, PropertyAttrs::new(true, true, true));
+        obj_value
+    }
+}
+
 /// Ensure a key appears in the object's keys_array. Used by `Object.defineProperty`
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
 /// even when the value is undefined or the property is an accessor (no underlying slot).

@@ -297,6 +297,132 @@ fn lower_method_prop(
     Ok(Some((method_key, value_expr, uses_this)))
 }
 
+/// Lower an object-literal accessor (`get k() {}` / `set k(v) {}`) into its
+/// key plus a `Closure` value. Getters take no params; setters take exactly
+/// one. The closure is always emitted with `captures_this` reflecting whether
+/// the body reads `this`, so the runtime installer (`js_object_define_accessor`)
+/// can rebind `this` to the receiver object — mirroring how the
+/// `Object.defineProperty(obj, k, { get(){...} })` path binds accessors (#450).
+///
+/// Returns `Ok(None)` for key/param shapes we don't model (a destructuring
+/// setter param, or a computed key that failed to lower) so the caller skips
+/// the entry rather than aborting the whole literal. (#2442)
+fn lower_accessor_prop(
+    ctx: &mut LoweringContext,
+    key: &ast::PropName,
+    setter_param: Option<&ast::Pat>,
+    body: Option<&ast::BlockStmt>,
+) -> Result<Option<(MethodKeyKind, Expr)>> {
+    let accessor_key = match key {
+        ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
+        ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Num(n) => MethodKeyKind::Static(n.value.to_string()),
+        ast::PropName::Computed(computed) => match lower_expr(ctx, computed.expr.as_ref()) {
+            Ok(e) => MethodKeyKind::Computed(e),
+            Err(_) => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+
+    let func_id = ctx.fresh_func();
+    let outer_locals: Vec<(String, LocalId)> = ctx
+        .locals
+        .iter()
+        .map(|(name, id, _)| (name.clone(), *id))
+        .collect();
+
+    let scope_mark = ctx.enter_scope();
+    let mut params = Vec::new();
+    if let Some(pat) = setter_param {
+        // Setters take a single param. Skip the TS `this:` type-only marker
+        // (mirrors `lower_method_prop`). Destructuring setter params aren't
+        // modeled here — bail to `None` rather than crash.
+        let param_name = match get_pat_name(pat) {
+            Ok(n) => n,
+            Err(_) => {
+                ctx.exit_scope(scope_mark);
+                return Ok(None);
+            }
+        };
+        if param_name != "this" {
+            let param_type = extract_param_type_with_ctx(pat, Some(ctx));
+            let param_default = get_param_default(ctx, pat)?;
+            let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+            params.push(Param {
+                id: param_id,
+                name: param_name,
+                ty: param_type,
+                default: param_default,
+                decorators: Vec::new(),
+                is_rest: false,
+            });
+        }
+    }
+
+    let body = if let Some(block) = body {
+        lower_block_stmt(ctx, block)?
+    } else {
+        Vec::new()
+    };
+    ctx.exit_scope(scope_mark);
+
+    // Capture analysis — identical pattern to `lower_method_prop`.
+    let mut all_refs = Vec::new();
+    let mut visited_closures = std::collections::HashSet::new();
+    for stmt in &body {
+        collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
+    }
+    let outer_local_ids: std::collections::HashSet<LocalId> =
+        outer_locals.iter().map(|(_, id)| *id).collect();
+    let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
+    let mut captures: Vec<LocalId> = all_refs
+        .into_iter()
+        .filter(|id| outer_local_ids.contains(id) && !param_ids.contains(id))
+        .collect();
+    captures.sort();
+    captures.dedup();
+    captures = ctx.filter_module_level_captures(captures);
+
+    let uses_this = closure_uses_this(&body);
+    let mut all_assigned = Vec::new();
+    for stmt in &body {
+        collect_assigned_locals_stmt(stmt, &mut all_assigned);
+    }
+    let assigned_set: std::collections::HashSet<LocalId> = all_assigned.into_iter().collect();
+    let mutable_captures: Vec<LocalId> = captures
+        .iter()
+        .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
+        .copied()
+        .collect();
+    let enclosing_class = if uses_this {
+        ctx.current_class.clone()
+    } else {
+        None
+    };
+
+    let closure = Expr::Closure {
+        func_id,
+        params,
+        return_type: Type::Any,
+        body,
+        captures,
+        mutable_captures,
+        captures_this: uses_this,
+        enclosing_class,
+        is_async: false,
+        is_generator: false,
+    };
+    Ok(Some((accessor_key, closure)))
+}
+
+/// Map a resolved accessor key to the `js_object_define_accessor` key argument.
+fn accessor_key_expr(key: MethodKeyKind) -> Expr {
+    match key {
+        MethodKeyKind::Static(s) => Expr::String(s),
+        MethodKeyKind::Computed(e) => e,
+    }
+}
+
 pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> Result<Expr> {
     // Phase 3: closed-shape object literals lower to `new __AnonShape_N()`
     // so downstream field access hits the direct-GEP fast path. The
@@ -408,7 +534,19 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         .props
         .iter()
         .any(|p| matches!(p, ast::PropOrSpread::Spread(_)));
-    if has_spread {
+    // #2442: object literals containing getters/setters also go through the
+    // fully source-ordered IIFE so the accessor key lands in its source
+    // position (`{a, get x(){}, b}` → keys `[a, x, b]`, not `[a, b, x]`).
+    // The post-init path used for computed keys appends after all static
+    // props, which would mis-order the accessor key.
+    let has_accessor = obj.props.iter().any(|p| {
+        matches!(
+            p,
+            ast::PropOrSpread::Prop(prop)
+                if matches!(prop.as_ref(), ast::Prop::Getter(_) | ast::Prop::Setter(_))
+        )
+    });
+    if has_spread || has_accessor {
         // #809: an object literal that mixes a `...spread` with computed
         // keys, methods, and `this`-binding methods. The old code lowered
         // this to `Expr::ObjectSpread { parts }`, whose `parts` list can
@@ -445,6 +583,14 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             MethodByName { key: String, closure: Expr },
             /// Computed-key method whose body uses `this`.
             SymbolMethod { key: Expr, closure: Expr },
+            /// `get k(){}` / `set k(v){}` accessor (#2442). `getter`/`setter`
+            /// is either the lowered closure or `Expr::Undefined`; the runtime
+            /// merges a separate get/set for the same key.
+            DefineAccessor {
+                key: Expr,
+                getter: Expr,
+                setter: Expr,
+            },
             /// `...src` — copy src's own enumerable string+symbol props.
             Assign { src: Expr },
         }
@@ -534,9 +680,33 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             }
                         }
                     }
-                    // Getters/setters in object literals remain a
-                    // categorical gap (matches the non-spread path's
-                    // `_ => {}`); not required by #809.
+                    // Object-literal getters/setters (#2442): lower to a
+                    // `js_object_define_accessor` op at this source position.
+                    ast::Prop::Getter(getter) => {
+                        if let Some((gkey, closure)) =
+                            lower_accessor_prop(ctx, &getter.key, None, getter.body.as_ref())?
+                        {
+                            ops.push(SpreadOp::DefineAccessor {
+                                key: accessor_key_expr(gkey),
+                                getter: closure,
+                                setter: Expr::Undefined,
+                            });
+                        }
+                    }
+                    ast::Prop::Setter(setter) => {
+                        if let Some((skey, closure)) = lower_accessor_prop(
+                            ctx,
+                            &setter.key,
+                            Some(setter.param.as_ref()),
+                            setter.body.as_ref(),
+                        )? {
+                            ops.push(SpreadOp::DefineAccessor {
+                                key: accessor_key_expr(skey),
+                                getter: Expr::Undefined,
+                                setter: closure,
+                            });
+                        }
+                    }
                     _ => {}
                 },
             }
@@ -621,6 +791,16 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     body.push(Stmt::Expr(extern_call(
                         "js_object_set_symbol_method",
                         vec![Expr::LocalGet(param_id), key, closure],
+                    )));
+                }
+                SpreadOp::DefineAccessor {
+                    key,
+                    getter,
+                    setter,
+                } => {
+                    body.push(Stmt::Expr(extern_call(
+                        "js_object_define_accessor",
+                        vec![Expr::LocalGet(param_id), key, getter, setter],
                     )));
                 }
                 SpreadOp::Assign { src } => {
@@ -743,6 +923,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         }
                     }
                 }
+                // Getters/setters are handled by the source-ordered IIFE
+                // path above (`has_accessor`), so they never reach here.
                 _ => {}
             }
         }
