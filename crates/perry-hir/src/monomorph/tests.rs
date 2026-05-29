@@ -384,6 +384,145 @@ fn test_monomorphize_updates_native_memory_fill_u32_operand_generic_calls() {
 }
 
 #[test]
+fn test_monomorphize_updates_native_arena_alloc_size_generic_call() {
+    let packet_ty = Type::Named("Packet".to_string());
+    let mut module = Module::new("test");
+    module
+        .functions
+        .push(generic_number_function(1, "byteLength"));
+
+    module
+        .init
+        .push(Stmt::Expr(Expr::NativeArenaAlloc(Box::new(generic_call(
+            1, &packet_ty,
+        )))));
+
+    monomorphize_module(&mut module);
+
+    assert!(module
+        .functions
+        .iter()
+        .any(|f| f.name == "byteLength$Packet"));
+
+    let Stmt::Expr(Expr::NativeArenaAlloc(size)) = &module.init[0] else {
+        panic!("Expected NativeArena.alloc expression");
+    };
+    assert_specialized_call(size, &module, "byteLength$Packet");
+}
+
+#[test]
+fn test_monomorphize_updates_native_arena_view_operand_generic_calls() {
+    let packet_ty = Type::Named("Packet".to_string());
+    let mut module = Module::new("test");
+    module
+        .functions
+        .push(generic_arena_function(1, "makeArena"));
+    module.functions.push(generic_number_function(2, "offset"));
+    module.functions.push(generic_number_function(3, "length"));
+
+    module.init.push(Stmt::Expr(Expr::NativeArenaView {
+        owner: Box::new(generic_call(1, &packet_ty)),
+        kind: 1,
+        byte_offset: Box::new(generic_call(2, &packet_ty)),
+        length: Box::new(generic_call(3, &packet_ty)),
+    }));
+
+    monomorphize_module(&mut module);
+
+    assert!(module
+        .functions
+        .iter()
+        .any(|f| f.name == "makeArena$Packet"));
+    assert!(module.functions.iter().any(|f| f.name == "offset$Packet"));
+    assert!(module.functions.iter().any(|f| f.name == "length$Packet"));
+
+    let Stmt::Expr(Expr::NativeArenaView {
+        owner,
+        byte_offset,
+        length,
+        ..
+    }) = &module.init[0]
+    else {
+        panic!("Expected NativeArena.view expression");
+    };
+
+    assert_specialized_call(owner, &module, "makeArena$Packet");
+    assert_specialized_call(byte_offset, &module, "offset$Packet");
+    assert_specialized_call(length, &module, "length$Packet");
+}
+
+#[test]
+fn test_monomorphize_updates_native_pod_view_operand_generic_calls() {
+    let packet_ty = Type::Named("Packet".to_string());
+    let mut module = Module::new("test");
+    module
+        .functions
+        .push(generic_arena_function(1, "makeArena"));
+    module.functions.push(generic_number_function(2, "offset"));
+    module.functions.push(generic_number_function(3, "count"));
+
+    module.init.push(Stmt::Expr(Expr::NativePodView {
+        owner: Box::new(generic_call(1, &packet_ty)),
+        byte_offset: Box::new(generic_call(2, &packet_ty)),
+        count: Box::new(generic_call(3, &packet_ty)),
+        view_type: Some(Type::Generic {
+            base: "PerryPodView".to_string(),
+            type_args: vec![packet_ty.clone()],
+        }),
+    }));
+
+    monomorphize_module(&mut module);
+
+    assert!(module
+        .functions
+        .iter()
+        .any(|f| f.name == "makeArena$Packet"));
+    assert!(module.functions.iter().any(|f| f.name == "offset$Packet"));
+    assert!(module.functions.iter().any(|f| f.name == "count$Packet"));
+
+    let Stmt::Expr(Expr::NativePodView {
+        owner,
+        byte_offset,
+        count,
+        ..
+    }) = &module.init[0]
+    else {
+        panic!("Expected NativeArena.podView expression");
+    };
+
+    assert_specialized_call(owner, &module, "makeArena$Packet");
+    assert_specialized_call(byte_offset, &module, "offset$Packet");
+    assert_specialized_call(count, &module, "count$Packet");
+}
+
+#[test]
+fn test_monomorphize_updates_native_arena_dispose_owner_generic_call() {
+    let packet_ty = Type::Named("Packet".to_string());
+    let mut module = Module::new("test");
+    module
+        .functions
+        .push(generic_arena_function(1, "makeArena"));
+
+    module
+        .init
+        .push(Stmt::Expr(Expr::NativeArenaDispose(Box::new(
+            generic_call(1, &packet_ty),
+        ))));
+
+    monomorphize_module(&mut module);
+
+    assert!(module
+        .functions
+        .iter()
+        .any(|f| f.name == "makeArena$Packet"));
+
+    let Stmt::Expr(Expr::NativeArenaDispose(owner)) = &module.init[0] else {
+        panic!("Expected NativeArena.dispose expression");
+    };
+    assert_specialized_call(owner, &module, "makeArena$Packet");
+}
+
+#[test]
 fn test_type_inference_from_arguments() {
     // Create a generic identity function: function identity<T>(x: T): T { return x; }
     let identity_func = Function {
@@ -703,6 +842,38 @@ fn generic_number_function(id: FuncId, name: &str) -> Function {
         is_exported: true,
         captures: vec![],
         decorators: vec![],
+    }
+}
+
+fn generic_arena_function(id: FuncId, name: &str) -> Function {
+    Function {
+        id,
+        name: name.to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }],
+        params: vec![],
+        return_type: Type::Named("NativeArena".to_string()),
+        body: vec![Stmt::Return(Some(Expr::NativeArenaAlloc(Box::new(
+            Expr::Integer(64),
+        ))))],
+        is_async: false,
+        is_generator: false,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+    }
+}
+
+fn generic_call(func_id: FuncId, ty: &Type) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::FuncRef(func_id)),
+        args: vec![],
+        type_args: vec![ty.clone()],
     }
 }
 

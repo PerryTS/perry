@@ -131,8 +131,6 @@ pub(crate) enum GcFinalizeHookKind {
     MapSideAllocation,
     SetSideAllocation,
     PromiseCleanup,
-    BufferCleanup,
-    TypedArrayCleanup,
     NativeArenaOwner,
     NativeTypedView,
     NativeHandle,
@@ -339,7 +337,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::BufferCleanup,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_TYPED_ARRAY,
@@ -354,7 +352,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::TypedArrayCleanup,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_SET,
@@ -557,14 +555,6 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             let promise = user_ptr as *mut crate::promise::Promise;
             crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
             crate::promise::clear_promise_context_for_gc(promise);
-        }
-        GcFinalizeHookKind::BufferCleanup => {
-            crate::buffer::unregister_buffer(user_ptr as *mut crate::buffer::BufferHeader);
-        }
-        GcFinalizeHookKind::TypedArrayCleanup => {
-            crate::typedarray::finalize_typed_array_for_gc(
-                user_ptr as *mut crate::typedarray::TypedArrayHeader,
-            );
         }
         GcFinalizeHookKind::NativeArenaOwner => {
             crate::native_arena::finalize_native_arena_owner_for_gc(

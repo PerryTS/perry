@@ -375,10 +375,6 @@ unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
     true
 }
 
-pub(crate) unsafe fn finalize_typed_array_for_gc(ta: *mut TypedArrayHeader) {
-    unregister_typed_array(ta as *const TypedArrayHeader);
-}
-
 fn ta_layout(capacity: u32, elem_size: usize) -> Layout {
     let total = std::mem::size_of::<TypedArrayHeader>() + (capacity as usize) * elem_size;
     let total = total.max(std::mem::size_of::<TypedArrayHeader>() + elem_size);

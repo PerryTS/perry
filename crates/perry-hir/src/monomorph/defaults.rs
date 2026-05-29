@@ -248,6 +248,29 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
                 fill_defaults_in_expr(arg, ctor_defaults);
             }
         }
+        Expr::NativeArenaAlloc(size) | Expr::NativeArenaDispose(size) => {
+            fill_defaults_in_expr(size, ctor_defaults);
+        }
+        Expr::NativeArenaView {
+            owner,
+            byte_offset,
+            length,
+            ..
+        } => {
+            fill_defaults_in_expr(owner, ctor_defaults);
+            fill_defaults_in_expr(byte_offset, ctor_defaults);
+            fill_defaults_in_expr(length, ctor_defaults);
+        }
+        Expr::NativePodView {
+            owner,
+            byte_offset,
+            count,
+            ..
+        } => {
+            fill_defaults_in_expr(owner, ctor_defaults);
+            fill_defaults_in_expr(byte_offset, ctor_defaults);
+            fill_defaults_in_expr(count, ctor_defaults);
+        }
         Expr::NativeMemoryFillU32 { view, value } => {
             fill_defaults_in_expr(view, ctor_defaults);
             fill_defaults_in_expr(value, ctor_defaults);

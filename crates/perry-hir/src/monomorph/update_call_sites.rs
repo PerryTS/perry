@@ -300,6 +300,29 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(arg, ctx, lookup);
             }
         }
+        Expr::NativeArenaAlloc(size) | Expr::NativeArenaDispose(size) => {
+            update_call_sites_in_expr(size, ctx, lookup);
+        }
+        Expr::NativeArenaView {
+            owner,
+            byte_offset,
+            length,
+            ..
+        } => {
+            update_call_sites_in_expr(owner, ctx, lookup);
+            update_call_sites_in_expr(byte_offset, ctx, lookup);
+            update_call_sites_in_expr(length, ctx, lookup);
+        }
+        Expr::NativePodView {
+            owner,
+            byte_offset,
+            count,
+            ..
+        } => {
+            update_call_sites_in_expr(owner, ctx, lookup);
+            update_call_sites_in_expr(byte_offset, ctx, lookup);
+            update_call_sites_in_expr(count, ctx, lookup);
+        }
         Expr::NativeMemoryFillU32 { view, value } => {
             update_call_sites_in_expr(view, ctx, lookup);
             update_call_sites_in_expr(value, ctx, lookup);

@@ -498,7 +498,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             pointer_free: true,
             move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::BufferCleanup,
+            finalize_hook_kind: GcFinalizeHookKind::None,
         },
         GcTypeInfo {
             type_id: GC_TYPE_TYPED_ARRAY,
@@ -513,7 +513,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             pointer_free: true,
             move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::TypedArrayCleanup,
+            finalize_hook_kind: GcFinalizeHookKind::None,
         },
         GcTypeInfo {
             type_id: GC_TYPE_SET,

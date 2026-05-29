@@ -129,38 +129,6 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
 }
 
-/// Remove all same-address buffer metadata for a finalized Buffer payload.
-pub fn unregister_buffer(ptr: *const BufferHeader) {
-    let addr = ptr as usize;
-    BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    UINT8ARRAY_FROM_CTOR.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    ARRAY_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    DATA_VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    SECRET_KEY_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    CRYPTO_KEY_META_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    ASYMMETRIC_KEY_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    BUFFER_AB_ALIAS.with(|m| {
-        m.borrow_mut().remove(&addr);
-    });
-}
-
 // ----- Small-buffer slab allocator ----------------------------------------
 //
 // GC interaction:
