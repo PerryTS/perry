@@ -741,6 +741,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("url", "format")
             | ("url", "parse")
             | ("url", "resolve")
+            | ("punycode", "decode")
+            | ("punycode", "encode")
+            | ("punycode", "toASCII")
+            | ("punycode", "toUnicode")
             | ("console", "Console")
             | ("console", "log")
             | ("console", "info")
@@ -1616,6 +1620,11 @@ pub(crate) unsafe fn get_native_module_constant(
     };
 
     match module_name {
+        // node:punycode (deprecated, #2513) — the bundled punycode.js version.
+        "punycode" => match property {
+            "version" => Some(str_val(crate::punycode::PUNYCODE_VERSION)),
+            _ => None,
+        },
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
         // and the `constants.NODE_PERFORMANCE_GC_*` numeric table. Both the
         // `performance` and `constants` objects are tagged "perf_hooks", so

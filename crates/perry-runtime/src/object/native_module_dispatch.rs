@@ -1154,6 +1154,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),
         ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
 
+        // ── punycode module (deprecated, #2513) ──
+        ("punycode", "decode") => crate::punycode::js_punycode_decode(arg(0)),
+        ("punycode", "encode") => crate::punycode::js_punycode_encode(arg(0)),
+        ("punycode", "toASCII") => crate::punycode::js_punycode_to_ascii(arg(0)),
+        ("punycode", "toUnicode") => crate::punycode::js_punycode_to_unicode(arg(0)),
+
         // ── console module namespace (`node:console` / `console`) ──
         ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {
             crate::builtins::js_console_log_spread(pack_args());

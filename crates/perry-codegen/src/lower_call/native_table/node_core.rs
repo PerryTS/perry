@@ -333,6 +333,43 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
+    // ========== Node punycode (deprecated, #2513) ==========
+    NativeModSig {
+        module: "punycode",
+        has_receiver: false,
+        method: "decode",
+        class_filter: None,
+        runtime: "js_punycode_decode",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "punycode",
+        has_receiver: false,
+        method: "encode",
+        class_filter: None,
+        runtime: "js_punycode_encode",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "punycode",
+        has_receiver: false,
+        method: "toASCII",
+        class_filter: None,
+        runtime: "js_punycode_to_ascii",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "punycode",
+        has_receiver: false,
+        method: "toUnicode",
+        class_filter: None,
+        runtime: "js_punycode_to_unicode",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node console ==========
     NativeModSig {
         module: "console",

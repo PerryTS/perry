@@ -119,6 +119,8 @@ pub const NATIVE_MODULES: &[&str] = &[
     // until real Google Mobile Ads SDK integration lands. d.ts at
     // `types/perry/ads/index.d.ts`.
     "perry/ads",
+    // #2513: deprecated Punycode/IDNA conversion module.
+    "punycode",
 ];
 
 /// Node built-in submodules that Perry routes through the
@@ -2720,6 +2722,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `resolveObjectURL` export on `node:buffer`.
     method("url", "createObjectURL", false, None),
     method("url", "revokeObjectURL", false, None),
+    // --- punycode (deprecated module, #2513). Top-level string helpers +
+    //     the `version` property. `ucs2.*` array helpers are a follow-up. ---
+    method("punycode", "decode", false, None),
+    method("punycode", "encode", false, None),
+    method("punycode", "toASCII", false, None),
+    method("punycode", "toUnicode", false, None),
+    property("punycode", "version"),
     // --- http (perry-ext-http surface + classes the framework spec
     //     exposes). Both http and https route through the same crate. ---
     method("http", "createServer", false, None),
