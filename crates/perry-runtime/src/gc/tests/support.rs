@@ -148,6 +148,26 @@ pub(super) fn reset_remembered_set() {
     crate::arena::old_arena_page_index_clear_for_tests();
 }
 
+pub(super) struct IncrementalMarkBarrierTestGuard<'a> {
+    _valid_ptrs: &'a ValidPointerSet,
+}
+
+impl<'a> IncrementalMarkBarrierTestGuard<'a> {
+    pub(super) fn new(valid_ptrs: &'a ValidPointerSet) -> Self {
+        incremental_mark_barrier_enable(valid_ptrs);
+        Self {
+            _valid_ptrs: valid_ptrs,
+        }
+    }
+}
+
+impl Drop for IncrementalMarkBarrierTestGuard<'_> {
+    fn drop(&mut self) {
+        incremental_mark_barrier_disable();
+        clear_mark_seeds();
+    }
+}
+
 static COPYING_NURSERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub(super) fn copying_nursery_isolation_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -212,6 +232,9 @@ fn reset_copying_nursery_runtime_test_state() {
     crate::os::test_clear_process_event_listeners();
     crate::promise::test_clear_promise_scanner_roots();
     crate::closure::test_clear_singleton_closure_caches();
+    crate::closure::test_clear_closure_side_tables();
+    crate::r#box::test_clear_box_registry();
+    crate::builtins::test_set_console_log_singleton(0);
     crate::geisterhand_registry::test_clear_geisterhand_roots();
     crate::ui_text_registry::test_clear_ui_text_registry_roots();
     #[cfg(feature = "full")]

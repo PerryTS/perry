@@ -39,6 +39,36 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
     );
 }
 
+pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: &str) {
+    let shape_id = match name {
+        "Readable" => 0x7FFF_FF34,
+        "Writable" => 0x7FFF_FF35,
+        "Duplex" => 0x7FFF_FF36,
+        "Transform" => 0x7FFF_FF37,
+        "PassThrough" => 0x7FFF_FF38,
+        _ => return,
+    };
+    let proto = js_object_alloc_with_shape(
+        shape_id,
+        1,
+        b"constructor\0".as_ptr(),
+        b"constructor\0".len() as u32,
+    );
+    js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
+        let mut protos = protos.borrow_mut();
+        if !protos.contains(&proto_value.to_bits()) {
+            protos.push(proto_value.to_bits());
+        }
+    });
+    crate::closure::closure_set_dynamic_prop(
+        (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize,
+        "prototype",
+        proto_value,
+    );
+}
+
 pub(crate) fn is_stream_event_emitter_prototype_value(value: f64) -> bool {
     let bits = value.to_bits();
     let jsval = JSValue::from_bits(bits);

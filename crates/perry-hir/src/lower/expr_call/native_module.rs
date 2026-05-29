@@ -135,37 +135,13 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "getBuiltinModule" => {
-                            // #1398/#2482: process.getBuiltinModule(id) — Node
-                            // 22.3+ accessor. For a string-literal id naming a
-                            // Perry-supported Node built-in, return the native-
-                            // module namespace — the same `NativeModuleRef` an
-                            // `import * as m` binding produces — so
-                            // `getBuiltinModule("fs").readFileSync(...)` works
-                            // without `require`. `node:`-prefixed and prefixless
-                            // ids resolve to the same module. npm packages that
-                            // also live in NATIVE_MODULES (axios, lodash, …) are
-                            // excluded via the node-builtin gate. Unknown ids,
-                            // unsupported builtins, and non-literal args return
-                            // `undefined` (Node returns `undefined` for unknown
-                            // ids; Perry has no runtime "is it loaded?" query for
-                            // a dynamic id).
-                            if let Some(first) = call.args.first() {
-                                if first.spread.is_none() {
-                                    if let ast::Expr::Lit(ast::Lit::Str(s)) = first.expr.as_ref() {
-                                        if let Some(spec) = s.value.as_str() {
-                                            let name = spec.strip_prefix("node:").unwrap_or(spec);
-                                            if is_node_builtin_module(name)
-                                                && crate::ir::is_native_module(name)
-                                            {
-                                                return Ok(Ok(Expr::NativeModuleRef(
-                                                    name.to_string(),
-                                                )));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            return Ok(Ok(Expr::Undefined));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "getBuiltinModule".to_string(),
+                                args,
+                            }));
                         }
                         "dlopen" => {
                             // #1409: process.dlopen(module, filename, flags?)

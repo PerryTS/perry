@@ -141,9 +141,10 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
         let fresh = crate::closure::js_closure_alloc(console_log_callable_thunk as *const u8, 0);
         // CAS so concurrent first-use callers don't leak a closure.
         // The loser's allocation is unreachable by any user code path
-        // and will be reclaimed by the next GC sweep — only the winner
-        // is added to the root set via `scan_console_log_singleton_roots`.
-        match CONSOLE_LOG_SINGLETON.compare_exchange(
+        // and will be reclaimed by the next GC sweep. The winner is
+        // stored in the root slot through the root barrier path.
+        match crate::gc::runtime_compare_exchange_root_atomic_raw_i64(
+            &CONSOLE_LOG_SINGLETON,
             0,
             fresh as i64,
             Ordering::AcqRel,
@@ -1322,7 +1323,7 @@ pub unsafe extern "C" fn js_console_dir_with_options(value: f64, options_value: 
 
 #[cfg(test)]
 pub(crate) fn test_set_console_log_singleton(ptr: i64) {
-    CONSOLE_LOG_SINGLETON.store(ptr, Ordering::Release);
+    crate::gc::runtime_store_root_atomic_raw_i64(&CONSOLE_LOG_SINGLETON, ptr, Ordering::Release);
 }
 
 #[cfg(test)]

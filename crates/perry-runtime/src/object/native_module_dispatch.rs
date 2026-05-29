@@ -352,6 +352,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
@@ -1334,6 +1335,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("zlib", _) => {
             let ptr =
                 crate::value::JS_NATIVE_ZLIB_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
+        ("querystring", "unescapeBuffer") => {
+            let ptr = crate::value::JS_NATIVE_QUERYSTRING_DISPATCH
+                .load(std::sync::atomic::Ordering::SeqCst);
             if ptr.is_null() {
                 f64::from_bits(JSValue::undefined().bits())
             } else {

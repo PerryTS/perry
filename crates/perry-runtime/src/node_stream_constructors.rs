@@ -703,28 +703,60 @@ pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f
     stream
 }
 
-/// #1539: `stream.compose(...streams)` chains a sequence of streams
-/// into one composite Duplex (data flows through them in order).
-/// Perry's stream stubs don't propagate data through chains, so the
-/// helper returns a fresh Duplex — the typeof / instanceof checks
-/// callers do (`compose(a, b) instanceof Duplex`) hold, and the
-/// reads/writes are stubbed at the Duplex layer same as a bare
-/// `new Duplex()`. Real composition is tracked separately.
-#[no_mangle]
-pub extern "C" fn js_node_stream_compose(first_stream: f64) -> f64 {
-    if first_stream.to_bits() == TAG_UNDEFINED {
-        throw_pipeline_missing_streams();
+fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
+    let chunks = if let Some(chunks) = readable_hidden_chunks(source) {
+        chunks
+    } else {
+        match collect_pipeline_chunks(source) {
+            Ok(chunks) => chunks,
+            Err(err) => {
+                let duplex = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
+                set_hidden_value(duplex, hidden_error_key(), err);
+                return duplex;
+            }
+        }
+    };
+    let values = pipeline_chunks_vec(chunks);
+    let mut arr = crate::array::js_array_alloc(values.len() as u32);
+    for chunk in values {
+        arr = crate::array::js_array_push_f64(arr, chunk);
     }
-    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+
+    let duplex = js_node_stream_duplex_new(readable_from_options(f64::from_bits(TAG_UNDEFINED)));
+    set_visible_writable(duplex, false);
+    set_hidden_value(duplex, hidden_chunks_key(), box_pointer(arr as *const u8));
+    set_hidden_value(
+        duplex,
+        hidden_buffered_key(),
+        crate::array::js_array_length(arr) as f64,
+    );
+    set_hidden_value(
+        duplex,
+        hidden_key(b"readableLength"),
+        crate::array::js_array_length(arr) as f64,
+    );
+    duplex
+}
+
+/// #1539: `stream.compose(...streams)` chains a sequence of streams
+/// into one composite Duplex (data flows through them in order). Perry
+/// now handles Node's single-source fast path by returning a Duplex
+/// wrapper whose readable side drains the source snapshot; multi-stage
+/// composition remains tracked separately.
+#[no_mangle]
+pub extern "C" fn js_node_stream_compose(args: *const crate::array::ArrayHeader) -> f64 {
+    js_node_stream_compose_args(args)
 }
 
 /// Variadic `stream.compose(...)` entry used by bound native-module property
-/// reads. Direct named imports still enter `js_node_stream_compose` with the
-/// first user argument only.
+/// reads and by direct named imports through codegen's packed varargs ABI.
 pub extern "C" fn js_node_stream_compose_args(args: *const crate::array::ArrayHeader) -> f64 {
     let args = pipeline_args(args);
     if args.is_empty() {
         throw_pipeline_missing_streams();
+    }
+    if args.len() == 1 {
+        return node_stream_duplex_from_source_chunks(args[0]);
     }
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
