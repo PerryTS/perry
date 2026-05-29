@@ -106,6 +106,13 @@ crates/perry-runtime/src/object/class_registry.rs
 # Crossed the limit at 2014 LOC after the #2135 worker_threads
 # value-export arm. Split tracked under #1435.
 crates/perry-runtime/src/object/native_module.rs
+# console.log / util.inspect value formatter (two big per-tag dispatch
+# towers: format_jsvalue + format_jsvalue_for_json). main had already
+# grown it to 1999 LOC; the #2089 Date-as-reference-type inspect arms
+# (a DateCell pointer must render as its ISO string, not be deref'd as an
+# ObjectHeader) tipped it over. Splitting the two towers into sibling
+# modules is tracked under #1435.
+crates/perry-runtime/src/builtins/formatting.rs
 EOF
 )
 

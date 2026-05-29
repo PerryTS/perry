@@ -75,15 +75,20 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) else {
         return readable_iterator_done();
     };
-    if stream_destroyed(stream) {
+    prepare_readable_for_iteration(stream);
+    let arr = readable_chunks_array(stream);
+    let index = stream_consume_index(stream);
+    if !arr.is_null() && index < crate::array::js_array_length(arr) {
+        let value = crate::array::js_array_get_f64(arr, index);
+        set_stream_consume_index(stream, index + 1);
         set_hidden_value(
             iterator,
-            hidden_key(READABLE_ITERATOR_DONE_KEY),
-            f64::from_bits(TAG_TRUE),
+            hidden_key(READABLE_ITERATOR_INDEX_KEY),
+            (iterator_local_index(iterator) + 1) as f64,
         );
-        return readable_iterator_done();
+        mark_disturbed(stream);
+        return resolved_promise(iterator_result(value, false));
     }
-    invoke_read_once(stream);
     if let Some(err) = readable_hidden_error(stream) {
         set_hidden_value(
             iterator,
@@ -92,8 +97,14 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
         );
         return rejected_promise(err);
     }
-    let arr = readable_chunks_array(stream);
-    let index = stream_consume_index(stream);
+    if stream_destroyed(stream) {
+        set_hidden_value(
+            iterator,
+            hidden_key(READABLE_ITERATOR_DONE_KEY),
+            f64::from_bits(TAG_TRUE),
+        );
+        return readable_iterator_done();
+    }
     if arr.is_null() || index >= crate::array::js_array_length(arr) {
         set_hidden_value(
             iterator,
@@ -104,15 +115,7 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
         destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
         return readable_iterator_done();
     }
-    let value = crate::array::js_array_get_f64(arr, index);
-    set_stream_consume_index(stream, index + 1);
-    set_hidden_value(
-        iterator,
-        hidden_key(READABLE_ITERATOR_INDEX_KEY),
-        (iterator_local_index(iterator) + 1) as f64,
-    );
-    mark_disturbed(stream);
-    resolved_promise(iterator_result(value, false))
+    readable_iterator_done()
 }
 
 extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 {

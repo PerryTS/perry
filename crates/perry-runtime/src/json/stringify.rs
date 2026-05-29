@@ -179,26 +179,9 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
 
 #[inline]
 pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
-    // Date — JSON.stringify must call toJSON/toISOString per ECMA-262
-    // 24.5.4.1. Perry stores Date as a raw f64 timestamp; the
-    // `DATE_REGISTRY` HashSet records which finite numbers came from a
-    // `new Date(...)`. Every numeric write that's actually a Date routes
-    // here as the last-resort fallback, so centralizing the check at
-    // this single funnel covers all template / fast-path / replacer
-    // sites without per-call-site changes. Guarded on "finite integer"
-    // first since the lookup involves a thread-local HashSet — only
-    // millisecond-shaped values can be Dates.
-    if value.is_finite() && value.fract() == 0.0 && value >= 0.0 && value < 1e16 {
-        if crate::date::is_registered_date_bits(value.to_bits()) {
-            let s_ptr = crate::date::js_date_to_iso_string(value);
-            if let Some(s) = str_from_header(s_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
-            return;
-        }
-    }
+    // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
+    // `stringify_value`/`stringify_value_depth` before this numeric funnel —
+    // so no Date detection is needed here anymore.
     if value.is_nan() || value.is_infinite() {
         buf.push_str("null");
     } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
@@ -522,6 +505,18 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             buf.push_str("null");
             return;
         }
+        // #2089: a Date is a NaN-boxed `DateCell` pointer — emit `toJSON()`
+        // (ISO string, or `null` for an Invalid Date) per ECMA-262 25.5.2,
+        // before any object/array deref of the small cell.
+        if crate::date::is_date_cell_addr(ptr as usize) {
+            let s_ptr = crate::date::js_date_to_json(value);
+            if let Some(s) = str_from_header(s_ptr) {
+                write_escaped_string(buf, s);
+            } else {
+                buf.push_str("null");
+            }
+            return;
+        }
         if type_hint == TYPE_OBJECT {
             stringify_object(ptr, buf);
             return;
@@ -710,6 +705,19 @@ pub(crate) unsafe fn stringify_value_depth(
         // objects live far above this low-memory guard (matches gc_obj_type).
         if (ptr as usize) < 0x1000 {
             buf.push_str("null");
+            return;
+        }
+        // #2089: a Date is a NaN-boxed `DateCell` pointer. JSON.stringify must
+        // emit `toJSON()` → the ISO string (or `null` for an Invalid Date) per
+        // ECMA-262 25.5.2. Check before any object/array handling so the small
+        // cell is never deref'd as an `ObjectHeader`/`ArrayHeader`.
+        if crate::date::is_date_cell_addr(ptr as usize) {
+            let s_ptr = crate::date::js_date_to_json(value);
+            if let Some(s) = str_from_header(s_ptr) {
+                write_escaped_string(buf, s);
+            } else {
+                buf.push_str("null");
+            }
             return;
         }
         if type_hint == TYPE_OBJECT {
@@ -1352,7 +1360,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     let template = if len >= 2 {
         let first_bits = (*elements).to_bits();
         let tag = first_bits & 0xFFFF_0000_0000_0000;
-        if tag == POINTER_TAG || is_raw_pointer(first_bits) {
+        if (tag == POINTER_TAG || is_raw_pointer(first_bits))
+            // #2089: a Date element is a small `DateCell`, not an object with a
+            // `keys_array` — don't build an object-shape template from it.
+            && !crate::date::is_date_cell_addr((first_bits & POINTER_MASK) as usize)
+        {
             build_shape_prefix_template(first_bits)
         } else {
             None
@@ -1425,6 +1437,17 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             } else {
                 elem_bits as *const u8
             };
+            // #2089: a Date element → its toJSON() ISO string (or null),
+            // before any object/array deref of the small cell.
+            if crate::date::is_date_cell_addr(elem_ptr as usize) {
+                let s_ptr = crate::date::js_date_to_json(elem);
+                if let Some(s) = str_from_header(s_ptr) {
+                    write_escaped_string(buf, s);
+                } else {
+                    buf.push_str("null");
+                }
+                continue;
+            }
             // Issue #639: Buffer/Uint8Array detection BEFORE gc_obj_type — see
             // the matching branch in `stringify_value`.
             if crate::buffer::is_registered_buffer(elem_ptr as usize) {

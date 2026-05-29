@@ -30,6 +30,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const ENTRY_TYPE_MARK: u8 = 0;
 const ENTRY_TYPE_MEASURE: u8 = 1;
 
+pub(crate) const CLASS_ID_PERFORMANCE_ENTRY: u32 = 0xFFFF_0080;
+pub(crate) const CLASS_ID_PERFORMANCE_MARK: u32 = 0xFFFF_0081;
+pub(crate) const CLASS_ID_PERFORMANCE_MEASURE: u32 = 0xFFFF_0082;
+
 /// Shape id for the `{ name, entryType, startTime, duration, detail }` object
 /// returned by mark/measure and the getEntries* arrays.
 const PERF_ENTRY_SHAPE: u32 = 0x7FFF_FF40;
@@ -90,6 +94,34 @@ pub(crate) unsafe fn is_perf_entry_object(obj: *const crate::object::ObjectHeade
     }
     let recorded = PERF_ENTRY_KEYS_ARRAY.with(|c| c.get());
     recorded != 0 && (*obj).keys_array as usize == recorded
+}
+
+unsafe fn perf_entry_type(obj: *const crate::object::ObjectHeader) -> Option<u8> {
+    let entry_type = string_of(js_object_get_field(obj, 1))?;
+    match entry_type.as_str() {
+        "mark" => Some(ENTRY_TYPE_MARK),
+        "measure" => Some(ENTRY_TYPE_MEASURE),
+        _ => None,
+    }
+}
+
+pub(crate) unsafe fn is_perf_entry_object_instance_of(
+    obj: *const crate::object::ObjectHeader,
+    class_id: u32,
+) -> Option<bool> {
+    let want = match class_id {
+        CLASS_ID_PERFORMANCE_ENTRY => None,
+        CLASS_ID_PERFORMANCE_MARK => Some(ENTRY_TYPE_MARK),
+        CLASS_ID_PERFORMANCE_MEASURE => Some(ENTRY_TYPE_MEASURE),
+        _ => return None,
+    };
+    if !is_perf_entry_object(obj) {
+        return Some(false);
+    }
+    Some(match want {
+        None => true,
+        Some(kind) => perf_entry_type(obj) == Some(kind),
+    })
 }
 
 /// Build the plain object returned by `PerformanceEntry#toJSON()` — a copy of

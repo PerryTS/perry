@@ -14,6 +14,7 @@ pub(crate) struct FsCopyOptions {
     verbatim_symlinks: bool,
     recursive: bool,
     filter: f64,
+    sync_symlink_resolution: bool,
 }
 
 pub(crate) unsafe fn fs_copy_options_from_value(options_value: f64) -> FsCopyOptions {
@@ -32,6 +33,28 @@ pub(crate) unsafe fn fs_copy_options_from_value(options_value: f64) -> FsCopyOpt
         filter: options_field_value(options_value, b"filter")
             .map(|v| f64::from_bits(v.bits()))
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+        sync_symlink_resolution: false,
+    }
+}
+
+fn resolve_copied_symlink_target(src: &Path, target: PathBuf, opts: FsCopyOptions) -> PathBuf {
+    if opts.verbatim_symlinks {
+        return target;
+    }
+    let target_is_relative = target.is_relative();
+    let resolved = if target.is_absolute() {
+        target
+    } else if let Some(parent) = src.parent() {
+        parent.join(target)
+    } else {
+        target
+    };
+    if opts.sync_symlink_resolution {
+        fs::canonicalize(&resolved).unwrap_or(resolved)
+    } else if target_is_relative {
+        lexical_normalize_path(resolved)
+    } else {
+        resolved
     }
 }
 
@@ -124,7 +147,7 @@ pub(crate) fn copy_symlink_with_options(
     if !copy_filter_allows(src, dst, opts) {
         return Ok(());
     }
-    if opts.dereference {
+    if opts.dereference && !opts.sync_symlink_resolution {
         let target_meta = fs::metadata(src)?;
         if target_meta.is_dir() {
             copy_dir_recursive(src, dst, opts)
@@ -146,12 +169,7 @@ pub(crate) fn copy_symlink_with_options(
         } else if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut target = fs::read_link(src)?;
-        if !opts.verbatim_symlinks && target.is_relative() {
-            if let Some(parent) = src.parent() {
-                target = lexical_normalize_path(parent.join(target));
-            }
-        }
+        let target = resolve_copied_symlink_target(src, fs::read_link(src)?, opts);
         #[cfg(unix)]
         std::os::unix::fs::symlink(target, dst)?;
         #[cfg(windows)]
@@ -225,6 +243,19 @@ pub extern "C" fn js_fs_cp_sync(from_value: f64, to_value: f64) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_cp_sync_options(from_value: f64, to_value: f64, options_value: f64) -> i32 {
+    js_fs_cp_options_inner(from_value, to_value, options_value, true)
+}
+
+pub(crate) fn js_fs_cp_async_options(from_value: f64, to_value: f64, options_value: f64) -> i32 {
+    js_fs_cp_options_inner(from_value, to_value, options_value, false)
+}
+
+fn js_fs_cp_options_inner(
+    from_value: f64,
+    to_value: f64,
+    options_value: f64,
+    sync_symlink_resolution: bool,
+) -> i32 {
     unsafe {
         let from = match decode_path_value(from_value) {
             Some(s) => s,
@@ -236,7 +267,8 @@ pub extern "C" fn js_fs_cp_sync_options(from_value: f64, to_value: f64, options_
         };
         let src = Path::new(&from);
         let dst = Path::new(&to);
-        let opts = fs_copy_options_from_value(options_value);
+        let mut opts = fs_copy_options_from_value(options_value);
+        opts.sync_symlink_resolution = sync_symlink_resolution;
         // Node throws ERR_FS_CP_EINVAL if `src == dest`. We don't propagate
         // typed errors yet, so return 0 (failure) to keep `cpSync` from
         // silently no-op'ing into itself.

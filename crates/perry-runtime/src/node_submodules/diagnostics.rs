@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::thread::ThreadId;
 
-use crate::closure::ClosureHeader;
+use crate::closure::{js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader};
 use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::thread::SerializedValue;
@@ -307,6 +307,20 @@ pub(crate) fn channel_key(name: f64) -> Option<DiagChannelKey> {
         return Some(DiagChannelKey::Symbol(bits));
     }
     None
+}
+
+pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return false;
+    }
+    let ptr = js_value.as_pointer::<ObjectHeader>();
+    DIAG_CHANNELS.with(|channels| {
+        channels
+            .borrow()
+            .values()
+            .any(|channel| std::ptr::eq(channel.obj, ptr))
+    })
 }
 
 thread_local! {
@@ -1410,6 +1424,37 @@ pub(crate) extern "C" fn diag_trace_promise(
     }
 }
 
+pub(crate) extern "C" fn diag_trace_wrapped_callback(
+    closure: *const ClosureHeader,
+    err: f64,
+    res: f64,
+) -> f64 {
+    let callback = js_closure_get_capture_f64(closure, 0);
+    let context = js_closure_get_capture_f64(closure, 1);
+    let async_start = js_closure_get_capture_ptr(closure, 2);
+    let async_end = js_closure_get_capture_ptr(closure, 3);
+    let error = js_closure_get_capture_ptr(closure, 4);
+    let context_obj = crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader;
+
+    if crate::value::js_is_truthy(err) != 0 {
+        set_field_value(context_obj, "error", err);
+        publish_channel(error, context);
+    } else {
+        set_field_value(context_obj, "result", res);
+    }
+
+    publish_channel(async_start, context);
+    let result = match catch_js(|| call_fn_value(callback, undefined(), &[err, res])) {
+        Ok(result) => result,
+        Err(callback_err) => {
+            publish_channel(async_end, context);
+            crate::exception::js_throw(callback_err)
+        }
+    };
+    publish_channel(async_end, context);
+    result
+}
+
 pub(crate) extern "C" fn diag_trace_callback(
     closure: *const ClosureHeader,
     fn_value: f64,
@@ -1429,33 +1474,42 @@ pub(crate) extern "C" fn diag_trace_callback(
             .map(|t| t.events)
             .unwrap_or([0; 5])
     });
-    publish_channel(events[0], context);
-    let ret = call_fn_value(fn_value, this_arg, &[callback, err, res]);
-    // Node's traceCallback fires events in this order around the
-    // wrapped callback: start, (fn → user callback runs synchronously,
-    // possibly producing user-visible "fn" log lines), asyncStart,
-    // [error,] asyncEnd, end. End fires *last*, not second — without
-    // a real callback wrap boundary we approximate by publishing the
-    // async events immediately after `fn` returns. A truthy `err`
-    // publishes `error` between asyncStart and asyncEnd. Full
-    // async-boundary fidelity is tracked by #788.
-    set_field_value(
-        crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
-        "result",
-        res,
-    );
-    publish_channel(events[2], context);
-    if crate::value::js_is_truthy(err) != 0 {
-        set_field_value(
-            crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
-            "error",
-            err,
-        );
-        publish_channel(events[4], context);
+    let active = DIAG_TRACES.with(|m| {
+        m.borrow()
+            .get(&method_id(closure))
+            .map(|t| get_field_value(t.obj, "hasSubscribers").to_bits() == TAG_TRUE)
+            .unwrap_or(false)
+    });
+    if !active {
+        return call_fn_value(fn_value, this_arg, &[callback, err, res]);
     }
-    publish_channel(events[3], context);
-    publish_channel(events[1], context);
-    ret
+
+    let wrapped = js_closure_alloc(diag_trace_wrapped_callback as *const u8, 5);
+    js_closure_set_capture_f64(wrapped, 0, callback);
+    js_closure_set_capture_f64(wrapped, 1, context);
+    js_closure_set_capture_ptr(wrapped, 2, events[2]);
+    js_closure_set_capture_ptr(wrapped, 3, events[3]);
+    js_closure_set_capture_ptr(wrapped, 4, events[4]);
+    js_register_closure_arity(diag_trace_wrapped_callback as *const u8, 2);
+    let wrapped_value = boxed_ptr(wrapped);
+
+    publish_channel(events[0], context);
+    match catch_js(|| call_fn_value(fn_value, this_arg, &[wrapped_value, err, res])) {
+        Ok(ret) => {
+            publish_channel(events[1], context);
+            ret
+        }
+        Err(err) => {
+            set_field_value(
+                crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
+                "error",
+                err,
+            );
+            publish_channel(events[4], context);
+            publish_channel(events[1], context);
+            crate::exception::js_throw(err)
+        }
+    }
 }
 
 pub(crate) extern "C" fn thunk_diag_tracing_channel(
