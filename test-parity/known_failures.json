@@ -572,12 +572,6 @@
     "category": "bug-open",
     "reason": "node:stream: for-await break \u2014 custom iterator.return() not invoked. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/destroyed-after-finish": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Writable destroyed false after 'finish' (autoDestroy default true). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/encoding-via-constructor": {
     "issue": "1532",
     "added": "2026-05-24",
