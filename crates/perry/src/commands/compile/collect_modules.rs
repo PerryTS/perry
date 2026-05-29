@@ -172,6 +172,61 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     }
 }
 
+/// #1674 sub-part B: expand a dynamic-`import()` glob pattern
+/// (`<prefix>*<suffix>`, where `prefix` is a relative, directory-anchored
+/// path) into concrete relative specifiers by reading the importing module's
+/// directory. Each returned specifier equals the string the runtime template
+/// produces (`prefix_dir + filename`), so the compile-time candidate keys match
+/// the runtime dispatch arg exactly. Returns specifiers sorted for determinism.
+fn expand_dynamic_import_glob(
+    importing_file: &str,
+    prefix: &str,
+    suffix: &str,
+    cap: usize,
+) -> Vec<String> {
+    // Split the prefix into its directory part (through the last '/') and the
+    // leading filename fragment that survivors must start with.
+    let last_slash = match prefix.rfind('/') {
+        Some(i) => i,
+        None => return Vec::new(),
+    };
+    let prefix_dir = &prefix[..=last_slash]; // e.g. "./plugins/" or "./"
+    let file_prefix = &prefix[last_slash + 1..]; // e.g. "" or "locale_"
+
+    let importing_dir = std::path::Path::new(importing_file)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let glob_dir = importing_dir.join(prefix_dir);
+
+    let entries = match std::fs::read_dir(&glob_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let min_len = file_prefix.len() + suffix.len();
+    let mut out: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // The wildcard must match a non-empty middle: `name` strictly longer
+        // than `file_prefix + suffix`, and bracketed by them.
+        if name.len() <= min_len || !name.starts_with(file_prefix) || !name.ends_with(suffix) {
+            continue;
+        }
+        let candidate = format!("{prefix_dir}{name}");
+        if !out.contains(&candidate) {
+            out.push(candidate);
+        }
+        if out.len() > cap {
+            break;
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Collect all modules to compile (transitive closure of imports)
 pub(super) fn collect_modules(
     entry_path: &PathBuf,
@@ -543,6 +598,41 @@ pub(super) fn collect_modules(
                     *paths = set;
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
+                    // #1674 sub-part B: a non-resolvable template specifier with
+                    // a fixed relative-directory prefix/suffix
+                    // (`import(`./plugins/${name}.ts`)`) globs the importing
+                    // module's directory for matching files instead of erroring.
+                    if let Some((prefix, suffix)) =
+                        perry_hir::dynamic_import_glob_pattern(arg, &module_const_locals)
+                    {
+                        let matches = expand_dynamic_import_glob(
+                            &source_file_path,
+                            &prefix,
+                            &suffix,
+                            perry_hir::DYNAMIC_IMPORT_PATH_CAP,
+                        );
+                        if matches.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
+                            dyn_errors.push(format!(
+                                "dynamic import() in module {}: glob '{}*{}' matched {} files \
+                                 (limit: {})",
+                                module_name,
+                                prefix,
+                                suffix,
+                                matches.len(),
+                                perry_hir::DYNAMIC_IMPORT_PATH_CAP
+                            ));
+                            return;
+                        }
+                        if !matches.is_empty() {
+                            for p in &matches {
+                                if !new_dyn_imports.contains(p) {
+                                    new_dyn_imports.push(p.clone());
+                                }
+                            }
+                            *paths = matches;
+                            return;
+                        }
+                    }
                     dyn_errors.push(format!(
                         "dynamic import() in module {}: {}",
                         module_name, reason
@@ -1418,5 +1508,40 @@ fn excerpt_around_offset(source: &str, lo: usize) -> Option<String> {
         None
     } else {
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod glob_expand_tests {
+    use super::expand_dynamic_import_glob;
+
+    #[test]
+    fn expands_directory_files_matching_suffix() {
+        // #1674 sub-B: glob `./plugins/*.ts` against the importing module's dir.
+        let base = std::env::temp_dir().join(format!("perry_glob_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let plugins = base.join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::fs::write(plugins.join("alpha.ts"), "export const x=1;").unwrap();
+        std::fs::write(plugins.join("beta.ts"), "export const x=2;").unwrap();
+        std::fs::write(plugins.join("notes.md"), "ignored: wrong suffix").unwrap();
+        let importing = base.join("main.ts");
+        std::fs::write(&importing, "").unwrap();
+
+        let got = expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".ts", 64);
+        assert_eq!(
+            got,
+            vec![
+                "./plugins/alpha.ts".to_string(),
+                "./plugins/beta.ts".to_string()
+            ]
+        );
+
+        // A directory with no matches yields nothing (→ rejected promise).
+        let none =
+            expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".mjs", 64);
+        assert!(none.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

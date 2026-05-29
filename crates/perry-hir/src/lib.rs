@@ -28,9 +28,9 @@ pub use analysis::{collect_local_refs_expr, collect_local_refs_stmt};
 pub use audit::{audit_module, AuditManifest, ModuleAudit};
 pub use capability::{audit_module_capabilities, CapabilityPolicy, CapabilityViolation};
 pub use dynamic_import::{
-    collect_module_const_locals, detect_top_level_await, flatten_exports,
-    for_each_dynamic_import_mut, resolve_import_path, resolve_import_path_with_consts, FlatExport,
-    Resolution, DYNAMIC_IMPORT_PATH_CAP,
+    collect_module_const_locals, detect_top_level_await, dynamic_import_glob_pattern,
+    flatten_exports, for_each_dynamic_import_mut, resolve_import_path,
+    resolve_import_path_with_consts, FlatExport, Resolution, DYNAMIC_IMPORT_PATH_CAP,
 };
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;

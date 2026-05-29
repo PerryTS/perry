@@ -734,6 +734,81 @@ pub fn resolve_import_path(arg: &Expr) -> Resolution {
 /// per-call cycle-breaker — a const initializer that references its
 /// own id (impossible in well-formed TS, but defensive) returns
 /// Unresolved instead of recursing infinitely.
+/// #1674 sub-part B (glob): when a template-literal specifier has a fixed,
+/// relative, directory-anchored `prefix`, a fixed `suffix`, and a
+/// non-statically-resolvable middle (`import(`./plugins/${name}.ts`)`),
+/// return `(prefix, suffix)` so the driver can glob `<prefix>*<suffix>`
+/// against the importing module's directory and enumerate the candidates.
+///
+/// Returns `None` for anything that isn't this shape — fully-resolvable
+/// templates (handled by [`resolve_import_path_with_consts`]) and patterns
+/// with no fixed, directory-bearing prefix (too broad to glob safely). The
+/// resolver itself performs no filesystem I/O; the driver owns the readdir.
+pub fn dynamic_import_glob_pattern(
+    arg: &Expr,
+    consts: &std::collections::HashMap<u32, Expr>,
+) -> Option<(String, String)> {
+    // Only template-literal concatenations (`Binary(Add, …)`) can glob.
+    if !matches!(
+        arg,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let mut parts: Vec<&Expr> = Vec::new();
+    flatten_concat(arg, &mut parts);
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // A part resolves to a single fixed string, or it doesn't (wildcard).
+    let single = |p: &Expr| -> Option<String> {
+        let mut visiting = std::collections::HashSet::new();
+        match resolve_import_path_with_consts(p, consts, &mut visiting) {
+            Resolution::Set(v) if v.len() == 1 => Some(v.into_iter().next().unwrap()),
+            _ => None,
+        }
+    };
+
+    // Leading fixed parts → prefix.
+    let mut prefix = String::new();
+    let mut i = 0;
+    while i < parts.len() {
+        match single(parts[i]) {
+            Some(s) => {
+                prefix.push_str(&s);
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    // Trailing fixed parts → suffix.
+    let mut suffix = String::new();
+    let mut j = parts.len();
+    while j > i {
+        match single(parts[j - 1]) {
+            Some(s) => {
+                suffix.insert_str(0, &s);
+                j -= 1;
+            }
+            None => break,
+        }
+    }
+    // Need at least one non-fixed (wildcard) part between prefix and suffix.
+    if i >= j {
+        return None;
+    }
+    // The prefix must be a relative specifier with a directory component so
+    // the glob is scoped to one folder (never the whole project / node_modules).
+    if !(prefix.starts_with("./") || prefix.starts_with("../")) || !prefix.contains('/') {
+        return None;
+    }
+    Some((prefix, suffix))
+}
+
 pub fn resolve_import_path_with_consts(
     arg: &Expr,
     consts: &std::collections::HashMap<u32, Expr>,
@@ -1361,5 +1436,56 @@ mod tests {
         m.init.push(Stmt::Expr(closure));
         detect_top_level_await(&mut m);
         assert!(!m.has_top_level_await);
+    }
+
+    // #1674 sub-B: `("./plugins/" + name) + ".ts"` where `name` is a
+    // non-resolvable local — the HIR shape of `` `./plugins/${name}.ts` ``.
+    fn glob_chain(prefix: &str, suffix: &str, wild_id: u32) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::String(prefix.into())),
+                right: Box::new(Expr::LocalGet(wild_id)),
+            }),
+            right: Box::new(Expr::String(suffix.into())),
+        }
+    }
+
+    #[test]
+    fn glob_pattern_extracts_relative_prefix_and_suffix() {
+        let consts = std::collections::HashMap::new();
+        let arg = glob_chain("./plugins/", ".ts", 1);
+        assert_eq!(
+            dynamic_import_glob_pattern(&arg, &consts),
+            Some(("./plugins/".to_string(), ".ts".to_string()))
+        );
+    }
+
+    #[test]
+    fn glob_pattern_rejects_non_relative_or_dirless_prefix() {
+        let consts = std::collections::HashMap::new();
+        // bare prefix with no directory component — too broad to glob.
+        assert_eq!(
+            dynamic_import_glob_pattern(&glob_chain("locale_", ".ts", 1), &consts),
+            None
+        );
+        // absolute / package prefix — not a relative directory glob.
+        assert_eq!(
+            dynamic_import_glob_pattern(&glob_chain("@scope/", ".ts", 1), &consts),
+            None
+        );
+    }
+
+    #[test]
+    fn glob_pattern_none_when_fully_resolvable() {
+        // No wildcard part — the normal resolver handles this, not the glob.
+        let consts = std::collections::HashMap::new();
+        let arg = Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::String("./a".into())),
+            right: Box::new(Expr::String(".ts".into())),
+        };
+        assert_eq!(dynamic_import_glob_pattern(&arg, &consts), None);
     }
 }
