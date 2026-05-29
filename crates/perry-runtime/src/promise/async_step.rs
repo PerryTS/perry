@@ -532,16 +532,20 @@ pub extern "C" fn js_array_from_async(input: f64) -> f64 {
     //   [0] result_promise (Promise to resolve at the end)
     //   [1] result_arr (Array to push each value into)
     //   [2] iter object (raw pointer; we re-NaN-box on .next() call)
-    let chain_closure = js_closure_alloc(array_from_async_step as *const u8, 3);
+    //   [3] reject handler (used for each chained .next() rejection)
+    let chain_closure = js_closure_alloc(array_from_async_step as *const u8, 4);
     js_closure_set_capture_ptr(chain_closure, 0, result_promise as i64);
     js_closure_set_capture_ptr(chain_closure, 1, result_arr as i64);
     js_closure_set_capture_ptr(chain_closure, 2, raw_ptr as i64);
+    let reject_closure = js_closure_alloc(array_from_async_reject as *const u8, 1);
+    js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
+    js_closure_set_capture_ptr(chain_closure, 3, reject_closure as i64);
 
     // Kick off the first .next() call. The handler returns the iter result
     // (or undefined for done) — we wire it through `.then(chain_closure)`
     // which will recurse.
     unsafe {
-        array_from_async_call_next(raw_ptr, chain_closure);
+        array_from_async_call_next(raw_ptr, chain_closure, reject_closure);
     }
 
     crate::value::js_nanbox_pointer(result_promise as i64)
@@ -553,6 +557,7 @@ pub extern "C" fn js_array_from_async(input: f64) -> f64 {
 unsafe fn array_from_async_call_next(
     iter_ptr: usize,
     chain_closure: *const crate::closure::ClosureHeader,
+    reject_closure: *const crate::closure::ClosureHeader,
 ) {
     // Re-NaN-box the iter pointer for js_native_call_method.
     let iter_f64 = crate::value::js_nanbox_pointer(iter_ptr as i64);
@@ -574,19 +579,24 @@ unsafe fn array_from_async_call_next(
             (next_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
             let next_promise = next_ptr as *mut Promise;
-            // Use the chain_closure for both fulfill and reject. On rejection
-            // we just propagate by resolving the result_promise with undefined.
-            js_promise_then(
-                next_promise,
-                chain_closure as *const _,
-                chain_closure as *const _,
-            );
+            js_promise_then(next_promise, chain_closure, reject_closure);
             return;
         }
     }
     // Synchronous iterator path: invoke the handler directly with the
     // result so the iteration loop continues without going through .then.
     array_from_async_step(chain_closure as *const _, next_result);
+}
+
+extern "C" fn array_from_async_reject(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let result_promise = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    if !result_promise.is_null() {
+        js_promise_reject(result_promise, reason);
+    }
+    0.0
 }
 
 /// `.then(...)` handler invoked once per `.next()` resolution. Reads the
@@ -603,6 +613,8 @@ extern "C" fn array_from_async_step(
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let mut result_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
     let iter_ptr = js_closure_get_capture_ptr(closure, 2) as usize;
+    let reject_closure =
+        js_closure_get_capture_ptr(closure, 3) as *const crate::closure::ClosureHeader;
 
     if result_promise.is_null() || result_arr.is_null() || iter_ptr == 0 {
         return 0.0;
@@ -651,7 +663,7 @@ extern "C" fn array_from_async_step(
     // Recurse: call iter.next() again. The same closure will be invoked
     // when the next promise resolves.
     unsafe {
-        array_from_async_call_next(iter_ptr, closure);
+        array_from_async_call_next(iter_ptr, closure, reject_closure);
     }
 
     0.0

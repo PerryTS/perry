@@ -578,6 +578,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         | "port"
                         | "username"
                         | "password"
+                        | "href"
                 );
                 if url_setter {
                     let is_url_recv = match member.obj.as_ref() {
@@ -623,6 +624,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 value,
                             },
                             "password" => Expr::UrlSetPassword {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "href" => Expr::UrlSetHref {
                                 url: Box::new(url_expr),
                                 value,
                             },

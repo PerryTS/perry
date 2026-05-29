@@ -139,6 +139,8 @@ pub(crate) fn lower_native_method_call(
             "isFloat32Array" => Some("js_util_types_is_float32_array"),
             "isFloat64Array" => Some("js_util_types_is_float64_array"),
             "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
+            "isBigInt64Array" => Some("js_util_types_is_big_int64_array"),
+            "isBigUint64Array" => Some("js_util_types_is_big_uint64_array"),
             "isMap" => Some("js_util_types_is_map"),
             "isMapIterator" => Some("js_util_types_is_map_iterator"),
             "isProxy" => Some("js_util_types_is_proxy"),
@@ -147,6 +149,9 @@ pub(crate) fn lower_native_method_call(
             "isDate" => Some("js_util_types_is_date"),
             "isRegExp" => Some("js_util_types_is_reg_exp"),
             "isAsyncFunction" => Some("js_util_types_is_async_function"),
+            "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
+            "isGeneratorObject" => Some("js_util_types_is_generator_object"),
+            "isNativeError" => Some("js_util_types_is_native_error"),
             _ => None,
         };
         if let Some(runtime) = runtime {

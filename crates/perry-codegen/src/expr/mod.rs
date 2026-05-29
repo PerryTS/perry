@@ -1876,6 +1876,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::UrlSetPort { .. }
         | Expr::UrlSetUsername { .. }
         | Expr::UrlSetPassword { .. }
+        | Expr::UrlSetHref { .. }
         | Expr::UrlCanParse(..)
         | Expr::UrlCanParseWithBase { .. }
         | Expr::UrlParse(..)

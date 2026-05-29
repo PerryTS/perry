@@ -56,6 +56,10 @@ pub(super) fn emit_string_pool(
     // pointer so `util.types.isAsyncFunction` keeps working when the value is
     // observed through a runtime alias instead of direct HIR.
     user_fn_wrapper_async: &std::collections::HashSet<String>,
+    // Wrapper/closure symbols whose original source form was a generator
+    // function. Registered so util.types.isGeneratorFunction can distinguish
+    // lowered generator state-machine closures from ordinary functions.
+    user_fn_wrapper_generator: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
     // JS name. Each entry produces one `js_register_function_name` call
@@ -773,6 +777,17 @@ pub(super) fn emit_string_pool(
     for wrap_sym in sorted_async_wrappers {
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
+    }
+
+    let mut sorted_generator_wrappers: Vec<String> =
+        user_fn_wrapper_generator.iter().cloned().collect();
+    sorted_generator_wrappers.sort();
+    for wrap_sym in sorted_generator_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_generator_function",
+            &[(PTR, &func_ref)],
+        );
     }
 
     blk.ret_void();
