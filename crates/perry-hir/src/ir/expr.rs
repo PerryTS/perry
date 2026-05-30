@@ -615,7 +615,7 @@ pub enum Expr {
     SymbolDescription(Box<Expr>), // sym.description
     /// RegExp.escape(str) -> escaped string (TC39 proposal, Node 24+)
     RegExpEscape(Box<Expr>),
-    SymbolToString(Box<Expr>),    // sym.toString()
+    SymbolToString(Box<Expr>), // sym.toString()
 
     // URL operations
     FileURLToPath(Box<Expr>), // url.fileURLToPath(url) -> string

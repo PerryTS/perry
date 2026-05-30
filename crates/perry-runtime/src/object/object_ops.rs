@@ -208,7 +208,8 @@ unsafe fn group_by_value_is_symbol(value: f64) -> bool {
 unsafe fn group_by_value_is_callable(value: f64) -> bool {
     let raw = crate::value::js_nanbox_get_pointer(value);
     raw >= 0x10000
-        && !crate::closure::get_valid_func_ptr(raw as *const crate::closure::ClosureHeader).is_null()
+        && !crate::closure::get_valid_func_ptr(raw as *const crate::closure::ClosureHeader)
+            .is_null()
 }
 
 /// Shared grouping core for `Object.groupBy` / `Map.groupBy`.
@@ -219,11 +220,7 @@ unsafe fn group_by_value_is_callable(value: f64) -> bool {
 /// `callback(value, index)` for each element. Returns the per-element
 /// `(raw_key, item)` pairs in iteration order. The caller decides how to
 /// coalesce keys (ToPropertyKey for Object, SameValueZero for Map).
-unsafe fn group_by_collect(
-    items_value: f64,
-    callback: f64,
-    callee_name: &[u8],
-) -> Vec<(f64, f64)> {
+unsafe fn group_by_collect(items_value: f64, callback: f64, callee_name: &[u8]) -> Vec<(f64, f64)> {
     let items_jv = crate::value::JSValue::from_bits(items_value.to_bits());
     if items_jv.is_null() || items_jv.is_undefined() {
         // Match Node: "X.groupBy called on null or undefined"
@@ -242,7 +239,8 @@ unsafe fn group_by_collect(
         return Vec::new();
     }
     let length = crate::array::js_array_length(raw) as usize;
-    let cb_ptr = crate::value::js_nanbox_get_pointer(callback) as *const crate::closure::ClosureHeader;
+    let cb_ptr =
+        crate::value::js_nanbox_get_pointer(callback) as *const crate::closure::ClosureHeader;
 
     let mut out: Vec<(f64, f64)> = Vec::with_capacity(length);
     for i in 0..length {

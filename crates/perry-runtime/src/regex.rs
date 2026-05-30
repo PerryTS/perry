@@ -1526,10 +1526,7 @@ fn regexp_escape_is_whitespace(cp: u32) -> bool {
             | 0xFEFF // ZWNBSP
             // Unicode Space_Separator (Zs):
             | 0x1680
-            | 0x2000..=0x200A
-            | 0x202F
-            | 0x205F
-            | 0x3000
+            | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000
     )
 }
 
@@ -1585,9 +1582,9 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
 
         match c {
             // Syntax characters and `/` → backslash escape.
-            Some('^') | Some('$') | Some('\\') | Some('.') | Some('*') | Some('+')
-            | Some('?') | Some('(') | Some(')') | Some('[') | Some(']') | Some('{')
-            | Some('}') | Some('|') | Some('/') => {
+            Some('^') | Some('$') | Some('\\') | Some('.') | Some('*') | Some('+') | Some('?')
+            | Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('|')
+            | Some('/') => {
                 out.push('\\');
                 out.push(c.unwrap());
             }
@@ -1642,7 +1639,7 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
     }
 
     let result = js_string_from_str(&out);
-    crate::value::js_nanbox_pointer(result as i64)
+    js_nanbox_string(result as i64)
 }
 
 /// Keepalive anchor: `js_regexp_escape` is only called from codegen-emitted
