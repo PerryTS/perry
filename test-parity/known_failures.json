@@ -194,12 +194,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/dispose/await-using-disposes": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: await using does not trigger Symbol.asyncDispose on the stream. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/from-async-iterable": {
     "issue": "1539",
     "added": "2026-05-24",
