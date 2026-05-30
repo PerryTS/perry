@@ -115,16 +115,32 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::ArrayIndexOf { array, value } => {
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".indexOf(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
-            Expr::ArrayIncludes { array, value } => {
+            Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".includes(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
             Expr::ArraySlice { array, start, end } => {
@@ -678,6 +694,26 @@ impl JsEmitter {
                 self.emit_expr(cause);
                 self.output.push_str(" })");
             }
+            Expr::ErrorNewWithOptions {
+                kind,
+                message,
+                options,
+            } => {
+                let ctor = match kind {
+                    1 => "TypeError",
+                    2 => "RangeError",
+                    3 => "ReferenceError",
+                    4 => "SyntaxError",
+                    _ => "Error",
+                };
+                self.output.push_str("new ");
+                self.output.push_str(ctor);
+                self.output.push('(');
+                self.emit_expr(message);
+                self.output.push_str(", ");
+                self.emit_expr(options);
+                self.output.push(')');
+            }
             Expr::TypeErrorNew(msg) => {
                 self.output.push_str("new TypeError(");
                 self.emit_expr(msg);
@@ -698,11 +734,19 @@ impl JsEmitter {
                 self.emit_expr(msg);
                 self.output.push(')');
             }
-            Expr::AggregateErrorNew { errors, message } => {
+            Expr::AggregateErrorNew {
+                errors,
+                message,
+                options,
+            } => {
                 self.output.push_str("new AggregateError(");
                 self.emit_expr(errors);
                 self.output.push_str(", ");
                 self.emit_expr(message);
+                if let Some(o) = options {
+                    self.output.push_str(", ");
+                    self.emit_expr(o);
+                }
                 self.output.push(')');
             }
 

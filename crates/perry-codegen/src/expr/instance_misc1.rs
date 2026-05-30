@@ -633,9 +633,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- arr.includes(value) -> boolean --------
-        Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             let arr_box = lower_expr(ctx, array)?;
             let v = lower_expr(ctx, value)?;
+            // #2804: optional fromIndex. has_from=1 + lowered index when
+            // present; otherwise has_from=0 with a placeholder DOUBLE (`v`).
+            let (from_box, has_from) = match from_index {
+                Some(fi) => (lower_expr(ctx, fi)?, "1"),
+                None => (v.clone(), "0"),
+            };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             // Use `js_array_includes_jsvalue` which does deep-value
@@ -645,7 +655,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let i32_v = blk.call(
                 I32,
                 "js_array_includes_jsvalue",
-                &[(I64, &arr_handle), (DOUBLE, &v)],
+                &[
+                    (I64, &arr_handle),
+                    (DOUBLE, &v),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
             );
             // Convert i32 boolean to NaN-tagged TAG_TRUE/FALSE so
             // console.log prints "true"/"false".

@@ -115,6 +115,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "ReferenceError",
     "EvalError",
     "URIError",
+    "AggregateError",
     "Symbol",
     "Promise",
     "Map",
@@ -255,6 +256,38 @@ extern "C" fn global_this_error_capture_stack_trace_thunk(
     constructor_opt: f64,
 ) -> f64 {
     crate::error::js_error_capture_stack_trace(target, constructor_opt)
+}
+
+/// #2904: `Error.isError(value)` thunk — delegates to the runtime duck-check.
+extern "C" fn global_this_error_is_error_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::error::js_error_is_error(value)
+}
+
+/// #2904: `Error.prepareStackTrace` default — Node leaves a hook here that
+/// formats the stack from structured frames. Perry's stack strings are
+/// coarse; the installed default returns the existing `error.stack` string
+/// (or empty) so `typeof Error.prepareStackTrace === "function"` holds and
+/// callers that invoke it get a usable string rather than a crash.
+extern "C" fn global_this_error_prepare_stack_trace_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    error: f64,
+    _structured_stack: f64,
+) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(error.to_bits());
+    if jsval.is_pointer() {
+        let ptr = crate::value::js_nanbox_get_pointer(error) as *mut crate::error::ErrorHeader;
+        if !ptr.is_null() {
+            let stack = crate::error::js_error_get_stack(ptr);
+            if !stack.is_null() {
+                return crate::value::js_nanbox_string(stack as i64);
+            }
+        }
+    }
+    let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+    crate::value::js_nanbox_string(empty as i64)
 }
 
 fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
@@ -870,6 +903,58 @@ fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
     super::set_builtin_property_attrs(
         ctor as usize,
         "captureStackTrace".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    // #2904: `Error.isError` — V8/Node Error duck-check.
+    install_error_static_fn(
+        ctor,
+        "isError",
+        global_this_error_is_error_thunk as *const u8,
+        1,
+    );
+
+    // #2904: `Error.prepareStackTrace` — default stack-formatting hook.
+    install_error_static_fn(
+        ctor,
+        "prepareStackTrace",
+        global_this_error_prepare_stack_trace_thunk as *const u8,
+        2,
+    );
+
+    // #2904: `Error.stackTraceLimit` — writable number controlling captured
+    // frame count. Node's default is 10; Perry's stacks are coarse but the
+    // property must read as a number and be writable.
+    let limit_key = crate::string::js_string_from_bytes(b"stackTraceLimit".as_ptr(), 15);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, limit_key, 10.0);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "stackTraceLimit".to_string(),
+        super::PropertyAttrs::new(true, true, true),
+    );
+}
+
+/// #2904: install a callable static method on the `Error` constructor closure
+/// as a non-enumerable, writable, configurable data property (matching Node's
+/// property descriptors for the V8 static helpers).
+fn install_error_static_fn(
+    ctor: *mut crate::closure::ClosureHeader,
+    name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    super::native_module::set_bound_native_closure_name(closure, name);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        name.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
 }
