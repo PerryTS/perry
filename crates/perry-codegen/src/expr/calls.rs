@@ -946,6 +946,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
 
+        // `crypto.randomUUIDv7([options])` — RFC 9562 v7 (#2550).
+        Expr::Call {
+            callee, args: _, ..
+        } if matches!(
+            callee.as_ref(),
+            Expr::PropertyGet { object, property } if property == "randomUUIDv7" && matches!(
+                object.as_ref(),
+                Expr::NativeModuleRef(n) if n == "crypto"
+            )
+        ) =>
+        {
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_crypto_random_uuidv7", &[]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
+
         // Phase H crypto: `crypto.randomInt([min,] max[, callback])` —
         // uniform integer in `[min, max)`. The single-arg form defaults
         // `min` to 0. The runtime returns the value as a plain double (a

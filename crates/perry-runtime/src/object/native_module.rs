@@ -1380,6 +1380,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "secureHeapUsed")
             | ("crypto", "randomBytes")
             | ("crypto", "randomUUID")
+            | ("crypto", "randomUUIDv7")
             | ("crypto", "randomInt")
             | ("crypto", "generatePrime")
             | ("crypto", "generatePrimeSync")

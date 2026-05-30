@@ -2009,6 +2009,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // up in the dispatch-table extraction.
     method("crypto", "randomBytes", false, None),
     method("crypto", "randomUUID", false, None),
+    method("crypto", "randomUUIDv7", false, None),
     method("crypto", "randomInt", false, None),
     method("crypto", "hash", false, None),
     method("crypto", "sha256", false, None),

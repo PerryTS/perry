@@ -27,6 +27,7 @@ pub(super) fn is_passthrough_method(method: &str) -> bool {
         // arg munging.
         "randomFillSync"
             | "randomUUID"
+            | "randomUUIDv7"
             | "randomBytes"
             | "hash"
             // Plain `crypto.<method>(...)` → `Expr::Call { PropertyGet {
@@ -114,6 +115,10 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
             args,
             type_args: vec![],
         }),
+        // `randomUUIDv7([options])` — options accepted for shape parity but
+        // do not affect the generated value (#2550).
+        "randomUUIDv7" => Some(Expr::CryptoRandomUUIDv7),
+
         "randomBytes" => {
             if args.is_empty() {
                 return None;

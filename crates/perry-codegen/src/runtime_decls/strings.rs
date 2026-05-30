@@ -753,6 +753,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // realloc). Param order is (arr, start, delete_count, items_ptr,
     // items_count, out_arr_ptr).
     module.declare_function("js_array_splice", I64, &[I64, I32, I32, PTR, I32, PTR]);
+    module.declare_function("js_array_splice_delete_count", I32, &[DOUBLE]);
     module.declare_function("js_parse_int", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_parse_float", DOUBLE, &[I64]);
     module.declare_function("js_array_reduce", DOUBLE, &[I64, I64, I32, DOUBLE]);
@@ -1350,6 +1351,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_bytes_async", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_random_uuidv7", I64, &[]);
     // crypto.randomInt([min,] max[, cb]) -> number; codegen passes min=0 for the
     // single-arg form. Returns the integer as a plain double.
     module.declare_function("js_crypto_random_int", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -1788,7 +1790,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_url_revoke_object_url", VOID, &[DOUBLE]);
     module.declare_function("js_buffer_resolve_object_url", DOUBLE, &[DOUBLE]);
     // Static factories.
-    module.declare_function("js_response_static_json", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_response_static_json",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, DOUBLE],
+    );
     module.declare_function("js_response_static_redirect", DOUBLE, &[I64, DOUBLE]);
 
     // ──────────────────────────────────────────────────────────────────

@@ -1235,7 +1235,7 @@ pub fn transform_expr(
         Expr::Null | Expr::Undefined | Expr::This | Expr::LocalGet(_) | Expr::GlobalGet(_) |
         Expr::FuncRef(_) | Expr::ClassRef(_) | Expr::EnumMember { .. } |
         Expr::RegExp { .. } | Expr::NativeModuleRef(_) | Expr::StaticFieldGet { .. } |
-        Expr::EnvGet(_) | Expr::ProcessUptime | Expr::ProcessMemoryUsage | Expr::ProcessEnv | Expr::MathRandom | Expr::CryptoRandomUUID | Expr::DateNow |
+        Expr::EnvGet(_) | Expr::ProcessUptime | Expr::ProcessMemoryUsage | Expr::ProcessEnv | Expr::MathRandom | Expr::CryptoRandomUUID | Expr::CryptoRandomUUIDv7 | Expr::DateNow |
         Expr::MapNew | Expr::SetNew | Expr::Update { .. } |
         Expr::ArrayPop(_) | Expr::ArrayShift(_) |
         // OS module expressions
