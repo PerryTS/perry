@@ -2255,6 +2255,7 @@ Total: 1833 entries across 89 modules.
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
 - `deprecate` — module
+- `diff` — module
 - `format` — module
 - `formatWithOptions` — module
 - `getCallSites` — module
@@ -2342,6 +2343,7 @@ Total: 1833 entries across 89 modules.
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
 - `deprecate` — module
+- `diff` — module
 - `format` — module
 - `formatWithOptions` — module
 - `getCallSites` — module

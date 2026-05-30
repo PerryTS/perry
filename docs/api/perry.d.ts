@@ -2621,6 +2621,8 @@ declare module "sys" {
   /** stdlib */
   export function deprecate(...args: any[]): any;
   /** stdlib */
+  export function diff(...args: any[]): any;
+  /** stdlib */
   export function format(...args: any[]): any;
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
@@ -2721,6 +2723,8 @@ declare module "util" {
   export function convertProcessSignalToExitCode(...args: any[]): any;
   /** stdlib */
   export function deprecate(...args: any[]): any;
+  /** stdlib */
+  export function diff(...args: any[]): any;
   /** stdlib */
   export function format(...args: any[]): any;
   /** stdlib */
