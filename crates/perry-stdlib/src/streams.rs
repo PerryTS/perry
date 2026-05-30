@@ -838,30 +838,46 @@ pub unsafe extern "C" fn js_readable_stream_from_response(_resp_id: f64) -> f64 
     alloc_readable_from_bytes(Vec::new()) as f64
 }
 
-/// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web
-/// ReadableStream pre-loaded with the iterable's items, then closed. Today we
-/// handle the synchronous-array case (the overwhelmingly common form: a literal
-/// array, a spread, `[...set]`, etc.); each element becomes one chunk so
-/// `getReader().read()` / `for await` yield them in order, then `done`.
-#[no_mangle]
-pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
-    ensure_gc_registered();
+fn ptr_addr_from_nanbox(value: f64) -> Option<usize> {
     let bits = value.to_bits();
     let top = bits >> 48;
-    let ptr_addr = if top == 0x7FFD || top == 0x7FFF {
+    if top == 0x7FFD || top == 0x7FFF {
         Some((bits & POINTER_MASK) as usize)
     } else if top == 0 && bits >= 0x10000 {
         Some(bits as usize)
     } else {
         None
-    };
+    }
+}
+
+unsafe fn chunks_from_array_ptr(arr_ptr: *const perry_runtime::ArrayHeader) -> Vec<u64> {
+    let len = perry_runtime::array::js_array_length(arr_ptr);
+    (0..len)
+        .map(|i| perry_runtime::array::js_array_get(arr_ptr, i).bits())
+        .collect()
+}
+
+unsafe fn chunks_from_sync_iterable(value: f64) -> Option<Vec<u64>> {
+    let iter = perry_runtime::symbol::js_get_iterator(value);
+    if iter.to_bits() == value.to_bits() {
+        return None;
+    }
+    let arr = perry_runtime::array::js_iterator_to_array(iter);
+    Some(chunks_from_array_ptr(arr))
+}
+
+/// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web
+/// ReadableStream pre-loaded with the iterable's items, then closed. Each
+/// element becomes one chunk so `getReader().read()` / `for await` yield them
+/// in order, then `done`.
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
+    ensure_gc_registered();
+    let ptr_addr = ptr_addr_from_nanbox(value);
 
     let chunks: Vec<u64> = if perry_runtime::array::js_array_is_array(value).to_bits() == TAG_TRUE {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
-        let len = perry_runtime::array::js_array_length(arr_ptr);
-        (0..len)
-            .map(|i| perry_runtime::array::js_array_get(arr_ptr, i).bits())
-            .collect()
+        chunks_from_array_ptr(arr_ptr)
     } else if let Some(addr) = ptr_addr {
         if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
             let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
@@ -877,6 +893,8 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
             let len = (*buf).length as usize;
             let data = perry_runtime::buffer::buffer_data(buf);
             (0..len).map(|i| (*data.add(i) as f64).to_bits()).collect()
+        } else if let Some(chunks) = chunks_from_sync_iterable(value) {
+            chunks
         } else {
             throw_type_error("ReadableStream.from requires an iterable");
         }

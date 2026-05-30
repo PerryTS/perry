@@ -302,12 +302,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: TS readable.cancel \u2014 writable.write does not reject after. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/web/from-promise-iterable": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: ReadableStream.from(customIterable) \u2014 value or done wrong. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",
     "added": "2026-05-24",
