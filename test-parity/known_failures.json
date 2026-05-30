@@ -242,12 +242,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(infiniteGen).take(N) \u2014 take helper does not abort upstream early; iteration hangs or returns wrong items. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/web/desired-size-backpressure": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: writer.desiredSize w/ CountQueuingStrategy \u2014 fails to compile (CountQueuingStrategy constructor not on globalThis). Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/compose/error-mid-chain": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -289,12 +283,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose() error does not destroy source. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/desired-size-restores-after-drain": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: writer.desiredSize does not restore to HWM after write resolves. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/abort-during-pipeto": {
     "issue": "1545",

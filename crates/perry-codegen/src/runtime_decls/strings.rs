@@ -1874,6 +1874,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_text_encoding_stream_new", DOUBLE, &[]);
     // #1545: node:stream/web QueuingStrategy constructors — take the options
     // object, return a `{ highWaterMark, size }` object.
+    module.declare_function("js_streams_strategy_high_water_mark", DOUBLE, &[DOUBLE]);
     module.declare_function("js_count_queuing_strategy_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_byte_length_queuing_strategy_new", DOUBLE, &[DOUBLE]);
     // Issue #562: stream subclassing (`class X extends WritableStream` etc.).

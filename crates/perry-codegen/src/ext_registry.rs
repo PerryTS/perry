@@ -144,6 +144,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_transform_stream_writable",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_stream_unwrap_handle",                     OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     // #1545: node:stream/web QueuingStrategy constructors.
+    ("js_streams_strategy_high_water_mark",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_count_queuing_strategy_new",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_byte_length_queuing_strategy_new",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
 
