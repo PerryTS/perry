@@ -685,6 +685,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_loose_eq", I64, &[I64, I64]);
     module.declare_function("js_number_to_fixed", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_replace_regex", I64, &[I64, I64, I64]);
+    module.declare_function("js_string_replace_all_regex", I64, &[I64, I64, I64]);
     module.declare_function("js_array_at", DOUBLE, &[I64, DOUBLE]);
     // Date getters: all take a timestamp double, return a double.
     module.declare_function("js_date_get_time", DOUBLE, &[DOUBLE]);
@@ -1235,7 +1236,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_regexp_get_source", I64, &[I64]);
     module.declare_function("js_regexp_get_flags", I64, &[I64]);
     module.declare_function("js_string_replace_regex_named", I64, &[I64, I64, I64]);
+    module.declare_function("js_string_replace_all_regex_named", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_regex_fn", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_string_replace_all_regex_fn", I64, &[I64, I64, DOUBLE]);
     // structuredClone(v) — real deep copy, was stubbed as passthrough.
     module.declare_function("js_structured_clone", DOUBLE, &[DOUBLE]);
     // WeakRef / FinalizationRegistry (weakref.rs). `js_weakref_new` /
