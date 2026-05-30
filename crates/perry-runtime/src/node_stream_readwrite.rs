@@ -841,7 +841,6 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     mark_disturbed(stream);
     clear_pending_readable_chunks(stream);
     if stream_hidden_ended(stream) {
-        queue_readable_event(stream);
         schedule_readable_end(stream);
     }
     let encoded = readable_encoding_tag(stream).is_some();
@@ -944,7 +943,6 @@ pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
     mark_disturbed(stream);
     if stream_hidden_ended(stream) && remaining == 0.0 {
         clear_pending_readable_chunks(stream);
-        queue_readable_event(stream);
         schedule_readable_end(stream);
     }
     chunk
