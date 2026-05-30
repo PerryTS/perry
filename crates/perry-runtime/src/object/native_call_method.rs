@@ -167,6 +167,120 @@ fn root_string_arg_handle<'scope>(
     }
 }
 
+#[inline]
+unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr = jsval.as_pointer::<u8>();
+    if ptr.is_null()
+        || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+        || !is_valid_obj_ptr(ptr as *const u8)
+    {
+        return None;
+    }
+    let addr = ptr as usize;
+    if crate::set::is_registered_set(addr)
+        || crate::map::is_registered_map(addr)
+        || crate::regex::is_regex_pointer(ptr as *const u8)
+        || crate::symbol::is_registered_symbol(addr)
+    {
+        return None;
+    }
+    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    Some((ptr, (*gc_header).obj_type))
+}
+
+#[inline]
+unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
+    if gc_type == crate::gc::GC_TYPE_OBJECT {
+        Some(ptr as *mut ObjectHeader)
+    } else {
+        None
+    }
+}
+
+/// Shared implementation for `Object.prototype.isPrototypeOf`.
+pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64) -> bool {
+    let receiver_ptr = match object_ptr_from_value(receiver) {
+        Some(ptr) => ptr,
+        None => return false,
+    };
+
+    let target_jsval = JSValue::from_bits(target.to_bits());
+    if !target_jsval.is_pointer() {
+        return false;
+    }
+
+    if let Some(target_ptr) = object_ptr_from_value(target) {
+        let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
+        let mut depth = 0usize;
+        let mut visited: [u32; 32] = [0; 32];
+        while cid != 0 && depth < visited.len() {
+            if visited[..depth].contains(&cid) {
+                break;
+            }
+            visited[depth] = cid;
+
+            let proto_obj = crate::object::class_registry::class_prototype_object(cid);
+            let mut next_cid = 0;
+            if !proto_obj.is_null() {
+                if std::ptr::addr_eq(proto_obj, receiver_ptr) {
+                    return true;
+                }
+                next_cid = crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
+            }
+
+            if next_cid != 0 && next_cid != cid {
+                cid = next_cid;
+                depth += 1;
+                continue;
+            }
+
+            match crate::object::class_registry::get_parent_class_id(cid) {
+                Some(parent_id) if parent_id != 0 && parent_id != cid => {
+                    cid = parent_id;
+                    depth += 1;
+                }
+                _ => break,
+            }
+        }
+    } else {
+        let (_, target_gc_type) = match gc_pointer_and_type_from_value(target) {
+            Some(info) => info,
+            None => return false,
+        };
+        if target_gc_type != crate::gc::GC_TYPE_CLOSURE {
+            return false;
+        }
+    }
+
+    let mut current = target;
+    for _ in 0..32 {
+        let current_ptr = object_ptr_from_value(current);
+        let proto = crate::object::js_object_get_prototype_of(current);
+        let proto_jsval = JSValue::from_bits(proto.to_bits());
+        if proto_jsval.is_null() || proto_jsval.is_undefined() {
+            break;
+        }
+        let proto_ptr = match object_ptr_from_value(proto) {
+            Some(ptr) => ptr,
+            None => break,
+        };
+        if current_ptr.is_some_and(|ptr| std::ptr::addr_eq(ptr, proto_ptr)) {
+            break;
+        }
+        if std::ptr::addr_eq(proto_ptr, receiver_ptr) {
+            return true;
+        }
+        current = proto;
+    }
+
+    false
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -1877,16 +1991,20 @@ pub unsafe extern "C" fn js_native_call_method(
             return f64::from_bits(JSValue::bool(enumerable).bits());
         }
 
-        // `prim.isPrototypeOf(v)` — true iff the receiver appears in `v`'s
-        // prototype chain. #2058: a primitive receiver (number/string/boolean,
-        // reached via the `js_class_method_bind` value-read path) is never on
-        // another object's prototype chain, so the result is always `false`.
-        // Scoped to non-pointer receivers so object/class-prototype receivers
-        // keep their existing dispatch. Returning a clean boolean keeps
-        // `typeof n.isPrototypeOf === "function"` honest: the bound value is
-        // actually callable rather than throwing.
-        "isPrototypeOf" if !jsval.is_pointer() => {
-            return f64::from_bits(JSValue::bool(false).bits());
+        // `obj.isPrototypeOf(v)` — true iff `obj` appears in `v`'s modeled
+        // prototype chain. Object.create links live in Perry's synthetic
+        // class/prototype side table; closure/static prototype links use
+        // `Object.getPrototypeOf` state. Primitive/nullish receivers or
+        // arguments are never a match.
+        "isPrototypeOf" => {
+            let arg = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return f64::from_bits(
+                JSValue::bool(js_object_is_prototype_of_value(object, arg)).bits(),
+            );
         }
 
         // `prim.valueOf()` — a primitive's `valueOf` returns the primitive
