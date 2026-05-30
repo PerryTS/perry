@@ -26,6 +26,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
     } else {
         ""
     };
+    let module_name = match module_name {
+        "path/posix" => "path.posix",
+        "path/win32" => "path.win32",
+        _ => module_name,
+    };
     // Helper: get arg N as f64
     let arg = |n: usize| -> f64 {
         if n < args_len && !args_ptr.is_null() {
@@ -1265,6 +1270,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(JSValue::undefined().bits())
         }
         ("stream", "compose") => crate::node_stream::js_node_stream_compose_args(pack_args()),
+        ("stream", "duplexPair") => crate::node_stream::js_node_stream_duplex_pair(arg(0)),
         ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.

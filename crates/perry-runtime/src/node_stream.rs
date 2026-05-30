@@ -1166,6 +1166,11 @@ fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
 }
 
 fn emit_writable_chunk(stream: f64, chunk: f64) {
+    // Custom Duplex sinks own readable output by calling push(); the generic
+    // Perry fallback auto-echoes only when there is no user write sink.
+    if has_truthy_hidden(stream, hidden_key(b"writableCustomSink")) {
+        return;
+    }
     if has_truthy_hidden(stream, hidden_readable_flag_key()) {
         mark_disturbed(stream);
         if readable_is_flowing(stream) {
@@ -1177,10 +1182,14 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 }
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
-    mark_stream_ended(stream);
-    refresh_readable_aborted_flag(stream);
+    let pair_peer = get_hidden_value(stream, hidden_key(b"duplexPairPeer"));
+    if pair_peer.is_none() {
+        mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
+    }
     mark_writable_ended(stream);
-    if get_hidden_value(stream, hidden_readable_flag_key()).is_none()
+    if pair_peer.is_none()
+        && get_hidden_value(stream, hidden_readable_flag_key()).is_none()
         && !has_truthy_hidden(stream, hidden_end_emitted_key())
     {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
@@ -1589,6 +1598,10 @@ pub use pipeline::*;
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
 pub use readwrite::*;
+
+#[path = "node_stream_json.rs"]
+mod json_stream;
+pub use json_stream::*;
 
 #[path = "node_stream_constructors.rs"]
 mod constructors;

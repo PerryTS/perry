@@ -18,6 +18,14 @@ use super::super::{
 };
 use super::os::user_info_expr_for_call;
 
+fn path_submodule_name(module_name: &str) -> Option<&'static str> {
+    match module_name.strip_prefix("node:").unwrap_or(module_name) {
+        "path/posix" | "path.posix" => Some("posix"),
+        "path/win32" | "path.win32" => Some("win32"),
+        _ => None,
+    }
+}
+
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
@@ -601,50 +609,10 @@ pub(super) fn try_native_module_methods(
                         // `result === target` and orphans target's symbol-keyed
                         // properties since the side table is keyed by raw pointer.
                         //
-                        // Special case: no target at all (`Object.assign()`) is
-                        // a TypeError per spec; we coerce to an empty object literal.
-                        // Special case: `Object.assign({}, ...)` with a fresh empty
-                        // object-literal target — the user is explicitly asking for
-                        // a fresh object, so we keep the old ObjectSpread path
-                        // (matches `{...src1, ...src2}` semantics, no observable
-                        // difference and avoids regressing the no-spread fold below).
                         "assign" => {
-                            if args.is_empty() {
-                                return Ok(Ok(Expr::Object(Vec::new())));
-                            }
                             let mut iter = args.into_iter();
-                            let target = iter.next().unwrap();
+                            let target = iter.next().unwrap_or(Expr::Undefined);
                             let sources: Vec<Expr> = iter.collect();
-                            // `Object.assign({}, ...sources)` — fresh empty object as
-                            // target. Preserve the literal-friendly fast paths
-                            // (no_spread fold to plain Object, otherwise ObjectSpread)
-                            // since there's no pre-existing identity / class_id to
-                            // preserve and downstream codegen has more aggressive
-                            // inlining for these shapes.
-                            if matches!(&target, Expr::Object(props) if props.is_empty()) {
-                                let mut parts: Vec<(Option<String>, Expr)> = Vec::new();
-                                for arg in &sources {
-                                    match arg {
-                                        Expr::Object(props) => {
-                                            for (key, val) in props {
-                                                parts.push((Some(key.clone()), val.clone()));
-                                            }
-                                        }
-                                        _ => {
-                                            parts.push((None, arg.clone()));
-                                        }
-                                    }
-                                }
-                                let has_spread = parts.iter().any(|(k, _)| k.is_none());
-                                if !has_spread {
-                                    let static_props: Vec<(String, Expr)> = parts
-                                        .into_iter()
-                                        .filter_map(|(k, v)| k.map(|key| (key, v)))
-                                        .collect();
-                                    return Ok(Ok(Expr::Object(static_props)));
-                                }
-                                return Ok(Ok(Expr::ObjectSpread { parts }));
-                            }
                             // Real `Object.assign(target, ...sources)` — mutate target.
                             return Ok(Ok(Expr::ObjectAssign {
                                 target: Box::new(target),
@@ -1170,6 +1138,22 @@ pub(super) fn try_native_module_methods(
                             }
                             return Ok(Ok(Expr::UrlParse(Box::new(input))));
                         }
+                    }
+                }
+
+                if let Some(submodule) = path_submodule_name(module_name) {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.to_string();
+                        return Ok(
+                            match super::nested_namespace::dispatch_path_subnamespace(
+                                submodule,
+                                &method_name,
+                                args,
+                            ) {
+                                Ok(expr) => Ok(expr),
+                                Err(args) => Err(args),
+                            },
+                        );
                     }
                 }
 

@@ -68,6 +68,8 @@ pub const NATIVE_MODULES: &[&str] = &[
     "streams",
     "fs",
     "path",
+    "path/posix",
+    "path/win32",
     "console",
     "util",
     "util/types",
@@ -127,7 +129,7 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2"];
+pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2", "sys"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -135,6 +137,8 @@ pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2"];
 pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "fs",
     "path",
+    "path/posix",
+    "path/win32",
     "os",
     "buffer",
     "assert",
@@ -2157,6 +2161,41 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path", "delimiter"),
     property("path", "posix"),
     property("path", "win32"),
+    // Direct Node path submodules. Runtime aliases `path/posix` and
+    // `path/win32` to the existing `path.posix` / `path.win32`
+    // native-module namespaces.
+    method("path/posix", "join", false, None),
+    method("path/posix", "dirname", false, None),
+    method("path/posix", "basename", false, None),
+    method("path/posix", "extname", false, None),
+    method("path/posix", "resolve", false, None),
+    method("path/posix", "isAbsolute", false, None),
+    method("path/posix", "relative", false, None),
+    method("path/posix", "normalize", false, None),
+    method("path/posix", "parse", false, None),
+    method("path/posix", "format", false, None),
+    method("path/posix", "toNamespacedPath", false, None),
+    method("path/posix", "matchesGlob", false, None),
+    property("path/posix", "sep"),
+    property("path/posix", "delimiter"),
+    property("path/posix", "posix"),
+    property("path/posix", "win32"),
+    method("path/win32", "join", false, None),
+    method("path/win32", "dirname", false, None),
+    method("path/win32", "basename", false, None),
+    method("path/win32", "extname", false, None),
+    method("path/win32", "resolve", false, None),
+    method("path/win32", "isAbsolute", false, None),
+    method("path/win32", "relative", false, None),
+    method("path/win32", "normalize", false, None),
+    method("path/win32", "parse", false, None),
+    method("path/win32", "format", false, None),
+    method("path/win32", "toNamespacedPath", false, None),
+    method("path/win32", "matchesGlob", false, None),
+    property("path/win32", "sep"),
+    property("path/win32", "delimiter"),
+    property("path/win32", "posix"),
+    property("path/win32", "win32"),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "cwd", false, None),
@@ -2486,6 +2525,34 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isStringObject", false, None),
     method("util/types", "isBooleanObject", false, None),
     method("util/types", "isBoxedPrimitive", false, None),
+    // --- sys: deprecated alias for node:util. Keep this module-level
+    // surface aligned with the public `util` manifest rows above; the
+    // runtime routes `node:sys` through the util namespace.
+    method("sys", "inspect", false, None),
+    method("sys", "format", false, None),
+    method("sys", "getSystemErrorName", false, None),
+    method("sys", "getSystemErrorMessage", false, None),
+    method("sys", "getSystemErrorMap", false, None),
+    method("sys", "parseEnv", false, None),
+    method("sys", "formatWithOptions", false, None),
+    method("sys", "promisify", false, None),
+    method("sys", "callbackify", false, None),
+    method("sys", "deprecate", false, None),
+    method("sys", "inherits", false, None),
+    method_sig(
+        "sys",
+        "isArray",
+        false,
+        None,
+        &[p_any("value")],
+        TypeSpec::Bool,
+    ),
+    method("sys", "isDeepStrictEqual", false, None),
+    method("sys", "parseArgs", false, None),
+    method("sys", "stripVTControlCharacters", false, None),
+    class("sys", "TextEncoder"),
+    class("sys", "TextDecoder"),
+    property("sys", "types"),
     // node:assert — assertion helpers used by tests and many npm packages.
     method("assert", "ok", false, None),
     method("assert", "fail", false, None),

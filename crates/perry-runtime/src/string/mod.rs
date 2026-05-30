@@ -49,8 +49,9 @@ pub use char_ops::{
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
-    js_string_is_well_formed, js_string_locale_compare, js_string_normalize, js_string_starts_with,
-    js_string_starts_with_at, js_string_to_well_formed,
+    js_string_is_well_formed, js_string_locale_compare, js_string_normalize,
+    js_string_search_value_to_string, js_string_starts_with, js_string_starts_with_at,
+    js_string_to_well_formed,
 };
 // #1781: SSO-aware key lookup helpers, used to retire the
 // `is_string() && js_string_equals(key, key_val.as_string_ptr())` shape

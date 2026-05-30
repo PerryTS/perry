@@ -24,6 +24,8 @@ pub const ERROR_KIND_RANGE_ERROR: u32 = 2;
 pub const ERROR_KIND_REFERENCE_ERROR: u32 = 3;
 pub const ERROR_KIND_SYNTAX_ERROR: u32 = 4;
 pub const ERROR_KIND_AGGREGATE_ERROR: u32 = 5;
+pub const ERROR_KIND_EVAL_ERROR: u32 = 6;
+pub const ERROR_KIND_URI_ERROR: u32 = 7;
 
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
 pub const CLASS_ID_ERROR: u32 = 0xFFFF0001;
@@ -32,6 +34,8 @@ pub const CLASS_ID_RANGE_ERROR: u32 = 0xFFFF0011;
 pub const CLASS_ID_REFERENCE_ERROR: u32 = 0xFFFF0012;
 pub const CLASS_ID_SYNTAX_ERROR: u32 = 0xFFFF0013;
 pub const CLASS_ID_AGGREGATE_ERROR: u32 = 0xFFFF0014;
+pub const CLASS_ID_EVAL_ERROR: u32 = 0xFFFF0015;
+pub const CLASS_ID_URI_ERROR: u32 = 0xFFFF0016;
 /// AssertionError is a plain ObjectHeader (so it can carry the extra
 /// `actual` / `expected` / `operator` / `code` / `generatedMessage`
 /// fields Node attaches), but it is registered via
@@ -208,6 +212,18 @@ pub extern "C" fn js_syntaxerror_new(message: *mut StringHeader) -> *mut ErrorHe
     unsafe { alloc_error(ERROR_KIND_SYNTAX_ERROR, b"SyntaxError", message) }
 }
 
+/// Create a new EvalError with a message
+#[no_mangle]
+pub extern "C" fn js_evalerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_EVAL_ERROR, b"EvalError", message) }
+}
+
+/// Create a new URIError with a message
+#[no_mangle]
+pub extern "C" fn js_urierror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_URI_ERROR, b"URIError", message) }
+}
+
 /// Create a new AggregateError with an errors array and a message
 #[no_mangle]
 pub extern "C" fn js_aggregateerror_new(
@@ -252,6 +268,46 @@ pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHead
         }
         (*error).stack
     }
+}
+
+fn throw_capture_stack_trace_target_type_error() -> ! {
+    let message = b"The \"targetObject\" argument must be an object";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// `Error.captureStackTrace(target[, constructorOpt])`.
+///
+/// Perry's stack strings are intentionally coarse today; this helper installs
+/// the same non-enumerable `stack` data property shape Node exposes and
+/// preserves the invalid-target TypeError contract.
+#[no_mangle]
+pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f64) -> f64 {
+    let target_value = crate::value::JSValue::from_bits(target.to_bits());
+    if !target_value.is_pointer() {
+        throw_capture_stack_trace_target_type_error();
+    }
+
+    unsafe {
+        let target_ptr = target_value.as_pointer::<crate::object::ObjectHeader>()
+            as *mut crate::object::ObjectHeader;
+        if target_ptr.is_null() || !crate::object::is_valid_obj_ptr(target_ptr as *const u8) {
+            throw_capture_stack_trace_target_type_error();
+        }
+
+        let stack = make_stack("Error", "");
+        let key = js_string_from_bytes(b"stack".as_ptr(), 5);
+        let value = crate::value::js_nanbox_string(stack as i64);
+        crate::object::js_object_set_field_by_name(target_ptr, key, value);
+        crate::object::set_property_attrs(
+            target_ptr as usize,
+            "stack".to_string(),
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Read a `StringHeader`'s UTF-8 bytes into an owned `String` (lossy on
@@ -502,5 +558,22 @@ mod tostring_tests {
         let e = js_error_new_with_name_message(b"TypeError", s(b"bad"));
         let out = unsafe { read_string_header_owned(js_error_to_string(e)) };
         assert_eq!(out, "TypeError: bad");
+    }
+
+    #[test]
+    fn eval_and_uri_errors_have_distinct_kinds_and_names() {
+        let eval = js_evalerror_new(s(b"eval"));
+        assert_eq!(js_error_get_kind(eval), ERROR_KIND_EVAL_ERROR);
+        assert_eq!(
+            unsafe { read_string_header_owned(js_error_get_name(eval)) },
+            "EvalError"
+        );
+
+        let uri = js_urierror_new(s(b"uri"));
+        assert_eq!(js_error_get_kind(uri), ERROR_KIND_URI_ERROR);
+        assert_eq!(
+            unsafe { read_string_header_owned(js_error_get_name(uri)) },
+            "URIError"
+        );
     }
 }

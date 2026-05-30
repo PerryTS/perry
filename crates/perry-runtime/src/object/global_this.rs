@@ -228,6 +228,14 @@ extern "C" fn global_this_btoa_thunk(
     crate::value::js_nanbox_string(encoded as i64)
 }
 
+extern "C" fn global_this_error_capture_stack_trace_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    constructor_opt: f64,
+) -> f64 {
+    crate::error::js_error_capture_stack_trace(target, constructor_opt)
+}
+
 fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
     let value = crate::value::JSValue::from_bits(rest.to_bits());
     if !value.is_pointer() {
@@ -404,13 +412,37 @@ extern "C" fn object_prototype_to_string_thunk(
     f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
 }
 
+extern "C" fn object_prototype_is_prototype_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    f64::from_bits(
+        JSValue::bool(unsafe { super::js_object_is_prototype_of_value(this_value, value) }).bits(),
+    )
+}
+
+extern "C" fn object_prototype_value_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_value_of(this_value) }
+}
+
+extern "C" fn object_prototype_to_locale_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_to_locale_string(this_value) }
+}
+
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
-/// `js_native_call_method`) and forwards to `js_array_slice`.
+/// `js_native_call_method`) and forwards to the shared slice-value helper.
 ///
-/// Coerces start/end through `JSValue::to_number`, with `undefined`
-/// mapping to `0` for start and `i32::MAX` for end — matching
+/// Coerces start/end through the shared array slice helper, with
+/// `undefined` mapping to `0` for start and end-of-array for end — matching
 /// `Array.prototype.slice`'s ECMA-262 defaults.
 ///
 /// Unblocks the `Array.prototype.slice.call(list, …)` pattern that
@@ -445,29 +477,7 @@ extern "C" fn array_prototype_slice_thunk(
     if arr_ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let start_jsv = JSValue::from_bits(start_val.to_bits());
-    let end_jsv = JSValue::from_bits(end_val.to_bits());
-    let start_i32 = if start_jsv.is_undefined() {
-        0
-    } else {
-        let n = start_jsv.to_number();
-        if n.is_nan() {
-            0
-        } else {
-            n as i32
-        }
-    };
-    let end_i32 = if end_jsv.is_undefined() {
-        i32::MAX
-    } else {
-        let n = end_jsv.to_number();
-        if n.is_nan() {
-            0
-        } else {
-            n as i32
-        }
-    };
-    let result = crate::array::js_array_slice(arr_ptr, start_i32, end_i32);
+    let result = crate::array::js_array_slice_values(arr_ptr, start_val, end_val);
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
 }
 
@@ -694,8 +704,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if name == "String" {
             crate::closure::js_register_closure_arity(func_ptr, 1);
         }
-        if name == "File" {
+        if matches!(name, "File" | "EvalError" | "URIError" | "Uint8Array") {
             super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        }
+        if name == "Error" {
+            install_error_static_methods(closure_ptr);
         }
         // Stash `prototype` on the closure's dynamic-prop side table.
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
@@ -810,6 +823,28 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let pval = crate::perf_hooks::performance_namespace();
         js_object_set_field_by_name(singleton, pkey, pval);
     }
+}
+
+fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    let func_ptr = global_this_error_capture_stack_trace_thunk as *const u8;
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    super::native_module::set_bound_native_closure_name(closure, "captureStackTrace");
+
+    let key = crate::string::js_string_from_bytes(b"captureStackTrace".as_ptr(), 17);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "captureStackTrace".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 /// Install a method on a prototype object as a callable closure value with
@@ -967,7 +1002,28 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 object_prototype_to_string_thunk as *const u8,
                 0,
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "toLocaleString",
+                object_prototype_to_locale_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                object_prototype_value_of_thunk as *const u8,
+                0,
+            );
+            install_noop_proto_methods(
+                proto_obj,
+                &[("hasOwnProperty", 1), ("propertyIsEnumerable", 1)],
+            );
         }
         "Function" => {
             install_noop_proto_methods(
