@@ -467,7 +467,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
     module.declare_function("js_string_compare", I32, &[I64, I64]);
-    module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, I32]);
+    module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_random", DOUBLE, &[]);
     // WebAssembly host runtime (issue #76). All take/return NaN-boxed
     // doubles (JSValues). Implementations live in
@@ -965,6 +965,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Universal `.toString(encoding)` dispatch — branches on
     // is_registered_buffer at runtime, falls back to js_jsvalue_to_string.
     module.declare_function("js_value_to_string_with_encoding", I64, &[DOUBLE, I32]);
+    // Buffer-encoding OR number/bigint-radix dispatch (#2864): the string arg
+    // is ambiguous, so pass both the pre-parsed encoding tag and the raw arg.
+    module.declare_function(
+        "js_value_to_string_with_encoding_or_radix",
+        I64,
+        &[DOUBLE, I32, DOUBLE],
+    );
     module.declare_function("js_fs_unlink_sync", I32, &[DOUBLE]);
     module.declare_function("js_object_values", I64, &[I64]);
     module.declare_function("js_object_values_value", I64, &[DOUBLE]);

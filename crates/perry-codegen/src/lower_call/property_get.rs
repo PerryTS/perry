@@ -151,6 +151,10 @@ pub fn try_lower_property_get_method_call(
             .unwrap_or(false);
         if !has_user_to_string {
             let v = lower_expr(ctx, object)?;
+            // Always lower the raw arg value too: for a Number/BigInt receiver
+            // the string is the radix (ToNumber-coerced at runtime, #2864), not
+            // an encoding. Disambiguation is by receiver type at runtime.
+            let arg_box = lower_expr(ctx, &args[0])?;
             let enc_tag_i32 = if let Expr::String(s) = &args[0] {
                 let lower = s.to_ascii_lowercase();
                 let tag: i32 = match lower.as_str() {
@@ -165,15 +169,14 @@ pub fn try_lower_property_get_method_call(
                 };
                 tag.to_string()
             } else {
-                let enc_box = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                blk.call(I32, "js_encoding_tag_from_value", &[(DOUBLE, &enc_box)])
+                blk.call(I32, "js_encoding_tag_from_value", &[(DOUBLE, &arg_box)])
             };
             let blk = ctx.block();
             let handle = blk.call(
                 I64,
-                "js_value_to_string_with_encoding",
-                &[(DOUBLE, &v), (I32, &enc_tag_i32)],
+                "js_value_to_string_with_encoding_or_radix",
+                &[(DOUBLE, &v), (I32, &enc_tag_i32), (DOUBLE, &arg_box)],
             );
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
@@ -205,13 +208,16 @@ pub fn try_lower_property_get_method_call(
             .unwrap_or(false);
         if !has_user_to_string {
             let v = lower_expr(ctx, object)?;
-            let radix_d = lower_expr(ctx, &args[0])?;
+            // Pass the *raw* NaN-boxed radix value (not an `fptosi` i32). The
+            // runtime performs ECMAScript ToNumber/ToInteger coercion and
+            // `RangeError` validation on it (#2864); an `fptosi` here would
+            // silently collapse NaN/Infinity/string radices to 0 or garbage.
+            let radix_v = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
-            let radix_i32 = blk.fptosi(DOUBLE, &radix_d, I32);
             let handle = blk.call(
                 I64,
                 "js_jsvalue_to_string_radix",
-                &[(DOUBLE, &v), (I32, &radix_i32)],
+                &[(DOUBLE, &v), (DOUBLE, &radix_v)],
             );
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
