@@ -991,6 +991,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "stripVTControlCharacters") => {
             crate::builtins::js_util_strip_vt_control_characters(arg(0))
         }
+        ("util", "styleText") => crate::util_style_text::js_util_style_text(arg(0), arg(1), arg(2)),
         // #2514: util.toUSVString(value) → string with lone surrogates → U+FFFD.
         ("util", "toUSVString") => crate::util_usv::js_util_to_usv_string(arg(0)),
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),

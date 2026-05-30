@@ -146,6 +146,7 @@ pub mod ui_text_registry;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
+pub mod util_style_text;
 pub mod util_syserr;
 pub mod util_usv;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]

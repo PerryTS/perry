@@ -2833,6 +2833,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "isDeepStrictEqual", false, None),
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
+    method("util", "styleText", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. Required
@@ -2902,6 +2903,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "isDeepStrictEqual", false, None),
     method("sys", "parseArgs", false, None),
     method("sys", "stripVTControlCharacters", false, None),
+    method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
