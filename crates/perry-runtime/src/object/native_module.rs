@@ -125,6 +125,28 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
 
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
+        "assert/strict" => Some(&[
+            b"AssertionError",
+            b"ok",
+            b"fail",
+            b"equal",
+            b"notEqual",
+            b"deepEqual",
+            b"notDeepEqual",
+            b"deepStrictEqual",
+            b"notDeepStrictEqual",
+            b"strictEqual",
+            b"notStrictEqual",
+            b"partialDeepStrictEqual",
+            b"match",
+            b"doesNotMatch",
+            b"throws",
+            b"rejects",
+            b"doesNotThrow",
+            b"doesNotReject",
+            b"ifError",
+            b"strict",
+        ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
@@ -181,7 +203,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
-        "util" | "util.types" | "path.posix" | "path.win32"
+        "assert/strict" | "util" | "util.types" | "path.posix" | "path.win32"
     )
 }
 
@@ -2180,6 +2202,10 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "assert" => match property {
             "strict" => Some(create_sub_namespace("assert/strict")),
+            _ => None,
+        },
+        "assert/strict" => match property {
+            "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
             _ => None,
         },
         "stream" => match property {

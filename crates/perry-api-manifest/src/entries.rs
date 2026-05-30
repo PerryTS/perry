@@ -2598,6 +2598,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert/strict", "doesNotReject", false, None),
     method("assert/strict", "ifError", false, None),
     method("assert/strict", "default", false, None),
+    method("assert/strict", "strict", false, None),
+    property("assert/strict", "strict"),
     class("assert/strict", "AssertionError"),
     // --- stream (Web Streams API + Node stream classes — see
     //     perry-stdlib/src/streams.rs and perry-ext-streams) ---

@@ -269,6 +269,22 @@ mod tests {
     }
 
     #[test]
+    fn assert_strict_self_alias_has_manifest_entries() {
+        let method = module_has_symbol("node:assert/strict", "strict")
+            .expect("assert/strict.strict should be callable in the manifest");
+        assert!(matches!(method.kind, ApiKind::Method { .. }));
+
+        assert!(
+            API_MANIFEST.iter().any(|entry| {
+                entry.module == "assert/strict"
+                    && entry.name == "strict"
+                    && matches!(entry.kind, ApiKind::Property)
+            }),
+            "assert/strict.strict should also be a manifest property"
+        );
+    }
+
+    #[test]
     fn util_is_array_is_manifest_method() {
         let entry = module_has_symbol("node:util", "isArray")
             .expect("util.isArray should be in the manifest");
