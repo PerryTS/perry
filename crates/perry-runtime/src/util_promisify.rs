@@ -99,6 +99,23 @@ fn validate_original_function(fn_value: f64) {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
+fn throw_plain_type_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn validate_deprecate_target(fn_value: f64) {
+    if is_callable_closure(fn_value) {
+        return;
+    }
+    let message = format!(
+        "The \"fn\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(fn_value)
+    );
+    throw_plain_type_error(&message);
+}
+
 fn custom_promisified_value(fn_value: f64) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let fn_handle = scope.root_nanbox_f64(fn_value);
@@ -216,6 +233,7 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
 /// contain spaces.
 #[no_mangle]
 pub extern "C" fn js_util_deprecate(fn_value: f64, _msg: f64, _code: f64) -> f64 {
+    validate_deprecate_target(fn_value);
     fn_value
 }
 
