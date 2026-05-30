@@ -682,9 +682,16 @@ where
             f(items);
             f(key_fn);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             f(iterable);
             f(map_fn);
+            if let Some(t) = this_arg {
+                f(t);
+            }
         }
         Expr::IndexSet {
             object,

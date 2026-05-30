@@ -824,9 +824,16 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             Expr::ArrayIsArray(Box::new(substitute_expr(value, substitutions)))
         }
         Expr::ArrayFrom(value) => Expr::ArrayFrom(Box::new(substitute_expr(value, substitutions))),
-        Expr::ArrayFromMapped { iterable, map_fn } => Expr::ArrayFromMapped {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => Expr::ArrayFromMapped {
             iterable: Box::new(substitute_expr(iterable, substitutions)),
             map_fn: Box::new(substitute_expr(map_fn, substitutions)),
+            this_arg: this_arg
+                .as_ref()
+                .map(|t| Box::new(substitute_expr(t, substitutions))),
         },
 
         // Global built-in functions

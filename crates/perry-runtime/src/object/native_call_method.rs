@@ -460,7 +460,9 @@ unsafe fn dispatch_typed_array_method(
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
-            f64::from_bits(crate::typedarray::js_typed_array_copy_within(ta, target, start, end) as u64)
+            f64::from_bits(
+                crate::typedarray::js_typed_array_copy_within(ta, target, start, end) as u64,
+            )
         }
         "with" => {
             let idx = arg0();
@@ -1606,11 +1608,12 @@ pub unsafe extern "C" fn js_native_call_method(
                         let result = crate::array::js_array_flatMap(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
-                    "concat" if args_len >= 1 && !args_ptr.is_null() => {
-                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        let other_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let other_ptr = other_bits as *mut crate::array::ArrayHeader;
-                        let result = crate::array::js_array_concat(arr, other_ptr);
+                    "concat" => {
+                        // #2805: non-mutating, variadic concat with
+                        // Symbol.isConcatSpreadable handling.
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result =
+                            crate::array::js_array_concat_variadic(arr, args_ptr, args_len as i32);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "indexOf" if args_len >= 1 && !args_ptr.is_null() => {

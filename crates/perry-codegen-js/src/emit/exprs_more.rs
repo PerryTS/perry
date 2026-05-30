@@ -1035,11 +1035,19 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
                 self.output.push_str("Array.from(");
                 self.emit_expr(iterable);
                 self.output.push_str(", ");
                 self.emit_expr(map_fn);
+                if let Some(t) = this_arg {
+                    self.output.push_str(", ");
+                    self.emit_expr(t);
+                }
                 self.output.push(')');
             }
 
