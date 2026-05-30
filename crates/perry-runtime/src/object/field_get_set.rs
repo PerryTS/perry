@@ -1653,15 +1653,15 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::undefined();
                     }
                 }
-                if key_bytes == b"buffer" {
-                    // Issue #1225: a copied Buffer aliases its source's
-                    // ArrayBuffer identity so `Buffer.from(src).buffer ===
-                    // src.buffer` matches Node's pool-slab sharing.  Fresh
-                    // buffers without an entry fall back to their own pointer.
-                    let alias = crate::buffer::resolve_buffer_ab_alias(obj as usize);
+                if key_bytes == b"buffer" || key_bytes == b"parent" {
+                    let alias = crate::buffer::buffer_backing_array_buffer(obj as usize);
                     return JSValue::from_bits(
                         crate::value::js_nanbox_pointer(alias as i64).to_bits(),
                     );
+                }
+                if key_bytes == b"byteOffset" || key_bytes == b"offset" {
+                    let offset = crate::buffer::buffer_byte_offset(obj as usize);
+                    return JSValue::number(offset as f64);
                 }
                 // Issue #639 followup: method-as-value reads on a Buffer
                 // (e.g. duck-type tests like `typeof v.readUInt8 === "function"`
