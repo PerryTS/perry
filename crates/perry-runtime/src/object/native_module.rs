@@ -44,6 +44,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 /// Special class ID for native module namespace objects
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
+const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
@@ -54,6 +55,20 @@ pub(crate) fn buffer_pool_size() -> f64 {
 
 pub(crate) fn set_buffer_pool_size(value: f64) {
     BUFFER_POOL_SIZE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn worker_threads_locks_value() -> f64 {
+    let name = "LockManager";
+    unsafe {
+        js_register_class_id(WORKER_THREADS_LOCK_MANAGER_CLASS_ID);
+        js_register_class_name(
+            WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+            name.as_ptr(),
+            name.len() as u32,
+        );
+    }
+    let obj = js_object_alloc(WORKER_THREADS_LOCK_MANAGER_CLASS_ID, 0);
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 /// Create a native module namespace object
@@ -932,6 +947,16 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "hrtime")
             | ("worker_threads", "getEnvironmentData")
             | ("worker_threads", "setEnvironmentData")
+            | ("worker_threads", "markAsUntransferable")
+            | ("worker_threads", "isMarkedAsUntransferable")
+            | ("worker_threads", "markAsUncloneable")
+            | ("worker_threads", "moveMessagePortToContext")
+            | ("worker_threads", "receiveMessageOnPort")
+            | ("worker_threads", "postMessageToThread")
+            | ("worker_threads", "Worker")
+            | ("worker_threads", "MessageChannel")
+            | ("worker_threads", "MessagePort")
+            | ("worker_threads", "BroadcastChannel")
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
@@ -2477,6 +2502,7 @@ pub(crate) unsafe fn get_native_module_constant(
                 let obj = crate::object::js_object_alloc(0, 0);
                 Some(crate::value::js_nanbox_pointer(obj as i64))
             }
+            "locks" => Some(worker_threads_locks_value()),
             "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
                 "nodejs.worker_threads.SHARE_ENV",
             ))),
