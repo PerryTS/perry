@@ -231,16 +231,8 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             if primitive.to_bits() != value.to_bits() {
                 return js_jsvalue_to_string(primitive);
             }
-            // #2089: a Date is a NaN-boxed `DateCell` pointer. `String(date)`,
-            // `` `${date}` ``, and `date.toString()` produce the full local
-            // date string (or "Invalid Date"), not "[object Object]". Detect
-            // before any GC-header object dispatch (the 8-byte cell is smaller
-            // than an ObjectHeader).
-            if crate::date::is_date_cell_addr(ptr as usize) {
-                return crate::date::js_date_to_string(value);
-            }
             // Buffers: BufferHeader has no GC header, so we must detect via
-            // BUFFER_REGISTRY before computing gc_header (which would read
+            // BUFFER_REGISTRY before any GC-header probe (which would read
             // garbage one word before the buffer). `Buffer.toString()` with
             // no arg defaults to UTF-8 — Node prints the raw bytes.
             if crate::buffer::is_registered_buffer(ptr as usize) {
@@ -248,6 +240,14 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     ptr as *const crate::buffer::BufferHeader,
                     0,
                 );
+            }
+            // #2089: a Date is a NaN-boxed `DateCell` pointer. `String(date)`,
+            // `` `${date}` ``, and `date.toString()` produce the full local
+            // date string (or "Invalid Date"), not "[object Object]". Detect
+            // before GC-header object dispatch (the 8-byte cell is smaller
+            // than an ObjectHeader), after non-GC native buffer handles.
+            if crate::date::is_date_cell_addr(ptr as usize) {
+                return crate::date::js_date_to_string(value);
             }
             unsafe {
                 let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

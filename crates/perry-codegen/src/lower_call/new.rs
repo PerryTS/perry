@@ -19,6 +19,7 @@ fn node_stream_parent_kind(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<
     while let Some(name) = cur {
         match name {
             "Readable" => return Some("readable"),
+            "Duplex" => return Some("duplex"),
             _ => {}
         }
         if ctx.imported_class_ctors.contains_key(name) {
@@ -462,6 +463,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     let builtin_parent_runtime = if !has_own_ctor && !has_imported_ctor {
         match class.extends_name.as_deref() {
             Some("Writable") => Some("js_node_stream_writable_subclass_init"),
+            Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
             _ => None,
         }
     } else {
@@ -601,6 +603,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     .unwrap_or_else(|| undef_lit.clone());
                 let runtime_fn = match kind {
                     "readable" => "js_node_stream_readable_subclass_init",
+                    "duplex" => "js_node_stream_duplex_subclass_init",
                     _ => unreachable!("node stream parent kind {}", kind),
                 };
                 ctx.block().call(
@@ -710,7 +713,20 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 found_inherited_ctor = true; // skip the imported-ctor fallback below
             }
         }
-        if builtin_parent_runtime.is_some() {
+        if let Some(runtime_fn) = builtin_parent_runtime {
+            let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let opts = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef_lit.clone());
+            let this_box = ctx
+                .this_stack
+                .last()
+                .cloned()
+                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                .unwrap_or_else(|| undef_lit.clone());
+            ctx.block()
+                .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
             found_inherited_ctor = true;
         }
         // If no parent constructor was found (imported class with no
@@ -846,7 +862,9 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // `BetterSQLiteSession` (explicit ctor) and arrow-field cross-
     // module classes are both load-bearing. Refs #420 / #618 followup.
     if !has_own_ctor && has_extends && !has_imported_ctor {
-        if let Some(stop_at) = inherited_ctor_class {
+        if builtin_parent_runtime.is_some() {
+            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
+        } else if let Some(stop_at) = inherited_ctor_class {
             apply_field_initializers_recursive(
                 ctx,
                 class_name,
@@ -856,22 +874,6 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
-    if let Some(runtime_fn) = builtin_parent_runtime {
-        let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        let opts = lowered_args
-            .first()
-            .cloned()
-            .unwrap_or_else(|| undef_lit.clone());
-        let this_box = ctx
-            .this_stack
-            .last()
-            .cloned()
-            .map(|slot| ctx.block().load(DOUBLE, &slot))
-            .unwrap_or_else(|| undef_lit.clone());
-        ctx.block()
-            .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
-    }
-
     if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
         let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
         let slot_count_str = typed_layout.slot_count.to_string();

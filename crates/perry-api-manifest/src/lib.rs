@@ -296,4 +296,62 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn sys_alias_mirrors_util_manifest() {
+        assert!(is_known_module("sys"));
+        assert!(is_known_module("node:sys"));
+        assert!(module_has_any_entries("sys"));
+
+        for name in [
+            "format",
+            "inspect",
+            "types",
+            "TextEncoder",
+            "parseArgs",
+            "stripVTControlCharacters",
+        ] {
+            assert!(
+                module_has_symbol("node:sys", name).is_some(),
+                "node:sys missing representative util alias export: {name}"
+            );
+        }
+
+        let util_entries: Vec<&ApiEntry> =
+            API_MANIFEST.iter().filter(|e| e.module == "util").collect();
+        let sys_entries: Vec<&ApiEntry> =
+            API_MANIFEST.iter().filter(|e| e.module == "sys").collect();
+        assert_eq!(
+            sys_entries.len(),
+            util_entries.len(),
+            "sys should mirror the public util module manifest surface"
+        );
+
+        for util_entry in util_entries {
+            let sys_entry = sys_entries
+                .iter()
+                .copied()
+                .find(|e| e.name == util_entry.name && e.kind == util_entry.kind)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "sys missing util alias entry {}::{:?}",
+                        util_entry.name, util_entry.kind
+                    )
+                });
+            assert_eq!(sys_entry.source, util_entry.source, "{}", util_entry.name);
+            assert_eq!(sys_entry.stub, util_entry.stub, "{}", util_entry.name);
+            assert_eq!(
+                sys_entry.abi_version, util_entry.abi_version,
+                "{}",
+                util_entry.name
+            );
+            assert_eq!(
+                sys_entry.params.len(),
+                util_entry.params.len(),
+                "{}",
+                util_entry.name
+            );
+            assert_eq!(sys_entry.returns, util_entry.returns, "{}", util_entry.name);
+        }
+    }
 }

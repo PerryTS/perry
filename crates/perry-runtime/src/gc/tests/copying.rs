@@ -125,6 +125,8 @@ impl TemporaryRustMutableRootScanner {
             scanners.push(MutableRootScannerEntry {
                 scanner: test_rust_mutable_root_scanner,
                 source: MutableRootScannerSource::RuntimeMutableScanner,
+                budgeted_scanner: None,
+                budgeted_state_factory: None,
             });
             previous_len
         });
@@ -1428,8 +1430,8 @@ fn copied_minor_rewrites_dirty_set_external_element_and_reindexes() {
 
 #[test]
 fn test_copied_minor_verify_evacuation_env_remains_eligible() {
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
     js_shadow_slot_set(0, ptr_bits(child));
@@ -1448,8 +1450,8 @@ fn test_copied_minor_verify_evacuation_env_remains_eligible() {
 
 #[test]
 fn test_copied_minor_verify_evacuation_copy_only_roots_reject_before_copying() {
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[]);
 

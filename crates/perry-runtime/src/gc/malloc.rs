@@ -70,6 +70,15 @@ pub(crate) struct MallocState {
     /// activates the registry by rebuilding it from `objects`; after that,
     /// allocation, realloc, and sweep keep it synchronized inline.
     pub(crate) set: crate::fast_hash::PtrHashSet<usize>,
+    /// Headers moved by `gc_realloc` after a malloc sweep snapshot starts.
+    /// Incremental malloc sweep resolves snapshot headers through this map
+    /// before dereferencing so a paused sweep never follows a freed realloc
+    /// source pointer.
+    pub(crate) realloc_forwarding: crate::fast_hash::PtrHashMap<usize, usize>,
+    /// Original headers in the currently active malloc sweep snapshot.
+    /// This prevents reallocs of new allocations that reuse old addresses from
+    /// replacing a snapshot object's forwarding entry.
+    pub(crate) realloc_snapshot_headers: crate::fast_hash::PtrHashSet<usize>,
     /// Registry availability/consistency. Copied-minor GC may consult an
     /// already-active exact registry, but must never rebuild it on the fast
     /// path because that would scale with total malloc churn.
@@ -106,6 +115,8 @@ thread_local! {
             MALLOC_STATE_INITIAL_CAPACITY,
             crate::fast_hash::PtrHasher,
         ),
+        realloc_forwarding: crate::fast_hash::new_ptr_hash_map(),
+        realloc_snapshot_headers: crate::fast_hash::new_ptr_hash_set(),
         registry_state: MallocRegistryState::Inactive,
         kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
     });
@@ -271,6 +282,79 @@ impl MallocState {
         }
         snapshot
     }
+
+    #[inline]
+    pub(super) fn record_realloc_forwarding(
+        &mut self,
+        old_header: *mut GcHeader,
+        new_header: *mut GcHeader,
+    ) {
+        if old_header == new_header {
+            return;
+        }
+        let old_addr = old_header as usize;
+        let new_addr = new_header as usize;
+        let mut updated_existing_snapshot = false;
+        for current in self.realloc_forwarding.values_mut() {
+            if *current == old_addr {
+                *current = new_addr;
+                updated_existing_snapshot = true;
+            }
+        }
+        if !updated_existing_snapshot
+            && self.realloc_snapshot_headers.contains(&old_addr)
+            && !self.realloc_forwarding.contains_key(&old_addr)
+        {
+            self.realloc_forwarding.insert(old_addr, new_addr);
+        }
+        self.realloc_forwarding
+            .retain(|&snapshot_header, current_header| snapshot_header != *current_header);
+    }
+
+    pub(super) fn resolve_realloc_forwarding(&self, header: *mut GcHeader) -> *mut GcHeader {
+        let start = header as usize;
+        self.realloc_forwarding
+            .get(&start)
+            .copied()
+            .unwrap_or(start) as *mut GcHeader
+    }
+}
+
+pub(super) fn malloc_sweep_snapshot_headers() -> Vec<*mut GcHeader> {
+    MALLOC_STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.realloc_forwarding.clear();
+        let headers = s.objects.clone();
+        s.realloc_snapshot_headers.clear();
+        s.realloc_snapshot_headers
+            .extend(headers.iter().map(|&header| header as usize));
+        headers
+    })
+}
+
+pub(super) fn malloc_sweep_clear_snapshot_tracking() {
+    MALLOC_STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.realloc_forwarding.clear();
+        s.realloc_snapshot_headers.clear();
+    });
+}
+
+pub(super) fn malloc_sweep_revalidate_header(
+    snapshot_header: *mut GcHeader,
+    expected_idx: usize,
+) -> Option<(*mut GcHeader, usize)> {
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        let current_header = s.resolve_realloc_forwarding(snapshot_header);
+        if expected_idx < s.objects.len() && s.objects[expected_idx] == current_header {
+            return Some((current_header, expected_idx));
+        }
+        s.objects
+            .iter()
+            .position(|&candidate| candidate == current_header)
+            .map(|idx| (current_header, idx))
+    })
 }
 
 thread_local! {
@@ -398,6 +482,7 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
                 // consistent with `objects` — patch in place.
                 s.set.remove(&(old_header as usize));
                 s.set.insert(new_header as usize);
+                s.record_realloc_forwarding(old_header, new_header);
             }
         });
         GC_FLAGS.with(|f| {

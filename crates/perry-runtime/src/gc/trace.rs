@@ -5,39 +5,22 @@ thread_local! {
         std::cell::UnsafeCell::new(Vec::new());
 }
 
+const VALID_POINTER_ARENA_RUN_CAPACITY: usize = 1024;
+
 pub(crate) struct ValidPointerSet {
-    /// Insertion-side staging for arena entries — filled in ascending
-    /// order by the address-sorted arena walk. Swapped into
-    /// `merged_sorted` in `finalize()` so `enclosing_object` can do
-    /// its interior-pointer floor-search. Malloc entries are *not*
-    /// staged here: they are inserted directly into `lookup_set`
-    /// during the malloc walk, bypassing the per-cycle
-    /// `sort_unstable` + merge that dominated `build_valid_pointer_set`
-    /// on promise-heavy kernels (5-6 % of total kernel time).
-    pub(super) arena_sorted: Vec<usize>,
-    /// Arena-only sorted vec, populated in `finalize()` by swapping
-    /// `arena_sorted` in. Kept for `enclosing_object`'s
-    /// interior-pointer floor-search (a lookup the hashset can't
-    /// answer). Malloc objects (Closure, Promise, String, Map, Error,
-    /// BigInt, Symbol) are deliberately omitted — every Perry runtime
-    /// function that holds an interior pointer across user callbacks
-    /// (`js_array_reduce`'s `elements_ptr = arr + 8`, etc.) does so
-    /// against an arena-allocated array/buffer; malloc-tracked types
-    /// are always accessed via their start (user pointer) and never
-    /// give rise to interior-pointer probes. If that invariant ever
-    /// changes, the malloc walk in `build_valid_pointer_set` must
-    /// also populate `arena_sorted` (or a separate sorted vec).
-    pub(super) merged_sorted: Vec<usize>,
-    /// O(1) hash set for the hot `contains` path. Built from
-    /// `merged_sorted` in `finalize()` with `PtrHasher` (Fibonacci-
-    /// multiplicative on `usize`) — pointer keys are already well-
-    /// distributed, so SipHash buys nothing and a single `mul` per
-    /// lookup keeps the hash step out of the cache-miss budget. One
-    /// cache miss per lookup (the bucket group) replaces the 17 cache
-    /// misses of the binary-search path.
-    pub(super) lookup_set: crate::fast_hash::PtrHashSet<usize>,
-    // Min/max heap-pointer range across the merged set. Populated in
-    // `finalize()`. The conservative stack scan calls `contains` once per
+    /// Arena-only start pointers in address-ordered runs. `lookup_set`
+    /// handles exact pointer membership; these runs support
+    /// `enclosing_object` floor lookups for arena interior pointers without
+    /// a final heap-sized merge.
+    pub(super) arena_runs: Vec<Vec<usize>>,
+    pub(super) current_arena_run: Vec<usize>,
+    /// Exact pointer membership filled incrementally as arena and malloc
+    /// entries are discovered. A B-tree avoids hash-table rebuilds in tiny
+    /// budget steps; insertion may split one fixed-size node but never
+    /// rehashes all previously discovered pointers.
+    pub(super) lookup_set: std::collections::BTreeSet<usize>,
+    // Min/max heap-pointer range across the valid set. Updated as entries
+    // are inserted. The conservative stack scan calls `contains` once per
     // 8-byte stack word (~1024 calls per scanned KB of stack) and
     // `try_mark_value` calls it once per scanned root and once per
     // traced reference field. Most candidates that pass the NaN-tag
@@ -55,30 +38,43 @@ pub(crate) struct ValidPointerSet {
 }
 
 impl ValidPointerSet {
-    pub(super) fn new(arena_capacity: usize, malloc_capacity: usize) -> Self {
-        // Pre-size the hashset to the expected entry count so finalize
-        // doesn't pay any rehash cost. hashbrown's growth threshold is
-        // 7/8 of capacity, so multiplying by 2 leaves comfortable
-        // headroom for both arena + malloc estimates.
-        let est = arena_capacity + malloc_capacity;
+    pub(super) fn new() -> Self {
         Self {
-            arena_sorted: Vec::with_capacity(arena_capacity),
-            merged_sorted: Vec::new(),
-            lookup_set: std::collections::HashSet::with_capacity_and_hasher(
-                est * 2,
-                crate::fast_hash::PtrHasher,
-            ),
+            arena_runs: Vec::new(),
+            current_arena_run: Vec::with_capacity(VALID_POINTER_ARENA_RUN_CAPACITY),
+            lookup_set: std::collections::BTreeSet::new(),
             range_min: usize::MAX,
             range_max: 0,
             tenured_nursery_bytes: 0,
         }
     }
+
     /// Caller must guarantee that pushes happen in ascending address
     /// order — `ValidPointerSetBuilder` does so via `ArenaObjectCursor`
     /// in address order.
     pub(super) fn push_arena(&mut self, ptr: usize) {
-        self.arena_sorted.push(ptr);
+        if let Some(previous) = self
+            .current_arena_run
+            .last()
+            .copied()
+            .or_else(|| self.arena_runs.last().and_then(|run| run.last()).copied())
+        {
+            debug_assert!(previous <= ptr);
+        }
+
+        self.lookup_set.insert(ptr);
+        self.record_pointer_range(ptr);
+        self.current_arena_run.push(ptr);
+        if self.current_arena_run.len() >= VALID_POINTER_ARENA_RUN_CAPACITY {
+            self.seal_current_arena_run();
+        }
     }
+
+    pub(super) fn push_malloc(&mut self, ptr: usize) {
+        self.lookup_set.insert(ptr);
+        self.record_pointer_range(ptr);
+    }
+
     pub(super) fn record_tenured_nursery_bytes(&mut self, bytes: usize) {
         self.tenured_nursery_bytes += bytes;
     }
@@ -86,48 +82,11 @@ impl ValidPointerSet {
         self.tenured_nursery_bytes
     }
     pub(super) fn finalize(&mut self) {
-        // `merged_sorted` is arena-only — `build_valid_pointer_set`
-        // direct-inserts malloc entries into `lookup_set`, so the
-        // expensive `malloc_sorted.sort_unstable()` + merge pass that
-        // dominated `build_valid_pointer_set` on
-        // `promise_all_chains` (~30 ms × 3 cycles = ~90 ms total,
-        // 5.78 % of kernel time) is gone. `enclosing_object` uses
-        // `merged_sorted` for interior-pointer floor-search — see
-        // `build_valid_pointer_set` for the correctness note that
-        // restricts that lookup to arena objects.
-        std::mem::swap(&mut self.merged_sorted, &mut self.arena_sorted);
-
-        // Compute the `merged_sorted` (arena) range first, then
-        // extend with the malloc range that was tracked separately
-        // in `range_min` / `range_max` via the
-        // `record_malloc_for_range` calls during the build. The
-        // final `[range_min, range_max]` covers BOTH regions so
-        // `maybe_contains` still prefilters correctly for malloc
-        // pointers (closures/promises) that fall outside the
-        // arena address span.
-        if let (Some(&first), Some(&last)) = (self.merged_sorted.first(), self.merged_sorted.last())
-        {
-            if first < self.range_min {
-                self.range_min = first;
-            }
-            if last > self.range_max {
-                self.range_max = last;
-            }
-        }
-
-        // Insert the arena entries into the unified `lookup_set`.
-        // Malloc entries are already in there (inserted directly by
-        // `build_valid_pointer_set`'s malloc walk). The hashset was
-        // sized in `new()` to hold both regions without rehashing.
-        self.lookup_set.extend(self.merged_sorted.iter().copied());
+        self.seal_current_arena_run();
     }
-    /// Track the address span of malloc entries so `maybe_contains`'s
-    /// `[range_min, range_max]` prefilter still rejects out-of-range
-    /// pointers correctly. `build_valid_pointer_set` calls this once
-    /// per malloc user pointer alongside the direct `lookup_set.insert`.
-    /// Cheap branch-free min/max update; no Vec materialization.
+
     #[inline(always)]
-    pub(super) fn record_malloc_for_range(&mut self, ptr: usize) {
+    fn record_pointer_range(&mut self, ptr: usize) {
         if ptr < self.range_min {
             self.range_min = ptr;
         }
@@ -135,6 +94,15 @@ impl ValidPointerSet {
             self.range_max = ptr;
         }
     }
+
+    fn seal_current_arena_run(&mut self) {
+        if self.current_arena_run.is_empty() {
+            return;
+        }
+        let sealed = std::mem::take(&mut self.current_arena_run);
+        self.arena_runs.push(sealed);
+    }
+
     /// Cheap O(1) range-rejection prefilter. Most stack words and
     /// register spills are not heap pointers; if the candidate falls
     /// outside `[range_min, range_max]` it cannot match either region
@@ -148,14 +116,9 @@ impl ValidPointerSet {
         if !self.maybe_contains(*ptr) {
             return false;
         }
-        // O(1) hashset lookup. `lookup_set` is built in `finalize()`
-        // with the same `PtrHasher` as the malloc-state registry, so a
-        // single multiplicative mix + bucket probe replaces the
-        // O(log n) binary search through `merged_sorted`. On
-        // promise-heavy kernels this cuts `try_mark_value` from ~28 %
-        // self-time to ~5–10 % — each call pays 1 cache miss for the
-        // bucket group instead of ~log2(100k)=17 random misses through
-        // the sorted Vec.
+        // Exact lookup. The B-tree insert path is bounded during
+        // `BuildValidPointerSet`, so a tiny GC step cannot trigger a
+        // heap-sized hash-table rebuild.
         self.lookup_set.contains(ptr)
     }
 
@@ -169,7 +132,7 @@ impl ValidPointerSet {
     /// iteration. Find the largest entry `<= query`, then validate via
     /// the GcHeader's size field.
     pub(crate) fn enclosing_object(&self, ptr: usize) -> Option<usize> {
-        let candidate = Self::find_floor(&self.merged_sorted, ptr)?;
+        let candidate = self.find_arena_floor(ptr)?;
         unsafe {
             let header = (candidate as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
             let total = (*header).size as usize;
@@ -180,6 +143,16 @@ impl ValidPointerSet {
                 None
             }
         }
+    }
+
+    fn find_arena_floor(&self, ptr: usize) -> Option<usize> {
+        let idx = self
+            .arena_runs
+            .partition_point(|run| run.first().copied().is_some_and(|first| first <= ptr));
+        if idx == 0 {
+            return None;
+        }
+        Self::find_floor(&self.arena_runs[idx - 1], ptr)
     }
 
     pub(super) fn find_floor(sorted: &[usize], ptr: usize) -> Option<usize> {
@@ -204,95 +177,183 @@ pub(crate) fn build_valid_pointer_set() -> ValidPointerSet {
 
 pub(super) struct ValidPointerSetBuilder {
     set: ValidPointerSet,
+    phase: ValidPointerSetBuildPhase,
+    arena_cursor_builder: Option<crate::arena::ArenaObjectCursorBuilder>,
     arena_cursor: Option<crate::arena::ArenaObjectCursor>,
     malloc_index: usize,
-    arena_done: bool,
-    finalized: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ValidPointerSetBuildPhase {
+    ArenaCursorSetup,
+    ArenaWalk,
+    MallocWalk,
+    Finalize,
+    Done,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ValidPointerSetBuilderSnapshot {
+    pub(super) phase: ValidPointerSetBuildPhase,
+    pub(super) arena_setup_blocks: usize,
+    pub(super) arena_run_count: usize,
+    pub(super) current_arena_run_len: usize,
+    pub(super) lookup_count: usize,
+    pub(super) malloc_index: usize,
 }
 
 impl ValidPointerSetBuilder {
     pub(super) fn new() -> Self {
-        let malloc_count = MALLOC_STATE.with(|s| s.borrow().objects.len());
-        // 48 bytes is a conservative under-estimate (smaller than the
-        // typical 96-byte class instance) so the Vec doesn't realloc.
-        let arena_estimate = crate::arena::arena_total_bytes() / 48;
         Self {
-            set: ValidPointerSet::new(arena_estimate + 64, malloc_count + 64),
-            arena_cursor: Some(crate::arena::ArenaObjectCursor::new(
+            set: ValidPointerSet::new(),
+            phase: ValidPointerSetBuildPhase::ArenaCursorSetup,
+            arena_cursor_builder: Some(crate::arena::ArenaObjectCursorBuilder::new(
                 crate::arena::ArenaWalkOrder::Address,
             )),
+            arena_cursor: None,
             malloc_index: 0,
-            arena_done: false,
-            finalized: false,
         }
     }
 
     pub(super) fn step(&mut self, budget: usize) -> bool {
-        if self.finalized {
+        if self.phase == ValidPointerSetBuildPhase::Done {
             return true;
         }
 
         let mut remaining = budget;
-        while remaining > 0 && !self.arena_done {
-            let next = self
-                .arena_cursor
-                .as_mut()
-                .and_then(crate::arena::ArenaObjectCursor::next);
-            let Some((header_ptr, _block_idx)) = next else {
-                self.arena_done = true;
-                self.arena_cursor = None;
-                break;
-            };
-            let user_ptr = unsafe { header_ptr.add(GC_HEADER_SIZE) };
-            self.set.push_arena(user_ptr as usize);
-            unsafe {
-                let header = header_ptr as *const GcHeader;
-                let flags = (*header).gc_flags;
-                if flags & GC_FLAG_TENURED != 0
-                    && flags & GC_FLAG_FORWARDED == 0
-                    && crate::arena::pointer_in_nursery(user_ptr as usize)
-                {
-                    self.set
-                        .record_tenured_nursery_bytes((*header).size as usize);
-                }
-            }
-            remaining -= 1;
-        }
+        let unbounded = budget == usize::MAX;
 
-        while remaining > 0 && self.arena_done {
+        loop {
+            match self.phase {
+                ValidPointerSetBuildPhase::ArenaCursorSetup => {
+                    if remaining == 0 {
+                        return false;
+                    }
+                    let cursor = self
+                        .arena_cursor_builder
+                        .as_mut()
+                        .and_then(|builder| builder.step(&mut remaining));
+                    let Some(cursor) = cursor else {
+                        return false;
+                    };
+                    self.arena_cursor_builder = None;
+                    self.arena_cursor = Some(cursor);
+                    self.phase = ValidPointerSetBuildPhase::ArenaWalk;
+                    if !unbounded {
+                        return false;
+                    }
+                }
+                ValidPointerSetBuildPhase::ArenaWalk => {
+                    if !self.step_arena_walk(&mut remaining) {
+                        return false;
+                    }
+                    self.phase = ValidPointerSetBuildPhase::MallocWalk;
+                    if !unbounded {
+                        return false;
+                    }
+                }
+                ValidPointerSetBuildPhase::MallocWalk => {
+                    if !self.step_malloc_walk(&mut remaining) {
+                        return false;
+                    }
+                    self.phase = ValidPointerSetBuildPhase::Finalize;
+                    if !unbounded {
+                        return false;
+                    }
+                }
+                ValidPointerSetBuildPhase::Finalize => {
+                    if remaining == 0 {
+                        return false;
+                    }
+                    self.set.finalize();
+                    self.phase = ValidPointerSetBuildPhase::Done;
+                    return true;
+                }
+                ValidPointerSetBuildPhase::Done => return true,
+            }
+        }
+    }
+
+    pub(super) fn finish(mut self) -> ValidPointerSet {
+        if self.phase != ValidPointerSetBuildPhase::Done {
+            while !self.step(usize::MAX) {}
+        }
+        self.set
+    }
+
+    fn step_arena_walk(&mut self, remaining: &mut usize) -> bool {
+        while *remaining > 0 {
+            let next = {
+                let cursor = self
+                    .arena_cursor
+                    .as_mut()
+                    .expect("arena cursor exists during arena walk");
+                cursor.next_budgeted(remaining)
+            };
+            let Some((header_ptr, _block_idx)) = next else {
+                let finished = self
+                    .arena_cursor
+                    .as_ref()
+                    .expect("arena cursor exists during arena walk")
+                    .is_finished();
+                if finished {
+                    self.arena_cursor = None;
+                    return true;
+                }
+                return false;
+            };
+            self.record_arena_header(header_ptr);
+        }
+        false
+    }
+
+    fn record_arena_header(&mut self, header_ptr: *mut u8) {
+        let user_ptr = unsafe { header_ptr.add(GC_HEADER_SIZE) };
+        self.set.push_arena(user_ptr as usize);
+        unsafe {
+            let header = header_ptr as *const GcHeader;
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_TENURED != 0
+                && flags & GC_FLAG_FORWARDED == 0
+                && crate::arena::pointer_in_nursery(user_ptr as usize)
+            {
+                self.set
+                    .record_tenured_nursery_bytes((*header).size as usize);
+            }
+        }
+    }
+
+    fn step_malloc_walk(&mut self, remaining: &mut usize) -> bool {
+        while *remaining > 0 {
             let maybe_header = MALLOC_STATE.with(|s| {
                 let s = s.borrow();
                 s.objects.get(self.malloc_index).copied()
             });
             let Some(header) = maybe_header else {
-                self.set.finalize();
-                self.finalized = true;
                 return true;
             };
             let user_ptr = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) };
-            let addr = user_ptr as usize;
-            self.set.lookup_set.insert(addr);
-            self.set.record_malloc_for_range(addr);
+            self.set.push_malloc(user_ptr as usize);
             self.malloc_index += 1;
-            remaining -= 1;
+            *remaining -= 1;
         }
-
-        if self.arena_done {
-            let malloc_len = MALLOC_STATE.with(|s| s.borrow().objects.len());
-            if self.malloc_index >= malloc_len {
-                self.set.finalize();
-                self.finalized = true;
-            }
-        }
-
-        self.finalized
+        false
     }
 
-    pub(super) fn finish(mut self) -> ValidPointerSet {
-        if !self.finalized {
-            while !self.step(usize::MAX) {}
+    #[cfg(test)]
+    pub(super) fn snapshot_for_tests(&self) -> ValidPointerSetBuilderSnapshot {
+        ValidPointerSetBuilderSnapshot {
+            phase: self.phase,
+            arena_setup_blocks: self
+                .arena_cursor_builder
+                .as_ref()
+                .map_or(0, crate::arena::ArenaObjectCursorBuilder::inspected_blocks),
+            arena_run_count: self.set.arena_runs.len(),
+            current_arena_run_len: self.set.current_arena_run.len(),
+            lookup_count: self.set.lookup_set.len(),
+            malloc_index: self.malloc_index,
         }
-        self.set
     }
 }
 
@@ -413,7 +474,7 @@ pub(super) unsafe fn mark_field_into_worklist(
         val_bits as usize
     };
 
-    // Range gate + hashset lookup. No enclosing_object fallback:
+    // Range gate + exact lookup. No enclosing_object fallback:
     // trace-phase field words always store user pointers at object
     // starts, not interior pointers (those only arise in conservative
     // stack scanning, which uses `try_mark_value_or_raw`).

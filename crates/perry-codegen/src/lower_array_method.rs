@@ -13,7 +13,7 @@ use crate::expr::{
     emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, nanbox_string_inline,
     unbox_str_handle, unbox_to_i64, FnCtx,
 };
-use crate::nanbox::double_literal;
+use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Lower `arr.method(args…)` for an array-typed receiver. Currently
@@ -38,26 +38,17 @@ pub(crate) fn lower_array_method(
             Ok(blk.call(DOUBLE, "js_array_pop_f64", &[(I64, &recv_handle)]))
         }
         "join" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.join expects 1 arg (separator), got {}",
-                    args.len()
-                );
-            }
-            let sep_box = lower_expr(ctx, &args[0])?;
+            let sep_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            // Separator is a JS string. `unbox_str_handle` materializes SSO
-            // values to a real heap StringHeader; plain `unbox_to_i64`
-            // returns the inline-payload bits, which `js_array_join` then
-            // dereferences as a `*StringHeader` and reads `byte_len` from
-            // — producing garbage / silent empty join. Same SSO bug class
-            // as #214.
-            let sep_handle = unbox_str_handle(blk, &sep_box);
             let result_handle = blk.call(
                 I64,
-                "js_array_join",
-                &[(I64, &recv_handle), (I64, &sep_handle)],
+                "js_array_join_value",
+                &[(I64, &recv_handle), (DOUBLE, &sep_box)],
             );
             Ok(nanbox_string_inline(blk, &result_handle))
         }
@@ -521,28 +512,27 @@ pub(crate) fn lower_array_method(
                     args.len()
                 );
             }
-            // Zero-arg `.slice()` is the JS shallow-copy idiom: same as
-            // `.slice(0)`. Lower it to start=0, end=i32::MAX.
-            let start_i32 = if args.is_empty() {
-                "0".to_string()
+            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let start_value = if args.is_empty() {
+                "0.0".to_string()
             } else {
-                let start_box = lower_expr(ctx, &args[0])?;
-                let blk = ctx.block();
-                blk.fptosi(DOUBLE, &start_box, I32)
+                lower_expr(ctx, &args[0])?
             };
-            let end_i32 = if args.len() == 2 {
-                let end_box = lower_expr(ctx, &args[1])?;
-                let blk = ctx.block();
-                blk.fptosi(DOUBLE, &end_box, I32)
+            let end_value = if args.len() == 2 {
+                lower_expr(ctx, &args[1])?
             } else {
-                "2147483647".to_string()
+                undefined
             };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let result = blk.call(
                 I64,
-                "js_array_slice",
-                &[(I64, &recv_handle), (I32, &start_i32), (I32, &end_i32)],
+                "js_array_slice_values",
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &start_value),
+                    (DOUBLE, &end_value),
+                ],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }

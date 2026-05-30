@@ -8,6 +8,7 @@
 //! timer pump fires on the UI thread.
 
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
+use std::any::Any;
 use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::{
@@ -1065,6 +1066,195 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     }
 }
 
+const TIMER_SCAN_TIMEOUTS: u8 = 0;
+const TIMER_SCAN_CALLBACKS: u8 = 1;
+const TIMER_SCAN_INTERVALS: u8 = 2;
+const TIMER_SCAN_DONE: u8 = 3;
+
+#[derive(Default)]
+pub(crate) struct TimerRootScanState {
+    phase: u8,
+    index: usize,
+    slot: usize,
+    arg_index: usize,
+    context_entry: usize,
+    context_store: usize,
+}
+
+impl TimerRootScanState {
+    fn advance_to(&mut self, phase: u8) {
+        self.phase = phase;
+        self.index = 0;
+        self.slot = 0;
+        self.arg_index = 0;
+        self.context_entry = 0;
+        self.context_store = 0;
+    }
+
+    fn finish_timer(&mut self) {
+        self.slot = 0;
+        self.arg_index = 0;
+        self.context_entry = 0;
+        self.context_store = 0;
+    }
+}
+
+pub(crate) fn new_timer_root_scan_state() -> Box<dyn Any> {
+    Box::<TimerRootScanState>::default()
+}
+
+pub(crate) fn scan_timer_roots_mut_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut dyn Any,
+    remaining: &mut usize,
+) -> bool {
+    let state = state
+        .downcast_mut::<TimerRootScanState>()
+        .expect("timer root scanner state type");
+    while state.phase != TIMER_SCAN_DONE {
+        let done = match state.phase {
+            TIMER_SCAN_TIMEOUTS => scan_timeout_timers_step(visitor, state, remaining),
+            TIMER_SCAN_CALLBACKS => scan_callback_timers_step(visitor, state, remaining),
+            TIMER_SCAN_INTERVALS => scan_interval_timers_step(visitor, state, remaining),
+            TIMER_SCAN_DONE => true,
+            _ => true,
+        };
+        if !done {
+            return false;
+        }
+        state.advance_to(state.phase.saturating_add(1));
+    }
+    true
+}
+
+#[inline]
+fn consume_timer_root_work(remaining: &mut usize) -> bool {
+    if *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    true
+}
+
+fn scan_timeout_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    let mut q = TIMER_QUEUE.lock().unwrap();
+    while state.index < q.len() {
+        let timer = &mut q[state.index];
+        while state.slot < 2 {
+            if !consume_timer_root_work(remaining) {
+                return false;
+            }
+            match state.slot {
+                0 => visitor.visit_raw_mut_ptr_slot(&mut timer.promise),
+                1 => visitor.visit_nanbox_f64_slot(&mut timer.value),
+                _ => false,
+            };
+            state.slot += 1;
+        }
+        state.index += 1;
+        state.finish_timer();
+    }
+    true
+}
+
+fn scan_callback_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    let mut q = CALLBACK_TIMERS.lock().unwrap();
+    while state.index < q.len() {
+        let timer = &mut q[state.index];
+        if state.slot == 0 {
+            if !consume_timer_root_work(remaining) {
+                return false;
+            }
+            if !timer.cleared && timer.callback != 0 {
+                visitor.visit_i64_slot(&mut timer.callback);
+            }
+            state.slot = 1;
+        }
+        if state.slot == 1 {
+            while state.arg_index < timer.args.len() {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                visitor.visit_nanbox_f64_slot(&mut timer.args[state.arg_index]);
+                state.arg_index += 1;
+            }
+            state.slot = 2;
+            state.arg_index = 0;
+        }
+        if state.slot == 2 {
+            if !crate::async_context::scan_snapshot_roots_mut_step(
+                &mut timer.context,
+                visitor,
+                &mut state.context_entry,
+                &mut state.context_store,
+                remaining,
+            ) {
+                return false;
+            }
+            state.slot = 3;
+            state.context_entry = 0;
+            state.context_store = 0;
+        }
+        if state.slot == 3 {
+            while state.arg_index < timer.args.len() {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                visitor.visit_nanbox_f64_slot(&mut timer.args[state.arg_index]);
+                state.arg_index += 1;
+            }
+            state.slot = 4;
+            state.arg_index = 0;
+        }
+        state.index += 1;
+        state.finish_timer();
+    }
+    true
+}
+
+fn scan_interval_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    let mut q = INTERVAL_TIMERS.lock().unwrap();
+    while state.index < q.len() {
+        let timer = &mut q[state.index];
+        if state.slot == 0 {
+            if !consume_timer_root_work(remaining) {
+                return false;
+            }
+            if !timer.cleared && timer.callback != 0 {
+                visitor.visit_i64_slot(&mut timer.callback);
+            }
+            state.slot = 1;
+        }
+        if state.slot == 1 {
+            if !crate::async_context::scan_snapshot_roots_mut_step(
+                &mut timer.context,
+                visitor,
+                &mut state.context_entry,
+                &mut state.context_store,
+                remaining,
+            ) {
+                return false;
+            }
+            state.slot = 2;
+        }
+        state.index += 1;
+        state.finish_timer();
+    }
+    true
+}
+
 #[cfg(test)]
 const TEST_CALLBACK_TIMER_ID: i64 = i64::MIN + 101;
 #[cfg(test)]
@@ -1118,6 +1308,27 @@ pub(crate) fn test_seed_timer_scanner_roots(
         context,
         cleared: false,
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
+    let deadline = Instant::now() + Duration::from_secs(86_400);
+    let mut q = TIMER_QUEUE.lock().unwrap();
+    q.clear();
+    for &value in values {
+        q.push(Timer {
+            deadline,
+            promise: std::ptr::null_mut(),
+            value,
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_all_timer_scanner_roots() {
+    TIMER_QUEUE.lock().unwrap().clear();
+    CALLBACK_TIMERS.lock().unwrap().clear();
+    INTERVAL_TIMERS.lock().unwrap().clear();
 }
 
 #[cfg(test)]

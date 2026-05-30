@@ -65,7 +65,7 @@ server.on("upgrade", (_req: any, wsOrSocket: any, head: Buffer) => {
       const msg = readClientTextFrame(frame);
       if (!msg) return;
       console.log("server-message:", msg);
-      socket.write(unmaskedTextFrame("echo:" + msg));
+      socket.write(unmaskedTextFrame("echo:" + msg), () => socket.end());
     };
     if (head && head.length > 0) handleFrame(head);
     socket.on("data", handleFrame);
@@ -75,6 +75,7 @@ server.on("upgrade", (_req: any, wsOrSocket: any, head: Buffer) => {
   wsOrSocket.on("message", (msg: string) => {
     console.log("server-message:", msg);
     wsOrSocket.send("echo:" + msg);
+    if (typeof wsOrSocket.close === "function") wsOrSocket.close();
   });
 });
 

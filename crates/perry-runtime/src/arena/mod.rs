@@ -32,9 +32,8 @@ pub(crate) use block::{
     SURVIVOR_ARENA_1,
 };
 pub(crate) use page_meta::{
-    address_span_overlaps_pages, generation_page_base, register_block_space,
-    register_old_object_pages, unregister_block_generation, unregister_old_block_pages,
-    GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE, OLD_GEN_RECLAIM_RETURNED_BYTES,
+    address_span_overlaps_pages, register_block_space, register_old_object_pages,
+    unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_RETURNED_BYTES,
     OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };
 
@@ -61,8 +60,9 @@ pub use walk::{
     old_arena_walk_objects, ArenaResetStats,
 };
 pub(crate) use walk::{
-    arena_telemetry_snapshot, general_block_in_recent_window, ArenaObjectCursor,
-    ArenaRegionTelemetry, ArenaTelemetrySnapshot, ArenaWalkOrder,
+    arena_block_snapshots, arena_telemetry_snapshot, general_block_in_recent_window,
+    ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder, ArenaRegionTelemetry,
+    ArenaTelemetrySnapshot, ArenaWalkOrder,
 };
 
 // reset.rs
@@ -70,7 +70,8 @@ pub(crate) use reset::{
     active_survivor_block_index_range, copying_active_survivor_in_use_bytes,
     copying_from_space_in_use_bytes, copying_prepare_to_space, copying_reset_from_spaces_and_flip,
     old_arena_reclaim_dead_blocks, old_arena_reclaim_selected_dead_blocks,
-    survivor_arena_reclaim_dead_blocks,
+    survivor_arena_reclaim_dead_blocks, ArenaResetEmptyBlocksState, OldArenaReclaimDeadBlocksState,
+    SurvivorArenaReclaimDeadBlocksState,
 };
 pub use reset::{arena_reset_all_blocks_to_zero, arena_reset_empty_blocks};
 
@@ -89,8 +90,11 @@ pub(crate) use page_meta::{
     old_page_account_promoted_object, old_page_account_swept_object, old_page_clear_dirty,
     old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
     old_pages_reset_sweep_accounting, unregister_old_object_pages, HeapGeneration, HeapSpace,
-    OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
 };
 
 #[cfg(test)]
-pub(crate) use page_meta::{old_arena_page_index_clear_for_tests, old_page_meta_for_tests};
+pub(crate) use page_meta::{
+    generation_page_base, old_arena_page_index_clear_for_tests, old_page_meta_for_tests,
+    GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE,
+};

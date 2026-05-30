@@ -284,15 +284,11 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
             call_listener_args(stream, callback, &[]);
         }
         let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
-        let readable_done = get_hidden_value(stream, hidden_readable_flag_key()).is_none()
-            || has_truthy_hidden(stream, hidden_end_emitted_key());
-        if readable_done {
-            mark_stream_closed(stream);
-            if stream_auto_destroy_enabled(stream) {
-                mark_stream_destroyed(stream);
-            }
-            let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+        mark_stream_closed(stream);
+        if stream_auto_destroy_enabled(stream) {
+            mark_stream_destroyed(stream);
         }
+        let _ = emit_stream_event(stream, string_value(b"close"), &[]);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -326,7 +322,7 @@ extern "C" fn ns_writable_final_callback_done(closure: *const ClosureHeader, err
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    schedule_writable_finish(
+    schedule_writable_finish_then_transform_end(
         stream,
         if is_callable_value(callback) {
             Some(callback)
@@ -1166,6 +1162,11 @@ fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
 }
 
 fn emit_writable_chunk(stream: f64, chunk: f64) {
+    // Custom Duplex sinks own readable output by calling push(); the generic
+    // Perry fallback auto-echoes only when there is no user write sink.
+    if has_truthy_hidden(stream, hidden_key(b"writableCustomSink")) {
+        return;
+    }
     if has_truthy_hidden(stream, hidden_readable_flag_key()) {
         mark_disturbed(stream);
         if readable_is_flowing(stream) {
@@ -1180,9 +1181,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
     mark_stream_ended(stream);
     refresh_readable_aborted_flag(stream);
     mark_writable_ended(stream);
-    if get_hidden_value(stream, hidden_readable_flag_key()).is_none()
-        && !has_truthy_hidden(stream, hidden_end_emitted_key())
-    {
+    if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
@@ -1192,7 +1191,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
         set_pending_writable_finish_callback(stream, callback);
         return;
     }
-    schedule_writable_finish(stream, callback);
+    schedule_writable_finish_then_transform_end(stream, callback);
 }
 
 fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {

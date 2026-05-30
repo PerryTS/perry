@@ -24,6 +24,7 @@ fn node_stream_parent_kind(
     while let Some(name) = cur {
         match name {
             "Readable" => return Some("readable"),
+            "Duplex" => return Some("duplex"),
             _ => {}
         }
         cur = classes
@@ -291,6 +292,7 @@ pub(super) fn compile_method(
         if class.constructor.is_none() && class.extends_name.is_some() {
             let builtin_parent_runtime = match class.extends_name.as_deref() {
                 Some("Writable") => Some("js_node_stream_writable_subclass_init"),
+                Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
                 _ => None,
             };
             let mut effective_parent: Option<&str> = if builtin_parent_runtime.is_some() {
@@ -331,6 +333,7 @@ pub(super) fn compile_method(
                     };
                     let runtime_fn = match kind {
                         "readable" => "js_node_stream_readable_subclass_init",
+                        "duplex" => "js_node_stream_duplex_subclass_init",
                         _ => unreachable!("node stream parent kind {}", kind),
                     };
                     ctx.block().call(
@@ -430,21 +433,6 @@ pub(super) fn compile_method(
                     }
                 }
             }
-            // Apply self field initializers AFTER the parent body chain has
-            // run, so they can read state set by the parent body (e.g. drizzle's
-            // PgText.enumValues = this.config.enumValues — this.config is set
-            // in Column body via super-chain). Refs #420.
-            crate::lower_call::apply_field_initializers_recursive(
-                &mut ctx,
-                &class.name,
-                crate::lower_call::FieldInitMode::SelfOnly,
-            )
-            .with_context(|| {
-                format!(
-                    "applying self field initializers for '{}' constructor",
-                    class.name
-                )
-            })?;
             if let Some(runtime_fn) = builtin_parent_runtime {
                 let undef_lit =
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -463,6 +451,22 @@ pub(super) fn compile_method(
                 ctx.block()
                     .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
             }
+
+            // Apply self field initializers AFTER the parent body chain has
+            // run, so they can read state set by the parent body (e.g. drizzle's
+            // PgText.enumValues = this.config.enumValues — this.config is set
+            // in Column body via super-chain). Refs #420.
+            crate::lower_call::apply_field_initializers_recursive(
+                &mut ctx,
+                &class.name,
+                crate::lower_call::FieldInitMode::SelfOnly,
+            )
+            .with_context(|| {
+                format!(
+                    "applying self field initializers for '{}' constructor",
+                    class.name
+                )
+            })?;
         }
     }
 

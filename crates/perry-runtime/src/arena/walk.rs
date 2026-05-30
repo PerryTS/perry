@@ -14,70 +14,234 @@ struct ArenaWalkBlock {
     block_idx: usize,
 }
 
-/// Resumable arena object walker used by the GC cycle state machine.
-///
-/// The cursor snapshots block base pointers and offsets at creation time and
-/// then yields at most one walkable GC object per `next()` call. It deliberately
-/// does not hold a borrow into any arena TLS slot across calls.
-pub(crate) struct ArenaObjectCursor {
-    blocks: Vec<ArenaWalkBlock>,
-    block_pos: usize,
-    offset: usize,
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ArenaBlockSnapshot {
+    pub(crate) data: usize,
+    pub(crate) offset: usize,
+    pub(crate) size: usize,
 }
 
-impl ArenaObjectCursor {
+/// Resumable arena object walker used by the GC cycle state machine.
+///
+/// The cursor owns block base pointers and offsets gathered by
+/// `ArenaObjectCursorBuilder`, then yields at most one walkable GC object per
+/// `next()` call. It deliberately does not hold a borrow into any arena TLS
+/// slot across calls.
+pub(crate) struct ArenaObjectCursor {
+    blocks: ArenaObjectCursorBlocks,
+    current_block: Option<ArenaWalkBlock>,
+    block_pos: usize,
+    offset: usize,
+    finished: bool,
+}
+
+enum ArenaObjectCursorBlocks {
+    BlockIndex(Vec<ArenaWalkBlock>),
+    Address(std::collections::btree_map::IntoValues<usize, ArenaWalkBlock>),
+}
+
+pub(crate) struct ArenaObjectCursorBuilder {
+    order: ArenaWalkOrder,
+    blocks: Vec<ArenaWalkBlock>,
+    address_blocks: std::collections::BTreeMap<usize, ArenaWalkBlock>,
+    initialized: bool,
+    region_lengths: [usize; ARENA_CURSOR_REGION_COUNT],
+    region_bases: [usize; ARENA_CURSOR_REGION_COUNT],
+    region: usize,
+    block_pos: usize,
+    inspected_blocks: usize,
+}
+
+const ARENA_CURSOR_REGION_COUNT: usize = 5;
+const ARENA_CURSOR_GENERAL: usize = 0;
+const ARENA_CURSOR_SURVIVOR0: usize = 1;
+const ARENA_CURSOR_SURVIVOR1: usize = 2;
+const ARENA_CURSOR_LONGLIVED: usize = 3;
+const ARENA_CURSOR_OLD: usize = 4;
+
+impl ArenaObjectCursorBuilder {
     pub(crate) fn new(order: ArenaWalkOrder) -> Self {
+        Self {
+            order,
+            blocks: Vec::new(),
+            address_blocks: std::collections::BTreeMap::new(),
+            initialized: false,
+            region_lengths: [0; ARENA_CURSOR_REGION_COUNT],
+            region_bases: [0; ARENA_CURSOR_REGION_COUNT],
+            region: 0,
+            block_pos: 0,
+            inspected_blocks: 0,
+        }
+    }
+
+    pub(crate) fn step(&mut self, remaining: &mut usize) -> Option<ArenaObjectCursor> {
+        if *remaining == 0 {
+            return None;
+        }
+        if !self.initialized {
+            self.initialize();
+        }
+
+        while *remaining > 0 && self.region < ARENA_CURSOR_REGION_COUNT {
+            let region = self.region;
+            let block_pos = self.block_pos;
+            let block_idx = self.region_bases[region] + block_pos;
+
+            self.block_pos += 1;
+            self.inspected_blocks = self.inspected_blocks.saturating_add(1);
+            *remaining -= 1;
+
+            if let Some(block) = snapshot_cursor_block(region, block_pos, block_idx) {
+                self.push_block(block);
+            }
+
+            while self.region < ARENA_CURSOR_REGION_COUNT
+                && self.block_pos >= self.region_lengths[self.region]
+            {
+                self.region += 1;
+                self.block_pos = 0;
+            }
+        }
+
+        if self.region >= ARENA_CURSOR_REGION_COUNT {
+            return Some(ArenaObjectCursor {
+                blocks: self.finish_blocks(),
+                current_block: None,
+                block_pos: 0,
+                offset: 0,
+                finished: false,
+            });
+        }
+
+        None
+    }
+
+    fn initialize(&mut self) {
         sync_inline_arena_state();
 
         let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
         let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
         let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
-        let longlived_base = general_n + survivor0_n + survivor1_n;
         let longlived_n = LONGLIVED_ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
-        let old_base = longlived_base + longlived_n;
+        let old_n = OLD_ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
 
-        let mut blocks = Vec::new();
-        let mut collect = |arena: &Arena, base: usize| {
-            for (i, block) in arena.blocks.iter().enumerate() {
-                if block.data.is_null() {
-                    continue;
-                }
-                blocks.push(ArenaWalkBlock {
-                    data: block.data as usize,
-                    offset: block.offset,
-                    size: block.size,
-                    block_idx: base + i,
-                });
-            }
-        };
+        self.region_lengths = [general_n, survivor0_n, survivor1_n, longlived_n, old_n];
+        self.region_bases = [
+            0,
+            general_n,
+            general_n + survivor0_n,
+            general_n + survivor0_n + survivor1_n,
+            general_n + survivor0_n + survivor1_n + longlived_n,
+        ];
+        self.initialized = true;
 
-        ARENA.with(|arena| unsafe { collect(&*arena.get(), 0) });
-        SURVIVOR_ARENA_0.with(|arena| unsafe { collect(&*arena.get(), general_n) });
-        SURVIVOR_ARENA_1.with(|arena| unsafe { collect(&*arena.get(), general_n + survivor0_n) });
-        LONGLIVED_ARENA.with(|arena| unsafe { collect(&*arena.get(), longlived_base) });
-        OLD_ARENA.with(|arena| unsafe { collect(&*arena.get(), old_base) });
-
-        match order {
-            ArenaWalkOrder::BlockIndex => {}
-            ArenaWalkOrder::Address => blocks.sort_unstable_by_key(|block| block.data),
-        }
-
-        Self {
-            blocks,
-            block_pos: 0,
-            offset: 0,
+        while self.region < ARENA_CURSOR_REGION_COUNT && self.region_lengths[self.region] == 0 {
+            self.region += 1;
         }
     }
 
-    pub(crate) fn next(&mut self) -> Option<(*mut u8, usize)> {
+    fn push_block(&mut self, block: ArenaWalkBlock) {
+        match self.order {
+            ArenaWalkOrder::BlockIndex => self.blocks.push(block),
+            ArenaWalkOrder::Address => {
+                self.address_blocks.insert(block.data, block);
+            }
+        }
+    }
+
+    fn finish_blocks(&mut self) -> ArenaObjectCursorBlocks {
+        match self.order {
+            ArenaWalkOrder::BlockIndex => {
+                ArenaObjectCursorBlocks::BlockIndex(std::mem::take(&mut self.blocks))
+            }
+            ArenaWalkOrder::Address => ArenaObjectCursorBlocks::Address(
+                std::mem::take(&mut self.address_blocks).into_values(),
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inspected_blocks(&self) -> usize {
+        self.inspected_blocks
+    }
+}
+
+fn snapshot_cursor_block(
+    region: usize,
+    block_pos: usize,
+    block_idx: usize,
+) -> Option<ArenaWalkBlock> {
+    let block = match region {
+        ARENA_CURSOR_GENERAL => ARENA.with(|arena| unsafe {
+            (&(*arena.get()).blocks)
+                .get(block_pos)
+                .map(snapshot_block_fields)
+        }),
+        ARENA_CURSOR_SURVIVOR0 => SURVIVOR_ARENA_0.with(|arena| unsafe {
+            (&(*arena.get()).blocks)
+                .get(block_pos)
+                .map(snapshot_block_fields)
+        }),
+        ARENA_CURSOR_SURVIVOR1 => SURVIVOR_ARENA_1.with(|arena| unsafe {
+            (&(*arena.get()).blocks)
+                .get(block_pos)
+                .map(snapshot_block_fields)
+        }),
+        ARENA_CURSOR_LONGLIVED => LONGLIVED_ARENA.with(|arena| unsafe {
+            (&(*arena.get()).blocks)
+                .get(block_pos)
+                .map(snapshot_block_fields)
+        }),
+        ARENA_CURSOR_OLD => OLD_ARENA.with(|arena| unsafe {
+            (&(*arena.get()).blocks)
+                .get(block_pos)
+                .map(snapshot_block_fields)
+        }),
+        _ => None,
+    }?;
+
+    if block.data == 0 {
+        return None;
+    }
+
+    Some(ArenaWalkBlock { block_idx, ..block })
+}
+
+fn snapshot_block_fields(block: &ArenaBlock) -> ArenaWalkBlock {
+    ArenaWalkBlock {
+        data: block.data as usize,
+        offset: block.offset,
+        size: block.size,
+        block_idx: 0,
+    }
+}
+
+impl ArenaObjectCursor {
+    pub(crate) fn new(order: ArenaWalkOrder) -> Self {
+        let mut builder = ArenaObjectCursorBuilder::new(order);
+        let mut remaining = usize::MAX;
+        builder
+            .step(&mut remaining)
+            .expect("unbounded arena cursor build must complete")
+    }
+
+    pub(crate) fn next_budgeted(&mut self, remaining: &mut usize) -> Option<(*mut u8, usize)> {
         use crate::gc::GcHeader;
 
-        while let Some(block) = self.blocks.get(self.block_pos).copied() {
+        while self.ensure_current_block() {
+            let block = self
+                .current_block
+                .expect("current block exists after ensure_current_block");
             while self.offset < block.offset {
                 let aligned = (self.offset + 7) & !7;
                 if aligned >= block.offset {
                     break;
                 }
+
+                if *remaining == 0 {
+                    return None;
+                }
+                *remaining -= 1;
 
                 let header_ptr = (block.data + aligned) as *mut u8;
                 let header = header_ptr as *const GcHeader;
@@ -94,12 +258,63 @@ impl ArenaObjectCursor {
                 }
             }
 
-            self.block_pos += 1;
+            self.current_block = None;
             self.offset = 0;
         }
 
         None
     }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    pub(crate) fn next(&mut self) -> Option<(*mut u8, usize)> {
+        let mut remaining = usize::MAX;
+        self.next_budgeted(&mut remaining)
+    }
+
+    fn ensure_current_block(&mut self) -> bool {
+        if self.current_block.is_some() {
+            return true;
+        }
+        self.current_block = match &mut self.blocks {
+            ArenaObjectCursorBlocks::BlockIndex(blocks) => {
+                let block = blocks.get(self.block_pos).copied();
+                if block.is_some() {
+                    self.block_pos += 1;
+                }
+                block
+            }
+            ArenaObjectCursorBlocks::Address(blocks) => blocks.next(),
+        };
+        if self.current_block.is_none() {
+            self.finished = true;
+            return false;
+        }
+        true
+    }
+}
+
+pub(crate) fn arena_block_snapshots() -> Vec<ArenaBlockSnapshot> {
+    sync_inline_arena_state();
+
+    let mut snapshots = Vec::with_capacity(arena_block_count());
+    let mut collect = |arena: &Arena| {
+        snapshots.extend(arena.blocks.iter().map(|block| ArenaBlockSnapshot {
+            data: block.data as usize,
+            offset: block.offset,
+            size: block.size,
+        }));
+    };
+
+    ARENA.with(|arena| unsafe { collect(&*arena.get()) });
+    SURVIVOR_ARENA_0.with(|arena| unsafe { collect(&*arena.get()) });
+    SURVIVOR_ARENA_1.with(|arena| unsafe { collect(&*arena.get()) });
+    LONGLIVED_ARENA.with(|arena| unsafe { collect(&*arena.get()) });
+    OLD_ARENA.with(|arena| unsafe { collect(&*arena.get()) });
+
+    snapshots
 }
 
 /// Get total bytes reserved across all arena blocks (general + longlived

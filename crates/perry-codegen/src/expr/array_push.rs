@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -51,6 +51,18 @@ use super::{
     try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
     FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
+
+fn emit_array_handle_length(ctx: &mut FnCtx<'_>, array_handle: &str) -> String {
+    let blk = ctx.block();
+    let len_i32 = blk.call(I32, "js_array_length", &[(I64, array_handle)]);
+    blk.sitofp(I32, &len_i32, DOUBLE)
+}
+
+fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str) -> String {
+    let blk = ctx.block();
+    let array_handle = unbox_to_i64(blk, array_box);
+    emit_array_handle_length(ctx, &array_handle)
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -197,7 +209,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
 
                 ctx.current_block = merge_idx;
-                return Ok(arr_box);
+                let current_box = ctx.block().load(DOUBLE, &slot);
+                return Ok(emit_array_box_length(ctx, &current_box));
             }
 
             // Fast path: local-bound, non-captured, non-boxed array.
@@ -338,14 +351,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 ctx.current_block = merge_idx;
-                // Existing arr_box value (pre-push) is still valid for
-                // ArrayPush's return value semantics: returns the
-                // pushed value cast back to double — but `out.push(...)`
-                // statements never read this, and the HIR uses Stmt::Expr
-                // which discards. Match the slow path's return shape
-                // anyway by re-loading the slot (covers the realloc
-                // case where the box changed).
-                return Ok(arr_box);
+                let current_box = ctx.block().load(DOUBLE, &slot);
+                return Ok(emit_array_box_length(ctx, &current_box));
             }
 
             let blk = ctx.block();
@@ -380,7 +387,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 }
-                return Ok(new_box);
+                return Ok(emit_array_handle_length(ctx, &new_handle));
             }
             if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
                 let closure_ptr = ctx
@@ -401,7 +408,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 return Err(anyhow!("ArrayPush({}): local not in scope", array_id));
             }
-            Ok(new_box)
+            Ok(emit_array_handle_length(ctx, &new_handle))
         }
 
         // `arr.push(...src)` — HIR variant carrying the destination
@@ -445,7 +452,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 }
-                return Ok(new_box);
+                return Ok(emit_array_handle_length(ctx, &new_handle));
             }
             if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
                 let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
@@ -465,7 +472,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 return Err(anyhow!("ArrayPushSpread({}): local not in scope", array_id));
             }
-            Ok(new_box)
+            Ok(emit_array_handle_length(ctx, &new_handle))
         }
 
         // -------- Closures (Phase D.1) --------

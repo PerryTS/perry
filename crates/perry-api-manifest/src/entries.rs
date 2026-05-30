@@ -127,7 +127,7 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2"];
+pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2", "sys"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -2486,6 +2486,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isStringObject", false, None),
     method("util/types", "isBooleanObject", false, None),
     method("util/types", "isBoxedPrimitive", false, None),
+    // --- sys: deprecated alias for node:util. Keep this module-level
+    // surface aligned with the public `util` manifest rows above; the
+    // runtime routes `node:sys` through the util namespace.
+    method("sys", "inspect", false, None),
+    method("sys", "format", false, None),
+    method("sys", "getSystemErrorName", false, None),
+    method("sys", "getSystemErrorMessage", false, None),
+    method("sys", "getSystemErrorMap", false, None),
+    method("sys", "formatWithOptions", false, None),
+    method("sys", "promisify", false, None),
+    method("sys", "callbackify", false, None),
+    method("sys", "deprecate", false, None),
+    method("sys", "inherits", false, None),
+    method("sys", "isDeepStrictEqual", false, None),
+    method("sys", "parseArgs", false, None),
+    method("sys", "stripVTControlCharacters", false, None),
+    class("sys", "TextEncoder"),
+    class("sys", "TextDecoder"),
+    property("sys", "types"),
     // node:assert — assertion helpers used by tests and many npm packages.
     method("assert", "ok", false, None),
     method("assert", "fail", false, None),

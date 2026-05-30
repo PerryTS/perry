@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1528 entries across 84 modules
+// Coverage: 1544 entries across 85 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2081,6 +2081,41 @@ declare module "string_decoder" {
   export const lastNeed: any;
   /** stdlib */
   export const lastTotal: any;
+}
+
+declare module "sys" {
+  /** stdlib */
+  export class TextDecoder { [key: string]: any; }
+  /** stdlib */
+  export class TextEncoder { [key: string]: any; }
+  /** stdlib */
+  export const types: any;
+  /** stdlib */
+  export function callbackify(...args: any[]): any;
+  /** stdlib */
+  export function deprecate(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function formatWithOptions(...args: any[]): any;
+  /** stdlib */
+  export function getSystemErrorMap(...args: any[]): any;
+  /** stdlib */
+  export function getSystemErrorMessage(...args: any[]): any;
+  /** stdlib */
+  export function getSystemErrorName(...args: any[]): any;
+  /** stdlib */
+  export function inherits(...args: any[]): any;
+  /** stdlib */
+  export function inspect(...args: any[]): any;
+  /** stdlib */
+  export function isDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function parseArgs(...args: any[]): any;
+  /** stdlib */
+  export function promisify(...args: any[]): any;
+  /** stdlib */
+  export function stripVTControlCharacters(...args: any[]): any;
 }
 
 declare module "tls" {

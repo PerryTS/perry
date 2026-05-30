@@ -27,7 +27,12 @@ fn force_next_general_arena_alloc_slow() {
 }
 
 fn register_runtime_handle_root_scanner_for_tests() {
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        scan_runtime_handle_roots_mut_step,
+        new_runtime_handle_root_scan_state,
+        MutableRootScannerSource::RuntimeHandles,
+    );
 }
 
 fn assert_automatic_minor_gc_progressed(before: u64, context: &str) -> bool {
@@ -1321,7 +1326,7 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
     gc_register_mutable_root_scanner(crate::timer::scan_timer_roots_mut);
 
@@ -1365,7 +1370,7 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
     gc_register_mutable_root_scanner(crate::timer::scan_timer_roots_mut);
 
@@ -1411,7 +1416,7 @@ fn test_queued_microtask_previous_context_survives_hook_gc() {
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
     gc_register_mutable_root_scanner(crate::builtins::scan_queued_microtask_roots_mut);
 
@@ -1444,7 +1449,7 @@ fn test_queued_microtask_previous_context_survives_hook_gc() {
 fn test_array_map_runtime_handles_survive_callback_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let input = test_string_value(b"array-map-payload");
     let input_ptr = (input.to_bits() & POINTER_MASK) as usize;
@@ -1476,7 +1481,7 @@ fn test_array_map_runtime_handles_survive_callback_copied_minor_gc() {
 fn test_map_materializers_runtime_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let key = test_string_value(b"map-key");
     let key_original = (key.to_bits() & POINTER_MASK) as usize;
@@ -1532,7 +1537,7 @@ fn test_map_materializers_runtime_handles_survive_copied_minor_gc() {
 fn test_map_from_array_runtime_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let key = test_string_value(b"map-from-array-key");
     let key_original = (key.to_bits() & POINTER_MASK) as usize;
@@ -1565,7 +1570,7 @@ fn test_map_from_array_runtime_handles_survive_copied_minor_gc() {
 fn test_structured_clone_map_runtime_handles_survive_nested_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let outer_key = test_string_value(b"clone-map-outer-key");
     let outer_key_original = (outer_key.to_bits() & POINTER_MASK) as usize;
@@ -1626,7 +1631,7 @@ fn test_structured_clone_map_runtime_handles_survive_nested_copied_minor_gc() {
 fn test_set_materializers_runtime_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(scan_runtime_handle_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     let value = test_string_value(b"set-value");
     let value_original = (value.to_bits() & POINTER_MASK) as usize;

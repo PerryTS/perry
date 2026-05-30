@@ -389,6 +389,668 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
     })
 }
 
+const GENERAL_DEALLOC_DEAD_CYCLES: u32 = 2;
+
+fn filter_free_list_ranges(ranges: &[(usize, usize)]) {
+    if ranges.is_empty() {
+        return;
+    }
+    crate::gc::ARENA_FREE_LIST.with(|fl| {
+        let mut fl = fl.borrow_mut();
+        fl.retain(|&(ptr, _)| {
+            let p = ptr as usize;
+            !ranges
+                .iter()
+                .any(|&(base, size)| p >= base && p < base.saturating_add(size))
+        });
+        if fl.is_empty() {
+            crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
+        }
+    });
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralResetSubphase {
+    Reset,
+    Deallocate,
+    Finish,
+    Done,
+}
+
+pub(crate) struct ArenaResetEmptyBlocksState {
+    block_has_live: Vec<bool>,
+    snapshots: Vec<ArenaBlockSnapshot>,
+    subphase: GeneralResetSubphase,
+    cursor: usize,
+    changed: bool,
+    reset_ranges: Vec<(usize, usize, usize)>,
+    deallocated_ranges: Vec<(usize, usize)>,
+    stats: ArenaResetStats,
+}
+
+impl ArenaResetEmptyBlocksState {
+    pub(crate) fn new(block_has_live: &[bool], snapshots: &[ArenaBlockSnapshot]) -> Self {
+        Self {
+            block_has_live: block_has_live.to_vec(),
+            snapshots: snapshots.to_vec(),
+            subphase: GeneralResetSubphase::Reset,
+            cursor: 0,
+            changed: false,
+            reset_ranges: Vec::new(),
+            deallocated_ranges: Vec::new(),
+            stats: ArenaResetStats::default(),
+        }
+    }
+
+    pub(crate) fn step(&mut self, budget: usize) -> bool {
+        let mut remaining = budget;
+        let mut free_list_ranges = Vec::new();
+
+        while remaining > 0 {
+            match self.subphase {
+                GeneralResetSubphase::Reset => {
+                    let general_n = ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
+                    if self.cursor >= general_n {
+                        self.cursor = 0;
+                        self.subphase = GeneralResetSubphase::Deallocate;
+                        continue;
+                    }
+                    if let Some((base, size, used)) = self.process_reset_block(self.cursor) {
+                        self.reset_ranges.push((base, size, used));
+                        free_list_ranges.push((base, size));
+                    }
+                    self.cursor += 1;
+                    remaining -= 1;
+                }
+                GeneralResetSubphase::Deallocate => {
+                    let general_n = ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
+                    if self.cursor >= general_n {
+                        self.cursor = 0;
+                        self.subphase = GeneralResetSubphase::Finish;
+                        continue;
+                    }
+                    if let Some((base, size)) = self.process_dealloc_block(self.cursor) {
+                        self.deallocated_ranges.push((base, size));
+                        free_list_ranges.push((base, size));
+                    }
+                    self.cursor += 1;
+                    remaining -= 1;
+                }
+                GeneralResetSubphase::Finish => {
+                    self.finish();
+                    self.subphase = GeneralResetSubphase::Done;
+                    break;
+                }
+                GeneralResetSubphase::Done => break,
+            }
+        }
+
+        filter_free_list_ranges(&free_list_ranges);
+        self.subphase == GeneralResetSubphase::Done
+    }
+
+    pub(crate) fn stats(&self) -> ArenaResetStats {
+        self.stats
+    }
+
+    fn process_reset_block(&mut self, block_idx: usize) -> Option<(usize, usize, usize)> {
+        let snapshot = self.snapshots.get(block_idx).copied().unwrap_or_default();
+        if snapshot.data == 0 {
+            return None;
+        }
+
+        ARENA.with(|arena| unsafe {
+            let arena = &mut *arena.get();
+            let current = arena.current;
+            let keep_low = current.saturating_sub(4);
+            let block = arena.blocks.get_mut(block_idx)?;
+            if block.data.is_null()
+                || block.data as usize != snapshot.data
+                || block.size != snapshot.size
+                || block.offset != snapshot.offset
+            {
+                return None;
+            }
+            if block.offset == 0
+                || self.block_has_live.get(block_idx).copied().unwrap_or(false)
+                || (block_idx >= keep_low && block_idx <= current)
+            {
+                return None;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let used = block.offset;
+            block.offset = 0;
+            self.changed = true;
+            Some((base, size, used))
+        })
+    }
+
+    fn process_dealloc_block(&mut self, block_idx: usize) -> Option<(usize, usize)> {
+        let snapshot = self.snapshots.get(block_idx).copied().unwrap_or_default();
+        if snapshot.data == 0 {
+            return None;
+        }
+
+        ARENA.with(|arena| unsafe {
+            let arena = &mut *arena.get();
+            let current = arena.current;
+            let keep_low = current.saturating_sub(4);
+            let block = arena.blocks.get_mut(block_idx)?;
+            if block.data.is_null()
+                || block.data as usize != snapshot.data
+                || block.size != snapshot.size
+            {
+                return None;
+            }
+            if block_idx == current || (block_idx >= keep_low && block_idx <= current) {
+                block.dead_cycles = 0;
+                return None;
+            }
+            if self.block_has_live.get(block_idx).copied().unwrap_or(false) {
+                block.dead_cycles = 0;
+                return None;
+            }
+            if block.offset != 0 {
+                block.dead_cycles = 0;
+                return None;
+            }
+
+            block.dead_cycles = block.dead_cycles.saturating_add(1);
+            if block.dead_cycles < GENERAL_DEALLOC_DEAD_CYCLES {
+                return None;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let layout = Layout::from_size_align(block.size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            self.changed = true;
+            Some((base, size))
+        })
+    }
+
+    fn finish(&mut self) {
+        let deallocated_blocks = self.deallocated_ranges.len();
+        let deallocated_bytes: usize = self.deallocated_ranges.iter().map(|&(_, size)| size).sum();
+        let reusable_bytes: usize = self
+            .reset_ranges
+            .iter()
+            .filter(|&&(base, _, _)| {
+                !self
+                    .deallocated_ranges
+                    .iter()
+                    .any(|&(deallocated_base, _)| deallocated_base == base)
+            })
+            .map(|&(_, _, used)| used)
+            .sum();
+
+        self.stats = ArenaResetStats {
+            reset_blocks: self.reset_ranges.len(),
+            reusable_bytes,
+            deallocated_blocks,
+            deallocated_bytes,
+        };
+
+        if !self.changed {
+            return;
+        }
+
+        ARENA.with(|arena| unsafe {
+            let arena = &mut *arena.get();
+            let mut new_current = arena.current;
+            for (i, block) in arena.blocks.iter().enumerate() {
+                if !block.data.is_null() && block.offset == 0 {
+                    new_current = i;
+                    break;
+                }
+            }
+            if arena
+                .blocks
+                .get(new_current)
+                .map(|block| !block.data.is_null())
+                .unwrap_or(false)
+            {
+                arena.current = new_current;
+            }
+            INLINE_STATE.with(|s| {
+                let inline = &mut *s.get();
+                if !inline.data.is_null() {
+                    if let Some(block) = arena.blocks.get(arena.current) {
+                        if !block.data.is_null() {
+                            inline.data = block.data;
+                            inline.offset = block.offset;
+                            inline.size = block.size;
+                        }
+                    }
+                }
+            });
+        });
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RegionReclaimSubphase {
+    Reclaim,
+    Finish,
+    Done,
+}
+
+struct SurvivorArenaReclaimState {
+    arena_idx: usize,
+    block_start: usize,
+    block_has_live: Vec<bool>,
+    snapshots: Vec<ArenaBlockSnapshot>,
+    cursor: usize,
+    subphase: RegionReclaimSubphase,
+    changed: bool,
+    stats: ArenaResetStats,
+}
+
+impl SurvivorArenaReclaimState {
+    fn new(
+        arena_idx: usize,
+        block_start: usize,
+        block_has_live: &[bool],
+        snapshots: &[ArenaBlockSnapshot],
+    ) -> Self {
+        Self {
+            arena_idx,
+            block_start,
+            block_has_live: block_has_live.to_vec(),
+            snapshots: snapshots.to_vec(),
+            cursor: 0,
+            subphase: RegionReclaimSubphase::Reclaim,
+            changed: false,
+            stats: ArenaResetStats::default(),
+        }
+    }
+
+    fn step(&mut self, budget: usize) -> bool {
+        let mut remaining = budget;
+        while remaining > 0 {
+            match self.subphase {
+                RegionReclaimSubphase::Reclaim => {
+                    let block_count =
+                        with_survivor_arena(self.arena_idx, |arena| arena.blocks.len());
+                    if self.cursor >= block_count {
+                        self.subphase = RegionReclaimSubphase::Finish;
+                        continue;
+                    }
+                    self.process_block(self.cursor);
+                    self.cursor += 1;
+                    remaining -= 1;
+                }
+                RegionReclaimSubphase::Finish => {
+                    self.finish();
+                    self.subphase = RegionReclaimSubphase::Done;
+                    break;
+                }
+                RegionReclaimSubphase::Done => break,
+            }
+        }
+        self.subphase == RegionReclaimSubphase::Done
+    }
+
+    fn process_block(&mut self, local_idx: usize) {
+        let global_idx = self.block_start + local_idx;
+        let snapshot = self.snapshots.get(global_idx).copied().unwrap_or_default();
+        if snapshot.data == 0 {
+            return;
+        }
+
+        with_survivor_arena_mut(self.arena_idx, |arena| unsafe {
+            let keep_idx = arena
+                .blocks
+                .get(arena.current)
+                .filter(|block| !block.data.is_null())
+                .map(|_| arena.current)
+                .or_else(|| {
+                    arena
+                        .blocks
+                        .iter()
+                        .enumerate()
+                        .find(|(_, block)| !block.data.is_null())
+                        .map(|(i, _)| i)
+                });
+            let Some(block) = arena.blocks.get_mut(local_idx) else {
+                return;
+            };
+            if block.data.is_null()
+                || block.data as usize != snapshot.data
+                || block.size != snapshot.size
+                || block.offset != snapshot.offset
+            {
+                return;
+            }
+            if self
+                .block_has_live
+                .get(global_idx)
+                .copied()
+                .unwrap_or(false)
+            {
+                block.dead_cycles = 0;
+                return;
+            }
+
+            let used = block.offset;
+            if used != 0 {
+                self.stats.reset_blocks = self.stats.reset_blocks.saturating_add(1);
+            }
+            block.offset = 0;
+            block.dead_cycles = 0;
+            self.changed = true;
+
+            if Some(local_idx) == keep_idx {
+                self.stats.reusable_bytes = self.stats.reusable_bytes.saturating_add(used);
+                return;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            self.stats.deallocated_blocks = self.stats.deallocated_blocks.saturating_add(1);
+            self.stats.deallocated_bytes = self.stats.deallocated_bytes.saturating_add(size);
+        });
+    }
+
+    fn finish(&mut self) {
+        if !self.changed {
+            return;
+        }
+        with_survivor_arena_mut(self.arena_idx, |arena| {
+            if let Some((idx, _)) = arena
+                .blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+            {
+                arena.current = idx;
+            } else if arena
+                .blocks
+                .get(arena.current)
+                .map(|block| block.data.is_null())
+                .unwrap_or(true)
+            {
+                if let Some((idx, _)) = arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                {
+                    arena.current = idx;
+                }
+            }
+        });
+    }
+}
+
+pub(crate) struct SurvivorArenaReclaimDeadBlocksState {
+    state0: SurvivorArenaReclaimState,
+    state1: SurvivorArenaReclaimState,
+    active: usize,
+    stats: ArenaResetStats,
+}
+
+impl SurvivorArenaReclaimDeadBlocksState {
+    pub(crate) fn new(block_has_live: &[bool], snapshots: &[ArenaBlockSnapshot]) -> Self {
+        let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+        let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
+        Self {
+            state0: SurvivorArenaReclaimState::new(0, general_n, block_has_live, snapshots),
+            state1: SurvivorArenaReclaimState::new(
+                1,
+                general_n + survivor0_n,
+                block_has_live,
+                snapshots,
+            ),
+            active: 0,
+            stats: ArenaResetStats::default(),
+        }
+    }
+
+    pub(crate) fn step(&mut self, budget: usize) -> bool {
+        if budget == 0 {
+            return false;
+        }
+        match self.active {
+            0 => {
+                let before = self.state0.stats;
+                if self.state0.step(budget) {
+                    self.stats = self.add_delta(self.stats, before, self.state0.stats);
+                    self.active = 1;
+                }
+                false
+            }
+            1 => {
+                let before = self.state1.stats;
+                if self.state1.step(budget) {
+                    self.stats = self.add_delta(self.stats, before, self.state1.stats);
+                    self.active = 2;
+                    return true;
+                }
+                false
+            }
+            _ => true,
+        }
+    }
+
+    pub(crate) fn stats(&self) -> ArenaResetStats {
+        self.stats
+    }
+
+    fn add_delta(
+        &self,
+        mut total: ArenaResetStats,
+        before: ArenaResetStats,
+        after: ArenaResetStats,
+    ) -> ArenaResetStats {
+        total.reset_blocks = total
+            .reset_blocks
+            .saturating_add(after.reset_blocks.saturating_sub(before.reset_blocks));
+        total.reusable_bytes = total
+            .reusable_bytes
+            .saturating_add(after.reusable_bytes.saturating_sub(before.reusable_bytes));
+        total.deallocated_blocks = total.deallocated_blocks.saturating_add(
+            after
+                .deallocated_blocks
+                .saturating_sub(before.deallocated_blocks),
+        );
+        total.deallocated_bytes = total.deallocated_bytes.saturating_add(
+            after
+                .deallocated_bytes
+                .saturating_sub(before.deallocated_bytes),
+        );
+        total
+    }
+}
+
+pub(crate) struct OldArenaReclaimDeadBlocksState {
+    block_has_live: Vec<bool>,
+    snapshots: Vec<ArenaBlockSnapshot>,
+    selected_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
+    cursor: usize,
+    subphase: RegionReclaimSubphase,
+    changed: bool,
+    stats: ArenaResetStats,
+}
+
+impl OldArenaReclaimDeadBlocksState {
+    pub(crate) fn new_full(block_has_live: &[bool], snapshots: &[ArenaBlockSnapshot]) -> Self {
+        Self::new(block_has_live, snapshots, None)
+    }
+
+    pub(crate) fn new_selected(
+        block_has_live: &[bool],
+        snapshots: &[ArenaBlockSnapshot],
+        selected_old_blocks: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> Self {
+        Self::new(block_has_live, snapshots, Some(selected_old_blocks.clone()))
+    }
+
+    fn new(
+        block_has_live: &[bool],
+        snapshots: &[ArenaBlockSnapshot],
+        selected_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
+    ) -> Self {
+        Self {
+            block_has_live: block_has_live.to_vec(),
+            snapshots: snapshots.to_vec(),
+            selected_old_blocks,
+            cursor: 0,
+            subphase: RegionReclaimSubphase::Reclaim,
+            changed: false,
+            stats: ArenaResetStats::default(),
+        }
+    }
+
+    pub(crate) fn step(&mut self, budget: usize) -> bool {
+        let mut remaining = budget;
+        while remaining > 0 {
+            match self.subphase {
+                RegionReclaimSubphase::Reclaim => {
+                    let block_count =
+                        OLD_ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
+                    if self.cursor >= block_count {
+                        self.subphase = RegionReclaimSubphase::Finish;
+                        continue;
+                    }
+                    self.process_block(self.cursor);
+                    self.cursor += 1;
+                    remaining -= 1;
+                }
+                RegionReclaimSubphase::Finish => {
+                    self.finish();
+                    OLD_GEN_RECLAIM_REUSABLE_BYTES
+                        .with(|bytes| bytes.set(self.stats.reusable_bytes));
+                    OLD_GEN_RECLAIM_RETURNED_BYTES
+                        .with(|bytes| bytes.set(self.stats.deallocated_bytes));
+                    self.subphase = RegionReclaimSubphase::Done;
+                    break;
+                }
+                RegionReclaimSubphase::Done => break,
+            }
+        }
+        self.subphase == RegionReclaimSubphase::Done
+    }
+
+    pub(crate) fn stats(&self) -> ArenaResetStats {
+        self.stats
+    }
+
+    fn process_block(&mut self, local_idx: usize) {
+        let old_block_start = longlived_end();
+        let block_idx = old_block_start + local_idx;
+        if self
+            .selected_old_blocks
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&block_idx))
+        {
+            return;
+        }
+
+        let snapshot = self.snapshots.get(block_idx).copied().unwrap_or_default();
+        if snapshot.data == 0 {
+            return;
+        }
+
+        OLD_ARENA.with(|arena| unsafe {
+            let arena = &mut *arena.get();
+            let original_current = arena.current;
+            let Some(block) = arena.blocks.get_mut(local_idx) else {
+                return;
+            };
+            if block.data.is_null()
+                || block.data as usize != snapshot.data
+                || block.size != snapshot.size
+                || block.offset != snapshot.offset
+            {
+                return;
+            }
+            if self.block_has_live.get(block_idx).copied().unwrap_or(false) {
+                block.dead_cycles = 0;
+                return;
+            }
+
+            let base = block.data as usize;
+            let size = block.size;
+            let used = block.offset;
+            let first_page = generation_page_for_addr(base);
+            let last_page = generation_page_for_addr(base + size - 1);
+            let pages: Vec<usize> = (first_page..=last_page).collect();
+            unregister_old_block_pages(&pages);
+
+            if used != 0 {
+                self.stats.reset_blocks = self.stats.reset_blocks.saturating_add(1);
+            }
+            block.offset = 0;
+            block.dead_cycles = 0;
+            self.changed = true;
+
+            if local_idx == original_current {
+                self.stats.reusable_bytes = self.stats.reusable_bytes.saturating_add(used);
+                return;
+            }
+
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unregister_block_generation(base, size);
+            std::alloc::dealloc(block.data, layout);
+            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            block.data = std::ptr::null_mut();
+            block.size = 0;
+            block.offset = 0;
+            block.dead_cycles = 0;
+            self.stats.deallocated_blocks = self.stats.deallocated_blocks.saturating_add(1);
+            self.stats.deallocated_bytes = self.stats.deallocated_bytes.saturating_add(size);
+        });
+    }
+
+    fn finish(&mut self) {
+        if !self.changed {
+            return;
+        }
+        OLD_ARENA.with(|arena| unsafe {
+            let arena = &mut *arena.get();
+            if let Some((idx, _)) = arena
+                .blocks
+                .iter()
+                .enumerate()
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+            {
+                arena.current = idx;
+            } else if arena
+                .blocks
+                .get(arena.current)
+                .map(|block| block.data.is_null())
+                .unwrap_or(true)
+            {
+                if let Some((idx, _)) = arena
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find(|(_, block)| !block.data.is_null())
+                {
+                    arena.current = idx;
+                }
+            }
+        });
+    }
+}
+
 pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaResetStats {
     let old_block_start = longlived_end();
     let stats = OLD_ARENA.with(|arena| unsafe {
