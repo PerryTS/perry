@@ -377,20 +377,25 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== zlib ==========
     module.declare_function("js_zlib_deflate_sync", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_gunzip", I64, &[I64]);
+    module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gunzip_sync", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_gzip", I64, &[I64]);
+    module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_unzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_unzip", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
-    // #1843 — Brotli one-shots (sync validates JS values; async returns a Promise ptr).
+    // #1843 — Brotli one-shots (sync validates JS values; async queues callbacks).
     module.declare_function("js_zlib_brotli_compress_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress_sync", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_brotli_compress", I64, &[I64]);
-    module.declare_function("js_zlib_brotli_decompress", I64, &[I64]);
+    module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE]);
     // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
     // (`js_zlib_create_brotli_decompress` is declared alongside the other
     // crypto/zlib helpers in runtime_decls/strings.rs.)

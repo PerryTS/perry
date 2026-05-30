@@ -1852,6 +1852,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectConstruct { .. }
         | Expr::ReflectDefineProperty { .. }
         | Expr::ReflectGetPrototypeOf(..)
+        | Expr::ReflectIsExtensible(..)
+        | Expr::ReflectPreventExtensions(..)
         | Expr::ReflectDefineMetadata { .. }
         | Expr::ReflectGetMetadata { .. }
         | Expr::ReflectGetOwnMetadata { .. }

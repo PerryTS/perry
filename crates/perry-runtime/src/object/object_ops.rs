@@ -558,7 +558,7 @@ pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
 }
 
 /// Helper: get GcHeader for an object pointer
-unsafe fn gc_header_for(obj: *const ObjectHeader) -> *mut crate::gc::GcHeader {
+pub(super) unsafe fn gc_header_for(obj: *const ObjectHeader) -> *mut crate::gc::GcHeader {
     (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
 }
 
