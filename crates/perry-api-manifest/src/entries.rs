@@ -131,7 +131,13 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2", "sys"];
+pub const NODE_SUBMODULES: &[&str] = &[
+    "stream/promises",
+    "punycode.ucs2",
+    "sys",
+    "test",
+    "test/reporters",
+];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from

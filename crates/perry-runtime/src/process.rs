@@ -67,9 +67,8 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
         | "console" | "constants" | "crypto" | "events" | "fs" | "http" | "http2" | "https"
         | "net" | "os" | "path" | "perf_hooks" | "process" | "punycode" | "querystring"
         | "readline" | "stream" | "stream/promises" | "string_decoder" | "sys" | "timers"
-        | "timers/promises" | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => {
-            Some(name)
-        }
+        | "test" | "test/reporters" | "timers/promises" | "tty" | "url" | "util" | "util/types"
+        | "worker_threads" | "zlib" => Some(name),
         _ => None,
     }
 }
