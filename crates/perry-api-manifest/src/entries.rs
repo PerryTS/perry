@@ -2891,7 +2891,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "aborted", false, None),
     method("sys", "transferableAbortController", false, None),
     method("sys", "transferableAbortSignal", false, None),
-    method("sys", "toUSVString", false, None),
     method("sys", "parseEnv", false, None),
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),

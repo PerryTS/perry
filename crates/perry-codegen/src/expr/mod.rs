@@ -366,6 +366,11 @@ pub(crate) struct FnCtx<'a> {
     /// `local_closure_func_ids` for guarded direct closure calls: direct
     /// calls only fire when the static arity exactly matches the call site.
     pub local_closure_param_counts: std::collections::HashMap<u32, usize>,
+    /// LocalId → compile-time options object fields for immutable locals
+    /// initialized from object literals / anonymous-shape literals. This lets
+    /// native constructor lowering read `const init = {...}; new Request(url,
+    /// init)` with the same field extractor used for inline object literals.
+    pub option_object_locals: std::collections::HashMap<u32, Vec<(String, Expr)>>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
     /// Locals that are namespace imports (`import * as X from "./mod"`).

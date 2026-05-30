@@ -107,6 +107,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 );
                 return Ok(Some(handle));
             }
+            "static_error" => {
+                let handle = ctx.block().call(DOUBLE, "js_response_static_error", &[]);
+                return Ok(Some(handle));
+            }
             _ => {}
         }
     }
@@ -298,6 +302,83 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let blk = ctx.block();
                 return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
             }
+            "destination" => {
+                let str_ptr =
+                    ctx.block()
+                        .call(I64, "js_request_get_destination", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "referrer" => {
+                let str_ptr =
+                    ctx.block()
+                        .call(I64, "js_request_get_referrer", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "referrerPolicy" => {
+                let str_ptr = ctx.block().call(
+                    I64,
+                    "js_request_get_referrer_policy",
+                    &[(DOUBLE, &h_handle)],
+                );
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "mode" => {
+                let str_ptr = ctx
+                    .block()
+                    .call(I64, "js_request_get_mode", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "credentials" => {
+                let str_ptr =
+                    ctx.block()
+                        .call(I64, "js_request_get_credentials", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "cache" => {
+                let str_ptr = ctx
+                    .block()
+                    .call(I64, "js_request_get_cache", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "redirect" => {
+                let str_ptr =
+                    ctx.block()
+                        .call(I64, "js_request_get_redirect", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "integrity" => {
+                let str_ptr =
+                    ctx.block()
+                        .call(I64, "js_request_get_integrity", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "keepalive" => {
+                let out =
+                    ctx.block()
+                        .call(DOUBLE, "js_request_get_keepalive", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(out));
+            }
+            "duplex" => {
+                let str_ptr =
+                    ctx.block()
+                        .call(I64, "js_request_get_duplex", &[(DOUBLE, &h_handle)]);
+                let blk = ctx.block();
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "signal" => {
+                let out = ctx
+                    .block()
+                    .call(DOUBLE, "js_request_get_signal", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(out));
+            }
             "body" => {
                 let val = ctx
                     .block()
@@ -338,6 +419,21 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
             "arrayBuffer" => {
                 let blk = ctx.block();
                 let promise = blk.call(I64, "js_request_array_buffer", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
+            "blob" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_request_blob", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
+            "bytes" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_request_bytes", &[(DOUBLE, &h_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
+            "formData" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_request_form_data", &[(DOUBLE, &h_handle)]);
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }
             "clone" => {
@@ -403,6 +499,24 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 );
                 return Ok(Some(blk.bitcast_i64_to_double(&tagged)));
             }
+            "type" => {
+                let blk = ctx.block();
+                let str_ptr = blk.call(I64, "js_fetch_response_type", &[(DOUBLE, &recv_handle)]);
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "url" => {
+                let blk = ctx.block();
+                let str_ptr = blk.call(I64, "js_fetch_response_url", &[(DOUBLE, &recv_handle)]);
+                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+            }
+            "redirected" => {
+                let out = ctx.block().call(
+                    DOUBLE,
+                    "js_fetch_response_redirected",
+                    &[(DOUBLE, &recv_handle)],
+                );
+                return Ok(Some(out));
+            }
             "bodyUsed" => {
                 let out =
                     ctx.block()
@@ -431,6 +545,16 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 let promise = blk.call(I64, "js_response_blob", &[(DOUBLE, &recv_handle)]);
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }
+            "bytes" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_response_bytes", &[(DOUBLE, &recv_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
+            "formData" => {
+                let blk = ctx.block();
+                let promise = blk.call(I64, "js_response_form_data", &[(DOUBLE, &recv_handle)]);
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
             // Issue #237: response.body — returns ReadableStream over the
             // buffered body bytes. Property access lowers as a zero-arg
             // method call here, same as response.headers above.
@@ -439,6 +563,46 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     .block()
                     .call(DOUBLE, "js_response_body", &[(DOUBLE, &recv_handle)]);
                 return Ok(Some(h));
+            }
+            _ => return Ok(None),
+        }
+    }
+
+    if module == "FormData" {
+        let handle = lower_expr(ctx, recv)?;
+        match method {
+            "get" => {
+                if args.is_empty() {
+                    return Ok(Some(double_literal(f64::from_bits(
+                        crate::nanbox::TAG_NULL,
+                    ))));
+                }
+                let key_ptr = get_raw_string_ptr(ctx, &args[0])?;
+                let value = ctx.block().call(
+                    DOUBLE,
+                    "js_form_data_get",
+                    &[(DOUBLE, &handle), (I64, &key_ptr)],
+                );
+                return Ok(Some(value));
+            }
+            "getAll" => {
+                let key_ptr = if args.is_empty() {
+                    "0".to_string()
+                } else {
+                    get_raw_string_ptr(ctx, &args[0])?
+                };
+                let arr = ctx.block().call(
+                    DOUBLE,
+                    "js_form_data_get_all",
+                    &[(DOUBLE, &handle), (I64, &key_ptr)],
+                );
+                return Ok(Some(arr));
+            }
+            "entries" => {
+                let arr = ctx
+                    .block()
+                    .call(DOUBLE, "js_form_data_entries", &[(DOUBLE, &handle)]);
+                return Ok(Some(arr));
             }
             _ => return Ok(None),
         }
