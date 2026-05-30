@@ -2812,6 +2812,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "aborted", false, None),
     method("util", "transferableAbortController", false, None),
     method("util", "transferableAbortSignal", false, None),
+    method("util", "getCallSites", false, None),
     method("util", "parseEnv", false, None),
     // #2514: util.toUSVString(value) → string with lone surrogates replaced.
     method("util", "toUSVString", false, None),
@@ -2894,6 +2895,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "aborted", false, None),
     method("sys", "transferableAbortController", false, None),
     method("sys", "transferableAbortSignal", false, None),
+    method("sys", "getCallSites", false, None),
     method("sys", "parseEnv", false, None),
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),

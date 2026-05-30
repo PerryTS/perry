@@ -144,6 +144,7 @@ mod ui_harmonyos_stubs;
 /// startup. See module docs for the ohos-napi gating story.
 pub mod ui_text_registry;
 pub mod util_abort;
+pub mod util_call_sites;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
