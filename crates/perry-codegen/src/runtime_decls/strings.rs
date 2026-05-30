@@ -763,6 +763,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_flat_depth", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_flatMap", I64, &[I64, I64]);
     module.declare_function("js_array_sort_with_comparator", I64, &[I64, I64]);
+    // #2796: validate sort/toSorted comparator (function | undefined) before sorting.
+    module.declare_function("js_validate_array_comparator", I64, &[DOUBLE]);
     // ES2023 immutable array methods
     module.declare_function("js_array_to_reversed", I64, &[I64]);
     module.declare_function("js_array_to_sorted_default", I64, &[I64]);
@@ -1697,6 +1699,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_promise_with_resolvers", I64, &[]);
     module.declare_function("js_promise_try", I64, &[DOUBLE, I64]);
     module.declare_function("js_array_unshift_f64", I64, &[I64, DOUBLE]);
+    // #2814: variadic unshift (insert N items at front, in order).
+    module.declare_function("js_array_unshift_variadic", I64, &[I64, PTR, I32]);
     module.declare_function("js_array_entries", I64, &[I64]);
     module.declare_function("js_array_keys", I64, &[I64]);
     module.declare_function("js_array_values", I64, &[I64]);
