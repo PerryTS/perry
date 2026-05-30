@@ -132,7 +132,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         method: "runInAsyncScope",
         class_filter: Some("AsyncResource"),
         runtime: "js_async_resource_run_in_async_scope",
-        args: &[NA_PTR, NA_F64, NA_VARARGS],
+        args: &[NA_F64, NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -141,7 +141,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         method: "bind",
         class_filter: Some("AsyncResource"),
         runtime: "js_async_resource_bind",
-        args: &[NA_PTR],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // ========== decimal.js (arbitrary-precision math) ==========
