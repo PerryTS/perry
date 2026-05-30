@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1825 entries across 89 modules
+// Coverage: 1831 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2613,6 +2613,8 @@ declare module "sys" {
   /** stdlib */
   export const types: any;
   /** stdlib */
+  export function aborted(...args: any[]): any;
+  /** stdlib */
   export function callbackify(...args: any[]): any;
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
@@ -2648,6 +2650,10 @@ declare module "sys" {
   export function styleText(...args: any[]): any;
   /** stdlib */
   export function toUSVString(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortController(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortSignal(...args: any[]): any;
 }
 
 declare module "tls" {
@@ -2706,6 +2712,8 @@ declare module "util" {
   /** stdlib */
   export const types: any;
   /** stdlib */
+  export function aborted(...args: any[]): any;
+  /** stdlib */
   export function callbackify(...args: any[]): any;
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
@@ -2741,6 +2749,10 @@ declare module "util" {
   export function styleText(...args: any[]): any;
   /** stdlib */
   export function toUSVString(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortController(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortSignal(...args: any[]): any;
 }
 
 declare module "util/types" {
