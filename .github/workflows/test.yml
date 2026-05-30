@@ -170,6 +170,12 @@ jobs:
           # shared runner this has repeatedly terminated large test links with
           # SIGBUS. Use the system linker for the cargo-test gate.
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          # Keep test artifacts small enough for the shared runner disk. The
+          # cargo-test job does not need line tables, and debug info was enough
+          # to make later package archives hit ENOSPC after several package
+          # test builds accumulated in target/debug.
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: |
           (
             while sleep 60; do
@@ -187,6 +193,7 @@ jobs:
           # flakes) and races the GC/threading tests into intermittent SIGSEGV.
           # Run perry-runtime single-threaded so the tests can't interfere.
           RUST_TEST_THREADS=1 cargo test -p perry-runtime
+          find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
           # The remaining workspace includes large `perry` / `perry-stdlib`
           # test binaries. Keep Cargo build jobs serialized so the runner
           # does not link several of those large test binaries at once, then
@@ -222,6 +229,7 @@ jobs:
             echo "::group::cargo test -p $package"
             cargo test -p "$package"
             echo "::endgroup::"
+            cargo clean -p "$package" || true
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
           done
 
