@@ -212,12 +212,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, transform, sink) \u2014 spread-arg form does not produce a working pipeline. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/from-infinite-take": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(infiniteGen).take(N) \u2014 take helper does not abort upstream early; iteration hangs or returns wrong items. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/compose/error-mid-chain": {
     "issue": "1531",
     "added": "2026-05-24",
