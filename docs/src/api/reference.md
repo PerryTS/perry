@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1782 entries across 88 modules.
+Total: 1783 entries across 89 modules.
 
 ## Modules
 
@@ -42,6 +42,7 @@ Total: 1782 entries across 88 modules.
 - [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
 - [`lru-cache`](#lru-cache)
+- [`module`](#module)
 - [`moment`](#moment)
 - [`mongodb`](#mongodb)
 - [`mysql2`](#mysql2)
@@ -1226,6 +1227,12 @@ Total: 1782 entries across 88 modules.
 - `has` — instance
 - `set` — instance
 - `size` — instance
+
+## `module`
+
+### Methods
+
+- `isBuiltin` — module
 
 ## `moment`
 

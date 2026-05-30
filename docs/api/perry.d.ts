@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1782 entries across 88 modules
+// Coverage: 1783 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1332,6 +1332,11 @@ declare module "lodash" {
 declare module "lru-cache" {
   /** stdlib */
   export default function (p0: any): any;
+}
+
+declare module "module" {
+  /** stdlib */
+  export function isBuiltin(...args: any[]): any;
 }
 
 declare module "moment" {

@@ -74,6 +74,104 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
     }
 }
 
+const MODULE_BUILTIN_MODULES: &[&str] = &[
+    "_http_agent",
+    "_http_client",
+    "_http_common",
+    "_http_incoming",
+    "_http_outgoing",
+    "_http_server",
+    "_stream_duplex",
+    "_stream_passthrough",
+    "_stream_readable",
+    "_stream_transform",
+    "_stream_wrap",
+    "_stream_writable",
+    "_tls_common",
+    "_tls_wrap",
+    "assert",
+    "assert/strict",
+    "async_hooks",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "diagnostics_channel",
+    "dns",
+    "dns/promises",
+    "domain",
+    "events",
+    "fs",
+    "fs/promises",
+    "http",
+    "http2",
+    "https",
+    "inspector",
+    "inspector/promises",
+    "module",
+    "net",
+    "node:sea",
+    "node:sqlite",
+    "node:test",
+    "node:test/reporters",
+    "os",
+    "path",
+    "path/posix",
+    "path/win32",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "readline/promises",
+    "repl",
+    "stream",
+    "stream/consumers",
+    "stream/promises",
+    "stream/web",
+    "string_decoder",
+    "sys",
+    "timers",
+    "timers/promises",
+    "tls",
+    "trace_events",
+    "tty",
+    "url",
+    "util",
+    "util/types",
+    "v8",
+    "vm",
+    "wasi",
+    "worker_threads",
+    "zlib",
+];
+
+/// Module.isBuiltin(id) -> boolean
+#[no_mangle]
+pub extern "C" fn js_module_is_builtin(id: f64) -> f64 {
+    let value = JSValue::from_bits(id.to_bits());
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(bytes) = (unsafe { crate::string::js_string_key_bytes(value, &mut sso_buf) }) else {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    };
+    let Ok(specifier) = std::str::from_utf8(bytes) else {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    };
+    let is_builtin = if let Some(name) = specifier.strip_prefix("node:") {
+        MODULE_BUILTIN_MODULES.contains(&specifier) || MODULE_BUILTIN_MODULES.contains(&name)
+    } else {
+        MODULE_BUILTIN_MODULES.contains(&specifier)
+    };
+    f64::from_bits(if is_builtin {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
 /// process.getBuiltinModule(id) -> module namespace | undefined
 #[no_mangle]
 pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {

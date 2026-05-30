@@ -67,6 +67,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "stream",
     "streams",
     "fs",
+    "module",
     "path",
     "path/posix",
     "path/win32",
@@ -146,6 +147,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "assert/strict",
     "child_process",
     "stream",
+    "module",
     "url",
     "console",
     "util",
@@ -2403,6 +2405,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path/win32", "delimiter"),
     property("path/win32", "posix"),
     property("path/win32", "win32"),
+    // node:module - first runtime-backed slice: builtin detection.
+    method("module", "isBuiltin", false, None),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "cwd", false, None),
