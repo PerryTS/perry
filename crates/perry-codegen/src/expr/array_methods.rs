@@ -236,11 +236,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result = blk.call(I64, "js_path_resolve", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
-        Expr::ObjectCreate(p) => {
+        Expr::ObjectCreate(p, props) => {
+            // #2816: route through `js_object_create_with_props` so prototype
+            // validation + the optional descriptor bag are handled uniformly.
+            // Pass `undefined` for the props arg when only one argument was
+            // supplied.
             let v = lower_expr(ctx, p)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_object_create", &[(DOUBLE, &v)]))
+            let props_val = match props {
+                Some(props_expr) => lower_expr(ctx, props_expr)?,
+                None => crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_create_with_props",
+                &[(DOUBLE, &v), (DOUBLE, &props_val)],
+            ))
         }
         Expr::MathClz32(o) => {
             let v = lower_expr(ctx, o)?;

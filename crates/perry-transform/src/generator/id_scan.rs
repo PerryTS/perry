@@ -350,7 +350,7 @@ pub fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
                 scan_expr_for_max_local(c, max_id);
             }
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             scan_expr_for_max_local(items, max_id);
             scan_expr_for_max_local(key_fn, max_id);
         }
@@ -620,8 +620,8 @@ pub fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
                 scan_expr_for_max_func(c, max_id);
             }
         }
-        // ObjectGroupBy carries a key_fn closure.
-        Expr::ObjectGroupBy { items, key_fn } => {
+        // ObjectGroupBy / MapGroupBy carry a key_fn closure.
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             scan_expr_for_max_func(items, max_id);
             scan_expr_for_max_func(key_fn, max_id);
         }

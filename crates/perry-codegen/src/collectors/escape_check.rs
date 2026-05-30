@@ -710,6 +710,10 @@ pub fn check_escapes_in_expr(
         | Expr::ObjectGroupBy {
             items: iterable,
             key_fn: map_fn,
+        }
+        | Expr::MapGroupBy {
+            items: iterable,
+            key_fn: map_fn,
         } => {
             check_escapes_in_expr(iterable, candidates, classes, escaped);
             check_escapes_in_expr(map_fn, candidates, classes, escaped);

@@ -1445,7 +1445,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // NaN-boxed Promise pointer; for arrays it forwards to
     // `js_promise_all`, for async iterators it chains `.next()` calls
     // through `array_from_async_step`.
-    module.declare_function("js_object_group_by", DOUBLE, &[DOUBLE, I64]);
+    // Both args NaN-boxed f64; runtime validates iterability + callback and
+    // throws TypeError per Node. Object.groupBy → null-proto object (symbol
+    // keys preserved); Map.groupBy → Map with un-coerced keys.
+    module.declare_function("js_object_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_map_group_by", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE]);
 
     // ========== JSX runtime stubs (issue #277) ==========

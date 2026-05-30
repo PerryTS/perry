@@ -1102,7 +1102,6 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::ObjectIsFrozen(operand)
         | Expr::ObjectIsSealed(operand)
         | Expr::ObjectIsExtensible(operand)
-        | Expr::ObjectCreate(operand)
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
         | Expr::ArrayFrom(operand)
@@ -1149,6 +1148,12 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand) => {
             walk(operand, out);
+        }
+        Expr::ObjectCreate(proto, props) => {
+            walk(proto, out);
+            if let Some(props) = props {
+                walk(props, out);
+            }
         }
         Expr::JsonParseTyped { text, .. } => walk(text, out),
         Expr::ProcessNextTick { callback, args } => {
@@ -1410,7 +1415,7 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(a, out);
             }
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             walk(items, out);
             walk(key_fn, out);
         }

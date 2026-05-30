@@ -625,47 +625,173 @@ pub unsafe fn js_promise_bound_method(promise: *mut Promise, property: &str) -> 
 /// Fulfilled-path wrapper for `.finally()`.
 /// Captures [on_finally, next_promise].
 /// Called with the upstream fulfilled `value`.
-/// Runs `on_finally()`, then resolves `next` with `value` via ONE extra
-/// microtask hop (matching Node.js `.finally()` microtask depth).
 extern "C" fn finally_fulfill_wrapper(
     closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
+    finally_wrapper_common(closure, value, true)
+}
+
+/// Rejected-path wrapper for `.finally()`.
+/// Captures [on_finally, next_promise].
+/// Called with the upstream rejection `reason`.
+extern "C" fn finally_reject_wrapper(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    finally_wrapper_common(closure, reason, false)
+}
+
+/// Shared body for both `.finally()` wrappers (issue #2825).
+///
+/// Node's `Promise.prototype.finally(onFinally)` semantics:
+///   - `onFinally()` is called with no arguments.
+///   - If it **throws**, the chained promise (`next`) rejects with the thrown
+///     value, OVERRIDING the upstream outcome.
+///   - If it returns a **Promise/thenable**, the chained promise waits for it:
+///       * cleanup fulfilled → settle `next` with the ORIGINAL outcome
+///         (the cleanup's fulfillment value is ignored).
+///       * cleanup rejected → reject `next` with the CLEANUP reason
+///         (overriding the upstream outcome).
+///   - Otherwise (non-thenable return / non-callable onFinally), settle `next`
+///     with the original outcome after one extra microtask hop (matching
+///     Node's `.finally()` microtask depth).
+///
+/// `orig` is the upstream value (fulfilled) or reason (rejected); `is_fulfilled`
+/// selects which.
+fn finally_wrapper_common(
+    closure: *const crate::closure::ClosureHeader,
+    orig: f64,
+    is_fulfilled: bool,
+) -> f64 {
     use crate::closure::{
-        js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
+        js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_f64,
+        js_closure_set_capture_ptr,
     };
 
     let on_finally = js_closure_get_capture_ptr(closure, 0) as *const crate::closure::ClosureHeader;
     let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
 
-    // Call the user's finally callback (ignoring its return value).
-    if !on_finally.is_null() {
-        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        crate::closure::js_closure_call1(on_finally, undef);
+    // Non-callable onFinally (e.g. `.finally(1)`): act like `.then(undefined,
+    // undefined)` — pass the original outcome through after one extra hop.
+    if on_finally.is_null() {
+        finally_settle_next_with_extra_hop(next, orig, is_fulfilled);
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
-    // Add one extra microtask tick before settling `next` by registering a
-    // passthrough closure on an already-resolved promise.  The runner will
-    // enqueue it, call it next iteration, and THEN `next` gets resolved.
+    // Call `onFinally()` under a dedicated try-frame so a throw from the
+    // callback rejects `next` (overriding the upstream outcome) instead of
+    // unwinding past us to the microtask runner's trap — whose `(*cur).next`
+    // is null here (js_promise_finally clears it), so a throw would otherwise
+    // be swallowed.
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
+    if jumped != 0 {
+        // onFinally threw — reject `next` with the thrown value.
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        crate::exception::js_try_end();
+        if !next.is_null() {
+            js_promise_reject(next, exc);
+        }
+        return undef;
+    }
+    let ret = crate::closure::js_closure_call1(on_finally, undef);
+    crate::exception::js_try_end();
+
+    // If onFinally returned a Promise/thenable, adopt it: wait for it before
+    // settling `next`. `js_assimilate_thenable` returns a native Promise for
+    // both real Promises and user thenables, or the value unchanged otherwise.
+    let cleanup = js_assimilate_thenable(ret);
+    if js_value_is_promise(cleanup) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(cleanup) as *mut Promise;
+        if !inner.is_null() {
+            // On cleanup fulfillment: settle `next` with the original outcome.
+            let on_ok = js_closure_alloc(finally_cleanup_fulfill as *const u8, 3);
+            js_closure_set_capture_ptr(on_ok, 0, next as i64);
+            js_closure_set_capture_f64(on_ok, 1, orig);
+            js_closure_set_capture_f64(
+                on_ok,
+                2,
+                f64::from_bits(if is_fulfilled {
+                    crate::value::TAG_TRUE
+                } else {
+                    crate::value::TAG_FALSE
+                }),
+            );
+            // On cleanup rejection: reject `next` with the cleanup reason.
+            let on_err = js_closure_alloc(finally_cleanup_reject as *const u8, 1);
+            js_closure_set_capture_ptr(on_err, 0, next as i64);
+            js_promise_then(inner, on_ok, on_err);
+            return undef;
+        }
+    }
+
+    // Plain (non-thenable) return value: pass the original outcome through
+    // after one extra microtask hop.
+    finally_settle_next_with_extra_hop(next, orig, is_fulfilled);
+    undef
+}
+
+/// Settle `next` with the original outcome after one extra microtask hop,
+/// matching Node's `.finally()` microtask depth.
+fn finally_settle_next_with_extra_hop(next: *mut Promise, orig: f64, is_fulfilled: bool) {
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
+    if next.is_null() {
+        return;
+    }
+    let pass_fn = if is_fulfilled {
+        finally_passthrough_fulfill as *const u8
+    } else {
+        finally_passthrough_reject as *const u8
+    };
+    let pass = js_closure_alloc(pass_fn, 2);
+    js_closure_set_capture_ptr(pass, 0, next as i64);
+    js_closure_set_capture_f64(pass, 1, orig);
+    let undef_promise = js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
+    // js_promise_then's side-effect is enqueuing `pass` to run next iteration.
+    js_promise_then(undef_promise, pass, ptr::null());
+}
+
+/// Cleanup-fulfilled handler: settle `next` with the ORIGINAL outcome.
+/// Captures [next_promise_ptr (i64), orig (f64), is_fulfilled (TAG_TRUE/FALSE)].
+extern "C" fn finally_cleanup_fulfill(
+    closure: *const crate::closure::ClosureHeader,
+    _cleanup_value: f64,
+) -> f64 {
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let orig = js_closure_get_capture_f64(closure, 1);
+    let is_fulfilled = js_closure_get_capture_f64(closure, 2).to_bits() == crate::value::TAG_TRUE;
     if !next.is_null() {
-        let pass = js_closure_alloc(finally_passthrough_fulfill as *const u8, 2);
-        js_closure_set_capture_ptr(pass, 0, next as i64);
-        crate::closure::js_closure_set_capture_f64(pass, 1, value);
-
-        let undef_promise = js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
-        // js_promise_then returns a new (discarded) promise; the side-effect
-        // is enqueuing `pass` to run in the next microtask iteration.
-        js_promise_then(undef_promise, pass, ptr::null());
+        if is_fulfilled {
+            js_promise_resolve(next, orig);
+        } else {
+            js_promise_reject(next, orig);
+        }
     }
-
-    // Return undefined.  Since promise.next is null (set in js_promise_finally),
-    // the runner will not try to resolve anything with this return value.
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// Passthrough closure for the extra hop in finally_fulfill_wrapper.
+/// Cleanup-rejected handler: reject `next` with the CLEANUP reason (overrides
+/// the upstream outcome). Captures [next_promise_ptr (i64)].
+extern "C" fn finally_cleanup_reject(
+    closure: *const crate::closure::ClosureHeader,
+    cleanup_reason: f64,
+) -> f64 {
+    use crate::closure::js_closure_get_capture_ptr;
+    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    if !next.is_null() {
+        js_promise_reject(next, cleanup_reason);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Passthrough closure for the extra hop in the fulfilled path.
 /// Captures [next_promise_ptr (i64), value (f64)].
-/// Resolves `next` with `value`.
 extern "C" fn finally_passthrough_fulfill(
     closure: *const crate::closure::ClosureHeader,
     _: f64,
@@ -679,44 +805,8 @@ extern "C" fn finally_passthrough_fulfill(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// Rejected-path wrapper for `.finally()`.
-/// Captures [on_finally, next_promise].
-/// Called with the upstream rejection `reason`.
-/// Runs `on_finally()`, then rejects `next` with `reason` via ONE extra
-/// microtask hop.
-extern "C" fn finally_reject_wrapper(
-    closure: *const crate::closure::ClosureHeader,
-    reason: f64,
-) -> f64 {
-    use crate::closure::{
-        js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
-    };
-
-    let on_finally = js_closure_get_capture_ptr(closure, 0) as *const crate::closure::ClosureHeader;
-    let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-
-    // Call the user's finally callback (ignoring its return value).
-    if !on_finally.is_null() {
-        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        crate::closure::js_closure_call1(on_finally, undef);
-    }
-
-    // Add one extra microtask tick before rejecting `next`.
-    if !next.is_null() {
-        let pass = js_closure_alloc(finally_passthrough_reject as *const u8, 2);
-        js_closure_set_capture_ptr(pass, 0, next as i64);
-        crate::closure::js_closure_set_capture_f64(pass, 1, reason);
-
-        let undef_promise = js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
-        js_promise_then(undef_promise, pass, ptr::null());
-    }
-
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-/// Passthrough closure for the extra hop in finally_reject_wrapper.
+/// Passthrough closure for the extra hop in the rejected path.
 /// Captures [next_promise_ptr (i64), reason (f64)].
-/// Rejects `next` with `reason`.
 extern "C" fn finally_passthrough_reject(
     closure: *const crate::closure::ClosureHeader,
     _: f64,

@@ -60,8 +60,11 @@ pub(super) fn try_global_builtins(
                 if !args.is_empty() {
                     return Ok(Ok(Expr::BigIntCoerce(Box::new(args.remove(0)))));
                 } else {
-                    // BigInt() with no args returns 0n
-                    return Ok(Ok(Expr::BigInt("0".to_string())));
+                    // `BigInt()` with no args coerces `undefined`, which Node
+                    // rejects with `TypeError: Cannot convert undefined to a
+                    // BigInt` (#2754/#2907). Route through the coercion path
+                    // so the runtime throws instead of returning 0n.
+                    return Ok(Ok(Expr::BigIntCoerce(Box::new(Expr::Undefined))));
                 }
             }
             "String" => {
