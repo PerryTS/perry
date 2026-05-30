@@ -540,6 +540,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_set_href", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
+    module.declare_function("js_url_search_params_throw_missing_args", DOUBLE, &[I32]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_get", I64, &[I64, I64]);

@@ -460,7 +460,9 @@ unsafe fn dispatch_typed_array_method(
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
-            f64::from_bits(crate::typedarray::js_typed_array_copy_within(ta, target, start, end) as u64)
+            f64::from_bits(
+                crate::typedarray::js_typed_array_copy_within(ta, target, start, end) as u64,
+            )
         }
         "with" => {
             let idx = arg0();

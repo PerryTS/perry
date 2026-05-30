@@ -182,22 +182,47 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
-    let input = get_string_content(input_f64);
-    if input.chars().any(|c| c.is_ascii_whitespace()) {
-        return create_string_f64("");
-    }
-    let out = idna::domain_to_ascii(&input).unwrap_or_else(|_| String::new());
+    let input = string_from_header(js_url_coerce_string(input_f64));
+    let out = domain_to_ascii(&input);
     create_string_f64(&out)
 }
 
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
-    let input = get_string_content(input_f64);
-    if input.chars().any(|c| c.is_ascii_whitespace()) {
-        return create_string_f64("");
-    }
-    let (out, _) = idna::domain_to_unicode(&input);
+    let input = string_from_header(js_url_coerce_string(input_f64));
+    let ascii = domain_to_ascii(&input);
+    let out = if ascii.starts_with('[') {
+        ascii
+    } else {
+        idna::domain_to_unicode(&ascii).0
+    };
     create_string_f64(&out)
+}
+
+fn domain_to_ascii(input: &str) -> String {
+    let host_prefix = input
+        .split(|c| matches!(c, '/' | '\\' | '?' | '#'))
+        .next()
+        .unwrap_or("");
+    if host_prefix.is_empty() || host_prefix.contains('@') {
+        return String::new();
+    }
+
+    if host_prefix.starts_with('[') {
+        let Some(end) = host_prefix.find(']') else {
+            return String::new();
+        };
+        if !host_prefix[end + 1..].is_empty() {
+            return String::new();
+        }
+    } else if host_prefix.chars().any(|c| matches!(c, ':' | '[' | ']')) {
+        return String::new();
+    }
+
+    let Ok(parsed) = url::Url::parse(&format!("http://{input}")) else {
+        return String::new();
+    };
+    parsed.host_str().unwrap_or("").to_string()
 }
 
 fn json_to_value(json: serde_json::Value) -> f64 {
