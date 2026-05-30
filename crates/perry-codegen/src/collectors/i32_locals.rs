@@ -1285,9 +1285,16 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(e, out);
             }
         }
-        Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             walk(array, out);
             walk(value, out);
+            if let Some(fi) = from_index {
+                walk(fi, out);
+            }
         }
         Expr::Object(props) => {
             for (_, v) in props {
@@ -1393,6 +1400,12 @@ pub fn collect_localset_ids_in_expr_filtered(
         Expr::ErrorNewWithCause { message, cause } => {
             walk(message, out);
             walk(cause, out);
+        }
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            walk(message, out);
+            walk(options, out);
         }
         Expr::DateNew(args) => {
             for a in args {

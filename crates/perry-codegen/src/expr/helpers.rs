@@ -268,6 +268,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "ReferenceError"
             | "EvalError"
             | "URIError"
+            | "AggregateError"
             | "Symbol"
             | "Promise"
             | "Map"

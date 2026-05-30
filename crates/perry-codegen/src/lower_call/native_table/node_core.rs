@@ -1018,6 +1018,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "util",
         has_receiver: false,
+        method: "convertProcessSignalToExitCode",
+        class_filter: None,
+        runtime: "js_util_convert_process_signal_to_exit_code",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
         method: "isArray",
         class_filter: None,
         runtime: "js_array_is_array",
@@ -1040,6 +1049,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_util_strip_vt_control_characters",
         args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "styleText",
+        class_filter: None,
+        runtime: "js_util_style_text",
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     // #2514: util.getSystemErrorName/Message(errno) + getSystemErrorMap().
