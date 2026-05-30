@@ -385,13 +385,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "0.0".to_string()
             };
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            let s_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)]);
             Ok(blk.call(DOUBLE, "js_parse_int", &[(I64, &s_handle), (DOUBLE, &r_d)]))
         }
         Expr::ParseFloat(string) => {
             let s_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            let s_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)]);
             Ok(blk.call(DOUBLE, "js_parse_float", &[(I64, &s_handle)]))
         }
 
