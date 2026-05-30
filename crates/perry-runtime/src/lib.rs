@@ -149,6 +149,7 @@ pub mod util_call_sites;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
+pub mod util_settracesigint;
 pub mod util_style_text;
 pub mod util_syserr;
 pub mod util_usv;
