@@ -577,6 +577,23 @@ fn object_property(value: f64, name: &[u8]) -> f64 {
     f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
 }
 
+fn value_gc_type(value: f64) -> Option<u8> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr = jsval.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < 0x10000 || ((ptr as u64) >> 48) != 0 {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    Some(gc_header.obj_type)
+}
+
+fn is_plain_object(value: f64) -> bool {
+    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+}
+
 #[cold]
 fn throw_console_writable_stream(stream_name: &str) -> ! {
     // Mirror Node's `ERR_CONSOLE_WRITABLE_STREAM` wording, which names the
@@ -613,6 +630,74 @@ fn has_write_method(value: f64) -> bool {
     is_callable(object_property(value, b"write"))
 }
 
+fn color_mode_received(value: f64) -> String {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_null() {
+        return "null".to_string();
+    }
+    if jsval.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jsval.is_bool() {
+        return jsval.as_bool().to_string();
+    }
+    if jsval.is_int32() {
+        return jsval.as_int32().to_string();
+    }
+    if jsval.is_number() {
+        let n = jsval.as_number();
+        if n.fract() == 0.0 && n.is_finite() {
+            return (n as i64).to_string();
+        }
+        return n.to_string();
+    }
+    if jsval.is_any_string() {
+        return format!("'{}'", jsvalue_string_content(value).unwrap_or_default());
+    }
+    format_jsvalue(value, 0)
+}
+
+#[cold]
+fn throw_invalid_color_mode(value: f64) -> ! {
+    let message = format!(
+        "The argument 'colorMode' must be one of: 'auto', true, false. Received {}",
+        color_mode_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+fn validate_console_constructor_options(options: f64) {
+    if !is_plain_object(options) {
+        return;
+    }
+
+    let inspect_options = object_property(options, b"inspectOptions");
+    if !JSValue::from_bits(inspect_options.to_bits()).is_undefined()
+        && !is_plain_object(inspect_options)
+    {
+        let message = format!(
+            "The \"options.inspectOptions\" property must be of type object. Received {}",
+            crate::fs::validate::describe_received(inspect_options)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let color_mode = object_property(options, b"colorMode");
+    let color_mode_value = JSValue::from_bits(color_mode.to_bits());
+    if !color_mode_value.is_undefined()
+        && !color_mode_value.is_bool()
+        && !(color_mode_value.is_any_string()
+            && jsvalue_string_content(color_mode).as_deref() == Some("auto"))
+    {
+        throw_invalid_color_mode(color_mode);
+    }
+
+    let group_indentation = object_property(options, b"groupIndentation");
+    if !JSValue::from_bits(group_indentation.to_bits()).is_undefined() {
+        crate::fs::validate::validate_int32(group_indentation, "groupIndentation", 0, 1000);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_console_new(options: f64) -> f64 {
     // Both `new Console(stdout, stderr?)` and `new Console(options)` are
@@ -624,21 +709,25 @@ pub extern "C" fn js_console_new(options: f64) -> f64 {
     let stdout_prop = object_property(options, b"stdout");
     let stdout;
     let stderr_candidate;
+    let options_value;
     if !null_or_undefined(stdout_prop) {
         stdout = stdout_prop;
         stderr_candidate = object_property(options, b"stderr");
+        options_value = options;
     } else if has_write_method(options) {
         // Single positional stream form: the argument is stdout itself.
         stdout = options;
         stderr_candidate = undefined_value();
+        options_value = undefined_value();
     } else {
         // Options-object form whose stdout is missing/nullish.
         stdout = stdout_prop;
         stderr_candidate = object_property(options, b"stderr");
+        options_value = options;
     }
 
     let ignore_errors = unsafe { decode_dir_bool_option(options, "ignoreErrors") }.unwrap_or(true);
-    js_console_new_resolved(stdout, stderr_candidate, ignore_errors)
+    js_console_new_resolved(stdout, stderr_candidate, ignore_errors, options_value)
 }
 
 #[no_mangle]
@@ -647,10 +736,15 @@ pub extern "C" fn js_console_new2(stdout: f64, stderr_candidate: f64) -> f64 {
     if null_or_undefined(stderr_candidate) && has_options_stdout {
         return js_console_new(stdout);
     }
-    js_console_new_resolved(stdout, stderr_candidate, true)
+    js_console_new_resolved(stdout, stderr_candidate, true, undefined_value())
 }
 
-fn js_console_new_resolved(stdout: f64, stderr_candidate: f64, ignore_errors: bool) -> f64 {
+fn js_console_new_resolved(
+    stdout: f64,
+    stderr_candidate: f64,
+    ignore_errors: bool,
+    options_value: f64,
+) -> f64 {
     if !has_write_method(stdout) {
         throw_console_writable_stream("stdout");
     }
@@ -659,6 +753,7 @@ fn js_console_new_resolved(stdout: f64, stderr_candidate: f64, ignore_errors: bo
     if !null_or_undefined(stderr_candidate) && !has_write_method(stderr_candidate) {
         throw_console_writable_stream("stderr");
     }
+    validate_console_constructor_options(options_value);
     let stderr = if null_or_undefined(stderr_candidate) {
         stdout
     } else {

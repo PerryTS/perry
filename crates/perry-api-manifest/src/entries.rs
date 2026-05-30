@@ -270,6 +270,7 @@ const ZLIB_STREAM_OPTS: &[ParamSpec] = &[ParamSpec::Named {
     ty: TypeSpec::Any,
     optional: true,
 }];
+const ZLIB_CALLBACK_ARGS: &[ParamSpec] = &[p_any("buffer"), p_any("callback")];
 const fn zlib_stream_factory(name: &'static str) -> ApiEntry {
     method_sig("zlib", name, false, None, ZLIB_STREAM_OPTS, TypeSpec::Any)
 }
@@ -1384,8 +1385,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_str("p0")],
         TypeSpec::String,
     ),
-    method_sig("zlib", "gzip", false, None, &[p_str("p0")], TypeSpec::Any),
-    method_sig("zlib", "gunzip", false, None, &[p_str("p0")], TypeSpec::Any),
+    method_sig(
+        "zlib",
+        "gzip",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "zlib",
+        "gunzip",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
     // One-shot sync codecs that round out the #1843 set: raw deflate/inflate
     // (no zlib wrapper), auto-detect unzip, and CRC32.
     method_sig(
@@ -1430,16 +1445,48 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         ],
         TypeSpec::Number,
     ),
-    // Callback-form variants that #1843 didn't surface. `gzip`/`gunzip` and
-    // `brotliCompress`/`brotliDecompress` already exist above as method_sig
-    // entries; these stub the rest so `typeof zlib.deflate === "function"`
-    // resolves true. Actual callback dispatch piggy-backs off the existing
-    // native_table sync routes when used with `util.promisify`.
-    method("zlib", "deflate", false, None),
-    method("zlib", "deflateRaw", false, None),
-    method("zlib", "inflate", false, None),
-    method("zlib", "inflateRaw", false, None),
-    method("zlib", "unzip", false, None),
+    // Callback-form one-shot codecs. Direct calls return `undefined`; promise
+    // wrappers are provided by `util.promisify(...)`.
+    method_sig(
+        "zlib",
+        "deflate",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "zlib",
+        "deflateRaw",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "zlib",
+        "inflate",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "zlib",
+        "inflateRaw",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "zlib",
+        "unzip",
+        false,
+        None,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
+    ),
     // Stream classes — registered as classes so `typeof zlib.Gzip` reads
     // "function". #1843 exposed the `create*` factories but not the
     // constructor names themselves.
@@ -1468,7 +1515,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("zlib", "BrotliDecompress"),
     class("zlib", "ZstdCompress"),
     class("zlib", "ZstdDecompress"),
-    // #1843 — Brotli one-shot compress/decompress (sync + async).
+    // #1843 — Brotli one-shot compress/decompress (sync + callback-form).
     method_sig(
         "zlib",
         "brotliCompressSync",
@@ -1490,16 +1537,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "brotliCompress",
         false,
         None,
-        &[p_str("p0")],
-        TypeSpec::Any,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
     ),
     method_sig(
         "zlib",
         "brotliDecompress",
         false,
         None,
-        &[p_str("p0")],
-        TypeSpec::Any,
+        ZLIB_CALLBACK_ARGS,
+        TypeSpec::Void,
     ),
     // #1843 — Transform-stream factories. Each returns a stream handle
     // supporting `.write`/`.end`/`.on('data'|'end'|'error')`/`.pipe`.
@@ -2789,6 +2836,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "getSystemErrorMessage", false, None),
     method("util", "getSystemErrorMap", false, None),
     method("util", "parseEnv", false, None),
+    // #2514: util.toUSVString(value) → string with lone surrogates replaced.
+    method("util", "toUSVString", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
@@ -2880,6 +2929,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "isDeepStrictEqual", false, None),
     method("sys", "parseArgs", false, None),
     method("sys", "stripVTControlCharacters", false, None),
+    method("sys", "toUSVString", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),

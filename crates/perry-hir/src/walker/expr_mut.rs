@@ -238,6 +238,8 @@ where
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)
         | Expr::ReflectGetPrototypeOf(v)
+        | Expr::ReflectIsExtensible(v)
+        | Expr::ReflectPreventExtensions(v)
         | Expr::DateGetTime(v)
         | Expr::DateToISOString(v)
         | Expr::DateGetFullYear(v)
