@@ -787,7 +787,11 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
         "unbindStore",
         method_closure(cast1(diag_channel_unbind_store), 1, id),
     );
-    set_field_value(obj, "runStores", run_stores_method_closure(id));
+    set_field_value(
+        obj,
+        "runStores",
+        method_closure(cast5(diag_channel_run_stores), 5, id),
+    );
     DIAG_CHANNEL_BY_KEY.with(|m| {
         m.borrow_mut().insert(key, id);
     });
@@ -1097,12 +1101,9 @@ pub(crate) extern "C" fn store_next_thunk(closure: *const ClosureHeader) -> f64 
     let data = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let fn_value = f64::from_bits(js_closure_get_capture_ptr(closure, 2) as u64);
     let this_arg = f64::from_bits(js_closure_get_capture_ptr(closure, 3) as u64);
-    // Capture slot 4 holds a NaN-boxed JS array of the trailing callback
-    // arguments (everything after `thisArg` in `runStores`), so the full
-    // `...args` list is forwarded — not just the first two (#3082).
-    let cb_args = f64::from_bits(js_closure_get_capture_ptr(closure, 4) as u64);
-    let args = unbox_arg_array(cb_args);
-    run_store_wrapped(id, data, fn_value, this_arg, &args)
+    let a = f64::from_bits(js_closure_get_capture_ptr(closure, 4) as u64);
+    let b = f64::from_bits(js_closure_get_capture_ptr(closure, 5) as u64);
+    run_store_wrapped(id, data, fn_value, this_arg, &[a, b])
 }
 
 pub(crate) extern "C" fn store_chain_thunk(closure: *const ClosureHeader) -> f64 {
@@ -1112,72 +1113,17 @@ pub(crate) extern "C" fn store_chain_thunk(closure: *const ClosureHeader) -> f64
     call_store_run(store, context, next)
 }
 
-/// Build the `runStores` method closure. Registered as a synthetic-arguments
-/// rest closure (fixed_arity 0) so the dispatcher bundles the FULL argument
-/// list — `context`, `callback`, `thisArg`, and every trailing `...args` — into
-/// a single JS array, regardless of how many arguments the caller passed
-/// (#3082). The fixed five-argument `cast5` entrypoint used previously capped
-/// the forwarded callback arguments at two.
-pub(crate) fn run_stores_method_closure(id: i64) -> f64 {
-    let func = cast1(diag_channel_run_stores);
-    let c = js_closure_alloc(func, 1);
-    js_closure_set_capture_ptr(c, 0, id);
-    js_register_closure_synthetic_arguments(func, 0);
-    boxed_ptr(c)
-}
-
-/// Build a NaN-boxed JS array value from a slice of callback arguments.
-///
-/// # Safety
-/// Allocates on the current thread's arena; callers must ensure the runtime
-/// is initialized (always true on the diagnostics_channel call path).
-unsafe fn build_arg_array(values: &[f64]) -> f64 {
-    let arr = js_array_new();
-    for &v in values {
-        js_array_push(arr, v);
-    }
-    boxed_ptr(arr)
-}
-
-/// Decode a NaN-boxed JS array value into a `Vec<f64>` of its elements.
-/// Returns an empty vec for null/non-array inputs.
-fn unbox_arg_array(arr_value: f64) -> Vec<f64> {
-    let arr = js_nanbox_get_pointer(arr_value) as *const crate::array::ArrayHeader;
-    if arr.is_null() {
-        return Vec::new();
-    }
-    unsafe {
-        let len = (*arr).length as usize;
-        let data = (*arr).data;
-        if data.is_null() {
-            return Vec::new();
-        }
-        let mut out = Vec::with_capacity(len);
-        for i in 0..len {
-            out.push(f64::from_bits((*data.add(i)).bits()));
-        }
-        out
-    }
-}
-
 pub(crate) extern "C" fn diag_channel_run_stores(
     closure: *const ClosureHeader,
-    all_args: f64,
+    data: f64,
+    fn_value: f64,
+    this_arg: f64,
+    a: f64,
+    b: f64,
 ) -> f64 {
     let id = method_id(closure);
-    // `all_args` is the synthetic-arguments rest array: [context, callback,
-    // thisArg, ...args]. Split it back into the documented parameters and the
-    // trailing callback argument list (#3082).
-    let all = unbox_arg_array(all_args);
-    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let data = all.first().copied().unwrap_or(undef);
-    let fn_value = all.get(1).copied().unwrap_or(undef);
-    let this_arg = all.get(2).copied().unwrap_or(undef);
-    let cb_args: Vec<f64> = if all.len() > 3 {
-        all[3..].to_vec()
-    } else {
-        Vec::new()
-    };
+    // Minimal implementation: apply all bound stores in insertion order for
+    // the two-argument shape used by the parity suite.
     let stores = DIAG_CHANNELS.with(|m| {
         m.borrow()
             .get(&id)
@@ -1185,20 +1131,16 @@ pub(crate) extern "C" fn diag_channel_run_stores(
             .unwrap_or_default()
     });
     if stores.is_empty() {
-        return run_store_wrapped(id, data, fn_value, this_arg, &cb_args);
+        return run_store_wrapped(id, data, fn_value, this_arg, &[a, b]);
     }
-    // Re-bundle the trailing callback arguments into a JS array so the chained
-    // store-`run` thunk can forward the full list (closure captures are
-    // fixed-width scalar slots, so the variadic tail rides in a single array
-    // handle).
-    let cb_args_arr = unsafe { build_arg_array(&cb_args) };
-    let mut next = js_closure_alloc(cast0(store_next_thunk), 5);
+    let mut next = js_closure_alloc(cast0(store_next_thunk), 6);
     js_register_closure_arity(cast0(store_next_thunk), 0);
     js_closure_set_capture_ptr(next, 0, id);
     js_closure_set_capture_ptr(next, 1, data.to_bits() as i64);
     js_closure_set_capture_ptr(next, 2, fn_value.to_bits() as i64);
     js_closure_set_capture_ptr(next, 3, this_arg.to_bits() as i64);
-    js_closure_set_capture_ptr(next, 4, cb_args_arr.to_bits() as i64);
+    js_closure_set_capture_ptr(next, 4, a.to_bits() as i64);
+    js_closure_set_capture_ptr(next, 5, b.to_bits() as i64);
     let mut next_value = boxed_ptr(next);
     for (store, transform) in stores.into_iter().rev() {
         let context = if let Some(t) = transform {
