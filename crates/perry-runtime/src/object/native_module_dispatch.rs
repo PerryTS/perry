@@ -992,6 +992,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
         ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
+        ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
             crate::builtins::js_util_is_deep_strict_equal(arg(0), arg(1))

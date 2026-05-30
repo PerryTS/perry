@@ -659,7 +659,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `util.parseEnv(content)`
 - `util.stripVTControlCharacters(str)`
 - `util.toUSVString(string)`
-- `util.diff(actual, expected)`
 - `util.setTraceSigInt(enable)`
 - `MIMEType.prototype.type`
 - `MIMEType.prototype.subtype`
