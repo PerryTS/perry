@@ -110,6 +110,7 @@ pub(super) fn try_url_date_weakref_instance(
                 | Some("Buffer")
                 | Some("Uint8Array")
                 | Some("Uint8ClampedArray")
+                | Some("Array")
         );
         // Methods we treat as Date-only when the receiver is unambiguously
         // Date or unknown (current behavior). `toString` / `toJSON` etc.
