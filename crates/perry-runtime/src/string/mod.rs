@@ -28,6 +28,7 @@ mod format;
 mod intern;
 mod io;
 mod pad;
+mod raw;
 mod slice_ops;
 mod split;
 
@@ -69,6 +70,7 @@ pub use format::{
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 pub use io::{js_string_error, js_string_print, js_string_warn};
 pub use pad::{js_string_alloc_space, js_string_pad_end, js_string_pad_start, js_string_repeat};
+pub use raw::js_string_raw;
 pub use slice_ops::{
     js_string_index_of, js_string_index_of_from, js_string_last_index_of,
     js_string_last_index_of_from, js_string_slice, js_string_substring, js_string_to_lower_case,

@@ -70,27 +70,52 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     // (value, writable, configurable). `name`/`length` are the
                     // built-in own data slots; anything else falls back to the
                     // user-attached dynamic-property side table.
+                    // Built-in `name`/`length` are spec'd `{ writable: false,
+                    // configurable: true }`. A registered descriptor (e.g.
+                    // from `install_proto_method`, #3143, or a user
+                    // `Object.defineProperty`) overrides those defaults.
+                    let registered = super::get_property_attrs(ptr, name);
+                    let writable_default = registered.map(|a| a.writable());
+                    let configurable_default = registered.map(|a| a.configurable()).unwrap_or(true);
                     let resolved: Option<(f64, bool, bool)> = match name {
                         "length" => {
                             let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
-                            if let Some(arity) =
+                            let arity = if let Some(arity) =
                                 super::native_module::bound_native_callable_value_arity(
                                     closure_value,
-                                )
+                                ) {
+                                arity
+                            } else if let Some(len) =
+                                super::native_module::builtin_closure_length(ptr)
                             {
-                                Some((arity as f64, false, true))
+                                // #3143: per-closure spec length for built-in
+                                // proto methods (shared func_ptr can't carry it).
+                                len
                             } else {
-                                let arity = crate::closure::closure_arity(
+                                crate::closure::closure_arity(
                                     ptr as *const crate::closure::ClosureHeader,
-                                );
-                                // Numbers are NaN-boxed as their raw f64 bits.
-                                Some((arity.unwrap_or(0) as f64, false, true))
-                            }
+                                )
+                                .unwrap_or(0)
+                            };
+                            // Numbers are NaN-boxed as their raw f64 bits.
+                            Some((
+                                arity as f64,
+                                writable_default.unwrap_or(false),
+                                configurable_default,
+                            ))
                         }
                         "name" => {
                             let dynv = crate::closure::closure_get_dynamic_prop(ptr, "name");
                             if dynv.to_bits() != crate::value::TAG_UNDEFINED {
-                                Some((dynv, true, true))
+                                // Function `.name` is spec'd non-writable; honor
+                                // a registered override but otherwise report
+                                // `writable: false` (#3143), not the old default
+                                // of `true`.
+                                Some((
+                                    dynv,
+                                    writable_default.unwrap_or(false),
+                                    configurable_default,
+                                ))
                             } else {
                                 let func_ptr = (*(ptr as *const crate::closure::ClosureHeader))
                                     .func_ptr

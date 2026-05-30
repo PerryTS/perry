@@ -7,7 +7,7 @@
 //! - parentPort.on('message', callback): Async stdin reader, dispatch on main thread
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 use std::sync::Once;
 
@@ -39,6 +39,8 @@ thread_local! {
     static STDIN_EOF: RefCell<bool> = const { RefCell::new(false) };
     /// Node-compatible per-thread environment data.
     static ENVIRONMENT_DATA: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+    /// Objects marked through worker_threads.markAsUntransferable().
+    static UNTRANSFERABLE_OBJECTS: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
 }
 
 static ENVIRONMENT_DATA_GC_REGISTERED: Once = Once::new();
@@ -118,6 +120,168 @@ fn environment_data_key(value: f64) -> String {
     format!("bits:{bits:016x}")
 }
 
+fn js_undefined() -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+fn js_null() -> f64 {
+    f64::from_bits(JSValue::null().bits())
+}
+
+fn js_bool(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+fn object_value(obj: *mut perry_runtime::object::ObjectHeader) -> f64 {
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+fn set_object_field(obj: *mut perry_runtime::object::ObjectHeader, name: &str, value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    perry_runtime::object::js_object_set_field_by_name(obj, key, value);
+}
+
+fn closure_value(func_ptr: *const u8, arity: u32) -> f64 {
+    perry_runtime::closure::js_register_closure_arity(func_ptr, arity);
+    let closure = perry_runtime::closure::js_closure_alloc(func_ptr, 0);
+    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
+extern "C" fn worker_threads_noop0(_closure: *const ClosureHeader) -> f64 {
+    js_undefined()
+}
+
+extern "C" fn worker_threads_noop1(_closure: *const ClosureHeader, _arg0: f64) -> f64 {
+    js_undefined()
+}
+
+extern "C" fn worker_threads_noop2(_closure: *const ClosureHeader, _arg0: f64, _arg1: f64) -> f64 {
+    js_undefined()
+}
+
+extern "C" fn worker_threads_has_ref(_closure: *const ClosureHeader) -> f64 {
+    js_bool(true)
+}
+
+fn message_port_object() -> *mut perry_runtime::object::ObjectHeader {
+    let obj = perry_runtime::object::js_object_alloc(0, 0);
+    set_object_field(
+        obj,
+        "postMessage",
+        closure_value(worker_threads_noop2 as *const u8, 2),
+    );
+    set_object_field(
+        obj,
+        "close",
+        closure_value(worker_threads_noop0 as *const u8, 0),
+    );
+    set_object_field(
+        obj,
+        "start",
+        closure_value(worker_threads_noop0 as *const u8, 0),
+    );
+    set_object_field(
+        obj,
+        "ref",
+        closure_value(worker_threads_noop0 as *const u8, 0),
+    );
+    set_object_field(
+        obj,
+        "unref",
+        closure_value(worker_threads_noop0 as *const u8, 0),
+    );
+    set_object_field(
+        obj,
+        "hasRef",
+        closure_value(worker_threads_has_ref as *const u8, 0),
+    );
+    obj
+}
+
+/// worker_threads.markAsUntransferable(object)
+#[no_mangle]
+pub extern "C" fn js_worker_threads_mark_as_untransferable(value: f64) -> f64 {
+    UNTRANSFERABLE_OBJECTS.with(|objects| {
+        objects.borrow_mut().insert(value.to_bits());
+    });
+    js_undefined()
+}
+
+/// worker_threads.isMarkedAsUntransferable(object)
+#[no_mangle]
+pub extern "C" fn js_worker_threads_is_marked_as_untransferable(value: f64) -> f64 {
+    let marked = UNTRANSFERABLE_OBJECTS.with(|objects| objects.borrow().contains(&value.to_bits()));
+    js_bool(marked)
+}
+
+/// worker_threads.markAsUncloneable(object)
+#[no_mangle]
+pub extern "C" fn js_worker_threads_mark_as_uncloneable(_value: f64) -> f64 {
+    js_undefined()
+}
+
+/// worker_threads.moveMessagePortToContext(port, context)
+#[no_mangle]
+pub extern "C" fn js_worker_threads_move_message_port_to_context(port: f64, _context: f64) -> f64 {
+    port
+}
+
+/// worker_threads.receiveMessageOnPort(port)
+#[no_mangle]
+pub extern "C" fn js_worker_threads_receive_message_on_port(_port: f64) -> f64 {
+    js_undefined()
+}
+
+/// worker_threads.postMessageToThread(threadId, value[, transferList][, timeout])
+#[no_mangle]
+pub extern "C" fn js_worker_threads_post_message_to_thread(
+    _thread_id: f64,
+    _value: f64,
+    _transfer_list: f64,
+    _timeout: f64,
+) -> f64 {
+    js_undefined()
+}
+
+/// new worker_threads.MessageChannel()
+#[no_mangle]
+pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
+    let obj = perry_runtime::object::js_object_alloc(0, 0);
+    set_object_field(obj, "port1", object_value(message_port_object()));
+    set_object_field(obj, "port2", object_value(message_port_object()));
+    object_value(obj)
+}
+
+/// new worker_threads.BroadcastChannel(name)
+#[no_mangle]
+pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
+    let obj = perry_runtime::object::js_object_alloc(0, 0);
+    set_object_field(
+        obj,
+        "postMessage",
+        closure_value(worker_threads_noop1 as *const u8, 1),
+    );
+    set_object_field(
+        obj,
+        "close",
+        closure_value(worker_threads_noop0 as *const u8, 0),
+    );
+    set_object_field(
+        obj,
+        "ref",
+        closure_value(worker_threads_noop0 as *const u8, 0),
+    );
+    set_object_field(
+        obj,
+        "unref",
+        closure_value(worker_threads_noop0 as *const u8, 0),
+    );
+    set_object_field(obj, "onmessage", js_null());
+    set_object_field(obj, "onmessageerror", js_null());
+    set_object_field(obj, "name", name);
+    object_value(obj)
+}
+
 /// worker_threads.setEnvironmentData(key, value)
 /// Stores data for this thread. An undefined value deletes the key.
 #[no_mangle]
@@ -135,7 +299,7 @@ pub extern "C" fn js_worker_threads_set_environment_data(key: f64, value: f64) -
         }
     });
 
-    f64::from_bits(JSValue::undefined().bits())
+    js_undefined()
 }
 
 /// worker_threads.getEnvironmentData(key)
@@ -189,7 +353,7 @@ pub extern "C" fn js_worker_threads_post_message(data: f64) -> f64 {
         let _ = writeln!(io::stdout(), "{}", content);
         let _ = io::stdout().flush();
     }
-    f64::from_bits(JSValue::undefined().bits())
+    js_undefined()
 }
 
 /// parentPort.on(event, callback) - Register event callback
@@ -228,7 +392,7 @@ pub extern "C" fn js_worker_threads_on(event_ptr: i64, callback: i64) -> f64 {
         _ => {}
     }
 
-    f64::from_bits(JSValue::undefined().bits())
+    js_undefined()
 }
 
 /// Start the background stdin reader thread

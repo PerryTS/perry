@@ -131,7 +131,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cmp_box = lower_expr(ctx, comparator)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cmp_handle = unbox_to_i64(blk, &cmp_box);
+            // #2796: validate the comparator (function | undefined) before
+            // sorting — throws TypeError for any other value, returns 0
+            // (default sort) for undefined.
+            let cmp_handle = blk.call(I64, "js_validate_array_comparator", &[(DOUBLE, &cmp_box)]);
             let result = blk.call(
                 I64,
                 "js_array_sort_with_comparator",

@@ -157,18 +157,22 @@ pub(super) fn try_inline_array_methods(
                             }));
                         }
                         "toSpliced" => {
-                            if args.len() >= 2 {
-                                let mut args_iter = args.into_iter();
-                                let start = args_iter.next().unwrap();
-                                let delete_count = args_iter.next().unwrap();
-                                let items: Vec<Expr> = args_iter.collect();
-                                return Ok(Ok(Expr::ArrayToSpliced {
-                                    array: Box::new(array_expr),
-                                    start: Box::new(start),
-                                    delete_count: Box::new(delete_count),
-                                    items,
-                                }));
-                            }
+                            // #2794: handle omitted args.
+                            let arg_count = args.len();
+                            let mut args_iter = args.into_iter();
+                            let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                            let delete_count = match args_iter.next() {
+                                Some(dc) => dc,
+                                None if arg_count >= 1 => Expr::Number(f64::INFINITY),
+                                None => Expr::Number(0.0),
+                            };
+                            let items: Vec<Expr> = args_iter.collect();
+                            return Ok(Ok(Expr::ArrayToSpliced {
+                                array: Box::new(array_expr),
+                                start: Box::new(start),
+                                delete_count: Box::new(delete_count),
+                                items,
+                            }));
                         }
                         "with" => {
                             if args.len() >= 2 {
