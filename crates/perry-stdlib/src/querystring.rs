@@ -555,14 +555,6 @@ unsafe fn resolve_stringify_separator_str(value: f64, default: &'static str) -> 
     jsvalue_to_owned_string(value)
 }
 
-fn throw_symbol_to_string_type_error() -> ! {
-    let msg = "Cannot convert a Symbol value to a string";
-    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = perry_runtime::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    perry_runtime::exception::js_throw(f64::from_bits(err_value))
-}
-
 /// Append `key=value` (or `key=v1&key=v2` for arrays) to `out`.
 unsafe fn append_stringify_value(
     out: &mut String,
