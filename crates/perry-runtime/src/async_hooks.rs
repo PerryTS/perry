@@ -153,29 +153,6 @@ fn ptr_from_nanboxed(value: f64) -> *const u8 {
     (bits & POINTER_MASK) as *const u8
 }
 
-fn string_from_value(value: f64, default: &str) -> String {
-    let bits = value.to_bits();
-    let tag = bits & TAG_MASK;
-    if tag != STRING_TAG && tag != POINTER_TAG {
-        return default.to_string();
-    }
-    let ptr = (bits & POINTER_MASK) as *const StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return default.to_string();
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::str::from_utf8(std::slice::from_raw_parts(data, len))
-            .unwrap_or(default)
-            .to_string()
-    }
-}
-
-fn closure_from_value(value: f64) -> *const ClosureHeader {
-    ptr_from_nanboxed(value) as *const ClosureHeader
-}
-
 fn object_field(obj_value: f64, name: &[u8]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_nanbox_f64(obj_value);
