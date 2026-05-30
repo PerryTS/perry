@@ -7,6 +7,7 @@
 //! separate follow-up.
 
 use crate::url::{create_string_f64, get_string_content};
+use crate::value::JSValue;
 
 /// Bundled punycode.js version Node reports via `punycode.version`.
 pub const PUNYCODE_VERSION: &str = "2.1.0";
@@ -20,6 +21,16 @@ const DAMP: u32 = 700;
 const INITIAL_BIAS: u32 = 72;
 const INITIAL_N: u32 = 128;
 const DELIMITER: char = '-';
+const ERR_INVALID_INPUT: &str = "Invalid input";
+const ERR_NON_BASIC: &str = "Illegal input >= 0x80 (not a basic code point)";
+
+#[cold]
+fn throw_range_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_rangeerror_new(msg);
+    let bits = JSValue::pointer(error as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(bits))
+}
 
 /// Bias adaptation (RFC 3492 §6.1).
 fn adapt(mut delta: u32, num_points: u32, first_time: bool) -> u32 {
@@ -55,10 +66,8 @@ fn basic_to_digit(cp: u32) -> Option<u32> {
 }
 
 /// `punycode.decode(string)` — decode a Punycode string (no `xn--` prefix) to
-/// its Unicode form. Returns the input unchanged on malformed input is NOT the
-/// spec behavior (Node throws RangeError); we instead return a best-effort
-/// decode and never panic, matching common consumer expectations.
-fn decode(input: &str) -> String {
+/// its Unicode form.
+fn decode(input: &str) -> Result<String, &'static str> {
     let input_cps: Vec<u32> = input.chars().map(|c| c as u32).collect();
     let mut output: Vec<u32> = Vec::new();
 
@@ -72,10 +81,12 @@ fn decode(input: &str) -> String {
         input[..b].chars().count()
     });
     let basic_len = basic.unwrap_or(0);
+    if basic == Some(0) {
+        return Err(ERR_INVALID_INPUT);
+    }
     for &cp in input_cps.iter().take(basic_len) {
         if cp >= 0x80 {
-            // Not a basic code point — malformed; bail to best-effort.
-            return input.to_string();
+            return Err(ERR_NON_BASIC);
         }
         output.push(cp);
     }
@@ -89,15 +100,15 @@ fn decode(input: &str) -> String {
         let mut k = BASE;
         loop {
             if idx >= input_cps.len() {
-                return input.to_string(); // bad input
+                return Err(ERR_INVALID_INPUT);
             }
             let digit = match basic_to_digit(input_cps[idx]) {
                 Some(d) => d,
-                None => return input.to_string(),
+                None => return Err(ERR_INVALID_INPUT),
             };
             idx += 1;
-            // overflow-guarded i += digit * w
-            i = i.wrapping_add(digit.wrapping_mul(w));
+            let increment = digit.checked_mul(w).ok_or(ERR_INVALID_INPUT)?;
+            i = i.checked_add(increment).ok_or(ERR_INVALID_INPUT)?;
             let t = if k <= bias {
                 TMIN
             } else if k >= bias + TMAX {
@@ -108,22 +119,24 @@ fn decode(input: &str) -> String {
             if digit < t {
                 break;
             }
-            w = w.wrapping_mul(BASE - t);
-            k += BASE;
+            w = w.checked_mul(BASE - t).ok_or(ERR_INVALID_INPUT)?;
+            k = k.checked_add(BASE).ok_or(ERR_INVALID_INPUT)?;
         }
         let out_len = output.len() as u32 + 1;
         bias = adapt(i - oldi, out_len, oldi == 0);
-        n = n.wrapping_add(i / out_len);
+        n = n.checked_add(i / out_len).ok_or(ERR_INVALID_INPUT)?;
         i %= out_len;
         // insert n at position i
         output.insert(i as usize, n);
-        i += 1;
+        i = i.checked_add(1).ok_or(ERR_INVALID_INPUT)?;
     }
 
-    output
-        .into_iter()
-        .filter_map(char::from_u32)
-        .collect::<String>()
+    let mut decoded = String::new();
+    for cp in output {
+        let ch = char::from_u32(cp).ok_or(ERR_INVALID_INPUT)?;
+        decoded.push(ch);
+    }
+    Ok(decoded)
 }
 
 /// `punycode.encode(string)` — encode a Unicode string to Punycode (no `xn--`).
@@ -213,13 +226,13 @@ fn to_ascii(domain: &str) -> String {
 }
 
 /// `punycode.toUnicode(domain)` — decode each `xn--` label back to Unicode.
-fn to_unicode(domain: &str) -> String {
-    map_labels(domain, |label| {
+fn to_unicode(domain: &str) -> Result<String, &'static str> {
+    map_labels_result(domain, |label| {
         let lower = label.to_ascii_lowercase();
         if let Some(rest) = lower.strip_prefix("xn--") {
             decode(rest)
         } else {
-            label.to_string()
+            Ok(label.to_string())
         }
     })
 }
@@ -229,20 +242,50 @@ fn to_unicode(domain: &str) -> String {
 /// and rejoin with `.` only between mapped labels of the original split (the
 /// original separators are normalized to `.`, matching Node's output).
 fn map_labels(domain: &str, f: impl Fn(&str) -> String) -> String {
-    // Node preserves a leading "email-style" local part before '@' verbatim
-    // for the *userland* punycode; the deprecated core module does not — it
-    // maps the whole string label-by-label. Split on the four IDNA dot chars.
+    let (prefix, domain) = split_email_local_part(domain);
     let parts: Vec<&str> = domain
         .split(['.', '\u{3002}', '\u{FF0E}', '\u{FF61}'])
         .collect();
-    parts.into_iter().map(f).collect::<Vec<_>>().join(".")
+    format!(
+        "{}{}",
+        prefix.unwrap_or(""),
+        parts.into_iter().map(f).collect::<Vec<_>>().join(".")
+    )
+}
+
+fn map_labels_result<E>(domain: &str, f: impl Fn(&str) -> Result<String, E>) -> Result<String, E> {
+    let (prefix, domain) = split_email_local_part(domain);
+    let parts: Vec<&str> = domain
+        .split(['.', '\u{3002}', '\u{FF0E}', '\u{FF61}'])
+        .collect();
+    let mut mapped = Vec::with_capacity(parts.len());
+    for part in parts {
+        mapped.push(f(part)?);
+    }
+    Ok(format!("{}{}", prefix.unwrap_or(""), mapped.join(".")))
+}
+
+fn split_email_local_part(domain: &str) -> (Option<&str>, &str) {
+    if let Some(at) = domain.find('@') {
+        let rest_start = at + '@'.len_utf8();
+        let rest_end = domain[rest_start..]
+            .find('@')
+            .map(|next_at| rest_start + next_at)
+            .unwrap_or(domain.len());
+        (Some(&domain[..rest_start]), &domain[rest_start..rest_end])
+    } else {
+        (None, domain)
+    }
 }
 
 // ── C-ABI runtime entry points (NaN-boxed string in/out) ──
 
 #[no_mangle]
 pub extern "C" fn js_punycode_decode(value: f64) -> f64 {
-    create_string_f64(&decode(&get_string_content(value)))
+    match decode(&get_string_content(value)) {
+        Ok(decoded) => create_string_f64(&decoded),
+        Err(message) => throw_range_error(message),
+    }
 }
 
 #[no_mangle]
@@ -257,7 +300,10 @@ pub extern "C" fn js_punycode_to_ascii(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_punycode_to_unicode(value: f64) -> f64 {
-    create_string_f64(&to_unicode(&get_string_content(value)))
+    match to_unicode(&get_string_content(value)) {
+        Ok(decoded) => create_string_f64(&decoded),
+        Err(message) => throw_range_error(message),
+    }
 }
 
 /// `punycode.ucs2.decode(string)` — split a string into an array of Unicode
@@ -305,20 +351,20 @@ mod tests {
     #[test]
     fn encode_decode_roundtrip() {
         assert_eq!(encode("münchen"), "mnchen-3ya");
-        assert_eq!(decode("mnchen-3ya"), "münchen");
+        assert_eq!(decode("mnchen-3ya").unwrap(), "münchen");
         assert_eq!(encode("bücher"), "bcher-kva");
-        assert_eq!(decode("bcher-kva"), "bücher");
+        assert_eq!(decode("bcher-kva").unwrap(), "bücher");
         // all-ASCII encodes to itself + trailing delimiter
         assert_eq!(encode("abc"), "abc-");
-        assert_eq!(decode("abc-"), "abc");
+        assert_eq!(decode("abc-").unwrap(), "abc");
     }
 
     #[test]
     fn domain_conversions() {
         assert_eq!(to_ascii("münchen.de"), "xn--mnchen-3ya.de");
-        assert_eq!(to_unicode("xn--mnchen-3ya.de"), "münchen.de");
+        assert_eq!(to_unicode("xn--mnchen-3ya.de").unwrap(), "münchen.de");
         // pure-ASCII domains pass through unchanged
         assert_eq!(to_ascii("example.com"), "example.com");
-        assert_eq!(to_unicode("example.com"), "example.com");
+        assert_eq!(to_unicode("example.com").unwrap(), "example.com");
     }
 }

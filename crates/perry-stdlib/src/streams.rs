@@ -272,6 +272,7 @@ unsafe fn build_iter_result(value_bits: u64, done: bool) -> u64 {
 
 unsafe fn alloc_uint8array_from_bytes(bytes: &[u8]) -> u64 {
     let buf = perry_runtime::buffer::buffer_alloc(bytes.len() as u32);
+    perry_runtime::buffer::mark_as_uint8array(buf as usize);
     (*buf).length = bytes.len() as u32;
     if !bytes.is_empty() {
         std::ptr::copy_nonoverlapping(
@@ -2037,6 +2038,7 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
     match (kind, name) {
         (1, "locked") => return js_readable_stream_locked(handle),
         (2, "locked") => return js_writable_stream_locked(handle),
+        (3, "closed") => return box_promise(js_reader_closed(handle)),
         _ => {}
     }
     // Callable members → bound-method closure so `typeof` reports

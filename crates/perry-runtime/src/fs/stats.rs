@@ -401,10 +401,8 @@ fn metadata_special_file_predicates(meta: Option<&fs::Metadata>) -> (bool, bool,
 }
 
 /// `fs.statSync(path)` — returns a Stats-like object with Node-compatible
-/// predicate methods and a `size` numeric field. On error, returns an object
-/// where all predicates are false and size is 0 (Node throws on ENOENT, but
-/// Perry's LLVM backend doesn't have a catch-unwind path for runtime panics —
-/// graceful degradation is safer here).
+/// predicate methods and scalar fields, or throws a Node-shaped fs Error when
+/// metadata lookup fails.
 #[no_mangle]
 pub extern "C" fn js_fs_stat_sync(path_value: f64) -> f64 {
     js_fs_stat_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
@@ -423,7 +421,7 @@ pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -
                 )
             }
         };
-        match fs::metadata(path_str) {
+        match fs::metadata(&path_str) {
             Ok(meta) => {
                 let is_file = meta.is_file();
                 let is_dir = meta.is_dir();
@@ -457,9 +455,10 @@ pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -
                     Some(&meta),
                 )
             }
-            Err(_) => build_stats_object(
-                false, false, false, 0, 0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, bigint, None,
-            ),
+            Err(err) => {
+                let err_val = build_fs_error_value(&err, "stat", &path_str);
+                crate::exception::js_throw(err_val)
+            }
         }
     }
 }
@@ -484,7 +483,7 @@ pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) 
                 )
             }
         };
-        match fs::symlink_metadata(path_str) {
+        match fs::symlink_metadata(&path_str) {
             Ok(meta) => {
                 let ft = meta.file_type();
                 let size = meta.len();
@@ -516,9 +515,10 @@ pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) 
                     Some(&meta),
                 )
             }
-            Err(_) => build_stats_object(
-                false, false, false, 0, 0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, bigint, None,
-            ),
+            Err(err) => {
+                let err_val = build_fs_error_value(&err, "lstat", &path_str);
+                crate::exception::js_throw(err_val)
+            }
         }
     }
 }

@@ -361,15 +361,22 @@ pub extern "C" fn js_fs_glob_callback(pattern_value: f64, arg1: f64, arg2: f64) 
 pub extern "C" fn js_fs_fstat_callback(fd_value: f64, arg1: f64, arg2: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    crate::fs::validate::validate_fd(fd_value);
     let options = if extract_closure_ptr(arg1).is_null() {
         arg1
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
-    let stats = js_fs_fstat_sync_options(fd_value, options);
+    let bigint = unsafe { options_bool_field(options, b"bigint") };
+    let result = fstat_stats_value(fd_value as i32, bigint);
     let cb = last_callback(&[arg1, arg2]);
     if !cb.is_null() {
-        crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), stats);
+        match result {
+            Ok(stats) => {
+                crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), stats);
+            }
+            Err(err) => unsafe { call_cb_err2(cb, err) },
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }

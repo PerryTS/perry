@@ -300,9 +300,10 @@ pub unsafe extern "C" fn js_querystring_parse(
                 None => (pair, ""),
             }
         };
-        let key = decode_parse_component(key_raw, decode);
+        let key_value = decode_parse_component(key_raw, decode);
         let value = decode_parse_component(val_raw, decode);
-        push_parsed_pair(obj, &key, &value);
+        let key = jsvalue_to_owned_string(key_value);
+        push_parsed_pair(obj, &key, value);
         parsed += 1;
     }
     obj
@@ -343,19 +344,20 @@ fn normalize_decode_component_input(input: &str) -> Cow<'_, str> {
     }
 }
 
-unsafe fn decode_parse_component(raw: &str, decode: Option<*const ClosureHeader>) -> String {
+unsafe fn decode_parse_component(raw: &str, decode: Option<*const ClosureHeader>) -> f64 {
     let Some(callback) = decode else {
-        return percent_decode(raw, true);
+        return nanbox_string(intern_string(&percent_decode(raw, true)));
     };
     let normalized = normalize_decode_component_input(raw);
-    apply_decode_codec(callback, normalized.as_ref()).unwrap_or_else(|| percent_decode(raw, true))
+    apply_decode_codec(callback, normalized.as_ref())
+        .unwrap_or_else(|| nanbox_string(intern_string(&percent_decode(raw, true))))
 }
 
-unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Option<String> {
+unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Option<f64> {
     let trap_buf = perry_runtime::exception::js_try_push();
     let jumped = unsafe { perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
     let result = if jumped == 0 {
-        Some(apply_codec(callback, raw))
+        Some(call_codec(callback, raw))
     } else {
         perry_runtime::exception::js_clear_exception();
         None
@@ -364,14 +366,25 @@ unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Optio
     result
 }
 
-/// Call a user-supplied codec closure with `raw` and decode the return.
-/// Returns the empty string if the callback yielded a non-string — Node
-/// would coerce via `String(ret)`, but the only realistic failure mode here
-/// is a buggy callback, and an empty string is observably distinct.
-unsafe fn apply_codec(callback: *const ClosureHeader, raw: &str) -> String {
+/// Call a user-supplied codec closure with `raw` and return its JS value.
+unsafe fn call_codec(callback: *const ClosureHeader, raw: &str) -> f64 {
     let arg = nanbox_string(intern_string(raw));
-    let ret = js_closure_call1(callback, arg);
-    nanboxed_to_string(ret).unwrap_or_default()
+    js_closure_call1(callback, arg)
+}
+
+unsafe fn apply_encode_codec(callback: *const ClosureHeader, raw: &str) -> String {
+    jsvalue_to_owned_string(call_codec(callback, raw))
+}
+
+unsafe fn jsvalue_to_owned_string(value: f64) -> String {
+    let ptr = perry_runtime::value::js_jsvalue_to_string(value);
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return String::new();
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn resolve_max_keys(options: f64) -> Option<usize> {
@@ -404,14 +417,11 @@ fn resolve_max_keys(options: f64) -> Option<usize> {
 
 /// Insert `(key, value)` into the parse result, promoting to an array
 /// on repeated keys. Mirrors Node's behaviour:
-///   - first occurrence stores the value as a plain string
+///   - first occurrence stores the decoded value
 ///   - second occurrence promotes to a 2-element array
 ///   - subsequent occurrences push onto the existing array
-unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value: &str) {
+unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value_f64: f64) {
     let key_hdr = intern_string(key);
-
-    let value_str = intern_string(value);
-    let value_f64 = nanbox_string(value_str);
 
     // #1175: read the OWN-property value rather than going through
     // `js_object_get_field_by_name` (which walks the prototype chain) for
@@ -465,7 +475,7 @@ unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value: &str) {
         }
     }
 
-    // Promote: existing string + new string → 2-element array.
+    // Promote: existing decoded value + new decoded value -> 2-element array.
     let arr = js_array_alloc(0);
     js_array_push_f64(arr, f64::from_bits(existing_bits));
     js_array_push_f64(arr, value_f64);
@@ -542,7 +552,7 @@ unsafe fn append_stringify_value(
 ) {
     let encode_with = |s: &str| -> String {
         match encode {
-            Some(cb) => apply_codec(cb, s),
+            Some(cb) => apply_encode_codec(cb, s),
             None => percent_encode(s),
         }
     };
