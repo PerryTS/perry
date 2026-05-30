@@ -1095,9 +1095,15 @@ pub unsafe extern "C" fn js_native_call_method(
                             }
                         };
                         let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-                        // Per spec: omitted deleteCount deletes through the end.
-                        // `js_array_splice` clamps to the live length.
-                        let delete_count = if args_len >= 2 { arg_i32(1) } else { i32::MAX };
+                        // Per spec: splice() deletes nothing, while
+                        // splice(start) deletes through the end.
+                        let delete_count = if args_len == 0 {
+                            0
+                        } else if args_len == 1 {
+                            i32::MAX
+                        } else {
+                            arg_i32(1)
+                        };
                         // Items to insert are args[2..].
                         let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
                             std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
