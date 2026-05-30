@@ -131,6 +131,34 @@ pub(crate) fn handle_to_f64(id: usize) -> f64 {
     perry_runtime::value::js_nanbox_pointer(id as i64)
 }
 
+pub(crate) fn headers_bound_method_value(headers_id: usize, method_name: &'static str) -> f64 {
+    if let Some(bits) = HEADERS_METHOD_VALUE_CACHE
+        .lock()
+        .unwrap()
+        .get(&(headers_id, method_name))
+        .copied()
+    {
+        return f64::from_bits(bits);
+    }
+
+    extern "C" {
+        fn js_write_barrier_root_nanbox(value_bits: u64);
+    }
+
+    let closure =
+        perry_runtime::closure::js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3);
+    perry_runtime::closure::js_closure_set_capture_f64(closure, 0, handle_to_f64(headers_id));
+    perry_runtime::closure::js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);
+    let value = perry_runtime::value::js_nanbox_pointer(closure as i64);
+    unsafe { js_write_barrier_root_nanbox(value.to_bits()) };
+    HEADERS_METHOD_VALUE_CACHE
+        .lock()
+        .unwrap()
+        .insert((headers_id, method_name), value.to_bits());
+    value
+}
+
 /// Helper to extract string from StringHeader pointer
 pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     // NaN-boxed TAG_UNDEFINED (0x7FFC_0000_0000_0001) unboxes to 0x1
@@ -1091,6 +1119,8 @@ struct RequestRecord {
 
 lazy_static::lazy_static! {
     static ref HEADERS_REGISTRY: Mutex<HashMap<usize, HeadersStore>> = Mutex::new(HashMap::new());
+    static ref HEADERS_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
+        Mutex::new(HashMap::new());
     static ref REQUEST_REGISTRY: Mutex<HashMap<usize, RequestRecord>> = Mutex::new(HashMap::new());
     pub(crate) static ref BLOB_REGISTRY: Mutex<HashMap<usize, BlobData>> = Mutex::new(HashMap::new());
 }

@@ -763,6 +763,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_headers_keys", DOUBLE, &[DOUBLE]);
     module.declare_function("js_headers_values", DOUBLE, &[DOUBLE]);
     module.declare_function("js_headers_entries", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_headers_init_from_value", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_headers_method_value", DOUBLE, &[DOUBLE, I64, I64]);
 
     // new Request(url_ptr, method_ptr, body_ptr, headers_handle_f64, metadata...) -> f64
     module.declare_function(

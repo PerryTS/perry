@@ -931,6 +931,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "Headers"
+                    && is_headers_instance_method_name(&property_name)
+                {
+                    // Fetch Headers methods are also first-class method
+                    // values. `h.entries` and `h[Symbol.iterator]` must return
+                    // the same cached callable, while the call form still
+                    // lowers through NativeMethodCall in expr_call.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1799,6 +1811,22 @@ fn is_console_instance_method_name(prop: &str) -> bool {
             | "profile"
             | "profileEnd"
             | "timeStamp"
+    )
+}
+
+fn is_headers_instance_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
     )
 }
 

@@ -1745,6 +1745,41 @@ pub extern "C" fn js_class_method_bind(
     method_name_ptr: *const u8,
     method_name_len: usize,
 ) -> f64 {
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        if let Ok(name) = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
+        } {
+            if matches!(
+                name,
+                "append"
+                    | "delete"
+                    | "entries"
+                    | "forEach"
+                    | "get"
+                    | "getSetCookie"
+                    | "has"
+                    | "keys"
+                    | "set"
+                    | "Symbol.iterator"
+                    | "@@iterator"
+                    | "values"
+            ) {
+                let bits = instance.to_bits();
+                if (bits >> 48) == 0x7FFD {
+                    let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    if id > 0 && id < 0x100000 {
+                        if let Some(dispatch) = handle_property_dispatch() {
+                            let value = unsafe { dispatch(id, method_name_ptr, method_name_len) };
+                            if value.to_bits() != crate::value::TAG_UNDEFINED {
+                                return value;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
     crate::closure::js_closure_set_capture_f64(closure, 0, instance);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
