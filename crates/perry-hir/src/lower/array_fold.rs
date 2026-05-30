@@ -300,6 +300,7 @@ pub(crate) fn is_known_namespace_static_function(obj_name: &str, prop_name: &str
         // `util.types.isArrayBufferView` predicate at call sites). The bare
         // value-read must report typeof "function".
         "ArrayBuffer" => prop_name == "isView",
+        "Response" => matches!(prop_name, "json" | "redirect" | "error"),
         _ => false,
     }
 }

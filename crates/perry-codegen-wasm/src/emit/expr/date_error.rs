@@ -292,6 +292,16 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, message);
                 self.emit_memcall(func, "error_new", 1);
             }
+            Expr::ErrorNewWithOptions {
+                message,
+                options: _,
+                ..
+            } => {
+                // WASM stub: ignore options/cause, falls back to plain Error
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, message);
+                self.emit_memcall(func, "error_new", 1);
+            }
             Expr::TypeErrorNew(msg)
             | Expr::RangeErrorNew(msg)
             | Expr::ReferenceErrorNew(msg)
@@ -301,7 +311,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, msg);
                 self.emit_memcall(func, "error_new", 1);
             }
-            Expr::AggregateErrorNew { errors: _, message } => {
+            Expr::AggregateErrorNew {
+                errors: _,
+                message,
+                options: _,
+            } => {
                 // WASM stub: alias to error_new (drops errors array)
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, message);
