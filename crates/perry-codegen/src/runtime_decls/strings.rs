@@ -749,6 +749,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // realloc). Param order is (arr, start, delete_count, items_ptr,
     // items_count, out_arr_ptr).
     module.declare_function("js_array_splice", I64, &[I64, I32, I32, PTR, I32, PTR]);
+    module.declare_function("js_array_splice_delete_count", I32, &[DOUBLE]);
     module.declare_function("js_parse_int", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_parse_float", DOUBLE, &[I64]);
     module.declare_function("js_array_reduce", DOUBLE, &[I64, I64, I32, DOUBLE]);
