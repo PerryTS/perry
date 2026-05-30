@@ -745,6 +745,27 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // #2877: `ArrayBuffer.isView(x)` — true for TypedArray / DataView
+            // values, false for ArrayBuffer / anything else. Route through the
+            // existing `util.types.isArrayBufferView` runtime predicate (it
+            // already recognizes typed arrays, Uint8Array-from-ctor and
+            // DataView-marked buffers) by re-emitting a `util/types`
+            // NativeMethodCall — no new HIR variant or runtime helper needed.
+            if obj_ident.sym.as_ref() == "ArrayBuffer" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "isView" {
+                        let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "util/types".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "isArrayBufferView".to_string(),
+                            args: vec![arg],
+                        }));
+                    }
+                }
+            }
+
             // Check for Number.methodName() static calls
             if obj_ident.sym.as_ref() == "Number" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {

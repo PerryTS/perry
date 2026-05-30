@@ -815,6 +815,32 @@ pub unsafe extern "C" fn js_native_call_method(
                         }
                         return crate::typedarray::js_typed_array_find_last_index(ta, cb);
                     }
+                    // #2879: bulk `set(source, offset?)` and `copyWithin`.
+                    "set" => {
+                        let source = arg0();
+                        let offset = if args_len >= 2 && !args_ptr.is_null() {
+                            unsafe { *args_ptr.add(1) }
+                        } else {
+                            0.0
+                        };
+                        return crate::typedarray::js_typed_array_set_from(ta, source, offset);
+                    }
+                    "copyWithin" => {
+                        let target = arg0();
+                        let start = if args_len >= 2 && !args_ptr.is_null() {
+                            unsafe { *args_ptr.add(1) }
+                        } else {
+                            0.0
+                        };
+                        let end = if args_len >= 3 && !args_ptr.is_null() {
+                            unsafe { *args_ptr.add(2) }
+                        } else {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        };
+                        let result =
+                            crate::typedarray::js_typed_array_copy_within(ta, target, start, end);
+                        return f64::from_bits(result as u64);
+                    }
                     _ => {
                         // Fall through. Other methods aren't handled here
                         // yet; they hit the primitive-method catch-all
