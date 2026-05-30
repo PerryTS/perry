@@ -192,7 +192,11 @@ pub(super) fn try_local_array_methods(
                                 return Ok(Ok(Expr::ArrayShift(array_id)));
                             }
                             "unshift" => {
-                                if !args.is_empty() {
+                                // #2814: the single-value fast path only handles
+                                // exactly one argument. Zero-arg and multi-arg
+                                // calls fall through to generic dispatch, which
+                                // routes to the variadic runtime helper.
+                                if args.len() == 1 {
                                     return Ok(Ok(Expr::ArrayUnshift {
                                         array_id,
                                         value: Box::new(args.into_iter().next().unwrap()),
@@ -454,18 +458,23 @@ pub(super) fn try_local_array_methods(
                                 }));
                             }
                             "toSpliced" => {
-                                if args.len() >= 2 {
-                                    let mut args_iter = args.into_iter();
-                                    let start = args_iter.next().unwrap();
-                                    let delete_count = args_iter.next().unwrap();
-                                    let items: Vec<Expr> = args_iter.collect();
-                                    return Ok(Ok(Expr::ArrayToSpliced {
-                                        array: Box::new(Expr::LocalGet(array_id)),
-                                        start: Box::new(start),
-                                        delete_count: Box::new(delete_count),
-                                        items,
-                                    }));
-                                }
+                                // #2794: handle omitted args (0 -> copy, 1 ->
+                                // delete through end via +Infinity deleteCount).
+                                let arg_count = args.len();
+                                let mut args_iter = args.into_iter();
+                                let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                                let delete_count = match args_iter.next() {
+                                    Some(dc) => dc,
+                                    None if arg_count >= 1 => Expr::Number(f64::INFINITY),
+                                    None => Expr::Number(0.0),
+                                };
+                                let items: Vec<Expr> = args_iter.collect();
+                                return Ok(Ok(Expr::ArrayToSpliced {
+                                    array: Box::new(Expr::LocalGet(array_id)),
+                                    start: Box::new(start),
+                                    delete_count: Box::new(delete_count),
+                                    items,
+                                }));
                             }
                             "with" => {
                                 // Issue #515: only fold `arr.with(idx, val)` to

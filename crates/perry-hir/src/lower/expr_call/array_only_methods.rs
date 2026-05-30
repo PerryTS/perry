@@ -700,11 +700,21 @@ pub(super) fn try_array_only_methods(
                             comparator,
                         }));
                     }
-                    "toSpliced" if args.len() >= 2 => {
+                    "toSpliced" => {
+                        // #2794: Node treats omitted args as valid. 0 args ->
+                        // shallow copy (start 0, deleteCount 0); 1 arg -> delete
+                        // from start through the end (deleteCount = +Infinity,
+                        // clamped in the runtime); 2+ args -> explicit count.
                         let array_expr = lower_expr(ctx, &member.obj)?;
+                        let arg_count = args.len();
                         let mut args_iter = args.into_iter();
-                        let start = args_iter.next().unwrap();
-                        let delete_count = args_iter.next().unwrap();
+                        let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                        let delete_count = match args_iter.next() {
+                            Some(dc) => dc,
+                            // 1 arg: delete through end; 0 args: delete nothing.
+                            None if arg_count >= 1 => Expr::Number(f64::INFINITY),
+                            None => Expr::Number(0.0),
+                        };
                         let items: Vec<Expr> = args_iter.collect();
                         return Ok(Ok(Expr::ArrayToSpliced {
                             array: Box::new(array_expr),

@@ -159,6 +159,36 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
             let module_alias = obj_ident.sym.as_ref();
+            let is_worker_threads_module = module_alias == "worker_threads"
+                || ctx.lookup_builtin_module_alias(module_alias) == Some("worker_threads")
+                || match ctx.lookup_native_module(module_alias) {
+                    Some((module_name, _)) => module_name == "worker_threads",
+                    None => false,
+                };
+            if is_worker_threads_module
+                && matches!(
+                    prop_ident.sym.as_ref(),
+                    "MessageChannel" | "BroadcastChannel"
+                )
+            {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "worker_threads".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: prop_ident.sym.to_string(),
+                    args,
+                });
+            }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
                 let class_name = prop_ident.sym.as_ref();
                 if matches!(

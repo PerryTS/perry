@@ -14,6 +14,9 @@ thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
+    static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
+    static UTIL_INSPECT_STYLES: Cell<u64> = const { Cell::new(0) };
+    static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
@@ -32,6 +35,27 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             slot.set(value_bits);
         }
     });
+    UTIL_INSPECT_DEFAULT_OPTIONS.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    UTIL_INSPECT_STYLES.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    UTIL_INSPECT_COLORS.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
     NATIVE_MODULE_NAMESPACES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
@@ -44,6 +68,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 /// Special class ID for native module namespace objects
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
+const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
@@ -54,6 +79,20 @@ pub(crate) fn buffer_pool_size() -> f64 {
 
 pub(crate) fn set_buffer_pool_size(value: f64) {
     BUFFER_POOL_SIZE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn worker_threads_locks_value() -> f64 {
+    let name = "LockManager";
+    unsafe {
+        js_register_class_id(WORKER_THREADS_LOCK_MANAGER_CLASS_ID);
+        js_register_class_name(
+            WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+            name.as_ptr(),
+            name.len() as u32,
+        );
+    }
+    let obj = js_object_alloc(WORKER_THREADS_LOCK_MANAGER_CLASS_ID, 0);
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 /// Create a native module namespace object
@@ -377,6 +416,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isDeepStrictEqual",
             b"promisify",
             b"stripVTControlCharacters",
+            b"toUSVString",
             b"types",
             b"parseArgs",
             b"TextDecoder",
@@ -554,6 +594,20 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
             crate::util_promisify::promisify_custom_symbol(),
         );
     }
+    if module_name == "util" && property_name == "inspect" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "custom",
+            util_inspect_custom_symbol(),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "defaultOptions",
+            util_inspect_default_options_value(),
+        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "styles", util_inspect_styles());
+        crate::closure::closure_set_dynamic_prop(closure_addr, "colors", util_inspect_colors());
+    }
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
         c.borrow_mut().insert(key, value.to_bits());
@@ -719,6 +773,137 @@ pub(crate) fn is_buffer_constructor_value(value: f64) -> bool {
     })
 }
 
+fn native_string_value(value: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn native_bool_value(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+fn native_object_value(obj: *mut ObjectHeader) -> f64 {
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+fn native_set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(obj, key, value);
+}
+
+fn native_color_tuple(open: i32, close: i32) -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(2);
+    crate::array::js_array_set_f64(arr, 0, open as f64);
+    crate::array::js_array_set_f64(arr, 1, close as f64);
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn util_inspect_custom_symbol() -> f64 {
+    unsafe { crate::symbol::js_symbol_for(native_string_value("nodejs.util.inspect.custom")) }
+}
+
+pub(crate) fn util_inspect_default_options_value() -> f64 {
+    UTIL_INSPECT_DEFAULT_OPTIONS.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        native_set_field(obj, "showHidden", native_bool_value(false));
+        native_set_field(obj, "depth", 2.0);
+        native_set_field(obj, "colors", native_bool_value(false));
+        native_set_field(obj, "customInspect", native_bool_value(true));
+        native_set_field(obj, "showProxy", native_bool_value(false));
+        native_set_field(obj, "maxArrayLength", 100.0);
+        native_set_field(obj, "maxStringLength", 10000.0);
+        native_set_field(obj, "breakLength", 80.0);
+        native_set_field(obj, "compact", 3.0);
+        native_set_field(obj, "sorted", native_bool_value(false));
+        native_set_field(obj, "getters", native_bool_value(false));
+        native_set_field(obj, "numericSeparator", native_bool_value(false));
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+fn util_inspect_styles() -> f64 {
+    UTIL_INSPECT_STYLES.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        native_set_field(obj, "special", native_string_value("cyan"));
+        native_set_field(obj, "number", native_string_value("yellow"));
+        native_set_field(obj, "bigint", native_string_value("yellow"));
+        native_set_field(obj, "boolean", native_string_value("yellow"));
+        native_set_field(obj, "undefined", native_string_value("grey"));
+        native_set_field(obj, "null", native_string_value("bold"));
+        native_set_field(obj, "string", native_string_value("green"));
+        native_set_field(obj, "symbol", native_string_value("green"));
+        native_set_field(obj, "date", native_string_value("magenta"));
+        native_set_field(obj, "regexp", native_string_value("red"));
+        native_set_field(obj, "module", native_string_value("underline"));
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+fn util_inspect_colors() -> f64 {
+    UTIL_INSPECT_COLORS.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        for (name, open, close) in [
+            ("reset", 0, 0),
+            ("bold", 1, 22),
+            ("dim", 2, 22),
+            ("italic", 3, 23),
+            ("underline", 4, 24),
+            ("blink", 5, 25),
+            ("inverse", 7, 27),
+            ("hidden", 8, 28),
+            ("strikethrough", 9, 29),
+            ("black", 30, 39),
+            ("red", 31, 39),
+            ("green", 32, 39),
+            ("yellow", 33, 39),
+            ("blue", 34, 39),
+            ("magenta", 35, 39),
+            ("cyan", 36, 39),
+            ("white", 37, 39),
+            ("gray", 90, 39),
+            ("grey", 90, 39),
+            ("bgBlack", 40, 49),
+            ("bgRed", 41, 49),
+            ("bgGreen", 42, 49),
+            ("bgYellow", 43, 49),
+            ("bgBlue", 44, 49),
+            ("bgMagenta", 45, 49),
+            ("bgCyan", 46, 49),
+            ("bgWhite", 47, 49),
+        ] {
+            native_set_field(obj, name, native_color_tuple(open, close));
+        }
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
 extern "C" fn util_debuglog_logger_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
@@ -837,6 +1022,35 @@ pub(crate) fn set_bound_native_closure_name(
     crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
 }
 
+thread_local! {
+    /// Per-closure spec `.length` for built-in *prototype methods*. Those
+    /// methods all share one no-op closure thunk
+    /// (`global_this_builtin_noop_thunk`), so the func-ptr-keyed
+    /// `CLOSURE_ARITY_REGISTRY` can't give `Array.prototype.map.length === 1`
+    /// while `Array.prototype.slice.length === 2` — the last install would
+    /// win for every method. Recording the length per *closure instance* here
+    /// (keyed by the closure pointer, like the user-facing dynamic-prop table
+    /// but isolated from it so a user `fn.length = x` write can't perturb it)
+    /// lets the `.length` value-read and `getOwnPropertyDescriptor` agree with
+    /// the spec count. #3143.
+    static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<std::collections::HashMap<usize, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record the spec `.length` for a built-in prototype-method closure. See
+/// [`BUILTIN_CLOSURE_LENGTH`].
+pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
+    BUILTIN_CLOSURE_LENGTH.with(|m| {
+        m.borrow_mut().insert(closure, length);
+    });
+}
+
+/// Look up the recorded spec `.length` for a built-in prototype-method
+/// closure, or `None` if this closure isn't one. See [`BUILTIN_CLOSURE_LENGTH`].
+pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
+    BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
+}
+
 /// Whitelist of (module, property) pairs for which property-read should
 /// produce a callable handle (a bound-method closure) rather than undefined.
 /// Needed so `typeof tty.ReadStream === "function"` matches Node — the
@@ -946,6 +1160,16 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "hrtime")
             | ("worker_threads", "getEnvironmentData")
             | ("worker_threads", "setEnvironmentData")
+            | ("worker_threads", "markAsUntransferable")
+            | ("worker_threads", "isMarkedAsUntransferable")
+            | ("worker_threads", "markAsUncloneable")
+            | ("worker_threads", "moveMessagePortToContext")
+            | ("worker_threads", "receiveMessageOnPort")
+            | ("worker_threads", "postMessageToThread")
+            | ("worker_threads", "Worker")
+            | ("worker_threads", "MessageChannel")
+            | ("worker_threads", "MessagePort")
+            | ("worker_threads", "BroadcastChannel")
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
@@ -1227,6 +1451,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inherits")
             | ("util", "isDeepStrictEqual")
             | ("util", "stripVTControlCharacters")
+            | ("util", "toUSVString")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")
@@ -2497,6 +2722,7 @@ pub(crate) unsafe fn get_native_module_constant(
                 let obj = crate::object::js_object_alloc(0, 0);
                 Some(crate::value::js_nanbox_pointer(obj as i64))
             }
+            "locks" => Some(worker_threads_locks_value()),
             "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
                 "nodejs.worker_threads.SHARE_ENV",
             ))),

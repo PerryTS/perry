@@ -46,6 +46,64 @@ use super::{
     I18nLowerCtx,
 };
 
+/// Field selector codes for `js_date_apply_setter`. Must match the runtime
+/// (`crates/perry-runtime/src/date.rs`): 0=FullYear 1=Month 2=Date 3=Hours
+/// 4=Minutes 5=Seconds 6=Milliseconds 7=Time.
+pub(crate) const DATE_FIELD_FULL_YEAR: i32 = 0;
+pub(crate) const DATE_FIELD_MONTH: i32 = 1;
+pub(crate) const DATE_FIELD_DATE: i32 = 2;
+pub(crate) const DATE_FIELD_HOURS: i32 = 3;
+pub(crate) const DATE_FIELD_MINUTES: i32 = 4;
+pub(crate) const DATE_FIELD_SECONDS: i32 = 5;
+pub(crate) const DATE_FIELD_MILLISECONDS: i32 = 6;
+pub(crate) const DATE_FIELD_TIME: i32 = 7;
+
+/// Lower a `Date.prototype.set*` call (#2851). Builds a stack buffer of the
+/// NaN-boxed argument values and calls the unified runtime entry point
+/// `js_date_apply_setter(date, is_utc, field, args_ptr, argc)`, which applies
+/// every supplied component (and the omitted-trailing / leading-undefined /
+/// NaN-propagation rules). The receiver `DateCell` is mutated in place;
+/// returns the numeric ms.
+pub(crate) fn lower_date_setter(
+    ctx: &mut FnCtx<'_>,
+    date: &Expr,
+    args: &[Expr],
+    is_utc: bool,
+    field: i32,
+) -> Result<String> {
+    let d = lower_expr(ctx, date)?;
+    let mut arg_vals: Vec<String> = Vec::with_capacity(args.len());
+    for a in args {
+        arg_vals.push(lower_expr(ctx, a)?);
+    }
+    let blk = ctx.block();
+    let (args_ptr, argc) = if arg_vals.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let n = arg_vals.len();
+        let buf_reg = blk.next_reg();
+        blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+        for (i, val) in arg_vals.iter().enumerate() {
+            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+            blk.store(DOUBLE, val, &slot);
+        }
+        (buf_reg, format!("{}", n))
+    };
+    let is_utc_str = if is_utc { "1" } else { "0" };
+    let field_str = format!("{}", field);
+    Ok(blk.call(
+        DOUBLE,
+        "js_date_apply_setter",
+        &[
+            (DOUBLE, &d),
+            (I32, is_utc_str),
+            (I32, &field_str),
+            (PTR, &args_ptr),
+            (I32, &argc),
+        ],
+    ))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::OsVersion => {
@@ -247,7 +305,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let cmp_box = lower_expr(ctx, c)?;
                 let blk = ctx.block();
                 let arr_handle = unbox_to_i64(blk, &arr_box);
-                let cmp_handle = unbox_to_i64(blk, &cmp_box);
+                // #2796: validate comparator (function | undefined) before sorting.
+                let cmp_handle =
+                    blk.call(I64, "js_validate_array_comparator", &[(DOUBLE, &cmp_box)]);
                 blk.call(
                     I64,
                     "js_array_to_sorted_with_comparator",
@@ -320,32 +380,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(I64, &arr_handle), (DOUBLE, &idx_d)],
             ))
         }
-        Expr::DateSetUtcMinutes { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_minutes",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+        Expr::DateSetUtcMinutes { date, args } => {
+            lower_date_setter(ctx, date, args, true, DATE_FIELD_MINUTES)
         }
-        Expr::DateSetUtcSeconds { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_seconds",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+        Expr::DateSetUtcSeconds { date, args } => {
+            lower_date_setter(ctx, date, args, true, DATE_FIELD_SECONDS)
         }
-        Expr::DateSetUtcMilliseconds { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_milliseconds",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+        Expr::DateSetUtcMilliseconds { date, args } => {
+            lower_date_setter(ctx, date, args, true, DATE_FIELD_MILLISECONDS)
         }
         Expr::Yield { value, .. } => {
             // Generators not implemented; lower the yielded value for
@@ -409,77 +451,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_object_prevent_extensions", &[(DOUBLE, &v)]))
         }
-        Expr::DateSetUtcMonth { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_month",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+        Expr::DateSetUtcMonth { date, args } => {
+            lower_date_setter(ctx, date, args, true, DATE_FIELD_MONTH)
         }
-        // Local-time Date setters (#1187). The runtime functions all share
-        // the same `(timestamp, value) -> new_timestamp` shape, so the
-        // lowering is the same modulo the C symbol name.
-        Expr::DateSetFullYear { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_full_year",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+        // Local-time Date setters (#1187 / #2851). All route through the
+        // unified `js_date_apply_setter` runtime entry point.
+        Expr::DateSetFullYear { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_FULL_YEAR)
         }
-        Expr::DateSetMonth { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_date_set_month", &[(DOUBLE, &d), (DOUBLE, &v)]))
+        Expr::DateSetMonth { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_MONTH)
         }
-        Expr::DateSetDate { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_date_set_date", &[(DOUBLE, &d), (DOUBLE, &v)]))
+        Expr::DateSetDate { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_DATE)
         }
-        Expr::DateSetHours { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_date_set_hours", &[(DOUBLE, &d), (DOUBLE, &v)]))
+        Expr::DateSetHours { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_HOURS)
         }
-        Expr::DateSetMinutes { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_date_set_minutes", &[(DOUBLE, &d), (DOUBLE, &v)]))
+        Expr::DateSetMinutes { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_MINUTES)
         }
-        Expr::DateSetSeconds { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_date_set_seconds", &[(DOUBLE, &d), (DOUBLE, &v)]))
+        Expr::DateSetSeconds { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_SECONDS)
         }
-        Expr::DateSetMilliseconds { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_milliseconds",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
+        Expr::DateSetMilliseconds { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_MILLISECONDS)
         }
-        Expr::DateSetTime { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_date_set_time", &[(DOUBLE, &d), (DOUBLE, &v)]))
+        Expr::DateSetTime { date, args } => {
+            lower_date_setter(ctx, date, args, false, DATE_FIELD_TIME)
         }
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
