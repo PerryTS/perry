@@ -643,6 +643,8 @@ pub(crate) fn lower_array_method(
             };
             let count_d = if args.len() >= 2 {
                 lower_expr(ctx, &args[1])?
+            } else if args.is_empty() {
+                "0.0".to_string()
             } else {
                 "2147483647.0".to_string()
             };
