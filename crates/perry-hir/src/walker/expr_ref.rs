@@ -880,9 +880,22 @@ where
             f(message);
             f(cause);
         }
-        Expr::AggregateErrorNew { errors, message } => {
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            f(message);
+            f(options);
+        }
+        Expr::AggregateErrorNew {
+            errors,
+            message,
+            options,
+        } => {
             f(errors);
             f(message);
+            if let Some(o) = options {
+                f(o);
+            }
         }
         Expr::UrlNew { url, base } => {
             f(url);
@@ -1334,11 +1347,17 @@ where
         | Expr::SetAdd { value, .. } => {
             f(value);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
-            f(array);
-            f(value);
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,

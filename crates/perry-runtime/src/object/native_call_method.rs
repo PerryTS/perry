@@ -1492,8 +1492,16 @@ pub unsafe extern "C" fn js_native_call_method(
                         return crate::array::js_array_reduce_right(arr, cb_ptr, has_init, init);
                     }
                     "flat" => {
+                        // #2800: honor the optional depth argument. Omitted →
+                        // depth 1 (legacy `js_array_flat`); supplied → route to
+                        // the depth-aware helper, which applies JS number
+                        // coercion (NaN/≤0 → 0, +Infinity → fully flat).
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let result = crate::array::js_array_flat(arr);
+                        let result = if args_len >= 1 && !args_ptr.is_null() {
+                            crate::array::js_array_flat_depth(arr, *args_ptr)
+                        } else {
+                            crate::array::js_array_flat(arr)
+                        };
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "flatMap" if args_len >= 1 && !args_ptr.is_null() => {
@@ -1511,14 +1519,30 @@ pub unsafe extern "C" fn js_native_call_method(
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "indexOf" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2804: honor the optional fromIndex (2nd arg).
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
                         let value = *args_ptr;
-                        return crate::array::js_array_indexOf_jsvalue(arr, value) as f64;
+                        let (from_index, has_from) = if args_len >= 2 {
+                            (*args_ptr.add(1), 1)
+                        } else {
+                            (0.0, 0)
+                        };
+                        return crate::array::js_array_indexOf_jsvalue(
+                            arr, value, from_index, has_from,
+                        ) as f64;
                     }
                     "includes" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2804: honor the optional fromIndex (2nd arg).
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
                         let value = *args_ptr;
-                        let r = crate::array::js_array_includes_jsvalue(arr, value);
+                        let (from_index, has_from) = if args_len >= 2 {
+                            (*args_ptr.add(1), 1)
+                        } else {
+                            (0.0, 0)
+                        };
+                        let r = crate::array::js_array_includes_jsvalue(
+                            arr, value, from_index, has_from,
+                        );
                         return f64::from_bits(JSValue::bool(r != 0).bits());
                     }
                     "lastIndexOf" if args_len >= 1 && !args_ptr.is_null() => {
@@ -1539,8 +1563,40 @@ pub unsafe extern "C" fn js_native_call_method(
                         return crate::array::js_array_at(arr, *args_ptr);
                     }
                     "fill" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2801: honor the optional start/end range. One arg →
+                        // whole-array fill; 2+ args → range fill with the
+                        // supplied start and (defaulting to +Infinity →
+                        // clamps to length) end, mirroring the static path.
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        let result = crate::array::js_array_fill(arr, *args_ptr);
+                        let value = *args_ptr;
+                        let result = if args_len >= 2 {
+                            let start = *args_ptr.add(1);
+                            let end = if args_len >= 3 {
+                                *args_ptr.add(2)
+                            } else {
+                                f64::INFINITY
+                            };
+                            crate::array::js_array_fill_range(arr, value, start, end)
+                        } else {
+                            crate::array::js_array_fill(arr, value)
+                        };
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "copyWithin" if args_len >= 1 && !args_ptr.is_null() => {
+                        // #2802: dynamic dispatch for Array.prototype.copyWithin.
+                        // Mirrors the static codegen path: require `target`,
+                        // default omitted `start` to 0, pass has_end=0 when
+                        // `end` is omitted. Mutates and returns the receiver.
+                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        let target = *args_ptr;
+                        let start = if args_len >= 2 { *args_ptr.add(1) } else { 0.0 };
+                        let (has_end, end) = if args_len >= 3 {
+                            (1, *args_ptr.add(2))
+                        } else {
+                            (0, 0.0)
+                        };
+                        let result =
+                            crate::array::js_array_copy_within(arr, target, start, has_end, end);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "join" => {

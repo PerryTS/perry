@@ -445,11 +445,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let pid_d = lower_expr(ctx, pid)?;
             let sig_d = match signal {
                 Some(s) => lower_expr(ctx, s)?,
-                None => double_literal(0.0),
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
             let blk = ctx.block();
-            blk.call_void("js_process_kill", &[(DOUBLE, &pid_d), (DOUBLE, &sig_d)]);
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            Ok(blk.call(
+                DOUBLE,
+                "js_process_kill",
+                &[(DOUBLE, &pid_d), (DOUBLE, &sig_d)],
+            ))
         }
         // -------- Symbol() / Symbol.for / ObjectGetOwnPropertySymbols --------
         // Runtime functions in perry-runtime/src/symbol.rs take and return

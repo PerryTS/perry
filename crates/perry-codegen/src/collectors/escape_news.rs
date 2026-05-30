@@ -454,11 +454,17 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(end, non_escaping_news, used);
             }
         }
-        Expr::ArrayIncludes { array, value } | Expr::ArrayIndexOf { array, value } => {
-            collect_used_new_fields_in_expr(array, non_escaping_news, used);
-            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,
