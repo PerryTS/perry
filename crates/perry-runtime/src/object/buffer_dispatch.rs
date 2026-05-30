@@ -155,6 +155,28 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "writeUintLE"
             | "writeIntBE"
             | "writeIntLE"
+            // #2879: typed-array mutators that reach buffer dispatch for the
+            // Uint8Array/Buffer shape.
+            | "copyWithin"
+            // #2878: DataView numeric accessors. These resolve as bound-method
+            // values on a DataView-marked buffer (so `typeof dv.getUint8 ===
+            // "function"`); the call routes through `dispatch_buffer_method`.
+            | "getInt8"
+            | "getUint8"
+            | "getInt16"
+            | "getUint16"
+            | "getInt32"
+            | "getUint32"
+            | "getFloat32"
+            | "getFloat64"
+            | "setInt8"
+            | "setUint8"
+            | "setInt16"
+            | "setUint16"
+            | "setInt32"
+            | "setUint32"
+            | "setFloat32"
+            | "setFloat64"
     )
 }
 
@@ -307,6 +329,32 @@ pub unsafe fn dispatch_buffer_method(
     let i32_bool = |b: i32| f64::from_bits(JSValue::bool(b != 0).bits());
     let i32_num = |n: i32| n as f64;
 
+    // DataView numeric accessors (#2878): getInt8/getUint16/setFloat64/… The
+    // receiver is a BufferHeader marked as a DataView. Endianness defaults to
+    // big-endian; the optional trailing `littleEndian` arg flips it. Routed
+    // here (before the Buffer method match) so DataView setters use ToIntN/
+    // ToUintN value-wrap semantics rather than the Buffer value-range throw.
+    if crate::buffer::is_data_view(addr) {
+        let truthy = |v: f64| crate::value::js_is_truthy(v) != 0;
+        if let Some(suffix) = method_name.strip_prefix("get") {
+            if let Some(kind) = crate::buffer::DataViewKind::from_method_suffix(suffix) {
+                let little = args.len() >= 2 && truthy(args[1]);
+                return crate::buffer::js_data_view_get(buf_f64, arg_or_zero(0), kind, little);
+            }
+        } else if let Some(suffix) = method_name.strip_prefix("set") {
+            if let Some(kind) = crate::buffer::DataViewKind::from_method_suffix(suffix) {
+                let little = args.len() >= 3 && truthy(args[2]);
+                return crate::buffer::js_data_view_set(
+                    buf_f64,
+                    arg_or_zero(0),
+                    arg_or_zero(1),
+                    kind,
+                    little,
+                );
+            }
+        }
+    }
+
     match method_name {
         "length" => crate::buffer::js_buffer_length(buf_ptr) as f64,
         "toString" if crate::buffer::is_secret_key(addr) => {
@@ -337,6 +385,14 @@ pub unsafe fn dispatch_buffer_method(
             let start = arg_i32(0);
             let end = if args.len() >= 2 { arg_i32(1) } else { len };
             let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
+            // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
+            // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
+            // false and a subsequent `new Uint8Array(slice)` aliases it.
+            if crate::buffer::is_array_buffer(addr) {
+                crate::buffer::mark_as_array_buffer(result as usize);
+            } else if crate::buffer::is_shared_array_buffer(addr) {
+                crate::buffer::mark_as_shared_array_buffer(result as usize);
+            }
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "set" => {
@@ -345,6 +401,40 @@ pub unsafe fn dispatch_buffer_method(
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             crate::buffer::js_buffer_set_from_value(buf_ptr, source, arg_or_zero(1))
+        }
+        // #2879: `Uint8Array.prototype.copyWithin` — Buffer/Uint8Array elements
+        // are single bytes, so copy at byte granularity. Returns the receiver.
+        "copyWithin" => {
+            let len = (*buf_ptr).length as i64;
+            let rel = |v: f64| -> i64 {
+                let n = crate::value::JSValue::from_bits(v.to_bits()).to_number();
+                if n.is_nan() {
+                    return 0;
+                }
+                if !n.is_finite() {
+                    return if n > 0.0 { len } else { 0 };
+                }
+                let idx = n.trunc() as i64;
+                if idx < 0 {
+                    (len + idx).max(0)
+                } else {
+                    idx.min(len)
+                }
+            };
+            let to = rel(arg_or_zero(0));
+            let from = rel(arg_or_zero(1));
+            let final_ = if args.len() >= 3 { rel(args[2]) } else { len };
+            let count = (final_ - from).min(len - to);
+            if count > 0 {
+                let data = crate::buffer::buffer_data_mut(buf_ptr);
+                let block: Vec<u8> = (0..count as usize)
+                    .map(|i| *data.add(from as usize + i))
+                    .collect();
+                for (i, b) in block.into_iter().enumerate() {
+                    *data.add(to as usize + i) = b;
+                }
+            }
+            buf_f64
         }
         // Issue #1206: explicit iterator-protocol surface. Each helper
         // returns a Buffer-iterator object whose `.next()` is dispatched

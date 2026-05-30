@@ -531,7 +531,27 @@ pub(super) fn try_local_array_methods(
                                 // Fall through to general method dispatch
                             }
                             "copyWithin" => {
-                                if args.len() >= 2 {
+                                // #2879: typed-array receivers must NOT fold to
+                                // `Expr::ArrayCopyWithin` — that path treats the
+                                // receiver as an `ArrayHeader` with boxed f64 slots,
+                                // which is invalid for `TypedArrayHeader` raw
+                                // storage. Fall through so they reach the runtime
+                                // `js_typed_array_copy_within` arm in
+                                // `js_native_call_method`.
+                                let is_typed_array = ctx
+                                    .lookup_local_type(&arr_name)
+                                    .map(|ty| {
+                                        matches!(ty, Type::Named(n) if matches!(
+                                            n.as_str(),
+                                            "Int8Array" | "Int16Array" | "Int32Array"
+                                            | "Uint8Array" | "Uint8ClampedArray"
+                                            | "Uint16Array" | "Uint32Array"
+                                            | "Float32Array" | "Float64Array"
+                                            | "BigInt64Array" | "BigUint64Array"
+                                        ))
+                                    })
+                                    .unwrap_or(false);
+                                if !is_typed_array && args.len() >= 2 {
                                     let mut args_iter = args.into_iter();
                                     let target = args_iter.next().unwrap();
                                     let start = args_iter.next().unwrap();

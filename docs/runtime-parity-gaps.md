@@ -6,11 +6,11 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 19 | 478 | n/a |
+| Whole-module gaps (zero coverage) | 18 | 472 | n/a |
 | Partial-module gaps | 29 | 1647 | 370 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2407** |  |
+| **Total true gaps** |  | **2401** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -307,19 +307,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `stringDecoder.lastChar`
 - `stringDecoder.lastNeed`
 - `stringDecoder.lastTotal`
-
-### node:trace_events
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `trace_events.createTracing(options)`
-- `trace_events.getEnabledCategories()`
-- `tracing.categories`
-- `tracing.enabled`
-- `tracing.enable()`
-- `tracing.disable()`
 
 ### node:wasi
 
@@ -659,7 +646,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:util
 
-**Gap APIs: 96** · Already covered: 9
+**Gap APIs: 93** · Already covered: 9
 
 #### Missing from Perry
 
@@ -673,9 +660,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `util.parseEnv(content)`
 - `util.stripVTControlCharacters(str)`
 - `util.toUSVString(string)`
-- `util.transferableAbortController()`
-- `util.transferableAbortSignal(signal)`
-- `util.aborted(signal, resource)`
 - `util.diff(actual, expected)`
 - `util.setTraceSigInt(enable)`
 - `MIMEType.prototype.type`

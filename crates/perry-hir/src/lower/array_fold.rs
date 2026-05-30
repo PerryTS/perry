@@ -296,6 +296,10 @@ pub(crate) fn is_known_namespace_static_function(obj_name: &str, prop_name: &str
         "JSON" => is_known_json_static_method(prop_name),
         "Number" => is_known_number_static_method(prop_name),
         "String" => is_known_string_static_method(prop_name),
+        // #2877: `ArrayBuffer.isView` is a real static function (folded to the
+        // `util.types.isArrayBufferView` predicate at call sites). The bare
+        // value-read must report typeof "function".
+        "ArrayBuffer" => prop_name == "isView",
         "Response" => matches!(prop_name, "json" | "redirect" | "error"),
         _ => false,
     }

@@ -110,6 +110,7 @@ mod fs_promises;
 mod hono_jsx;
 mod stream_promises;
 mod timers;
+mod trace_events;
 
 // #1671: hono/jsx/server + hono/jsx/streaming. Re-export the stream-creation
 // registration so perry-stdlib's `bundled-streams` init can wire it up.
@@ -148,6 +149,7 @@ use timers::{
     timers_promises_scheduler, timers_promises_scheduler_wait, timers_promises_scheduler_yield,
     timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
+use trace_events::{thunk_trace_events_createTracing, thunk_trace_events_getEnabledCategories};
 
 // node:sys is a deprecated alias for node:util. Known util-backed
 // exports are rebound to util's callable singletons below so identity
@@ -606,6 +608,19 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             },
         ],
     },
+    SubmoduleSpec {
+        key: "trace_events",
+        exports: &[
+            ExportSpec {
+                name: "createTracing",
+                thunk: ExportThunk::Fn1(thunk_trace_events_createTracing),
+            },
+            ExportSpec {
+                name: "getEnabledCategories",
+                thunk: ExportThunk::Fn1(thunk_trace_events_getEnabledCategories),
+            },
+        ],
+    },
 ];
 
 fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
@@ -727,6 +742,7 @@ fn export_rest_fixed_arity(submod_key: &str, export_name: &str) -> Option<u32> {
         ("stream_promises", "pipeline") => Some(2),
         ("timers", "setTimeout" | "setInterval") => Some(2),
         ("timers", "setImmediate") => Some(1),
+        ("trace_events", "getEnabledCategories") => Some(0),
         _ => None,
     }
 }
@@ -787,6 +803,23 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             crate::object::js_object_set_field_by_name(obj, name_header, value);
         }
     }
+    if submod.key == "trace_events" {
+        let default_obj = js_object_alloc(0, submod.exports.len() as u32);
+        for spec in submod.exports {
+            let closure_ptr = ensure_export_singleton(submod, spec);
+            let value = f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits());
+            let name_bytes = spec.name.as_bytes();
+            let name_header = js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+            crate::object::js_object_set_field_by_name(default_obj, name_header, value);
+        }
+        let name = b"default";
+        let name_header = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            name_header,
+            f64::from_bits(JSValue::pointer(default_obj as *const u8).bits()),
+        );
+    }
     NAMESPACE_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, obj);
     });
@@ -846,6 +879,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
             visitor.visit_raw_mut_ptr_slot(&mut trace.obj);
         }
     });
+    trace_events::scan_trace_events_roots_mut(visitor);
 }
 
 #[cfg(test)]
@@ -934,6 +968,12 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         let obj = ensure_namespace_singleton(submod);
         return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     }
+    if submod.key == "trace_events" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        let name_header = js_string_from_bytes(b"default".as_ptr(), 7);
+        let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, name_header);
+        return value;
+    }
     let export = match find_export(submod, name) {
         Some(e) => e,
         None => return f64::from_bits(JSValue::bool(true).bits()),
@@ -986,6 +1026,12 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
     if submod.key == "stream_promises" && name == "default" {
         let obj = ensure_namespace_singleton(submod);
         return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if submod.key == "trace_events" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        let name_header = js_string_from_bytes(b"default".as_ptr(), 7);
+        let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, name_header);
+        return value;
     }
     let export = match find_export(submod, name) {
         Some(e) => e,
@@ -1057,6 +1103,7 @@ mod tests {
             "stream_consumers",
             "sys",
             "diagnostics_channel",
+            "trace_events",
         ] {
             assert!(
                 find_submodule(key).is_some(),
