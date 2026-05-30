@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1831 entries across 89 modules
+// Coverage: 1835 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2625,6 +2625,8 @@ declare module "sys" {
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
   /** stdlib */
+  export function getCallSites(...args: any[]): any;
+  /** stdlib */
   export function getSystemErrorMap(...args: any[]): any;
   /** stdlib */
   export function getSystemErrorMessage(...args: any[]): any;
@@ -2644,6 +2646,8 @@ declare module "sys" {
   export function parseEnv(...args: any[]): any;
   /** stdlib */
   export function promisify(...args: any[]): any;
+  /** stdlib */
+  export function setTraceSigInt(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
   /** stdlib */
@@ -2724,6 +2728,8 @@ declare module "util" {
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
   /** stdlib */
+  export function getCallSites(...args: any[]): any;
+  /** stdlib */
   export function getSystemErrorMap(...args: any[]): any;
   /** stdlib */
   export function getSystemErrorMessage(...args: any[]): any;
@@ -2743,6 +2749,8 @@ declare module "util" {
   export function parseEnv(...args: any[]): any;
   /** stdlib */
   export function promisify(...args: any[]): any;
+  /** stdlib */
+  export function setTraceSigInt(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
   /** stdlib */

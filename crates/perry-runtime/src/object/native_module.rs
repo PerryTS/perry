@@ -409,6 +409,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"deprecate",
             b"format",
             b"formatWithOptions",
+            b"getCallSites",
             b"getSystemErrorMap",
             b"getSystemErrorName",
             b"getSystemErrorMessage",
@@ -420,6 +421,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"stripVTControlCharacters",
             b"styleText",
             b"toUSVString",
+            b"setTraceSigInt",
             b"types",
             b"parseArgs",
             b"TextDecoder",
@@ -1418,6 +1420,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "aborted")
             | ("util", "debuglog")
+            | ("util", "getCallSites")
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
             | ("util", "getSystemErrorMap")
@@ -1434,6 +1437,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "stripVTControlCharacters")
             | ("util", "styleText")
             | ("util", "toUSVString")
+            | ("util", "setTraceSigInt")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")

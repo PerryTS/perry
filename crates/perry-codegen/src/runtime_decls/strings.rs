@@ -467,7 +467,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
     module.declare_function("js_string_compare", I32, &[I64, I64]);
-    module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, I32]);
+    module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_random", DOUBLE, &[]);
     // WebAssembly host runtime (issue #76). All take/return NaN-boxed
     // doubles (JSValues). Implementations live in
@@ -511,6 +511,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_style_text", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_util_get_call_sites", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_promisify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_callbackify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_deprecate", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
@@ -757,9 +758,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // would do. (Map ptr, entry idx) → key / value.
     module.declare_function("js_map_entry_key_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_map_entry_value_at", DOUBLE, &[I64, I32]);
-    // Map/Set forEach: (collection_ptr, callback_nanboxed_f64) -> void
-    module.declare_function("js_map_foreach", VOID, &[I64, DOUBLE]);
-    module.declare_function("js_set_foreach", VOID, &[I64, DOUBLE]);
+    // Map/Set forEach: (collection_ptr, callback_nanboxed_f64, thisArg_f64) -> void (#2830)
+    module.declare_function("js_map_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_set_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
+    // #2856: value-level Map/Set iterator methods return a real iterator
+    // OBJECT (raw ptr as i64; caller NaN-boxes), unlike the eager Array
+    // materializers above which still back the for-of/spread fast paths.
+    module.declare_function("js_map_entries_iter_obj", I64, &[I64]);
+    module.declare_function("js_map_keys_iter_obj", I64, &[I64]);
+    module.declare_function("js_map_values_iter_obj", I64, &[I64]);
+    module.declare_function("js_set_values_iter_obj", I64, &[I64]);
+    module.declare_function("js_set_keys_iter_obj", I64, &[I64]);
+    module.declare_function("js_set_entries_iter_obj", I64, &[I64]);
     // Set to array conversion (for Set iteration via for...of)
     module.declare_function("js_set_to_array", I64, &[I64]);
     // Direct element access for the `for (const x of set)` fast path —
@@ -955,6 +965,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Universal `.toString(encoding)` dispatch — branches on
     // is_registered_buffer at runtime, falls back to js_jsvalue_to_string.
     module.declare_function("js_value_to_string_with_encoding", I64, &[DOUBLE, I32]);
+    // Buffer-encoding OR number/bigint-radix dispatch (#2864): the string arg
+    // is ambiguous, so pass both the pre-parsed encoding tag and the raw arg.
+    module.declare_function(
+        "js_value_to_string_with_encoding_or_radix",
+        I64,
+        &[DOUBLE, I32, DOUBLE],
+    );
     module.declare_function("js_fs_unlink_sync", I32, &[DOUBLE]);
     module.declare_function("js_object_values", I64, &[I64]);
     module.declare_function("js_object_values_value", I64, &[DOUBLE]);

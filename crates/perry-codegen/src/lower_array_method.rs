@@ -95,7 +95,7 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "concat" => {
-            // arr.concat(other) — call js_array_concat_new (non-mutating).
+            // #2805: arr.concat(...args) — spec-complete, non-mutating, variadic.
             // Issue #637: pre-fix this called `js_array_concat` (mutating
             // — used internally by spread-into-array desugar) which wrote
             // `other`'s elements into `recv`'s storage. When `recv` was the
@@ -107,18 +107,35 @@ pub(crate) fn lower_array_method(
             // allocated keys_arrays of OTHER objects via GC reuse. The
             // user-visible `.concat()` is spec-non-mutating; route to the
             // dedicated non-mutating helper.
-            // For simplicity we only handle single-argument concat.
-            if args.len() != 1 {
-                return Ok(recv_box);
+            //
+            // Lower every argument into an alloca buffer of raw NaN-boxed
+            // doubles, then call `js_array_concat_variadic(recv, ptr, count)`
+            // which applies Symbol.isConcatSpreadable / array-like spreading
+            // and always returns a fresh array (receiver unchanged). Mirrors
+            // the `unshift` variadic pattern below.
+            let mut item_vals: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                item_vals.push(lower_expr(ctx, a)?);
             }
-            let other_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let other_handle = unbox_to_i64(blk, &other_box);
+            let n = item_vals.len();
+            let (buf_reg, count_str) = if n == 0 {
+                // No args: pass a null buffer + 0 count (concat() returns a copy).
+                ("null".to_string(), "0".to_string())
+            } else {
+                let buf_reg = blk.next_reg();
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                for (i, val) in item_vals.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, val, &slot);
+                }
+                (buf_reg, format!("{}", n))
+            };
             let result = blk.call(
                 I64,
-                "js_array_concat_new",
-                &[(I64, &recv_handle), (I64, &other_handle)],
+                "js_array_concat_variadic",
+                &[(I64, &recv_handle), (PTR, &buf_reg), (I32, &count_str)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }

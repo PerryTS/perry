@@ -17,6 +17,11 @@
 
 use super::*;
 
+lazy_static::lazy_static! {
+    static ref HEADERS_BOUND_METHOD_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
+        Mutex::new(HashMap::new());
+}
+
 // ----------------- Untyped property dispatch (refs #421) -----------------
 //
 // When user code accesses a property on a Web Fetch handle whose static type
@@ -314,19 +319,31 @@ pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
         let guard = HEADERS_REGISTRY.lock().unwrap();
         guard.get(&headers_id)?;
     }
-    let name_bytes: &'static [u8] = match prop {
-        "append" => b"append",
-        "delete" => b"delete",
-        "entries" => b"entries",
-        "forEach" => b"forEach",
-        "get" => b"get",
-        "getSetCookie" => b"getSetCookie",
-        "has" => b"has",
-        "keys" => b"keys",
-        "set" => b"set",
-        "values" => b"values",
+    let (name, name_bytes): (&'static str, &'static [u8]) = match prop {
+        "append" => ("append", b"append"),
+        "delete" => ("delete", b"delete"),
+        "entries" => ("entries", b"entries"),
+        "forEach" => ("forEach", b"forEach"),
+        "get" => ("get", b"get"),
+        "getSetCookie" => ("getSetCookie", b"getSetCookie"),
+        "has" => ("has", b"has"),
+        "keys" => ("keys", b"keys"),
+        "set" => ("set", b"set"),
+        "values" => ("values", b"values"),
         _ => return None,
     };
+    Some(headers_bound_method(headers_id, name, name_bytes))
+}
+
+fn headers_bound_method(headers_id: usize, name: &'static str, name_bytes: &'static [u8]) -> f64 {
+    if let Some(bits) = HEADERS_BOUND_METHOD_CACHE
+        .lock()
+        .unwrap()
+        .get(&(headers_id, name))
+        .copied()
+    {
+        return f64::from_bits(bits);
+    }
     extern "C" {
         fn js_class_method_bind(
             instance: f64,
@@ -334,13 +351,19 @@ pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
             method_name_len: usize,
         ) -> f64;
     }
-    Some(unsafe {
+    let value = unsafe {
         js_class_method_bind(
             handle_to_f64(headers_id),
             name_bytes.as_ptr(),
             name_bytes.len(),
         )
-    })
+    };
+    perry_runtime::gc::js_write_barrier_root_nanbox(value.to_bits());
+    HEADERS_BOUND_METHOD_CACHE
+        .lock()
+        .unwrap()
+        .insert((headers_id, name), value.to_bits());
+    value
 }
 
 /// Try to dispatch a method call on a Response handle. Returns `Some(result)`

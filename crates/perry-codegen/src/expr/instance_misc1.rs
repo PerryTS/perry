@@ -317,10 +317,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Array.from(iterable) — clone via js_array_clone which
         // handles arrays, Sets (→ js_set_to_array), Maps (→ entries).
         Expr::ArrayFrom(iter) => {
+            // #2773: `js_array_from_value` throws TypeError for null/undefined
+            // sources (and keeps number/boolean/symbol -> []) before delegating
+            // to the existing `js_array_clone` materialization. Pass the raw
+            // NaN-boxed value (NOT unboxed) so the tag bits survive.
             let iter_box = lower_expr(ctx, iter)?;
             let blk = ctx.block();
-            let iter_handle = unbox_to_i64(blk, &iter_box);
-            let result = blk.call(I64, "js_array_clone", &[(I64, &iter_handle)]);
+            let result = blk.call(I64, "js_array_from_value", &[(DOUBLE, &iter_box)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
@@ -372,17 +375,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
+            // #2773: `js_array_from_mapped` throws for nullish sources, validates
+            // mapFn callability, calls mapFn(value, index) and binds the optional
+            // thisArg. All three args are passed raw NaN-boxed (DOUBLE).
             let iter_box = lower_expr(ctx, iterable)?;
             let cb_box = lower_expr(ctx, map_fn)?;
+            let this_box = match this_arg {
+                Some(t) => lower_expr(ctx, t)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
             let blk = ctx.block();
-            let iter_handle = unbox_to_i64(blk, &iter_box);
-            let arr = blk.call(I64, "js_array_clone", &[(I64, &iter_handle)]);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
-            let mapped = blk.call(I64, "js_array_map", &[(I64, &arr), (I64, &cb_handle)]);
+            let mapped = blk.call(
+                I64,
+                "js_array_from_mapped",
+                &[(DOUBLE, &iter_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+            );
             Ok(nanbox_pointer_inline(blk, &mapped))
         }
-        Expr::Uint8ArrayFrom(iter) => lower_expr(ctx, iter),
+        Expr::Uint8ArrayFrom(iter) => {
+            // #2774: materialize the source into a real Uint8Array (kind 1) so
+            // `Uint8Array.from(...)` / `Uint8Array.of(...)` produce typed arrays
+            // (with Uint8 truncation), not plain Arrays. Source nullish-throwing
+            // + materialization is reused from `js_array_from_value`.
+            let iter_box = lower_expr(ctx, iter)?;
+            let blk = ctx.block();
+            let arr = blk.call(I64, "js_array_from_value", &[(DOUBLE, &iter_box)]);
+            let ta = blk.call(
+                I64,
+                "js_typed_array_new_from_array",
+                &[(I32, "1"), (I64, &arr)],
+            );
+            Ok(nanbox_pointer_inline(blk, &ta))
+        }
 
         // -------- Object.values / Object.entries --------
         Expr::ObjectValues(obj) => {

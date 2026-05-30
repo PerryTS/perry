@@ -2812,9 +2812,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "aborted", false, None),
     method("util", "transferableAbortController", false, None),
     method("util", "transferableAbortSignal", false, None),
+    method("util", "getCallSites", false, None),
     method("util", "parseEnv", false, None),
     // #2514: util.toUSVString(value) → string with lone surrogates replaced.
     method("util", "toUSVString", false, None),
+    method("util", "setTraceSigInt", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
@@ -2894,6 +2896,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "aborted", false, None),
     method("sys", "transferableAbortController", false, None),
     method("sys", "transferableAbortSignal", false, None),
+    method("sys", "getCallSites", false, None),
     method("sys", "parseEnv", false, None),
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),
@@ -2913,6 +2916,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "stripVTControlCharacters", false, None),
     method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
+    method("sys", "setTraceSigInt", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),

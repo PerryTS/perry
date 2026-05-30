@@ -316,7 +316,9 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "array_from", 1);
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable, map_fn, ..
+            } => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, iterable);
                 self.emit_store_arg(func, 1, map_fn);
