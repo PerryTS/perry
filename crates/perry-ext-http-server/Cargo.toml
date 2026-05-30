@@ -30,4 +30,4 @@ tokio-tungstenite = { workspace = true }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
-perry-runtime.workspace = true
+perry-runtime = { workspace = true, features = ["external-ws-symbols"] }

@@ -29,6 +29,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // declaration was missing — the call site at
     // `lower_call/builtin.rs:217` referenced an undeclared symbol.
     module.declare_function("js_array_create", I64, &[]);
+    module.declare_function("js_array_constructor_single", I64, &[DOUBLE]);
     // Exact-sized literal allocator — one call + N direct stores replaces
     // alloc + N×push_f64. See `js_array_alloc_literal` in perry-runtime/src/array.rs.
     module.declare_function("js_array_alloc_literal", I64, &[I32]);
