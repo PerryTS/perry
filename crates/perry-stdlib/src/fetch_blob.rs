@@ -21,13 +21,30 @@ use crate::fetch::{
 };
 
 // Object URLs: `URL.createObjectURL(blob)` returns a
-// `blob:nodedata:<id>` URL and `URL.revokeObjectURL(url)` removes it.
+// `blob:nodedata:<uuid-shaped-id>` URL and `URL.revokeObjectURL(url)` removes it.
 // `resolveObjectURL(url)` returns the same blob handle (or undefined
 // after revoke).  The registry is process-global; entries live until
 // `revokeObjectURL` clears them.
 lazy_static::lazy_static! {
     static ref OBJECT_URL_REGISTRY: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
     static ref NEXT_OBJECT_URL_ID: Mutex<u64> = Mutex::new(1);
+}
+
+fn throw_invalid_object_url_blob(value: f64) -> ! {
+    let message = format!(
+        "The \"obj\" argument must be an instance of Blob. Received {}",
+        perry_runtime::fs::validate::describe_received(value)
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn object_url_uuid(n: u64) -> String {
+    let group1 = (n >> 32) as u32;
+    let group2 = ((n >> 16) & 0xFFFF) as u16;
+    let group3 = 0x4000u16 | (n as u16 & 0x0FFF);
+    let group4 = 0x8000u16 | ((n >> 12) as u16 & 0x3FFF);
+    let group5 = n & 0x0000_FFFF_FFFF_FFFF;
+    format!("{group1:08x}-{group2:04x}-{group3:04x}-{group4:04x}-{group5:012x}")
 }
 
 /// Walk a JS value passed as the `parts` argument of
@@ -195,21 +212,20 @@ pub extern "C" fn js_file_last_modified(handle: f64) -> f64 {
 }
 
 /// `URL.createObjectURL(blob)` — register the Blob handle under a
-/// fresh `blob:nodedata:<n>` URL and return the URL string.
+/// fresh `blob:nodedata:<uuid-shaped-id>` URL and return the URL string.
 #[no_mangle]
 pub unsafe extern "C" fn js_url_create_object_url(blob_handle: f64) -> *mut StringHeader {
     let id = handle_id(blob_handle);
-    if id == 0 {
-        return js_string_from_bytes(b"".as_ptr(), 0);
+    if id == 0 || !BLOB_REGISTRY.lock().unwrap().contains_key(&id) {
+        throw_invalid_object_url_blob(blob_handle);
     }
     let url = {
         let mut counter = NEXT_OBJECT_URL_ID.lock().unwrap();
         let n = *counter;
         *counter += 1;
-        // Node's published shape: `blob:nodedata:<uuid>`. We use a
-        // monotonic counter — the actual identity bytes don't matter
-        // to `resolveObjectURL` so long as they round-trip.
-        format!("blob:nodedata:{:032x}", n)
+        // Node's published shape is UUID-based. Keep deterministic
+        // monotonic identity while matching the visible UUID layout.
+        format!("blob:nodedata:{}", object_url_uuid(n))
     };
     OBJECT_URL_REGISTRY.lock().unwrap().insert(url.clone(), id);
     js_string_from_bytes(url.as_ptr(), url.len() as u32)
