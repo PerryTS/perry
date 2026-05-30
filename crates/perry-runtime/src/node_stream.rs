@@ -179,6 +179,9 @@ extern "C" fn ns_readable_event_microtask(closure: *const ClosureHeader) -> f64 
         return f64::from_bits(TAG_UNDEFINED);
     }
     let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    if !has_truthy_hidden(stream, hidden_readable_scheduled_key()) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     set_hidden_value(
         stream,
         hidden_readable_scheduled_key(),

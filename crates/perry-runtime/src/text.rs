@@ -16,6 +16,27 @@ use crate::buffer::{buffer_alloc, buffer_data_mut, mark_as_uint8array, BufferHea
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 
+fn throw_type_error(message: &[u8]) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    let bits = crate::value::JSValue::pointer(err as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(bits))
+}
+
+pub(crate) fn text_encoder_string_ptr(value: f64) -> *const StringHeader {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+
+    if jsval.is_undefined() {
+        return js_string_from_bytes(std::ptr::null(), 0) as *const StringHeader;
+    }
+
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        throw_type_error(b"Cannot convert a Symbol value to a string");
+    }
+
+    crate::value::js_jsvalue_to_string(value) as *const StringHeader
+}
+
 /// `new TextEncoder()` — returns a non-null sentinel integer pointer.
 ///
 /// The returned value is a small integer (`1`) that the codegen NaN-boxes
@@ -45,16 +66,11 @@ pub extern "C" fn js_text_decoder_new() -> i64 {
 /// with `POINTER_TAG` before handing it to user code.
 #[no_mangle]
 pub extern "C" fn js_text_encoder_encode_llvm(value: f64) -> i64 {
-    let str_ptr_i = crate::value::js_get_string_pointer_unified(value);
-    let (data_ptr, len) = if str_ptr_i == 0 {
-        (std::ptr::null::<u8>(), 0usize)
-    } else {
-        let str_ptr = str_ptr_i as *const StringHeader;
-        unsafe {
-            let l = (*str_ptr).byte_len as usize;
-            let d = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            (d, l)
-        }
+    let str_ptr = text_encoder_string_ptr(value);
+    let (data_ptr, len) = unsafe {
+        let l = (*str_ptr).byte_len as usize;
+        let d = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        (d, l)
     };
 
     let buf = buffer_alloc(len as u32);

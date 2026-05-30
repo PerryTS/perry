@@ -300,6 +300,19 @@ mod tests {
     }
 
     #[test]
+    fn path_make_long_is_manifest_method() {
+        let entry = module_has_symbol("node:path", "_makeLong")
+            .expect("node:path._makeLong should be in the manifest");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: false,
+                class_filter: None
+            }
+        ));
+    }
+
+    #[test]
     fn crypto_random_fill_is_manifest_method() {
         let entry = module_has_symbol("node:crypto", "randomFill")
             .expect("crypto.randomFill should be in the manifest");

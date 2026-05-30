@@ -609,6 +609,14 @@ pub(super) fn queue_readable_event(stream: f64) {
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
+pub(super) fn cancel_readable_event(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_readable_scheduled_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+}
+
 pub(super) fn schedule_readable_end(stream: f64) {
     if has_truthy_hidden(stream, hidden_end_emitted_key())
         || has_truthy_hidden(stream, hidden_end_scheduled_key())
@@ -820,6 +828,7 @@ pub(super) fn read_stream_default_size(stream: f64) -> f64 {
 pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
         if stream_hidden_ended(stream) {
+            cancel_readable_event(stream);
             refresh_readable_aborted_flag(stream);
         }
         return f64::from_bits(TAG_NULL);
@@ -833,6 +842,7 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     }
     if values.is_empty() {
         if stream_hidden_ended(stream) {
+            cancel_readable_event(stream);
             refresh_readable_aborted_flag(stream);
         }
         return f64::from_bits(TAG_NULL);
@@ -869,6 +879,7 @@ pub(super) fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
         .max(0.0) as usize;
     if available == 0 {
         if stream_hidden_ended(stream) {
+            cancel_readable_event(stream);
             refresh_readable_aborted_flag(stream);
         }
         return f64::from_bits(TAG_NULL);

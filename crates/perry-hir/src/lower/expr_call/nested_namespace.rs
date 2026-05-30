@@ -471,7 +471,7 @@ pub(super) fn dispatch_path_subnamespace(
             "parse" if !args.is_empty() => Some(M::Parse),
             "format" if !args.is_empty() => Some(M::Format),
             "relative" if args.len() >= 2 => Some(M::Relative),
-            "toNamespacedPath" if !args.is_empty() => Some(M::ToNamespacedPath),
+            "toNamespacedPath" | "_makeLong" if !args.is_empty() => Some(M::ToNamespacedPath),
             "matchesGlob" if args.len() >= 2 => Some(M::MatchesGlob),
             _ => None,
         };
@@ -543,7 +543,7 @@ pub(super) fn dispatch_path_subnamespace(
             "format" if !args.is_empty() => {
                 return Ok(Expr::PathFormat(Box::new(args.into_iter().next().unwrap())));
             }
-            "toNamespacedPath" if !args.is_empty() => {
+            "toNamespacedPath" | "_makeLong" if !args.is_empty() => {
                 return Ok(Expr::PathToNamespacedPath(Box::new(
                     args.into_iter().next().unwrap(),
                 )));
