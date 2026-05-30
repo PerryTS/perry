@@ -31,6 +31,8 @@ use std::collections::HashMap;
 const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
 const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
 const TAG_NULL_F64_BITS: u64 = 0x7FFC_0000_0000_0002;
+const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
+const POINTER_MASK_BITS: u64 = 0x0000_FFFF_FFFF_FFFF;
 const ERROR_MONITOR_EVENT_NAME: &str = "Symbol(events.errorMonitor)";
 const MIN_HEAP_POINTER: u64 = 0x10000;
 const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -72,6 +74,87 @@ unsafe fn stream_listeners_for_heap_object(
         perry_runtime::node_stream::js_node_stream_method_listeners(handle, event)
             as *mut ArrayHeader,
     )
+}
+
+#[derive(Clone, Copy)]
+enum EventHelperTarget {
+    EventEmitter(Handle),
+    EventTarget(*mut ObjectHeader),
+    Stream(Handle),
+}
+
+fn handle_from_value(value: f64) -> Handle {
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK_BITS) == POINTER_TAG_BITS {
+        (bits & POINTER_MASK_BITS) as Handle
+    } else {
+        bits as Handle
+    }
+}
+
+unsafe fn event_helper_target(value: f64) -> Option<EventHelperTarget> {
+    let handle = handle_from_value(value);
+    if get_handle::<EventEmitterHandle>(handle).is_some() {
+        return Some(EventHelperTarget::EventEmitter(handle));
+    }
+    if let Some(target) = event_target_ptr(handle) {
+        return Some(EventHelperTarget::EventTarget(target));
+    }
+    if stream_value_from_handle(handle).is_some() {
+        return Some(EventHelperTarget::Stream(handle));
+    }
+    None
+}
+
+fn invalid_arg_type_error(message: &str) -> f64 {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(msg, "ERR_INVALID_ARG_TYPE");
+    let err = perry_runtime::error::js_typeerror_new(msg);
+    perry_runtime::value::js_nanbox_pointer(err as i64)
+}
+
+fn throw_invalid_arg_type(message: &str) -> ! {
+    perry_runtime::exception::js_throw(invalid_arg_type_error(message))
+}
+
+fn received(value: f64) -> String {
+    perry_runtime::fs::validate::describe_received(value)
+}
+
+fn invalid_instance_arg_message(name: &str, expected: &str, value: f64) -> String {
+    format!(
+        "The \"{name}\" argument must be an instance of {expected}. Received {}",
+        received(value)
+    )
+}
+
+fn invalid_instance_property_message(name: &str, expected: &str, value: f64) -> String {
+    format!(
+        "The \"{name}\" property must be an instance of {expected}. Received {}",
+        received(value)
+    )
+}
+
+fn invalid_type_arg_message(name: &str, expected: &str, value: f64) -> String {
+    format!(
+        "The \"{name}\" argument must be of type {expected}. Received {}",
+        received(value)
+    )
+}
+
+fn throw_invalid_emitter(value: f64) -> ! {
+    throw_invalid_arg_type(&invalid_instance_arg_message(
+        "emitter",
+        "EventEmitter",
+        value,
+    ))
+}
+
+fn event_target_array_len(target: *mut ObjectHeader, event_name_ptr: *const StringHeader) -> f64 {
+    let arr = unsafe {
+        perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
+    };
+    js_array_length(arr) as f64
 }
 
 fn format_max_listeners_received(n: f64) -> String {
@@ -347,13 +430,68 @@ unsafe fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
     }
 }
 
-unsafe fn options_signal(options: f64) -> Option<f64> {
-    let jsval = JSValue::from_bits(options.to_bits());
-    if jsval.is_undefined() || jsval.is_null() {
+unsafe fn is_abort_signal_value(value: f64) -> bool {
+    let Some(aborted) = get_object_property(value, b"aborted") else {
+        return false;
+    };
+    JSValue::from_bits(aborted.to_bits()).is_bool()
+}
+
+unsafe fn validate_abort_signal_arg(value: f64, name: &str) -> f64 {
+    if is_abort_signal_value(value) {
+        return value;
+    }
+    throw_invalid_arg_type(&invalid_instance_arg_message(name, "AbortSignal", value))
+}
+
+fn closure_ptr_from_value(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK_BITS) != POINTER_TAG_BITS {
         return None;
     }
-    get_object_property(options, b"signal")
-        .filter(|signal| object_ptr_from_value(*signal).is_some())
+    let ptr = (bits & POINTER_MASK_BITS) as usize;
+    if ptr >= MIN_HEAP_POINTER as usize && perry_runtime::closure::is_closure_ptr(ptr) {
+        Some(ptr as i64)
+    } else {
+        None
+    }
+}
+
+fn validate_listener_arg(value: f64, name: &str) -> i64 {
+    closure_ptr_from_value(value).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_type_arg_message(name, "function", value))
+    })
+}
+
+unsafe fn options_signal_result(options: f64) -> Result<Option<f64>, f64> {
+    let jsval = JSValue::from_bits(options.to_bits());
+    if jsval.is_undefined() {
+        return Ok(None);
+    }
+    if object_ptr_from_value(options).is_none() {
+        return Err(invalid_arg_type_error(&invalid_type_arg_message(
+            "options", "object", options,
+        )));
+    }
+    let Some(signal) = get_object_property(options, b"signal") else {
+        return Ok(None);
+    };
+    if is_abort_signal_value(signal) {
+        Ok(Some(signal))
+    } else {
+        Err(invalid_arg_type_error(&invalid_instance_property_message(
+            "options.signal",
+            "AbortSignal",
+            signal,
+        )))
+    }
+}
+
+unsafe fn options_signal_or_throw(options: f64) -> Option<f64> {
+    match options_signal_result(options) {
+        Ok(signal) => signal,
+        Err(error) => perry_runtime::exception::js_throw(error),
+    }
 }
 
 fn signal_is_aborted(signal: f64) -> bool {
@@ -1103,6 +1241,29 @@ fn first_rest_arg_or_undefined(rest: f64) -> f64 {
     }
 }
 
+extern "C" fn events_once_event_target_listener(closure: *const ClosureHeader, arg0: f64) -> f64 {
+    use perry_runtime::closure::js_closure_get_capture_ptr;
+
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let target = js_closure_get_capture_ptr(closure, 1) as *mut ObjectHeader;
+    let event_name_ptr = js_closure_get_capture_ptr(closure, 2) as *const StringHeader;
+    unsafe {
+        if !target.is_null() && !event_name_ptr.is_null() {
+            perry_runtime::event_target::js_event_target_remove_event_listener(
+                target,
+                event_name_ptr,
+                closure as i64,
+            );
+        }
+        if !promise.is_null() {
+            let mut args = js_array_alloc(0);
+            args = js_array_push_f64(args, arg0);
+            js_promise_resolve(promise, js_nanbox_pointer(args as i64));
+        }
+    }
+    undefined_value()
+}
+
 /// `events.once(emitter, eventName[, options])` — returns a Promise that resolves
 /// to an array of the args fired by the next `emit(eventName, ...)`.
 ///
@@ -1112,7 +1273,7 @@ fn first_rest_arg_or_undefined(rest: f64) -> f64 {
 /// issue #850; multi-arg parity is a follow-up.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_once(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut Promise {
@@ -1120,16 +1281,39 @@ pub unsafe extern "C" fn js_events_once(
 
     ensure_gc_scanner_registered();
     let promise = js_promise_new();
+    let target = match event_helper_target(target_value) {
+        Some(target) => target,
+        None => {
+            js_promise_reject(
+                promise,
+                invalid_arg_type_error(&invalid_instance_arg_message(
+                    "emitter",
+                    "EventEmitter",
+                    target_value,
+                )),
+            );
+            return promise;
+        }
+    };
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return promise,
     };
-    let signal = options_signal(options);
+    let signal = match options_signal_result(options) {
+        Ok(signal) => signal,
+        Err(error) => {
+            js_promise_reject(promise, error);
+            return promise;
+        }
+    };
     if signal.is_some_and(signal_is_aborted) {
         js_promise_reject(promise, perry_runtime::url::js_abort_error_value());
         return promise;
     }
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+    if let EventHelperTarget::EventEmitter(handle) = target {
+        let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) else {
+            return promise;
+        };
         let mut pending = PendingOnce {
             promise,
             signal: undefined_value(),
@@ -1156,7 +1340,19 @@ pub unsafe extern "C" fn js_events_once(
             .push(pending);
         return promise;
     }
-    if stream_value_from_handle(handle).is_some() {
+    if let EventHelperTarget::EventTarget(target) = target {
+        let listener = js_closure_alloc(events_once_event_target_listener as *const u8, 3);
+        js_closure_set_capture_ptr(listener, 0, promise as i64);
+        js_closure_set_capture_ptr(listener, 1, target as i64);
+        js_closure_set_capture_ptr(listener, 2, event_name_ptr as i64);
+        perry_runtime::event_target::js_event_target_add_event_listener(
+            target,
+            event_name_ptr,
+            listener as i64,
+        );
+        return promise;
+    }
+    if let EventHelperTarget::Stream(handle) = target {
         perry_runtime::closure::js_register_closure_rest(
             events_once_stream_resolve_listener as *const u8,
             0,
@@ -1228,6 +1424,29 @@ extern "C" fn events_on_queue_listener(closure: *const ClosureHeader, arg0: f64)
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
 }
 
+extern "C" fn events_on_async_iterator(closure: *const ClosureHeader) -> f64 {
+    use perry_runtime::closure::js_closure_get_capture_ptr;
+
+    let queue = js_closure_get_capture_ptr(closure, 0);
+    js_nanbox_pointer(queue)
+}
+
+unsafe fn install_events_on_async_iterator(queue: *mut ArrayHeader) {
+    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+
+    let async_iterator = perry_runtime::symbol::well_known_symbol("asyncIterator");
+    if async_iterator.is_null() {
+        return;
+    }
+    let closure = js_closure_alloc(events_on_async_iterator as *const u8, 1);
+    js_closure_set_capture_ptr(closure, 0, queue as i64);
+    perry_runtime::symbol::js_object_set_symbol_property(
+        js_nanbox_pointer(queue as i64),
+        js_nanbox_pointer(async_iterator as i64),
+        js_nanbox_pointer(closure as i64),
+    );
+}
+
 extern "C" fn events_on_abort_listener(closure: *const ClosureHeader) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
@@ -1235,11 +1454,27 @@ extern "C" fn events_on_abort_listener(closure: *const ClosureHeader) -> f64 {
     let data_listener = js_closure_get_capture_ptr(closure, 1);
     let signal_ptr = js_closure_get_capture_ptr(closure, 2) as *mut ObjectHeader;
     let abort_promise = js_closure_get_capture_ptr(closure, 3) as *mut Promise;
+    let event_name_ptr = js_closure_get_capture_ptr(closure, 4) as *const StringHeader;
 
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         remove_listener_by_callback(emitter, data_listener);
     }
     unsafe {
+        if !event_name_ptr.is_null() {
+            if let Some(target) = event_target_ptr(handle) {
+                perry_runtime::event_target::js_event_target_remove_event_listener(
+                    target,
+                    event_name_ptr,
+                    data_listener,
+                );
+            } else if stream_value_from_handle(handle).is_some() {
+                let event = js_nanbox_string(event_name_ptr as i64);
+                let listener = js_nanbox_pointer(data_listener);
+                let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
+                    handle, event, listener,
+                );
+            }
+        }
         if !signal_ptr.is_null() {
             perry_runtime::url::js_abort_signal_remove_listener(
                 signal_ptr,
@@ -1281,19 +1516,22 @@ extern "C" fn events_abort_listener_dispose(closure: *const ClosureHeader) -> f6
 /// with an Array and appends one `[arg]` entry per emitted event.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_on(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut ArrayHeader {
     use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
 
     ensure_gc_scanner_registered();
+    let target =
+        event_helper_target(target_value).unwrap_or_else(|| throw_invalid_emitter(target_value));
     let queue = js_array_alloc(0);
+    install_events_on_async_iterator(queue);
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return queue,
     };
-    let signal = options_signal(options);
+    let signal = options_signal_or_throw(options);
     if signal.is_some_and(signal_is_aborted) {
         perry_runtime::exception::js_throw(perry_runtime::url::js_abort_error_value());
     }
@@ -1310,21 +1548,43 @@ pub unsafe extern "C" fn js_events_on(
         let _ = js_array_push_f64(queue, js_nanbox_pointer(abort_promise as i64));
     }
 
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.add_listener(&event_name, listener as i64, false, false);
-        if let Some(signal) = signal {
-            if let Some(signal_ptr) = object_ptr_from_value(signal) {
-                let abort_listener = js_closure_alloc(events_on_abort_listener as *const u8, 4);
-                js_closure_set_capture_ptr(abort_listener, 0, handle);
-                js_closure_set_capture_ptr(abort_listener, 1, listener as i64);
-                js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);
-                js_closure_set_capture_ptr(abort_listener, 3, abort_promise as i64);
-                perry_runtime::url::js_abort_signal_add_listener(
-                    signal_ptr,
-                    abort_event_value(),
-                    js_nanbox_pointer(abort_listener as i64),
-                );
+    let handle = match target {
+        EventHelperTarget::EventEmitter(handle) => {
+            if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+                emitter.add_listener(&event_name, listener as i64, false, false);
             }
+            handle
+        }
+        EventHelperTarget::EventTarget(target) => {
+            perry_runtime::event_target::js_event_target_add_event_listener(
+                target,
+                event_name_ptr,
+                listener as i64,
+            );
+            target as Handle
+        }
+        EventHelperTarget::Stream(handle) => {
+            let event = js_nanbox_string(event_name_ptr as i64);
+            let listener_value = js_nanbox_pointer(listener as i64);
+            let _ =
+                perry_runtime::node_stream::js_node_stream_method_on(handle, event, listener_value);
+            handle
+        }
+    };
+
+    if let Some(signal) = signal {
+        if let Some(signal_ptr) = object_ptr_from_value(signal) {
+            let abort_listener = js_closure_alloc(events_on_abort_listener as *const u8, 5);
+            js_closure_set_capture_ptr(abort_listener, 0, handle);
+            js_closure_set_capture_ptr(abort_listener, 1, listener as i64);
+            js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);
+            js_closure_set_capture_ptr(abort_listener, 3, abort_promise as i64);
+            js_closure_set_capture_ptr(abort_listener, 4, event_name_ptr as i64);
+            perry_runtime::url::js_abort_signal_add_listener(
+                signal_ptr,
+                abort_event_value(),
+                js_nanbox_pointer(abort_listener as i64),
+            );
         }
     }
 
@@ -1334,76 +1594,112 @@ pub unsafe extern "C" fn js_events_on(
 /// `events.addAbortListener(signal, listener)` — attach listener to AbortSignal
 /// and return a disposable-shaped object whose `Symbol.dispose` unregisters it.
 #[no_mangle]
-pub unsafe extern "C" fn js_events_add_abort_listener(signal_ptr: i64, callback_ptr: i64) -> i64 {
-    if signal_ptr != 0 && callback_ptr != 0 {
-        use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64) -> i64 {
+    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
 
-        let event_name = b"abort";
-        let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
-        let event_val = js_nanbox_string(event_str as i64);
-        let listener_val = js_nanbox_pointer(callback_ptr);
-        perry_runtime::url::js_abort_signal_add_listener(
-            signal_ptr as *mut perry_runtime::ObjectHeader,
-            event_val,
-            listener_val,
-        );
+    let signal = validate_abort_signal_arg(signal, "signal");
+    let signal_ptr = object_ptr_from_value(signal).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "signal",
+            "AbortSignal",
+            signal,
+        ))
+    });
+    let callback_ptr = validate_listener_arg(listener, "listener");
 
-        let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
-        js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr);
-        js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
-        let dispose_val = js_nanbox_pointer(dispose_closure as i64);
+    let event_name = b"abort";
+    let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
+    let event_val = js_nanbox_string(event_str as i64);
+    let listener_val = js_nanbox_pointer(callback_ptr);
+    perry_runtime::url::js_abort_signal_add_listener(signal_ptr, event_val, listener_val);
 
-        let disposable = js_object_alloc(0, 0);
-        let disposable_val = js_nanbox_pointer(disposable as i64);
-        let dispose_sym = perry_runtime::symbol::well_known_symbol("dispose");
-        let dispose_sym_val = js_nanbox_pointer(dispose_sym as i64);
-        perry_runtime::symbol::js_object_set_symbol_property(
-            disposable_val,
-            dispose_sym_val,
-            dispose_val,
-        );
-        disposable as i64
-    } else {
-        0
-    }
+    let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
+    js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr as i64);
+    js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
+    let dispose_val = js_nanbox_pointer(dispose_closure as i64);
+
+    let disposable = js_object_alloc(0, 0);
+    let disposable_val = js_nanbox_pointer(disposable as i64);
+    let dispose_sym = perry_runtime::symbol::well_known_symbol("dispose");
+    let dispose_sym_val = js_nanbox_pointer(dispose_sym as i64);
+    perry_runtime::symbol::js_object_set_symbol_property(
+        disposable_val,
+        dispose_sym_val,
+        dispose_val,
+    );
+    disposable as i64
 }
 
 /// `events.getEventListeners(emitter, eventName)` — alias for
 /// `emitter.listeners(eventName)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_get_event_listeners(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> *mut ArrayHeader {
-    if let Some(target) = event_target_ptr(handle) {
-        return perry_runtime::event_target::js_event_target_get_event_listeners(
-            target,
-            event_name_ptr,
-        );
+    match event_helper_target(target_value).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "emitter",
+            "EventEmitter or EventTarget",
+            target_value,
+        ))
+    }) {
+        EventHelperTarget::EventEmitter(handle) => {
+            js_event_emitter_listeners(handle, event_name_ptr)
+        }
+        EventHelperTarget::EventTarget(target) => {
+            perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
+        }
+        EventHelperTarget::Stream(handle) => {
+            stream_listeners_for_heap_object(handle, event_name_ptr)
+                .unwrap_or_else(|| js_array_alloc(0))
+        }
     }
-    if let Some(listeners) = stream_listeners_for_heap_object(handle, event_name_ptr) {
-        return listeners;
-    }
-    js_event_emitter_listeners(handle, event_name_ptr)
 }
 
 /// `events.listenerCount(emitter, eventName)` — alias for
 /// `emitter.listenerCount(eventName)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_listener_count(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> f64 {
-    js_event_emitter_listener_count(handle, event_name_ptr, 0)
+    match event_helper_target(target_value).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "emitter",
+            "EventEmitter or EventTarget",
+            target_value,
+        ))
+    }) {
+        EventHelperTarget::EventEmitter(handle) => {
+            js_event_emitter_listener_count(handle, event_name_ptr, 0)
+        }
+        EventHelperTarget::EventTarget(target) => event_target_array_len(target, event_name_ptr),
+        EventHelperTarget::Stream(handle) => {
+            let event = js_nanbox_string(event_name_ptr as i64);
+            perry_runtime::node_stream::js_node_stream_method_listener_count(handle, event)
+        }
+    }
 }
 
 /// `events.getMaxListeners(emitter)` — alias.
 #[no_mangle]
-pub unsafe extern "C" fn js_events_get_max_listeners(handle: Handle) -> f64 {
-    if let Some(target) = event_target_ptr(handle) {
-        return perry_runtime::event_target::js_event_target_get_max_listeners(target);
+pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
+    match event_helper_target(target_value).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "emitter",
+            "EventEmitter or EventTarget",
+            target_value,
+        ))
+    }) {
+        EventHelperTarget::EventEmitter(handle) => js_event_emitter_get_max_listeners(handle),
+        EventHelperTarget::EventTarget(target) => {
+            perry_runtime::event_target::js_event_target_get_max_listeners(target)
+        }
+        EventHelperTarget::Stream(handle) => {
+            perry_runtime::node_stream::js_node_stream_method_get_max_listeners(handle)
+        }
     }
-    js_event_emitter_get_max_listeners(handle)
 }
 
 /// `events.setMaxListeners(n, ...targets)` — codegen passes the varargs
@@ -1418,18 +1714,28 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
     if !handles_ptr.is_null() {
         let len = js_array_length(handles_ptr);
         for i in 0..len {
-            let handle_val = perry_runtime::array::js_array_get_f64(handles_ptr, i);
-            let handle = handle_val.to_bits() as Handle;
-            let handle = if (handle_val.to_bits() & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000
-            {
-                (handle_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as Handle
-            } else {
-                handle
-            };
-            if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-                emitter.max_listeners = n;
-            } else if let Some(target) = event_target_ptr(handle) {
-                let _ = perry_runtime::event_target::js_event_target_set_max_listeners(target, n);
+            let value = perry_runtime::array::js_array_get_f64(handles_ptr, i);
+            match event_helper_target(value).unwrap_or_else(|| {
+                throw_invalid_arg_type(&invalid_instance_arg_message(
+                    "eventTargets",
+                    "EventEmitter or EventTarget",
+                    value,
+                ))
+            }) {
+                EventHelperTarget::EventEmitter(handle) => {
+                    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+                        emitter.max_listeners = n;
+                    }
+                }
+                EventHelperTarget::EventTarget(target) => {
+                    let _ =
+                        perry_runtime::event_target::js_event_target_set_max_listeners(target, n);
+                }
+                EventHelperTarget::Stream(handle) => {
+                    let _ = perry_runtime::node_stream::js_node_stream_method_set_max_listeners(
+                        handle, n,
+                    );
+                }
             }
         }
     }

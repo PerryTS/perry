@@ -990,12 +990,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
     // Module-level helpers
-    module.declare_function("js_events_once", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_events_on", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_events_add_abort_listener", I64, &[I64, I64]);
-    module.declare_function("js_events_get_event_listeners", I64, &[I64, I64]);
-    module.declare_function("js_events_listener_count", DOUBLE, &[I64, I64]);
-    module.declare_function("js_events_get_max_listeners", DOUBLE, &[I64]);
+    module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
+    module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
+    module.declare_function("js_events_add_abort_listener", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_events_get_event_listeners", I64, &[DOUBLE, I64]);
+    module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
 
     // ========== StringDecoder (issue #848) ==========
