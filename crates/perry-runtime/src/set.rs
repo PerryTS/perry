@@ -643,34 +643,26 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         let size = (*set).size;
         let elements = elements_ptr_mut(set);
 
-        // Update the hash index: remove the deleted value,
-        // and if we swap-remove, update the swapped element's index.
-        SET_INDEX.with(|sidx| {
-            let mut sidx = sidx.borrow_mut();
-            if let Some(map) = sidx.get_mut(&(set as usize)) {
-                map.remove(&JSValueKey(value));
-                if (idx as u32) < size - 1 {
-                    let last_value = ptr::read(elements.add((size - 1) as usize));
-                    // Update the last element's index to the position of the deleted element
-                    if let Some(entry) = map.get_mut(&JSValueKey(last_value)) {
-                        *entry = idx as u32;
-                    }
-                }
-            }
-        });
-
-        // If not the last element, swap with the last element
-        if (idx as u32) < size - 1 {
-            let last_value = ptr::read(elements.add((size - 1) as usize));
-            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set swap-remove stores through the shared external-slot helper.
+        // #2831: preserve insertion order. The previous swap-remove moved
+        // the last element into the hole, reordering iteration. Shift every
+        // element after `idx` down by one slot instead so survivors keep
+        // their relative order (and a delete-then-re-add appends at the end).
+        for i in (idx as usize)..(size as usize - 1) {
+            let next_value = ptr::read(elements.add(i + 1));
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set compaction stores through the shared external-slot helper.
             crate::gc::runtime_store_external_jsvalue_slot(
                 set as usize,
-                elements.add(idx as usize) as usize,
-                last_value.to_bits(),
+                elements.add(i) as usize,
+                next_value.to_bits(),
             );
         }
 
         (*set).size = size - 1;
+
+        // The shift changes the stored index of every surviving element at
+        // or after `idx`, so rebuild the O(1) lookup index from the
+        // compacted buffer.
+        rebuild_set_index(set);
         1
     }
 }
@@ -842,10 +834,12 @@ pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
     set_handle.get_raw_mut_ptr::<SetHeader>()
 }
 
-/// Iterate over set elements, calling a callback with (value, value, set) for each
-/// Matches JS Set.forEach signature where key===value (so we pass value twice).
+/// `Set.prototype.forEach(callback, thisArg)` — calls `callback` with
+/// `(value, value, set)` (key === value for Sets, #2830) and binds
+/// `thisArg` as the callback's `this`. `this_arg` is `undefined` when
+/// omitted at the call site.
 #[no_mangle]
-pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
+pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg: f64) {
     let set = clean_set_ptr(set);
     if set.is_null() {
         return;
@@ -853,15 +847,15 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let set_handle = scope.root_raw_const_ptr(set);
     let callback_handle = scope.root_nanbox_f64(callback);
+    let this_handle = scope.root_nanbox_f64(this_arg);
     unsafe {
         let set = set_handle.get_raw_const_ptr::<SetHeader>();
         let size = (*set).size as usize;
         if size == 0 {
             return;
         }
-
-        // Extract the closure pointer from the NaN-boxed callback.
-        // Mask off the upper 16 bits (NaN-box tag) to get the real pointer.
+        // The Set itself is the third callback argument / `self === s`.
+        let set_value = crate::value::js_nanbox_pointer(set as i64);
 
         for i in 0..size {
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
@@ -870,10 +864,12 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
             }
             let elements = elements_ptr(set);
             let value = ptr::read(elements.add(i));
-            let closure_ptr = (callback_handle.get_nanbox_u64() & 0x0000_FFFF_FFFF_FFFF)
-                as *const crate::closure::ClosureHeader;
-            // Call closure with (value, value) - Set.forEach callback gets (value, value) in JS
-            crate::closure::js_closure_call2(closure_ptr, value, value);
+            let args = [value, value, set_value];
+            let cb = callback_handle.get_nanbox_f64();
+            let this_v = this_handle.get_nanbox_f64();
+            let prev_this = crate::object::js_implicit_this_set(this_v);
+            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+            crate::object::js_implicit_this_set(prev_this);
         }
     }
 }

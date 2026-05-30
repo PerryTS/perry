@@ -511,6 +511,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_style_text", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_util_get_call_sites", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_promisify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_callbackify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_deprecate", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
@@ -757,9 +758,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // would do. (Map ptr, entry idx) → key / value.
     module.declare_function("js_map_entry_key_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_map_entry_value_at", DOUBLE, &[I64, I32]);
-    // Map/Set forEach: (collection_ptr, callback_nanboxed_f64) -> void
-    module.declare_function("js_map_foreach", VOID, &[I64, DOUBLE]);
-    module.declare_function("js_set_foreach", VOID, &[I64, DOUBLE]);
+    // Map/Set forEach: (collection_ptr, callback_nanboxed_f64, thisArg_f64) -> void (#2830)
+    module.declare_function("js_map_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_set_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
+    // #2856: value-level Map/Set iterator methods return a real iterator
+    // OBJECT (raw ptr as i64; caller NaN-boxes), unlike the eager Array
+    // materializers above which still back the for-of/spread fast paths.
+    module.declare_function("js_map_entries_iter_obj", I64, &[I64]);
+    module.declare_function("js_map_keys_iter_obj", I64, &[I64]);
+    module.declare_function("js_map_values_iter_obj", I64, &[I64]);
+    module.declare_function("js_set_values_iter_obj", I64, &[I64]);
+    module.declare_function("js_set_keys_iter_obj", I64, &[I64]);
+    module.declare_function("js_set_entries_iter_obj", I64, &[I64]);
     // Set to array conversion (for Set iteration via for...of)
     module.declare_function("js_set_to_array", I64, &[I64]);
     // Direct element access for the `for (const x of set)` fast path —
