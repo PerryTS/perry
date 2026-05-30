@@ -82,7 +82,9 @@ pub use self::search::{
 pub use self::sort::{
     js_array_sort_default, js_array_sort_with_comparator, js_validate_array_comparator,
 };
-pub use self::splice_slice::{js_array_slice, js_array_slice_values, js_array_splice};
+pub use self::splice_slice::{
+    js_array_slice, js_array_slice_values, js_array_splice, js_array_splice_delete_count,
+};
 
 pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};

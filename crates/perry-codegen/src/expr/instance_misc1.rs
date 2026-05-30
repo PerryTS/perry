@@ -691,7 +691,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             blk.store(I64, "0", &out_slot);
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let count_i32 = blk.fptosi(DOUBLE, &count_d, I32);
+            let count_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
 
             let (items_ptr, items_count_str) = if item_vals.is_empty() {
                 ("null".to_string(), "0".to_string())

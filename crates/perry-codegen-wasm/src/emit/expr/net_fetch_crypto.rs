@@ -231,6 +231,10 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "crypto_random_uuid", 0);
             }
+            Expr::CryptoRandomUUIDv7 => {
+                self.emit_frame_begin(func, 0);
+                self.emit_memcall(func, "crypto_random_uuidv7", 0);
+            }
             Expr::CryptoRandomBytes(n) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, n);

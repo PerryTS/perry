@@ -829,6 +829,7 @@ pub enum Expr {
     // Crypto operations
     CryptoRandomBytes(Box<Expr>), // crypto.randomBytes(size) -> string (hex)
     CryptoRandomUUID,             // crypto.randomUUID() -> string
+    CryptoRandomUUIDv7,           // crypto.randomUUIDv7() -> string (RFC 9562 v7)
     CryptoSha256(Box<Expr>),      // crypto.sha256(data) -> string (hex)
     CryptoMd5(Box<Expr>),         // crypto.md5(data) -> string (hex)
 
