@@ -6,11 +6,11 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 19 | 478 | n/a |
+| Whole-module gaps (zero coverage) | 18 | 472 | n/a |
 | Partial-module gaps | 29 | 1647 | 370 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2407** |  |
+| **Total true gaps** |  | **2401** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -307,19 +307,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `stringDecoder.lastChar`
 - `stringDecoder.lastNeed`
 - `stringDecoder.lastTotal`
-
-### node:trace_events
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `trace_events.createTracing(options)`
-- `trace_events.getEnabledCategories()`
-- `tracing.categories`
-- `tracing.enabled`
-- `tracing.enable()`
-- `tracing.disable()`
 
 ### node:wasi
 
