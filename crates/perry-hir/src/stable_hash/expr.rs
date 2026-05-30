@@ -163,7 +163,7 @@ impl SH for Expr {
             Expr::ObjectGetOwnPropertySymbols(e) => { tag(h, 119); e.as_ref().hash(h); }
             Expr::SymbolNew(e) => { tag(h, 120); e.hash(h); }
             Expr::SymbolFor(e) => { tag(h, 121); e.as_ref().hash(h); }
-            Expr::RegExpEscape(e) => { tag(h, 12045); e.as_ref().hash(h); }
+            Expr::RegExpEscape(e) => { tag(h, 12043); e.as_ref().hash(h); }
             Expr::SymbolKeyFor(e) => { tag(h, 122); e.as_ref().hash(h); }
             Expr::SymbolDescription(e) => { tag(h, 123); e.as_ref().hash(h); }
             Expr::SymbolToString(e) => { tag(h, 124); e.as_ref().hash(h); }
@@ -327,9 +327,9 @@ impl SH for Expr {
             Expr::ArrayPop(id) => { tag(h, 251); id.hash(h); }
             Expr::ArrayShift(id) => { tag(h, 252); id.hash(h); }
             Expr::ArrayUnshift { array_id, value } => { tag(h, 253); array_id.hash(h); value.as_ref().hash(h); }
-            Expr::ArrayIndexOf { array, value } => { tag(h, 254); array.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::ArrayIndexOf { array, value, from_index } => { tag(h, 254); array.as_ref().hash(h); value.as_ref().hash(h); if let Some(fi) = from_index { tag(h, 1); fi.as_ref().hash(h); } else { tag(h, 0); } }
             Expr::ArrayLastIndexOf { array, value, from_index } => { tag(h, 11244); array.as_ref().hash(h); value.as_ref().hash(h); if let Some(fi) = from_index { tag(h, 1); fi.as_ref().hash(h); } else { tag(h, 0); } }
-            Expr::ArrayIncludes { array, value } => { tag(h, 255); array.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::ArrayIncludes { array, value, from_index } => { tag(h, 255); array.as_ref().hash(h); value.as_ref().hash(h); if let Some(fi) = from_index { tag(h, 1); fi.as_ref().hash(h); } else { tag(h, 0); } }
             Expr::ArraySlice { array, start, end } => { tag(h, 256); array.as_ref().hash(h); start.as_ref().hash(h); end.hash(h); }
             Expr::ArraySplice { array_id, start, delete_count, items, } => { tag(h, 257); array_id.hash(h); start.as_ref().hash(h); delete_count.hash(h); items.hash(h); }
             Expr::ArrayForEach { array, callback } => { tag(h, 258); array.as_ref().hash(h); callback.as_ref().hash(h); }
@@ -439,11 +439,12 @@ impl SH for Expr {
             Expr::ErrorNew(e) => { tag(h, 346); e.hash(h); }
             Expr::ErrorMessage(e) => { tag(h, 347); e.as_ref().hash(h); }
             Expr::ErrorNewWithCause { message, cause } => { tag(h, 348); message.as_ref().hash(h); cause.as_ref().hash(h); }
+            Expr::ErrorNewWithOptions { kind, message, options } => { tag(h, 12060); kind.hash(h); message.as_ref().hash(h); options.as_ref().hash(h); }
             Expr::TypeErrorNew(e) => { tag(h, 349); e.as_ref().hash(h); }
             Expr::RangeErrorNew(e) => { tag(h, 350); e.as_ref().hash(h); }
             Expr::ReferenceErrorNew(e) => { tag(h, 351); e.as_ref().hash(h); }
             Expr::SyntaxErrorNew(e) => { tag(h, 352); e.as_ref().hash(h); }
-            Expr::AggregateErrorNew { errors, message } => { tag(h, 353); errors.as_ref().hash(h); message.as_ref().hash(h); }
+            Expr::AggregateErrorNew { errors, message, options } => { tag(h, 353); errors.as_ref().hash(h); message.as_ref().hash(h); options.hash(h); }
             Expr::UrlNew { url, base } => { tag(h, 354); url.as_ref().hash(h); base.hash(h); }
             Expr::UrlGetHref(e) => { tag(h, 355); e.as_ref().hash(h); }
             Expr::UrlGetPathname(e) => { tag(h, 356); e.as_ref().hash(h); }

@@ -510,6 +510,25 @@ impl WasmModuleEmitter {
                     m_js, c_js
                 )
             }
+            Expr::ErrorNewWithOptions {
+                kind,
+                message,
+                options,
+            } => {
+                let ctor = match kind {
+                    1 => "TypeError",
+                    2 => "RangeError",
+                    3 => "ReferenceError",
+                    4 => "SyntaxError",
+                    _ => "Error",
+                };
+                let m_js = self.emit_js_expr(message, locals);
+                let o_js = self.emit_js_expr(options, locals);
+                format!(
+                    "fromJsValue(new {}(getString({}), toJsValue({})))",
+                    ctor, m_js, o_js
+                )
+            }
             Expr::TypeErrorNew(m) => {
                 let m_js = self.emit_js_expr(m, locals);
                 format!("fromJsValue(new TypeError(getString({})))", m_js)
@@ -526,13 +545,26 @@ impl WasmModuleEmitter {
                 let m_js = self.emit_js_expr(m, locals);
                 format!("fromJsValue(new SyntaxError(getString({})))", m_js)
             }
-            Expr::AggregateErrorNew { errors, message } => {
+            Expr::AggregateErrorNew {
+                errors,
+                message,
+                options,
+            } => {
                 let e_js = self.emit_js_expr(errors, locals);
                 let m_js = self.emit_js_expr(message, locals);
-                format!(
-                    "fromJsValue(new AggregateError(toJsValue({}), getString({})))",
-                    e_js, m_js
-                )
+                match options {
+                    Some(o) => {
+                        let o_js = self.emit_js_expr(o, locals);
+                        format!(
+                            "fromJsValue(new AggregateError(toJsValue({}), getString({}), toJsValue({})))",
+                            e_js, m_js, o_js
+                        )
+                    }
+                    None => format!(
+                        "fromJsValue(new AggregateError(toJsValue({}), getString({})))",
+                        e_js, m_js
+                    ),
+                }
             }
             Expr::JsonParse(val) => {
                 let v = self.emit_js_expr(val, locals);

@@ -587,7 +587,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     });
                 }
             }
-            // Handle AggregateError separately (2-arg form: errors array, message)
+            // Handle AggregateError separately:
+            // `new AggregateError(errors, message?, options?)`.
+            //
+            // #2838: `errors` is forwarded as a raw runtime value (not coerced
+            // to an array literal) so the runtime consumes any iterable and
+            // throws TypeError on a missing/non-iterable argument — so a
+            // missing first arg defaults to `undefined`, NOT an empty array.
+            // #2836: the third `options` argument carries `{ cause }`.
             if class_name == "AggregateError" {
                 let args = new_expr
                     .args
@@ -600,11 +607,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     .transpose()?
                     .unwrap_or_default();
                 let mut iter = args.into_iter();
-                let errors = iter.next().unwrap_or(Expr::Array(vec![]));
+                let errors = iter.next().unwrap_or(Expr::Undefined);
                 let message = iter.next().unwrap_or(Expr::String("".to_string()));
+                let options = iter.next().map(Box::new);
                 return Ok(Expr::AggregateErrorNew {
                     errors: Box::new(errors),
                     message: Box::new(message),
+                    options,
                 });
             }
 
@@ -625,72 +634,90 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // would miss it. Pull `cause` directly from the AST first, then
                 // fall through to the standard argument lowering for other shapes.
                 let ast_args = new_expr.args.as_deref().unwrap_or(&[]);
-                if ast_args.len() == 2 && class_name == "Error" {
+                // #2836: a 2-argument constructor — `new <ErrorKind>(message,
+                // options)` — applies the ES2022 `{ cause }` option across the
+                // base `Error` AND every native subclass. `BugIndicatingError`
+                // (an effect-internal Error subclass) keeps its plain shape.
+                if ast_args.len() == 2 && class_name != "BugIndicatingError" {
                     let msg = lower_expr(ctx, &ast_args[0].expr)?;
                     // Peel `Expr::Paren(({ cause: e }))` — SWC preserves paren
-                    // nodes, so without unwrapping the outer Object match below
-                    // would miss `new Error(msg, ({ cause }))` and we'd silently
-                    // drop the cause.
+                    // nodes, so without unwrapping the literal fast path below
+                    // would miss `new Error(msg, ({ cause }))`.
                     let mut opts_expr: &ast::Expr = &ast_args[1].expr;
                     while let ast::Expr::Paren(p) = opts_expr {
                         opts_expr = &p.expr;
                     }
-                    // Look for `{ cause: <expr> }` or `{ cause }` at the AST level.
-                    if let ast::Expr::Object(opts_obj) = opts_expr {
-                        for prop in &opts_obj.props {
-                            if let ast::PropOrSpread::Prop(p) = prop {
-                                match p.as_ref() {
-                                    ast::Prop::KeyValue(kv) => {
-                                        let key = match &kv.key {
-                                            ast::PropName::Ident(i) => i.sym.to_string(),
-                                            ast::PropName::Str(s) => {
-                                                s.value.as_str().unwrap_or("").to_string()
+                    // Fast path for base `Error` with a literal `{ cause: <e> }`
+                    // / `{ cause }` — emits the existing `ErrorNewWithCause`
+                    // variant (no runtime options read). Subclasses and dynamic
+                    // option objects fall through to the runtime helper below.
+                    if class_name == "Error" {
+                        if let ast::Expr::Object(opts_obj) = opts_expr {
+                            for prop in &opts_obj.props {
+                                if let ast::PropOrSpread::Prop(p) = prop {
+                                    match p.as_ref() {
+                                        ast::Prop::KeyValue(kv) => {
+                                            let key = match &kv.key {
+                                                ast::PropName::Ident(i) => i.sym.to_string(),
+                                                ast::PropName::Str(s) => {
+                                                    s.value.as_str().unwrap_or("").to_string()
+                                                }
+                                                _ => continue,
+                                            };
+                                            if key == "cause" {
+                                                let cause = lower_expr(ctx, &kv.value)?;
+                                                return Ok(Expr::ErrorNewWithCause {
+                                                    message: Box::new(msg),
+                                                    cause: Box::new(cause),
+                                                });
                                             }
-                                            _ => continue,
-                                        };
-                                        if key == "cause" {
-                                            let cause = lower_expr(ctx, &kv.value)?;
+                                        }
+                                        ast::Prop::Shorthand(ident) => {
+                                            let name = ident.sym.to_string();
+                                            if name != "cause" {
+                                                continue;
+                                            }
+                                            let cause = if let Some(func_id) =
+                                                ctx.lookup_func(&name)
+                                            {
+                                                Expr::FuncRef(func_id)
+                                            } else if let Some(local_id) = ctx.lookup_local(&name) {
+                                                Expr::LocalGet(local_id)
+                                            } else if ctx.lookup_class(&name).is_some() {
+                                                Expr::ClassRef(name.clone())
+                                            } else {
+                                                continue;
+                                            };
                                             return Ok(Expr::ErrorNewWithCause {
                                                 message: Box::new(msg),
                                                 cause: Box::new(cause),
                                             });
                                         }
+                                        _ => {}
                                     }
-                                    // ES2022 shorthand `new Error(msg, { cause })`
-                                    // — the canonical idiom inside a `catch (cause)`
-                                    // block. Resolve the ident the same way the
-                                    // HIR Object-literal lowering does: func /
-                                    // local / class-ref precedence.
-                                    ast::Prop::Shorthand(ident) => {
-                                        let name = ident.sym.to_string();
-                                        if name != "cause" {
-                                            continue;
-                                        }
-                                        let cause = if let Some(func_id) = ctx.lookup_func(&name) {
-                                            Expr::FuncRef(func_id)
-                                        } else if let Some(local_id) = ctx.lookup_local(&name) {
-                                            Expr::LocalGet(local_id)
-                                        } else if ctx.lookup_class(&name).is_some() {
-                                            Expr::ClassRef(name.clone())
-                                        } else {
-                                            // Unresolvable identifier — fall through
-                                            // to the no-cause path below.
-                                            continue;
-                                        };
-                                        return Ok(Expr::ErrorNewWithCause {
-                                            message: Box::new(msg),
-                                            cause: Box::new(cause),
-                                        });
-                                    }
-                                    _ => {}
                                 }
                             }
                         }
                     }
-                    // No recognizable `cause` key — lower the opts for side effects,
-                    // then emit a plain Error with just the message.
-                    let _ = lower_expr(ctx, &ast_args[1].expr)?;
-                    return Ok(Expr::ErrorNew(Some(Box::new(msg))));
+                    // General case: lower the options as a runtime value and let
+                    // the runtime read `.cause`. Works for `new TypeError(m,
+                    // { cause })`, `new RangeError(m, opts)`, base Error with a
+                    // variable-held options object, etc. ERROR_KIND_* values are
+                    // hardcoded here (perry-hir has no perry-runtime dep): Error=0,
+                    // TypeError=1, RangeError=2, ReferenceError=3, SyntaxError=4.
+                    let kind: u32 = match class_name.as_str() {
+                        "TypeError" => 1,
+                        "RangeError" => 2,
+                        "ReferenceError" => 3,
+                        "SyntaxError" => 4,
+                        _ => 0,
+                    };
+                    let options = lower_expr(ctx, &ast_args[1].expr)?;
+                    return Ok(Expr::ErrorNewWithOptions {
+                        kind,
+                        message: Box::new(msg),
+                        options: Box::new(options),
+                    });
                 }
 
                 let args = new_expr

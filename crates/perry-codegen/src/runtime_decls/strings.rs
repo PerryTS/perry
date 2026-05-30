@@ -503,6 +503,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_style_text", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_util_promisify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_callbackify", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_deprecate", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
@@ -587,7 +588,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_chdir", VOID, &[I64]);
     // #2013 — f64-taking variant that validates type before dispatch.
     module.declare_function("js_process_chdir_jsv", VOID, &[DOUBLE]);
-    module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_process_kill", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_abort", VOID, &[]);
     module.declare_function("js_process_umask", DOUBLE, &[]);
@@ -721,14 +722,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_new_from_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_new_from_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_indexOf_f64", I32, &[I64, DOUBLE]);
-    module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE]);
+    // #2804: indexOf/includes carry an optional fromIndex (value, fromIndex, has_from).
+    module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE, DOUBLE, I32]);
     module.declare_function(
         "js_array_last_index_of_jsvalue",
         I32,
         &[I64, DOUBLE, DOUBLE, I32],
     );
     module.declare_function("js_array_includes_f64", I32, &[I64, DOUBLE]);
-    module.declare_function("js_array_includes_jsvalue", I32, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_array_includes_jsvalue",
+        I32,
+        &[I64, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function("js_map_size", I32, &[I64]);
     module.declare_function("js_map_clear", VOID, &[I64]);
     module.declare_function("js_set_clear", VOID, &[I64]);
@@ -1283,6 +1289,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Error subclasses (Agent B's runtime work).
     module.declare_function("js_aggregateerror_new", I64, &[I64, I64]);
     module.declare_function("js_error_new_with_cause", I64, &[I64, DOUBLE]);
+    // #2838/#2836: full AggregateError ctor — errors as raw value, options.
+    module.declare_function("js_aggregateerror_new_full", I64, &[DOUBLE, I64, DOUBLE]);
+    // #2836: Error/subclass ctor honoring a runtime `{ cause }` options value.
+    module.declare_function("js_error_new_kind_with_options", I64, &[I32, I64, DOUBLE]);
+    // #2904: Error.isError(value) duck-check.
+    module.declare_function("js_error_is_error", DOUBLE, &[DOUBLE]);
     // AggregateError.errors field access — returns raw *ArrayHeader.
     module.declare_function("js_error_get_errors", I64, &[I64]);
     // Crypto stdlib — sha256/md5/hmac/randomBytes/randomUUID used by
