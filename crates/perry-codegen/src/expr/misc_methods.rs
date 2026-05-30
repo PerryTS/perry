@@ -59,12 +59,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .call(DOUBLE, "js_math_f16round", &[(DOUBLE, &v)]))
         }
 
-        // -------- new Map([[k,v], ...]) — alloc empty map, ignore source --------
+        // -------- new Map(init) — consume any iterable + validate (#2770) --------
+        // Pass the NaN-boxed init value so the runtime can classify it by tag
+        // (number/symbol/object/iterable) and throw Node's exact TypeErrors for
+        // non-iterables / malformed entries instead of mis-reading an
+        // ArrayHeader.
         Expr::MapNewFromArray(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            let handle = blk.call(I64, "js_map_from_array", &[(I64, &arr_handle)]);
+            let handle = blk.call(I64, "js_map_from_iterable", &[(DOUBLE, &arr_box)]);
             Ok(nanbox_pointer_inline(blk, &handle))
         }
 

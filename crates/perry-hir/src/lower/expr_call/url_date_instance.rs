@@ -414,8 +414,13 @@ pub(super) fn try_url_date_weakref_instance(
                 }
                 // WeakMap/WeakSet — route to dedicated runtime functions
                 // (NOT the regular Map/Set HIR variants) so reference-equality
-                // works for object keys. Primitive keys/values throw via
-                // js_weak_throw_primitive when the AST shows a bare literal.
+                // works for object keys. Primitive keys/values are rejected by
+                // the runtime helpers themselves (#2772): `js_weakmap_set` /
+                // `js_weakset_add` validate the key/value at runtime and throw
+                // Node's exact `Invalid value used as weak map key` /
+                // `Invalid value used in weak set`. This covers both literal
+                // and dynamic primitives uniformly, so no AST-literal fast path
+                // is needed here.
                 let make_extern_call = |name: &str, args: Vec<Expr>| -> Expr {
                     Expr::Call {
                         callee: Box::new(Expr::ExternFuncRef {
@@ -427,29 +432,11 @@ pub(super) fn try_url_date_weakref_instance(
                         type_args: Vec::new(),
                     }
                 };
-                let throw_primitive_expr = || -> Expr {
-                    Expr::Call {
-                        callee: Box::new(Expr::ExternFuncRef {
-                            name: "js_weak_throw_primitive".to_string(),
-                            param_types: Vec::new(),
-                            return_type: Type::Any,
-                        }),
-                        args: Vec::new(),
-                        type_args: Vec::new(),
-                    }
-                };
                 if ctx.weakmap_locals.contains(&recv_name) {
                     let map_id = ctx.lookup_local(&recv_name).unwrap_or(0);
                     let recv = Expr::LocalGet(map_id);
                     match method_name {
                         "set" if args.len() >= 2 => {
-                            let key_is_primitive_lit = matches!(
-                                call.args.first().map(|a| a.expr.as_ref()),
-                                Some(ast::Expr::Lit(_))
-                            );
-                            if key_is_primitive_lit {
-                                return Ok(Ok(throw_primitive_expr()));
-                            }
                             let mut iter = args.into_iter();
                             let key = iter.next().unwrap();
                             let value = iter.next().unwrap();
@@ -484,13 +471,6 @@ pub(super) fn try_url_date_weakref_instance(
                     let recv = Expr::LocalGet(set_id);
                     match method_name {
                         "add" if !args.is_empty() => {
-                            let value_is_primitive_lit = matches!(
-                                call.args.first().map(|a| a.expr.as_ref()),
-                                Some(ast::Expr::Lit(_))
-                            );
-                            if value_is_primitive_lit {
-                                return Ok(Ok(throw_primitive_expr()));
-                            }
                             return Ok(Ok(make_extern_call(
                                 "js_weakset_add",
                                 vec![recv, args.into_iter().next().unwrap()],

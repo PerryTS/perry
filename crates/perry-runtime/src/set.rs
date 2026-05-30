@@ -792,79 +792,54 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
 ///   adding each as a single-char string to the set (matches the JS
 ///   spec: `new Set("abc")` → `{"a", "b", "c"}`)
 /// - undefined / null → empty set (matches `new Set()` and `new Set(null)`)
-/// - anything else → empty set with no error (lenient — JS would throw
-///   `TypeError`, but blocking compilation for non-iterable inputs is
-///   worse than silently producing an empty set; followup as needed)
+/// - any other iterable (Map/Set/custom `[Symbol.iterator]`) → consume its
+///   yielded values
+/// - non-iterable number / boolean / bigint / symbol / function / plain
+///   object → throw `TypeError: <type> ... is not iterable (...)` (#2771)
 ///
 /// Used by codegen for `Expr::SetNewFromArray` so a single call site
 /// handles any iterable input shape — closes #421-related bug where
 /// `new Set("abc")` (hono's `regExpMetaChars` pattern) crashed because
-/// `js_set_from_array` blindly cast the StringHeader to ArrayHeader.
+/// `js_set_from_array` blindly cast the StringHeader to ArrayHeader, and
+/// #2771 (arbitrary iterables + TypeError on non-iterables).
 #[no_mangle]
 pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
+    use crate::collection_iter::{classify_init, InitIter};
+
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value_handle = scope.root_nanbox_f64(value);
-    let bits = value_handle.get_nanbox_u64();
-    let top16 = (bits >> 48) as u16;
-    // String literals (heap or SSO).
-    if top16 == 0x7FFF || top16 == 0x7FF9 {
-        let set = js_set_alloc(4);
-        let set_handle = scope.root_raw_mut_ptr(set);
-        maybe_force_helper_gc_for_test();
-        // Materialize SSO to a real heap StringHeader; cheap for heap strings.
-        let str_ptr = {
-            crate::value::js_get_string_pointer_unified(value_handle.get_nanbox_f64())
-                as *const crate::string::StringHeader
-        };
-        if str_ptr.is_null() {
-            return set_handle.get_raw_mut_ptr::<SetHeader>();
-        }
-        let bytes = unsafe {
-            let byte_len = (*str_ptr).byte_len as usize;
-            let data =
-                (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            std::slice::from_raw_parts(data, byte_len).to_vec()
-        };
-        // UTF-8 codepoint iteration. Each codepoint becomes a single-
-        // codepoint string allocated via `js_string_from_bytes`, then
-        // added to the set as the NaN-boxed string handle.
-        let mut i = 0;
-        while i < bytes.len() {
-            let lead = bytes[i];
-            let codepoint_len = if lead < 0x80 {
-                1
-            } else if lead < 0xC0 {
-                // Continuation byte mid-sequence — shouldn't happen for
-                // well-formed UTF-8; skip one byte to avoid infinite loop.
-                1
-            } else if lead < 0xE0 {
-                2
-            } else if lead < 0xF0 {
-                3
-            } else {
-                4
-            };
-            let end = (i + codepoint_len).min(bytes.len());
-            let cp_bytes = &bytes[i..end];
-            let cp_str =
-                crate::string::js_string_from_bytes(cp_bytes.as_ptr(), cp_bytes.len() as u32);
-            let cp_value =
-                f64::from_bits(0x7FFF_0000_0000_0000 | (cp_str as u64 & 0x0000_FFFF_FFFF_FFFF));
-            let set = set_handle.get_raw_mut_ptr::<SetHeader>();
-            js_set_add(set, cp_value);
-            i = end;
-        }
+    // `classify_init` returns the materialized array of yielded values for any
+    // iterable (Array/String/Map/Set/custom iterator), an Empty marker for
+    // null/undefined, or throws the Node "not iterable" TypeError otherwise.
+    // For a Map it yields `[k, v]` pair arrays; for a String it yields
+    // single-codepoint strings — both match `[...new Set(x)]` in Node.
+    let arr_ptr = match classify_init(value) {
+        InitIter::Empty => return js_set_alloc(4),
+        InitIter::Values(p) => p,
+    };
+    let arr_handle = if arr_ptr.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_mut_ptr(arr_ptr))
+    };
+    let set = js_set_alloc(4);
+    let set_handle = scope.root_raw_mut_ptr(set);
+    let Some(arr_handle) = arr_handle.as_ref() else {
         return set_handle.get_raw_mut_ptr::<SetHeader>();
+    };
+    maybe_force_helper_gc_for_test();
+    let len = {
+        let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
+        crate::array::js_array_length(arr)
+    };
+    for i in 0..len {
+        let element = {
+            let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
+            crate::array::js_array_get_f64(arr, i)
+        };
+        let set = set_handle.get_raw_mut_ptr::<SetHeader>();
+        js_set_add(set, element);
     }
-    // Pointer tag covers arrays + objects; we treat it as array (existing
-    // path). Non-array objects produce an empty-ish set since
-    // `js_array_length` reads bytes that happen to be at offset 0.
-    if top16 == 0x7FFD || (bits & 0xFFFF_0000_0000_0000) == 0 {
-        let arr_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader;
-        return js_set_from_array(arr_ptr);
-    }
-    // undefined / null / number / etc. → empty set.
-    js_set_alloc(4)
+    set_handle.get_raw_mut_ptr::<SetHeader>()
 }
 
 /// Iterate over set elements, calling a callback with (value, value, set) for each
