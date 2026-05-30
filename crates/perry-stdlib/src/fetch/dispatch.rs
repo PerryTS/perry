@@ -53,7 +53,10 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
     // closure so `typeof` reports "function" and the value stays callable —
     // calling it routes back through `js_native_call_method` → small-handle →
     // `dispatch_request_method`. Mirrors #1670's stream property dispatch.
-    if matches!(prop, "json" | "text" | "arrayBuffer" | "clone") {
+    if matches!(
+        prop,
+        "json" | "text" | "arrayBuffer" | "blob" | "bytes" | "formData" | "clone"
+    ) {
         // Membership check first so a non-Request id falls through.
         REQUEST_REGISTRY.lock().unwrap().get(&req_id)?;
         extern "C" {
@@ -67,6 +70,9 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
             "json" => b"json",
             "text" => b"text",
             "arrayBuffer" => b"arrayBuffer",
+            "blob" => b"blob",
+            "bytes" => b"bytes",
+            "formData" => b"formData",
             "clone" => b"clone",
             _ => unreachable!(),
         };
@@ -85,6 +91,45 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
             let p = js_string_from_bytes(req.method.as_ptr(), req.method.len() as u32);
             JSValue::string_ptr(p).bits()
         }
+        "destination" => {
+            let p = js_string_from_bytes(req.destination.as_ptr(), req.destination.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "referrer" => {
+            let p = js_string_from_bytes(req.referrer.as_ptr(), req.referrer.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "referrerPolicy" => {
+            let p = js_string_from_bytes(
+                req.referrer_policy.as_ptr(),
+                req.referrer_policy.len() as u32,
+            );
+            JSValue::string_ptr(p).bits()
+        }
+        "mode" => {
+            let p = js_string_from_bytes(req.mode.as_ptr(), req.mode.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "credentials" => {
+            let p = js_string_from_bytes(req.credentials.as_ptr(), req.credentials.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "cache" => {
+            let p = js_string_from_bytes(req.cache.as_ptr(), req.cache.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "redirect" => {
+            let p = js_string_from_bytes(req.redirect.as_ptr(), req.redirect.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "integrity" => {
+            let p = js_string_from_bytes(req.integrity.as_ptr(), req.integrity.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "duplex" => {
+            let p = js_string_from_bytes(req.duplex.as_ptr(), req.duplex.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
         "body" => match &req.body {
             Some(b) => {
                 let p = js_string_from_bytes(b.as_ptr(), b.len() as u32);
@@ -95,6 +140,8 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
         "bodyUsed" => {
             return Some(tagged_bool(req.body_used));
         }
+        "keepalive" => return Some(tagged_bool(req.keepalive)),
+        "signal" => return Some(req.signal),
         // Other Request properties not yet wired — fall through so other
         // dispatchers (or the final undefined fallback) can answer.
         _ => return None,
@@ -132,6 +179,18 @@ pub fn dispatch_request_method(req_id: usize, method: &str, _args: &[f64]) -> Op
             }
             "arrayBuffer" => {
                 let promise = js_request_array_buffer(req_f64);
+                Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
+            }
+            "blob" => {
+                let promise = js_request_blob(req_f64);
+                Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
+            }
+            "bytes" => {
+                let promise = js_request_bytes(req_f64);
+                Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
+            }
+            "formData" => {
+                let promise = js_request_form_data(req_f64);
                 Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
             }
             "clone" => Some(js_request_clone(req_f64)),
@@ -189,12 +248,46 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
         FETCH_RESPONSES.lock().unwrap().get(&resp_id)?;
         return Some(response_body_stream(resp_id));
     }
+    if matches!(
+        prop,
+        "text" | "json" | "arrayBuffer" | "blob" | "bytes" | "formData" | "clone"
+    ) {
+        FETCH_RESPONSES.lock().unwrap().get(&resp_id)?;
+        extern "C" {
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+        let name: &'static [u8] = match prop {
+            "text" => b"text",
+            "json" => b"json",
+            "arrayBuffer" => b"arrayBuffer",
+            "blob" => b"blob",
+            "bytes" => b"bytes",
+            "formData" => b"formData",
+            "clone" => b"clone",
+            _ => unreachable!(),
+        };
+        return Some(unsafe {
+            js_class_method_bind(handle_to_f64(resp_id), name.as_ptr(), name.len())
+        });
+    }
     let guard = FETCH_RESPONSES.lock().unwrap();
     let resp = guard.get(&resp_id)?;
     let bits = match prop {
         "status" => return Some(resp.status as f64),
         "statusText" => {
             let p = js_string_from_bytes(resp.status_text.as_ptr(), resp.status_text.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "type" => {
+            let p = js_string_from_bytes(resp.type_name.as_ptr(), resp.type_name.len() as u32);
+            JSValue::string_ptr(p).bits()
+        }
+        "url" => {
+            let p = js_string_from_bytes(resp.url.as_ptr(), resp.url.len() as u32);
             JSValue::string_ptr(p).bits()
         }
         "ok" => {
@@ -205,6 +298,7 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
             }))
         }
         "bodyUsed" => return Some(tagged_bool(resp.body_used)),
+        "redirected" => return Some(tagged_bool(resp.redirected)),
         _ => return None,
     };
     Some(f64::from_bits(bits))
@@ -278,6 +372,14 @@ pub fn dispatch_response_method(resp_id: usize, method: &str, _args: &[f64]) -> 
             }
             "blob" => {
                 let promise = js_response_blob(resp_f64);
+                Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
+            }
+            "bytes" => {
+                let promise = js_response_bytes(resp_f64);
+                Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
+            }
+            "formData" => {
+                let promise = js_response_form_data(resp_f64);
                 Some(f64::from_bits(JSValue::pointer(promise as *mut u8).bits()))
             }
             "clone" => Some(js_response_clone(resp_f64)),

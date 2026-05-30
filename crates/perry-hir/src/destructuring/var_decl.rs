@@ -1052,29 +1052,44 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                 }
-                // Issue #234: const blob = await <res>.blob() — register `blob`
-                // as a blob::Blob native instance so subsequent `blob.text()` /
-                // `.arrayBuffer()` / `.bytes()` / `.slice()` / `.size` /
-                // `.type` calls dispatch through the codegen `module=="blob"`
-                // arm in `lower_call.rs`.
+                // Issue #234 / fetch body helpers: const blob = await <res|req>.blob()
+                // registers Blob results; const form = await <res|req>.formData()
+                // registers FormData results so follow-up calls dispatch through
+                // the typed fetch lowering instead of the generic handle path.
                 if let ast::Expr::Await(await_expr) = init_expr.as_ref() {
                     if let ast::Expr::Call(call_expr) = await_expr.arg.as_ref() {
                         if let ast::Callee::Expr(callee) = &call_expr.callee {
                             if let ast::Expr::Member(member) = callee.as_ref() {
                                 if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                                        if prop_ident.sym.as_ref() == "blob" {
-                                            if let Some((_, c)) =
-                                                ctx.lookup_native_instance(obj_ident.sym.as_ref())
-                                            {
-                                                if c == "Response" {
-                                                    ctx.register_native_instance(
-                                                        name.clone(),
-                                                        "blob".to_string(),
-                                                        "Blob".to_string(),
-                                                    );
+                                        match prop_ident.sym.as_ref() {
+                                            "blob" => {
+                                                if let Some((_, c)) = ctx
+                                                    .lookup_native_instance(obj_ident.sym.as_ref())
+                                                {
+                                                    if c == "Response" || c == "Request" {
+                                                        ctx.register_native_instance(
+                                                            name.clone(),
+                                                            "blob".to_string(),
+                                                            "Blob".to_string(),
+                                                        );
+                                                    }
                                                 }
                                             }
+                                            "formData" => {
+                                                if let Some((_, c)) = ctx
+                                                    .lookup_native_instance(obj_ident.sym.as_ref())
+                                                {
+                                                    if c == "Response" || c == "Request" {
+                                                        ctx.register_native_instance(
+                                                            name.clone(),
+                                                            "FormData".to_string(),
+                                                            "FormData".to_string(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
