@@ -737,7 +737,9 @@ fn finally_wrapper_common(
 /// Settle `next` with the original outcome after one extra microtask hop,
 /// matching Node's `.finally()` microtask depth.
 fn finally_settle_next_with_extra_hop(next: *mut Promise, orig: f64, is_fulfilled: bool) {
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr};
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
     if next.is_null() {
         return;
     }

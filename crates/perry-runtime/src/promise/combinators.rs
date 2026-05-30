@@ -311,10 +311,14 @@ fn combinator_iterable_to_array(value: f64) -> Result<*mut crate::array::ArrayHe
 
     // Side-table iterables.
     if crate::set::is_registered_set(raw) || crate::map::is_registered_map(raw) {
-        return Ok(crate::array::js_array_clone(raw as *const crate::array::ArrayHeader));
+        return Ok(crate::array::js_array_clone(
+            raw as *const crate::array::ArrayHeader,
+        ));
     }
     if crate::buffer::is_registered_buffer(raw) {
-        return Ok(crate::array::js_array_clone(raw as *const crate::array::ArrayHeader));
+        return Ok(crate::array::js_array_clone(
+            raw as *const crate::array::ArrayHeader,
+        ));
     }
 
     // Symbols / closures are not iterable.
@@ -339,7 +343,8 @@ fn combinator_iterable_to_array(value: f64) -> Result<*mut crate::array::ArrayHe
             } else {
                 let sym_f64 =
                     f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
-                let iter_fn = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
+                let iter_fn =
+                    unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
                 iter_fn.to_bits() != crate::value::TAG_UNDEFINED
             }
         };
@@ -353,7 +358,9 @@ fn combinator_iterable_to_array(value: f64) -> Result<*mut crate::array::ArrayHe
             !next_val.is_undefined() && crate::closure::is_closure_ptr(next_ptr as usize)
         };
         if has_iterator || has_next_field {
-            return Ok(crate::array::js_array_clone(raw as *const crate::array::ArrayHeader));
+            return Ok(crate::array::js_array_clone(
+                raw as *const crate::array::ArrayHeader,
+            ));
         }
     }
 
