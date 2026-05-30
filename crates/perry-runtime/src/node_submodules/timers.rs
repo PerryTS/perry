@@ -11,6 +11,53 @@ use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
+/// #3067 — `node:timers/promises` helpers reject a non-number `delay` and a
+/// non-object `options` with the same `TypeError [ERR_INVALID_ARG_TYPE]` shape
+/// Node emits. A missing (`undefined`) argument is allowed: Node defaults the
+/// delay and treats absent options as the empty object. `NaN` is a number, so
+/// it passes here (the warn/coerce path is tracked by #2966).
+fn validate_delay(delay: f64) {
+    let jv = JSValue::from_bits(delay.to_bits());
+    if jv.is_undefined() || crate::fs::validate::is_numeric(jv) {
+        return;
+    }
+    let message = format!(
+        "The \"delay\" argument must be of type number. Received {}",
+        crate::fs::validate::describe_received(delay)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// Accept `undefined` (no options) or a non-null, non-array object; anything
+/// else throws like Node's `validateObject`. Mirrors the `Array`/`null`
+/// detection used by `describe_received`.
+fn validate_options(options: f64) {
+    let jv = JSValue::from_bits(options.to_bits());
+    if jv.is_undefined() || is_plain_object(options) {
+        return;
+    }
+    let message = format!(
+        "The \"options\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(options)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// True when `value` is a heap object that is not an array — the shape Node's
+/// `validateObject` admits for a timer `options` bag.
+fn is_plain_object(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    gc_header.obj_type != crate::gc::GC_TYPE_ARRAY
+}
+
 /// node:timers/promises.setTimeout(delay, value?) — a Promise that resolves
 /// with `value` (or undefined) after `delay` ms. Composes the existing
 /// promise-returning timer primitive; the closure dispatch pads a missing
@@ -22,6 +69,8 @@ pub(crate) extern "C" fn timers_promises_set_timeout(
     value: f64,
     options: f64,
 ) -> f64 {
+    validate_delay(delay_ms);
+    validate_options(options);
     let signal = super::stream_promises::options_signal(options);
     if let Some(signal) = signal {
         if super::stream_promises::signal_aborted(signal) {
@@ -38,12 +87,16 @@ pub(crate) extern "C" fn timers_promises_set_timeout(
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
-/// node:timers/promises.setImmediate(value?) — a Promise that resolves with
-/// `value` (or undefined) on a later turn. Refs #1213.
+/// node:timers/promises.setImmediate(value?, options?) — a Promise that
+/// resolves with `value` (or undefined) on a later turn. `options` is validated
+/// for type (#3067); honoring its `signal`/`ref` fields is tracked by #2603.
+/// Refs #1213.
 pub(crate) extern "C" fn timers_promises_set_immediate(
     _closure: *const ClosureHeader,
     value: f64,
+    options: f64,
 ) -> f64 {
+    validate_options(options);
     let promise = crate::timer::js_set_timeout_value(0.0, value);
     crate::value::js_nanbox_pointer(promise as i64)
 }
