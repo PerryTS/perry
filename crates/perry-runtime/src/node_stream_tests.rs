@@ -629,6 +629,51 @@ fn compose_source_transform_applies_stage_snapshot() {
 }
 
 #[test]
+fn compose_single_transform_returns_stage() {
+    READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| matches.borrow_mut().clear());
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    let transform_cb = js_closure_alloc(transform_upper_callback as *const u8, 0);
+    crate::closure::js_register_closure_arity(transform_upper_callback as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"transform"),
+        box_pointer(transform_cb as *const u8),
+    );
+    let upper = js_node_stream_transform_new(box_pointer(opts as *const u8));
+
+    let mut args = crate::array::js_array_alloc(1);
+    args = crate::array::js_array_push_f64(args, upper);
+    let composed = js_node_stream_compose_args(args);
+    assert_eq!(composed.to_bits(), upper.to_bits());
+
+    let handle = raw_ptr_from_value(composed) as i64;
+    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(data_closure, 0, composed);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("data"),
+        box_pointer(data_closure as *const u8),
+    );
+
+    let _ = js_node_stream_method_write(
+        handle,
+        string_value("ab"),
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    let _ = js_node_stream_method_end(handle, f64::from_bits(TAG_UNDEFINED));
+
+    READABLE_DATA_CAPTURED.with(|captured| {
+        assert_eq!(captured.borrow().as_slice(), &[b"AB".to_vec()]);
+    });
+    TRANSFORM_THIS_HAS_STREAM_STATE
+        .with(|matches| assert_eq!(matches.borrow().as_slice(), &[true]));
+}
+
+#[test]
 fn transform_flush_callback_pushes_tail_before_finish() {
     READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
     TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| matches.borrow_mut().clear());

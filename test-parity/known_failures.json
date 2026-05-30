@@ -170,12 +170,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/compose/single-transform": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/single-sync-fn": {
     "issue": "1531",
     "added": "2026-05-23",
