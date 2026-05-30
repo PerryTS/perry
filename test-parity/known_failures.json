@@ -122,12 +122,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
   },
-  "test_parity_worker_threads": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:worker_threads` surface not implemented (perry/thread provides a Perry-native alternative). Tracker for surface coverage; flips to PASS as each API lands."
-  },
   "test_parity_zlib": {
     "issue": "793",
     "added": "2026-05-15",

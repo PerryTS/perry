@@ -2102,6 +2102,11 @@ pub enum Expr {
         descriptor: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
+    // #2762: Reflect.isExtensible / Reflect.preventExtensions have
+    // Reflect-specific semantics (boolean result, TypeError on non-object)
+    // distinct from the Object.* helpers, so they use dedicated variants.
+    ReflectIsExtensible(Box<Expr>),
+    ReflectPreventExtensions(Box<Expr>),
     ReflectDefineMetadata {
         key: Box<Expr>,
         value: Box<Expr>,

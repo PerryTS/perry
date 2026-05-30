@@ -1653,15 +1653,15 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::undefined();
                     }
                 }
-                if key_bytes == b"buffer" {
-                    // Issue #1225: a copied Buffer aliases its source's
-                    // ArrayBuffer identity so `Buffer.from(src).buffer ===
-                    // src.buffer` matches Node's pool-slab sharing.  Fresh
-                    // buffers without an entry fall back to their own pointer.
-                    let alias = crate::buffer::resolve_buffer_ab_alias(obj as usize);
+                if key_bytes == b"buffer" || key_bytes == b"parent" {
+                    let alias = crate::buffer::buffer_backing_array_buffer(obj as usize);
                     return JSValue::from_bits(
                         crate::value::js_nanbox_pointer(alias as i64).to_bits(),
                     );
+                }
+                if key_bytes == b"byteOffset" || key_bytes == b"offset" {
+                    let offset = crate::buffer::buffer_byte_offset(obj as usize);
+                    return JSValue::number(offset as f64);
                 }
                 // Issue #639 followup: method-as-value reads on a Buffer
                 // (e.g. duck-type tests like `typeof v.readUInt8 === "function"`
@@ -1808,6 +1808,12 @@ pub extern "C" fn js_object_get_field_by_name(
                         super::native_module::bound_native_callable_value_arity(closure_value)
                     {
                         return JSValue::number(arity as f64);
+                    }
+                    // #3143: built-in proto methods share one func_ptr, so the
+                    // func-ptr arity registry can't tell `map` (1) from `slice`
+                    // (2) — read the per-closure recorded spec length first.
+                    if let Some(len) = super::native_module::builtin_closure_length(obj as usize) {
+                        return JSValue::number(len as f64);
                     }
                     let arity =
                         crate::closure::closure_arity(obj as *const crate::closure::ClosureHeader);

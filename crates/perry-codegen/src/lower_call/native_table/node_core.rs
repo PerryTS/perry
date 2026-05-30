@@ -1061,6 +1061,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #2514: util.toUSVString(value) → string with lone surrogates → U+FFFD.
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "toUSVString",
+        class_filter: None,
+        runtime: "js_util_to_usv_string",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "util",
         has_receiver: false,
