@@ -150,7 +150,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- Crypto.* wired to real runtime helpers --------
         Expr::CryptoRandomUUID => {
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_crypto_random_uuid", &[]);
+            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let handle = blk.call(I64, "js_crypto_random_uuid", &[(DOUBLE, &undefined)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
         Expr::CryptoRandomBytes(operand) => {

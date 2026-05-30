@@ -927,18 +927,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // Phase H crypto: `crypto.randomUUID()`.
-        Expr::Call {
-            callee, args: _, ..
-        } if matches!(
-            callee.as_ref(),
-            Expr::PropertyGet { object, property } if property == "randomUUID" && matches!(
-                object.as_ref(),
-                Expr::NativeModuleRef(n) if n == "crypto"
-            )
-        ) =>
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "randomUUID" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
         {
+            let options_box = if let Some(options) = args.first() {
+                lower_expr(ctx, options)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_crypto_random_uuid", &[]);
+            let handle = blk.call(I64, "js_crypto_random_uuid", &[(DOUBLE, &options_box)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
 
@@ -1009,12 +1013,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let a_box = lower_expr(ctx, &args[0])?;
             let b_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &a_box);
-            let b_handle = unbox_to_i64(blk, &b_box);
             Ok(blk.call(
                 DOUBLE,
                 "js_crypto_timing_safe_equal",
-                &[(I64, &a_handle), (I64, &b_handle)],
+                &[(DOUBLE, &a_box), (DOUBLE, &b_box)],
             ))
         }
 

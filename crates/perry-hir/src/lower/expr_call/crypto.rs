@@ -86,7 +86,8 @@ pub(super) fn is_passthrough_method(method: &str) -> bool {
 ///
 /// Today's set:
 /// - `randomFillSync(buffer, offset?, size?)` → `Expr::CryptoRandomFillSync`.
-/// - `randomUUID()` → `Expr::CryptoRandomUUID`.
+/// - `randomUUID()` → `Expr::CryptoRandomUUID`; option-bearing calls keep
+///   the generic call shape so codegen can pass the options value through.
 /// - `randomBytes(size)` → `Expr::CryptoRandomBytes`.
 pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<Expr> {
     match method {
@@ -104,7 +105,15 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
                 size: Box::new(size),
             })
         }
-        "randomUUID" => Some(Expr::CryptoRandomUUID),
+        "randomUUID" if args.is_empty() => Some(Expr::CryptoRandomUUID),
+        "randomUUID" => Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                property: "randomUUID".to_string(),
+            }),
+            args,
+            type_args: vec![],
+        }),
         "randomBytes" => {
             if args.is_empty() {
                 return None;

@@ -99,17 +99,67 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
 }
 
 /// Generate a random UUID v4 using crypto-secure random
-/// crypto.randomUUID() -> string
+/// crypto.randomUUID([options]) -> string
 #[no_mangle]
-pub extern "C" fn js_crypto_random_uuid() -> *mut StringHeader {
+pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut StringHeader {
+    validate_random_uuid_options(options_bits);
     let uuid = uuid::Uuid::new_v4();
     let uuid_str = uuid.to_string();
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
+unsafe fn validate_random_uuid_options(options_bits: f64) {
+    let value = JSValue::from_bits(options_bits.to_bits());
+    if value.is_undefined() {
+        return;
+    }
+    if !value.is_pointer() {
+        let message = format!(
+            "The \"options\" argument must be of type object. Received {}",
+            perry_runtime::fs::validate::describe_received(options_bits)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let ptr = value.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < perry_runtime::gc::GC_HEADER_SIZE + 0x1000 {
+        let message = format!(
+            "The \"options\" argument must be of type object. Received {}",
+            perry_runtime::fs::validate::describe_received(options_bits)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let header =
+        &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
+    if header.obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
+        let message = format!(
+            "The \"options\" argument must be of type object. Received {}",
+            perry_runtime::fs::validate::describe_received(options_bits)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+        return;
+    }
+    let key = js_string_from_bytes(b"disableEntropyCache".as_ptr(), 19);
+    let field = js_object_get_field_by_name(ptr as *const ObjectHeader, key);
+    if field.is_undefined() {
+        return;
+    }
+    if !field.is_bool() {
+        let message = format!(
+            "The \"options.disableEntropyCache\" property must be of type boolean. Received {}",
+            perry_runtime::fs::validate::describe_received(f64::from_bits(field.bits()))
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+}
+
+const RANDOM_INT_MAX_RANGE: i64 = (1i64 << 48) - 1;
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
 /// Issue #2013 — validate one of `randomInt`'s integer arguments
 /// (min/max). Non-number → ERR_INVALID_ARG_TYPE; non-finite /
-/// fractional / out-of-(-2^48, 2^48) → ERR_OUT_OF_RANGE. Mirrors
+/// fractional / unsafe integer → ERR_OUT_OF_RANGE. Mirrors
 /// `validate_random_bytes_size` but with the wider int bound Node
 /// accepts for randomInt's `min`/`max`.
 fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
@@ -127,9 +177,6 @@ fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
     } else {
         value
     };
-    // Node's `validateInteger` splits the rejection by error code:
-    // non-integer (NaN, Infinity, fractional) → ERR_INVALID_ARG_TYPE;
-    // out-of-range integer (outside [-2^48, 2^48]) → ERR_OUT_OF_RANGE.
     if !n.is_finite() || n.fract() != 0.0 {
         let message = format!(
             "The \"{}\" argument must be a safe integer. Received {}",
@@ -138,8 +185,7 @@ fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let bound = (1i64 << 48) as f64;
-    if n < -bound || n > bound {
+    if !(-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&n) {
         let message = format!(
             "The value of \"{}\" is out of range. It must be a safe integer type number. Received {}",
             arg_name, n
@@ -156,7 +202,19 @@ pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
     let min = validate_random_int_arg(min_bits, "min");
     let max = validate_random_int_arg(max_bits, "max");
     if max <= min {
-        return f64::NAN;
+        let message = format!(
+            "The value of \"max\" is out of range. It must be greater than the value of \"min\" ({}). Received {}",
+            min, max
+        );
+        perry_runtime::fs::validate::throw_range_error_with_code(&message);
+    }
+    let range = max as i128 - min as i128;
+    if range > RANDOM_INT_MAX_RANGE as i128 {
+        let message = format!(
+            "The value of \"max - min\" is out of range. It must be <= {}. Received {}",
+            RANDOM_INT_MAX_RANGE, range
+        );
+        perry_runtime::fs::validate::throw_range_error_with_code(&message);
     }
     rand::thread_rng().gen_range(min..max) as f64
 }
@@ -206,7 +264,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
     match method {
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
-        "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid()).bits()),
+        "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid(arg(0))).bits()),
         "randomBytes" => {
             let buf = js_crypto_random_bytes_buffer(arg(0));
             f64::from_bits(JSValue::pointer(buf as *const u8).bits())
@@ -214,6 +272,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
         "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),
         "randomInt" => js_crypto_random_int(0.0, arg(0)),
+        "timingSafeEqual" => js_crypto_timing_safe_equal(arg(0), arg(1)),
         "Certificate.verifySpkac" => js_crypto_certificate_verify_spkac(arg(0)),
         "Certificate.exportPublicKey" => js_crypto_certificate_export_public_key(arg(0)),
         "Certificate.exportChallenge" => js_crypto_certificate_export_challenge(arg(0)),
@@ -253,27 +312,8 @@ pub extern "C" fn js_crypto_random_fill_sync(
     offset_bits: f64,
     size_bits: f64,
 ) -> f64 {
-    let bits = buf_bits.to_bits();
-    // Accept either form the codegen can hand us:
-    //   - NaN-boxed POINTER_TAG (top16 0x7FFD) → Buffer / Uint8Array
-    //   - Raw heap pointer in low 48 bits (top16 == 0) → TypedArray
-    //     (Uint32Array etc — see `Expr::TypedArrayNew` codegen, the
-    //     pointer is `bitcast_i64_to_double` without a tag).
-    let top16 = (bits >> 48) as u16;
-    let raw = if top16 >= 0x7FF8 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        bits as usize
-    };
-    if raw < 0x1000 {
-        return buf_bits;
-    }
-
-    // Read optional numeric args; undefined / NaN → use default.
-    let offset_arg = nanboxed_to_usize(offset_bits);
-    let size_arg = nanboxed_to_usize(size_bits);
-
     unsafe {
+        let raw = raw_addr_from_value(buf_bits);
         // TypedArrayHeader path (Uint8Array, Uint32Array, Float32Array, …).
         if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
             let ta = raw as *mut perry_runtime::typedarray::TypedArrayHeader;
@@ -284,26 +324,27 @@ pub extern "C" fn js_crypto_random_fill_sync(
                 } else {
                     data.len() / elem_size
                 };
-                // Node interprets offset/size for TypedArray inputs in elements,
-                // not bytes. Convert the resolved element range back to byte
-                // offsets before filling the underlying storage.
-                let (start_elem, end_elem) = resolve_range(len, offset_arg, size_arg);
+                let (start_elem, count_elem) =
+                    validate_random_fill_range(len, offset_bits, size_bits);
                 let start = start_elem.saturating_mul(elem_size);
-                let end = end_elem.saturating_mul(elem_size).min(data.len());
+                let end = start
+                    .saturating_add(count_elem.saturating_mul(elem_size))
+                    .min(data.len());
                 if end > start {
                     rand::thread_rng().fill_bytes(&mut data[start..end]);
                 }
+                return buf_bits;
             }
-            return buf_bits;
+            throw_invalid_random_fill_buffer(buf_bits);
         }
         // BufferHeader / Uint8Array path.
         if perry_runtime::buffer::is_registered_buffer(raw) {
             let buf = raw as *mut perry_runtime::buffer::BufferHeader;
             let total = (*buf).length as usize;
-            let (start, end) = resolve_range(total, offset_arg, size_arg);
-            if end > start {
+            let (start, count) = validate_random_fill_range(total, offset_bits, size_bits);
+            if count > 0 {
                 let data = perry_runtime::buffer::buffer_data_mut(buf);
-                let slice = std::slice::from_raw_parts_mut(data.add(start), end - start);
+                let slice = std::slice::from_raw_parts_mut(data.add(start), count);
                 rand::thread_rng().fill_bytes(slice);
             }
             // Hand back the same NaN-boxed value the caller passed.
@@ -311,10 +352,78 @@ pub extern "C" fn js_crypto_random_fill_sync(
         }
     }
 
-    // Unsupported value shape — return the original (no-op) rather
-    // than crashing. The HIR-level type check is "any", so the
-    // compiler can't statically rule this out.
-    buf_bits
+    throw_invalid_random_fill_buffer(buf_bits);
+}
+
+fn raw_addr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    }
+}
+
+fn throw_invalid_random_fill_buffer(value: f64) -> ! {
+    let message = format!(
+        "The \"buf\" argument must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer. Received {}",
+        perry_runtime::fs::validate::describe_received(value)
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn random_fill_number_arg(value: f64, name: &str) -> Option<f64> {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_undefined() {
+        return None;
+    }
+    if !js.is_number() && !js.is_int32() {
+        let message = format!(
+            "The \"{}\" argument must be of type number. Received {}",
+            name,
+            perry_runtime::fs::validate::describe_received(value)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    Some(if js.is_int32() {
+        js.as_int32() as f64
+    } else {
+        value
+    })
+}
+
+fn validate_random_fill_range(total: usize, offset_bits: f64, size_bits: f64) -> (usize, usize) {
+    let offset = match random_fill_number_arg(offset_bits, "offset") {
+        Some(n) if n.is_finite() && n >= 0.0 && n <= total as f64 => n as usize,
+        Some(n) => {
+            let message = format!(
+                "The value of \"offset\" is out of range. It must be >= 0 && <= {}. Received {}",
+                total, n
+            );
+            perry_runtime::fs::validate::throw_range_error_with_code(&message);
+        }
+        None => 0,
+    };
+    let size = match random_fill_number_arg(size_bits, "size") {
+        Some(n) if n.is_finite() && n >= 0.0 && n <= i32::MAX as f64 => n as usize,
+        Some(n) => {
+            let message = format!(
+                "The value of \"size\" is out of range. It must be >= 0 && <= 2147483647. Received {}",
+                n
+            );
+            perry_runtime::fs::validate::throw_range_error_with_code(&message);
+        }
+        None => total.saturating_sub(offset),
+    };
+    let end = offset.saturating_add(size);
+    if end > total {
+        let message = format!(
+            "The value of \"size + offset\" is out of range. It must be <= {}. Received {}",
+            total, end
+        );
+        perry_runtime::fs::validate::throw_range_error_with_code(&message);
+    }
+    (offset, size)
 }
 
 /// `crypto.randomFill(buffer[, offset][, size], callback)` — async callback
