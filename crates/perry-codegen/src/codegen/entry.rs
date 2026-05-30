@@ -431,7 +431,7 @@ pub(super) fn compile_module_entry(
                 // don't need the full event loop.
                 for _ in 0..4 {
                     let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
-                    let _ = ctx.block().call(I32, "js_timer_tick", &[]);
+                    let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                     let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                     let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 }
@@ -489,7 +489,7 @@ pub(super) fn compile_module_entry(
                 ctx.block()
                     .call_void("js_process_emit_before_exit", &[(DOUBLE, &zero_code)]);
                 let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
-                let _ = ctx.block().call(I32, "js_timer_tick", &[]);
+                let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block().ret(I32, "0");

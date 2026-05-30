@@ -1578,6 +1578,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Timer tick functions — called from the Await busy-wait loop so
     // `setTimeout(resolve, N)` inside a Promise executor actually fires.
     module.declare_function("js_timer_tick", I32, &[]);
+    module.declare_function("js_timer_tick_if_refed", I32, &[]);
     module.declare_function("js_callback_timer_tick", I32, &[]);
     module.declare_function("js_interval_timer_tick", I32, &[]);
     // Timer has-pending checks — called from the main event loop to
