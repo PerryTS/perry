@@ -50,11 +50,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Unary { op, operand } => {
             let numeric = is_numeric_expr(ctx, operand);
+            // `-<bigint>` must stay a BigInt (`typeof -1n === "bigint"`).
+            // `fneg` on a NaN-boxed BigInt flips the NaN payload's sign bit
+            // and produces a garbage number, so route negation through the
+            // runtime dynamic helper when the operand is statically bigint.
+            let is_big = matches!(op, UnaryOp::Neg) && is_bigint_expr(ctx, operand);
             let v = lower_expr(ctx, operand)?;
             let blk = ctx.block();
             match op {
                 UnaryOp::Neg => {
-                    if numeric {
+                    if is_big {
+                        Ok(blk.call(DOUBLE, "js_dynamic_neg", &[(DOUBLE, &v)]))
+                    } else if numeric {
                         Ok(blk.fneg(&v))
                     } else {
                         let coerced = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]);

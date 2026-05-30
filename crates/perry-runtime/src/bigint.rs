@@ -362,7 +362,11 @@ fn parse_bigint_string(raw: &str) -> Result<[u64; BIGINT_LIMBS], ()> {
 
 /// Parse `digits` in the given radix (2/8/10/16), rejecting any out-of-range
 /// character. Applies two's-complement negation when `is_negative`.
-fn parse_radix_digits(digits: &str, radix: u32, is_negative: bool) -> Result<[u64; BIGINT_LIMBS], ()> {
+fn parse_radix_digits(
+    digits: &str,
+    radix: u32,
+    is_negative: bool,
+) -> Result<[u64; BIGINT_LIMBS], ()> {
     let mut limbs = ZERO_LIMBS;
     let radix_u128 = radix as u128;
     for c in digits.chars() {
@@ -1548,6 +1552,90 @@ mod tests {
         assert_eq!(d(-7, 2), -3);
         assert_eq!(d(7, -2), -3);
         assert_eq!(d(-7, -2), 3);
+    }
+
+    // -- #2754 / #2907: BigInt() coercion semantics --
+
+    #[test]
+    fn coerce_boolean_inputs() {
+        use crate::value::JSValue;
+        let t = js_bigint_from_f64(f64::from_bits(JSValue::bool(true).bits()));
+        assert_eq!(read_as_i64(t), 1);
+        let f = js_bigint_from_f64(f64::from_bits(JSValue::bool(false).bits()));
+        assert_eq!(read_as_i64(f), 0);
+    }
+
+    #[test]
+    fn coerce_finite_integer_number() {
+        // Plain f64 (real Number) integer → exact BigInt.
+        let b = js_bigint_from_f64(42.0);
+        assert_eq!(read_as_i64(b), 42);
+        let b = js_bigint_from_f64(-7.0);
+        assert_eq!(read_as_i64(b), -7);
+    }
+
+    #[test]
+    fn coerce_large_integer_number_preserved() {
+        // 2^60 fits in f64 exactly and exceeds nothing; verify the full
+        // value is preserved (not saturated/truncated).
+        let v = (1u64 << 60) as f64;
+        let b = js_bigint_from_f64(v);
+        assert_eq!(read_as_i64(b), 1i64 << 60);
+    }
+
+    // -- #2907: string parsing validation --
+
+    fn parse(s: &str) -> Result<i64, ()> {
+        parse_bigint_string(s).map(|limbs| fits_in_i64(&limbs).expect("fits"))
+    }
+
+    #[test]
+    fn parse_radix_prefixes_and_whitespace() {
+        assert_eq!(parse("0x10"), Ok(16));
+        assert_eq!(parse("0o17"), Ok(15));
+        assert_eq!(parse("0b101"), Ok(5));
+        assert_eq!(parse("  42  "), Ok(42));
+        assert_eq!(parse(""), Ok(0));
+        assert_eq!(parse("  "), Ok(0));
+        assert_eq!(parse("+5"), Ok(5));
+        assert_eq!(parse("-5"), Ok(-5));
+    }
+
+    #[test]
+    fn parse_invalid_strings_reject() {
+        assert_eq!(parse("bad"), Err(()));
+        assert_eq!(parse("12abc34"), Err(()));
+        assert_eq!(parse("0x"), Err(()));
+        assert_eq!(parse("0xG"), Err(()));
+        assert_eq!(parse("1_000"), Err(()));
+        assert_eq!(parse("+"), Err(()));
+    }
+
+    // -- #2908: shift direction-reversing + pow --
+
+    #[test]
+    fn shift_negative_count_reverses_direction() {
+        // 1n << -1n === 1n >> 1n === 0n
+        let one = js_bigint_from_i64(1);
+        let neg_one = js_bigint_from_i64(-1);
+        assert_eq!(read_as_i64(js_bigint_shl(one, neg_one)), 0);
+        // 8n >> -1n === 8n << 1n === 16n
+        let eight = js_bigint_from_i64(8);
+        assert_eq!(read_as_i64(js_bigint_shr(eight, neg_one)), 16);
+        // Sanity: positive counts still work.
+        let four = js_bigint_from_i64(4);
+        assert_eq!(read_as_i64(js_bigint_shl(one, four)), 16);
+        let two = js_bigint_from_i64(2);
+        assert_eq!(read_as_i64(js_bigint_shr(eight, two)), 2);
+    }
+
+    #[test]
+    fn pow_non_negative() {
+        let two = js_bigint_from_i64(2);
+        let three = js_bigint_from_i64(3);
+        assert_eq!(read_as_i64(js_bigint_pow(two, three)), 8);
+        let zero = js_bigint_from_i64(0);
+        assert_eq!(read_as_i64(js_bigint_pow(two, zero)), 1);
     }
 
     #[test]
