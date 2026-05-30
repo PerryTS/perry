@@ -812,6 +812,10 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "fromCharCode" => {
+                            if args.is_empty() {
+                                // #2788: String.fromCharCode() -> "".
+                                return Ok(Ok(Expr::String(String::new())));
+                            }
                             if args.len() == 1 {
                                 return Ok(Ok(Expr::StringFromCharCode(Box::new(
                                     args.into_iter().next().unwrap(),
@@ -832,6 +836,10 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "fromCodePoint" => {
+                            if args.is_empty() {
+                                // #2788: String.fromCodePoint() -> "".
+                                return Ok(Ok(Expr::String(String::new())));
+                            }
                             if args.len() == 1 {
                                 return Ok(Ok(Expr::StringFromCodePoint(Box::new(
                                     args.into_iter().next().unwrap(),

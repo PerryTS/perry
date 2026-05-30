@@ -440,6 +440,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
+    // #2787: NaN-safe JS index coercion (undefined/NaN -> 0, trunc, clamp) for
+    // the char-access methods, replacing a raw `fptosi` that is UB on a NaN.
+    module.declare_function("js_string_index_to_i32", I32, &[DOUBLE]);
     // Issue #514: tag-aware dynamic index dispatch — routes `obj[idx]` to
     // `js_string_char_at` / `js_array_get_f64` / `js_object_get_field_by_name_f64`
     // based on the receiver's NaN-box tag at runtime. Used by IndexGet's
@@ -605,6 +608,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);
@@ -1217,8 +1221,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // String extras (already in string.rs; expr.rs was stubbing or missing dispatch).
     module.declare_function("js_string_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_code_point_at", DOUBLE, &[I64, I32]);
-    module.declare_function("js_string_from_code_point", I64, &[I32]);
-    module.declare_function("js_string_from_char_code", I64, &[I32]);
+    // #2788: take the raw NaN-boxed f64 so the runtime can apply ToUint16
+    // (fromCharCode) / RangeError validation (fromCodePoint) — a prior fptosi
+    // truncated fractional/non-finite inputs before they could be observed.
+    module.declare_function("js_string_from_code_point", I64, &[DOUBLE]);
+    module.declare_function("js_string_from_char_code", I64, &[DOUBLE]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
     module.declare_function(

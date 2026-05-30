@@ -822,6 +822,7 @@ pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32
     match (module.as_str(), method.as_str()) {
         ("console", "Console") => Some(1),
         ("util", "isArray") => Some(1),
+        ("module", "isBuiltin") => Some(1),
         ("process", "getBuiltinModule") => Some(1),
         _ => native_callable_export_arity(module.as_str(), method.as_str()),
     }
@@ -884,6 +885,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         // #1533: node:stream `promises` namespace exports.
         ("stream/promises", "pipeline")
             | ("stream/promises", "finished")
+            | ("module", "isBuiltin")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")

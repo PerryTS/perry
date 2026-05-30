@@ -1,6 +1,16 @@
 use super::*;
 
 pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
+    // ========== Node module ==========
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "isBuiltin",
+        class_filter: None,
+        runtime: "js_module_is_builtin",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node TTY ==========
     NativeModSig {
         module: "tty",

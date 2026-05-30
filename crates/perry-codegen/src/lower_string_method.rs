@@ -197,16 +197,23 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(blk, &result))
         }
         "charAt" => {
-            if args.len() != 1 {
+            // #2787: a missing index defaults to 0; the provided index is
+            // coerced with JS `ToIntegerOrInfinity` (undefined/NaN -> 0) rather
+            // than a raw `fptosi`, which is UB on a NaN bit pattern.
+            if args.len() > 1 {
                 bail!(
-                    "perry-codegen: String.charAt expects 1 arg, got {}",
+                    "perry-codegen: String.charAt expects at most 1 arg, got {}",
                     args.len()
                 );
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             let result = blk.call(
                 I64,
                 "js_string_char_at",
@@ -311,13 +318,22 @@ pub(crate) fn lower_string_method(
         }
         // str.at(i) / str.charCodeAt(i) / str.codePointAt(i)
         "at" => {
-            if args.len() != 1 {
-                bail!("perry-codegen: String.at expects 1 arg, got {}", args.len());
+            // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
+            // `js_string_at` already resolves negative indices relative to len.
+            if args.len() > 1 {
+                bail!(
+                    "perry-codegen: String.at expects at most 1 arg, got {}",
+                    args.len()
+                );
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_at returns a NaN-boxed string or undefined directly.
             Ok(blk.call(
                 DOUBLE,
@@ -326,16 +342,21 @@ pub(crate) fn lower_string_method(
             ))
         }
         "codePointAt" => {
-            if args.is_empty() || args.len() > 1 {
+            // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
+            if args.len() > 1 {
                 bail!(
-                    "perry-codegen: String.codePointAt expects 1 arg, got {}",
+                    "perry-codegen: String.codePointAt expects at most 1 arg, got {}",
                     args.len()
                 );
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // Returns NaN-boxed number or undefined directly.
             Ok(blk.call(
                 DOUBLE,
@@ -344,16 +365,21 @@ pub(crate) fn lower_string_method(
             ))
         }
         "charCodeAt" => {
-            if args.is_empty() || args.len() > 1 {
+            // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
+            if args.len() > 1 {
                 bail!(
-                    "perry-codegen: String.charCodeAt expects 1 arg, got {}",
+                    "perry-codegen: String.charCodeAt expects at most 1 arg, got {}",
                     args.len()
                 );
             }
-            let idx_d = lower_expr(ctx, &args[0])?;
+            let idx_d = if args.is_empty() {
+                crate::nanbox::double_literal(0.0)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
+            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_char_code_at returns a plain f64 (NaN for OOB).
             Ok(blk.call(
                 DOUBLE,
