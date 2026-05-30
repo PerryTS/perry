@@ -167,12 +167,16 @@ pub(crate) fn throw_invalid_path_arg(arg_name: &str, value: f64) -> ! {
 
 /// Throw `Error [EBADF]` for a numeric fd that is not an open descriptor.
 fn throw_ebadf(syscall: &'static str) -> ! {
+    crate::exception::js_throw(build_ebadf_error_value(syscall))
+}
+
+pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
     let message = format!("EBADF: bad file descriptor, {}", syscall);
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "EBADF");
     crate::node_submodules::register_error_syscall(msg, syscall);
     let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
 pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
