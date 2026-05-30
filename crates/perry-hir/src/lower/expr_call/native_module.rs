@@ -1059,12 +1059,16 @@ pub(super) fn try_native_module_methods(
                         }
                         "setPrototypeOf" => return Ok(Ok(Expr::Bool(true))),
                         "isExtensible" => {
+                            // #2762: Reflect-specific semantics (boolean +
+                            // TypeError on non-object), NOT Object.isExtensible.
                             let target = args.into_iter().next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::ObjectIsExtensible(Box::new(target))));
+                            return Ok(Ok(Expr::ReflectIsExtensible(Box::new(target))));
                         }
                         "preventExtensions" => {
+                            // #2762: Reflect-specific semantics (boolean +
+                            // TypeError on non-object), NOT Object.preventExtensions.
                             let target = args.into_iter().next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::ObjectPreventExtensions(Box::new(target))));
+                            return Ok(Ok(Expr::ReflectPreventExtensions(Box::new(target))));
                         }
                         _ => {}
                     }
