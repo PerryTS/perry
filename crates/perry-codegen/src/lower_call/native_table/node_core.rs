@@ -1125,6 +1125,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #2514: util.setTraceSigInt(enable) → validate boolean, return undefined.
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "setTraceSigInt",
+        class_filter: None,
+        runtime: "js_util_set_trace_sig_int",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "util",
         has_receiver: false,
