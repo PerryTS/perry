@@ -20,6 +20,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Dynamic string coercion: takes any NaN-boxed JSValue and returns a
     // raw string handle (`crates/perry-runtime/src/value.rs:813`).
     module.declare_function("js_jsvalue_to_string", I64, &[DOUBLE]);
+    // #3146: nullish-guarded `.toString()` member-call variant.
+    module.declare_function("js_jsvalue_to_string_method", I64, &[DOUBLE]);
 
     // Fused string+value concat (issue #58): collapses js_jsvalue_to_string +
     // js_string_concat into a single allocation for number operands.

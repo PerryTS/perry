@@ -450,8 +450,27 @@ pub(crate) unsafe fn coerce_validate_radix(radix_value: f64) -> Option<i32> {
     Some(r as i32)
 }
 
+/// `value.toString()` as an explicit METHOD CALL (#3146). Unlike the abstract
+/// `js_jsvalue_to_string` (used for `String(x)`, template literals, and `+`
+/// coercion, where a nullish operand stringifies to "undefined"/"null"), a
+/// member call `u.toString()` on `undefined`/`null` is a property read on a
+/// nullish base and must throw a `TypeError`. For every non-nullish value this
+/// delegates to `js_jsvalue_to_string`, so ordinary `.toString()` behaviour is
+/// unchanged.
+#[no_mangle]
+pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string::StringHeader {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        let is_null = if jsval.is_null() { 1u32 } else { 0u32 };
+        let prop = b"toString";
+        crate::error::js_throw_type_error_property_access(is_null, prop.as_ptr(), prop.len());
+    }
+    js_jsvalue_to_string(value)
+}
+
 fn throw_radix_range_error() -> ! {
-    let message = b"toString() radix must be between 2 and 36";
+    // Node/V8 message verbatim: includes the word "argument" (#3146).
+    let message = b"toString() radix argument must be between 2 and 36";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_rangeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
