@@ -27,6 +27,47 @@ fn throw_invalid_query_pair_tuple() -> ! {
     ))
 }
 
+fn gc_object_type(raw_ptr: *const u8) -> Option<u8> {
+    if raw_ptr.is_null() || (raw_ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    unsafe { Some(*raw_ptr.sub(crate::gc::GC_HEADER_SIZE)) }
+}
+
+fn known_iterable_to_array(raw_ptr: i64) -> Option<*mut ArrayHeader> {
+    if raw_ptr == 0 {
+        return None;
+    }
+    let addr = raw_ptr as usize;
+    if crate::map::is_registered_map(addr) {
+        return Some(crate::map::js_map_entries(
+            raw_ptr as *const crate::map::MapHeader,
+        ));
+    }
+    if crate::set::is_registered_set(addr) {
+        return Some(crate::set::js_set_to_array(
+            raw_ptr as *const crate::set::SetHeader,
+        ));
+    }
+    let raw = raw_ptr as *const u8;
+    match gc_object_type(raw) {
+        Some(t) if t == crate::gc::GC_TYPE_ARRAY => Some(raw as *mut ArrayHeader),
+        _ => None,
+    }
+}
+
+fn query_pair_iterable_to_array(pair_f64: f64) -> *mut ArrayHeader {
+    let pair_jsval = crate::value::JSValue::from_bits(pair_f64.to_bits());
+    if !pair_jsval.is_pointer() {
+        throw_invalid_query_pair_tuple();
+    }
+    let pair_ptr_i64 = crate::value::js_nanbox_get_pointer(pair_f64);
+    if let Some(pair) = known_iterable_to_array(pair_ptr_i64) {
+        return pair;
+    }
+    throw_invalid_query_pair_tuple();
+}
+
 // URL field constant alias — we only need URL_SEARCH from `super::parse` for
 // the params→owner-URL sync path.
 use super::parse::URL_SEARCH;
@@ -254,25 +295,11 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
         if ptr_i64 == 0 {
             return create_url_search_params_object(Vec::new());
         }
-        let raw_ptr = ptr_i64 as *const u8;
 
-        // Issue #650 sub-issue: iterable form `new URLSearchParams([['a','1'], ['b','2']])`.
-        // The init is an Array (GC_TYPE_ARRAY), each element a 2-element
-        // pair array. Pre-fix this fell through to `read_record_entries`
-        // which read the array's numeric "keys" (`"0"`, `"1"`) as if they
-        // were string keys and stringified the inner pair-array values
-        // via `[object Object]` — and on some shapes silently exited
-        // mid-construction. Detect via the GC header's obj_type tag and
-        // walk pair-by-pair.
-        unsafe {
-            if !raw_ptr.is_null() && (raw_ptr as usize) >= 0x1000 {
-                let gc_obj_type = *raw_ptr.sub(crate::gc::GC_HEADER_SIZE);
-                if gc_obj_type == crate::gc::GC_TYPE_ARRAY {
-                    return create_url_search_params_object(read_iterable_pair_entries(
-                        raw_ptr as *const ArrayHeader,
-                    ));
-                }
-            }
+        // Iterable form: arrays, Maps, and Sets are consumed as sequences of
+        // query-pair iterables before falling back to record enumeration.
+        if let Some(iterable_entries) = known_iterable_to_array(ptr_i64) {
+            return create_url_search_params_object(read_iterable_pair_entries(iterable_entries));
         }
 
         let obj_ptr = ptr_i64 as *mut ObjectHeader;
@@ -299,47 +326,29 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
     create_url_search_params_object(parse_query_string(&s))
 }
 
-/// Issue #650: iterable URLSearchParams init — each element is itself
-/// a 2-element array `[key, value]`. Strings (key + value) are
-/// extracted via `get_string_content`, which handles SSO + heap
-/// strings + INT32 / number coercion so `new URLSearchParams([["n", 1]])`
-/// silently stringifies the value to `"1"` to match Node. Array entries must
-/// be exactly two items; Node throws `ERR_INVALID_TUPLE` for shorter or longer
-/// query pairs before appending them.
+/// Iterable URLSearchParams init — each element must itself be an iterable
+/// two-item `[key, value]` tuple. Node throws `ERR_INVALID_TUPLE` when an
+/// entry is not iterable or does not produce exactly two items.
 pub(crate) fn read_iterable_pair_entries(arr: *const ArrayHeader) -> Vec<(String, String)> {
     if arr.is_null() {
         return Vec::new();
     }
-    let len = unsafe { (*arr).length } as usize;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_const_ptr(arr);
+    let len = crate::array::js_array_length(arr_handle.get_raw_const_ptr::<ArrayHeader>()) as usize;
     let mut out = Vec::with_capacity(len);
     for i in 0..len {
+        let arr = arr_handle.get_raw_const_ptr::<ArrayHeader>();
         let pair_f64 = crate::array::js_array_get_f64(arr, i as u32);
-        let pair_bits = pair_f64.to_bits();
-        let pair_jsval = crate::value::JSValue::from_bits(pair_bits);
-        if !pair_jsval.is_pointer() {
-            continue;
-        }
-        let pair_ptr_i64 = crate::value::js_nanbox_get_pointer(pair_f64);
-        if pair_ptr_i64 == 0 {
-            continue;
-        }
-        let pair_raw = pair_ptr_i64 as *const u8;
-        unsafe {
-            if (pair_raw as usize) < 0x1000 {
-                continue;
-            }
-            let gc_type = *pair_raw.sub(crate::gc::GC_HEADER_SIZE);
-            if gc_type != crate::gc::GC_TYPE_ARRAY {
-                continue;
-            }
-        }
-        let pair = pair_ptr_i64 as *const ArrayHeader;
-        let pair_len = unsafe { (*pair).length };
+        let pair = query_pair_iterable_to_array(pair_f64);
+        let pair_len = crate::array::js_array_length(pair);
         if pair_len != 2 {
             throw_invalid_query_pair_tuple();
         }
-        let k = get_string_content(crate::array::js_array_get_f64(pair, 0));
-        let v = get_string_content(crate::array::js_array_get_f64(pair, 1));
+        let key_f64 = crate::array::js_array_get_f64(pair, 0);
+        let value_f64 = crate::array::js_array_get_f64(pair, 1);
+        let k = stringify_field_value(key_f64);
+        let v = stringify_field_value(value_f64);
         out.push((k, v));
     }
     out
