@@ -690,7 +690,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if name == "String" {
             crate::closure::js_register_closure_arity(func_ptr, 1);
         }
-        if matches!(name, "File" | "EvalError" | "URIError") {
+        if matches!(name, "File" | "EvalError" | "URIError" | "Uint8Array") {
             super::native_module::set_bound_native_closure_name(closure_ptr, name);
         }
         if name == "Error" {

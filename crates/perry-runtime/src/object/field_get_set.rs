@@ -1601,6 +1601,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
                 if key_bytes == b"constructor" {
+                    if crate::buffer::is_uint8array_buffer(obj as usize) {
+                        let ctor =
+                            super::js_get_global_this_builtin_value(b"Uint8Array".as_ptr(), 10);
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
                     let module = b"buffer.Buffer";
                     return JSValue::from_bits(
                         js_create_native_module_namespace(module.as_ptr(), module.len()).to_bits(),
