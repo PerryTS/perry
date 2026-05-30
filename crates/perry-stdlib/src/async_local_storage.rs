@@ -3,8 +3,10 @@
 //! Native implementation of Node.js AsyncLocalStorage from `async_hooks`.
 //! Provides run(), getStore(), enterWith(), exit(), and disable().
 
-use perry_runtime::closure::{is_closure_ptr, ClosureHeader};
-use perry_runtime::{async_context, js_closure_call0};
+use perry_runtime::array::{js_array_length, ArrayHeader};
+use perry_runtime::async_context;
+use perry_runtime::closure::{is_closure_ptr, js_closure_call_array, ClosureHeader};
+use std::ptr;
 
 use crate::common::{get_handle_mut, register_handle, Handle};
 
@@ -31,6 +33,20 @@ unsafe fn validate_callback(callback: f64) -> *const ClosureHeader {
     let msg = perry_runtime::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_typeerror_new(msg);
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+unsafe fn call_callback_with_args(cb: *const ClosureHeader, args_array: *const ArrayHeader) -> f64 {
+    let len = if args_array.is_null() {
+        0
+    } else {
+        js_array_length(args_array) as i64
+    };
+    let data = if args_array.is_null() {
+        ptr::null()
+    } else {
+        (args_array as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+    };
+    js_closure_call_array(cb as i64, data, len)
 }
 
 /// AsyncLocalStorage handle. Store stacks live in perry-runtime's active
@@ -64,16 +80,25 @@ pub unsafe extern "C" fn js_async_local_storage_run(
     handle: Handle,
     store: f64,
     callback: f64,
+    args_array: *const ArrayHeader,
 ) -> f64 {
     // Validate before mutating the async context so an invalid callback throws
     // without leaving a pushed store behind (#3092).
     let cb = validate_callback(callback);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let cb_handle = scope.root_raw_const_ptr(cb);
+    let args_handle = scope.root_raw_const_ptr(args_array);
+    let store_handle = scope.root_nanbox_f64(store);
 
-    async_context::push_store(handle, store);
-    let result = js_closure_call0(cb);
+    async_context::push_store(handle, store_handle.get_nanbox_f64());
+    let result = call_callback_with_args(
+        cb_handle.get_raw_const_ptr::<ClosureHeader>(),
+        args_handle.get_raw_const_ptr::<ArrayHeader>(),
+    );
+    let result_handle = scope.root_nanbox_f64(result);
     async_context::pop_store(handle);
 
-    result
+    result_handle.get_nanbox_f64()
 }
 
 /// AsyncLocalStorage.getStore()
@@ -100,24 +125,49 @@ pub extern "C" fn js_async_local_storage_enter_with(handle: Handle, store: f64) 
 /// AsyncLocalStorage.exit(callback)
 /// Save current stack, clear it, call callback, restore stack
 #[no_mangle]
-pub unsafe extern "C" fn js_async_local_storage_exit(handle: Handle, callback: f64) -> f64 {
+pub unsafe extern "C" fn js_async_local_storage_exit(
+    handle: Handle,
+    callback: f64,
+    args_array: *const ArrayHeader,
+) -> f64 {
     // Validate before clearing the context so an invalid callback throws
     // without disturbing the saved store (#3092).
     let cb = validate_callback(callback);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let cb_handle = scope.root_raw_const_ptr(cb);
+    let args_handle = scope.root_raw_const_ptr(args_array);
 
-    let saved = if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
+    let mut saved = if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
         Some(async_context::take_store(handle))
     } else {
         None
     };
+    let saved_roots = saved
+        .as_ref()
+        .and_then(|stores| stores.as_ref())
+        .map(|stores| {
+            stores
+                .iter()
+                .map(|store| scope.root_nanbox_f64(*store))
+                .collect::<Vec<_>>()
+        });
 
-    let result = js_closure_call0(cb);
+    let result = call_callback_with_args(
+        cb_handle.get_raw_const_ptr::<ClosureHeader>(),
+        args_handle.get_raw_const_ptr::<ArrayHeader>(),
+    );
+    let result_handle = scope.root_nanbox_f64(result);
 
+    if let (Some(Some(stores)), Some(root_handles)) = (saved.as_mut(), saved_roots.as_ref()) {
+        for (store, root) in stores.iter_mut().zip(root_handles.iter()) {
+            *store = root.get_nanbox_f64();
+        }
+    }
     if let Some(saved) = saved {
         async_context::restore_store(handle, saved);
     }
 
-    result
+    result_handle.get_nanbox_f64()
 }
 
 /// AsyncLocalStorage.disable()
