@@ -1037,7 +1037,7 @@ pub unsafe extern "C" fn js_response_static_json(
     // only if the init headers didn't already set one.
     let headers_id = handle_id(headers_handle);
     let mut headers = if headers_id != 0 {
-        HEADERS_REGISTRY
+        HEADERS_HANDLES
             .lock()
             .unwrap()
             .get(&headers_id)
