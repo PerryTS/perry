@@ -158,12 +158,6 @@
     "category": "bug-open",
     "reason": "node:stream EventEmitter wiring incomplete \u2014 re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS. Real Perry gap (not ci-env); rolled under the open stream-events tracker #1532."
   },
-  "node-suite/stream/readable/from-async-iterable": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(asyncIterable) \u2192 data event chain doesn't deliver. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/wrap-old-stream": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -194,12 +188,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/dispose/await-using-disposes": {
-    "issue": "1531",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: await using does not trigger Symbol.asyncDispose on the stream. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/from-async-iterable": {
     "issue": "1539",
     "added": "2026-05-24",
@@ -217,12 +205,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Duplex.from(asyncIterable) \u2014 async-gen \u2192 Duplex form not yet wired. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/duplex/from-object-form": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex.from({readable, writable}) \u2014 combine-form not yet wired. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/compose-array-form": {
     "issue": "1531",
@@ -296,12 +278,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, PassThrough) \u2014 data not preserved through PT in composite. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/from-async-iter-mixed-values": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(asyncGen yielding mixed types) \u2014 types lost or wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/double-pipe-through": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -313,12 +289,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: TS readable.cancel \u2014 writable.write does not reject after. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/from-async-iter-nested": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(asyncIter with awaits) \u2014 wrong collected output. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/from-promise-iterable": {
     "issue": "1545",

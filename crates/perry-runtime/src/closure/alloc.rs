@@ -323,6 +323,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
                 .collect();
             unsafe {
                 let dest = closure_capture_slots_mut(allocated);
+                // GC_STORE_AUDIT(BARRIERED): copied captures are followed by closure layout/barrier rebuild.
                 std::ptr::copy_nonoverlapping(rewritten_captures.as_ptr(), dest, n);
                 rebuild_closure_layout_and_barriers(allocated, n);
             }
@@ -376,6 +377,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     if n > 0 && !captures_ptr.is_null() {
         unsafe {
             let dest = closure_capture_slots_mut(allocated);
+            // GC_STORE_AUDIT(BARRIERED): cached closure captures are followed by layout/barrier rebuild.
             std::ptr::copy_nonoverlapping(rewritten_captures.as_ptr(), dest, n);
             rebuild_closure_layout_and_barriers(allocated, n);
         }
@@ -434,6 +436,7 @@ pub extern "C" fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index:
     }
     unsafe {
         let captures_ptr = closure_capture_slots_mut(closure) as *mut f64;
+        // GC_STORE_AUDIT(BARRIERED): closure f64 capture write is immediately recorded via note_closure_capture_slot.
         *captures_ptr.add(index as usize) = value;
         note_closure_capture_slot(closure, index as usize, value.to_bits());
     }
@@ -460,6 +463,7 @@ pub extern "C" fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index:
     }
     unsafe {
         let captures_ptr = closure_capture_slots_mut(closure) as *mut i64;
+        // GC_STORE_AUDIT(BARRIERED): closure pointer capture write is immediately recorded via note_closure_capture_slot.
         *captures_ptr.add(index as usize) = value;
         note_closure_capture_slot(closure, index as usize, value as u64);
     }

@@ -164,7 +164,7 @@ pub fn is_well_known_symbol(ptr: usize) -> bool {
 }
 
 fn register_symbol_pointer(ptr: usize) {
-    let mut guard = SYMBOL_POINTERS.lock().unwrap();
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
     if guard.is_none() {
         *guard = Some(HashSet::new());
     }
@@ -199,13 +199,14 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
 // Storage is intentionally simple (linear scan per lookup) — symbol-keyed
 // properties on a single object are rare.
 //
-// NOTE: this side table holds raw pointers and is GC-blind. Stored values
-// (symbol pointers and any pointer-shaped JSValues) won't be traced as roots.
-// For the test scenarios this matters: symbols allocated through `Symbol(desc)`
-// hit `gc_malloc` and would be reclaimed if a GC ran while the user code only
-// kept a reference via `obj[sym]`. In practice the test doesn't trigger GC
-// between the `obj[sym] = v` write and the `getOwnPropertySymbols(obj)` read,
-// so this is acceptable for now.
+// GC invariant:
+// - SYMBOL_PROPERTIES outer object keys are metadata-only raw pointers. They
+//   are rewritten when an owner moves but do not keep that owner alive.
+// - SYMBOL_PROPERTIES inner symbol keys are raw-pointer roots.
+// - SYMBOL_PROPERTIES values and CLASS_STATIC_SYMBOLS values are NaN-box roots.
+// - CLASS_STATIC_SYMBOLS symbol keys are raw-pointer roots.
+// - SYMBOL_POINTERS is metadata-only: moved symbol addresses are rewritten, but
+//   tracking a pointer there does not by itself keep the symbol alive.
 static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
 
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
@@ -480,7 +481,7 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
     if src_obj_ptr == 0 {
         return Vec::new();
     }
-    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     guard
         .as_ref()
         .and_then(|m| m.get(&src_obj_ptr))
@@ -544,27 +545,54 @@ unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
     crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
 }
 
+fn publish_symbol_side_table_root_edges(sym_key: usize, value_bits: u64) {
+    crate::gc::runtime_write_barrier_root_raw_ptr(sym_key as *const SymbolHeader);
+    crate::gc::runtime_write_barrier_root_nanbox(value_bits);
+}
+
+fn store_object_symbol_property_root(obj_key: usize, sym_key: usize, value_bits: u64) -> bool {
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        let map = guard.as_mut().unwrap();
+        let entries = map.entry(obj_key).or_default();
+        for entry in entries.iter_mut() {
+            if entry.0 == sym_key {
+                entry.1 = value_bits;
+                drop(guard);
+                publish_symbol_side_table_root_edges(sym_key, value_bits);
+                return false;
+            }
+        }
+        entries.push((sym_key, value_bits));
+    }
+    publish_symbol_side_table_root_edges(sym_key, value_bits);
+    true
+}
+
+fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .insert((class_id, sym_key), value_bits);
+    }
+    publish_symbol_side_table_root_edges(sym_key, value_bits);
+}
+
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
-    let val_bits = value_f64.to_bits();
-    let mut guard = SYMBOL_PROPERTIES.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(HashMap::new());
-    }
-    let map = guard.as_mut().unwrap();
-    let entries = map.entry(obj_key).or_default();
-    // Update existing entry if the symbol is already present.
-    for entry in entries.iter_mut() {
-        if entry.0 == sym_key {
-            entry.1 = val_bits;
-            return value_f64;
-        }
-    }
-    entries.push((sym_key, val_bits));
+    store_object_symbol_property_root(obj_key, sym_key, value_f64.to_bits());
     value_f64
 }
 
@@ -620,14 +648,7 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
     if class_id == 0 || sym_key == 0 {
         return;
     }
-    let mut guard = CLASS_STATIC_SYMBOLS.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(HashMap::new());
-    }
-    guard
-        .as_mut()
-        .unwrap()
-        .insert((class_id, sym_key), value.to_bits());
+    store_class_static_symbol_root(class_id, sym_key, value.to_bits());
 }
 
 /// Look up a static Symbol-keyed property on a class by class_id.
@@ -638,11 +659,376 @@ pub fn class_static_symbol_lookup(class_id: u32, sym_f64: f64) -> Option<u64> {
         if class_id == 0 || sym_key == 0 {
             return None;
         }
-        let guard = CLASS_STATIC_SYMBOLS.lock().unwrap();
+        let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         guard
             .as_ref()
             .and_then(|m| m.get(&(class_id, sym_key)).copied())
     }
+}
+
+fn merge_symbol_property_entries(dst: &mut Vec<(usize, u64)>, src: Vec<(usize, u64)>) {
+    for (sym_key, value_bits) in src {
+        if let Some(existing) = dst.iter_mut().find(|entry| entry.0 == sym_key) {
+            existing.1 = value_bits;
+        } else {
+            dst.push((sym_key, value_bits));
+        }
+    }
+}
+
+pub fn scan_symbol_side_table_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_symbol_side_table_roots_mut(&mut visitor);
+}
+
+pub fn scan_symbol_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    scan_symbol_property_roots_mut(visitor);
+    scan_class_static_symbol_roots_mut(visitor);
+    scan_symbol_pointer_metadata_roots_mut(visitor);
+}
+
+fn scan_symbol_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut owner_rewrites = Vec::new();
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+
+    for (&owner, entries) in map.iter_mut() {
+        let mut new_owner = owner;
+        if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner {
+            owner_rewrites.push((owner, new_owner));
+        }
+        for (sym_key, value_bits) in entries.iter_mut() {
+            visitor.visit_usize_slot(sym_key);
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    }
+
+    for (old_owner, new_owner) in owner_rewrites {
+        let Some(entries) = map.remove(&old_owner) else {
+            continue;
+        };
+        match map.entry(new_owner) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                merge_symbol_property_entries(entry.get_mut(), entries);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(entries);
+            }
+        }
+    }
+}
+
+fn scan_class_static_symbol_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut key_rewrites = Vec::new();
+    let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+
+    for (class_id, old_sym_key) in map.keys().copied().collect::<Vec<_>>() {
+        let Some(value_bits) = map.get_mut(&(class_id, old_sym_key)) else {
+            continue;
+        };
+        let mut new_sym_key = old_sym_key;
+        if visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != old_sym_key {
+            key_rewrites.push(((class_id, old_sym_key), (class_id, new_sym_key)));
+        }
+        visitor.visit_nanbox_u64_slot(value_bits);
+    }
+
+    for (old_key, new_key) in key_rewrites {
+        if let Some(value_bits) = map.remove(&old_key) {
+            map.insert(new_key, value_bits);
+        }
+    }
+}
+
+fn scan_symbol_pointer_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut rewrites = Vec::new();
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
+    let Some(set) = guard.as_mut() else {
+        return;
+    };
+    for old_ptr in set.iter().copied().collect::<Vec<_>>() {
+        let mut new_ptr = old_ptr;
+        if visitor.visit_metadata_usize_slot(&mut new_ptr) && new_ptr != old_ptr {
+            rewrites.push((old_ptr, new_ptr));
+        }
+    }
+    for (old_ptr, new_ptr) in rewrites {
+        set.remove(&old_ptr);
+        if new_ptr != 0 {
+            set.insert(new_ptr);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SymbolSideTableRootSlot {
+    SymbolPropertyOwner { owner: usize },
+    SymbolPropertyEntry { owner: usize, sym_key: usize },
+    ClassStaticSymbol { class_id: u32, sym_key: usize },
+    SymbolPointer { ptr: usize },
+}
+
+pub(crate) struct SymbolSideTableRootScanState {
+    slots: Vec<SymbolSideTableRootSlot>,
+    cursor: usize,
+}
+
+pub(crate) fn new_symbol_side_table_root_scan_state() -> Box<dyn std::any::Any> {
+    Box::new(SymbolSideTableRootScanState {
+        slots: symbol_side_table_root_snapshot(),
+        cursor: 0,
+    })
+}
+
+pub(crate) fn scan_symbol_side_table_roots_mut_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut dyn std::any::Any,
+    remaining: &mut usize,
+) -> bool {
+    let state = state
+        .downcast_mut::<SymbolSideTableRootScanState>()
+        .expect("symbol side-table root scanner state type");
+    while *remaining > 0 && state.cursor < state.slots.len() {
+        scan_symbol_side_table_root_slot(visitor, state.slots[state.cursor]);
+        state.cursor += 1;
+        *remaining -= 1;
+    }
+    state.cursor >= state.slots.len()
+}
+
+fn symbol_side_table_root_snapshot() -> Vec<SymbolSideTableRootSlot> {
+    let mut slots = Vec::new();
+
+    {
+        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        if let Some(map) = guard.as_ref() {
+            for (&owner, entries) in map.iter() {
+                slots.push(SymbolSideTableRootSlot::SymbolPropertyOwner { owner });
+                for &(sym_key, _) in entries.iter() {
+                    slots.push(SymbolSideTableRootSlot::SymbolPropertyEntry { owner, sym_key });
+                }
+            }
+        }
+    }
+
+    {
+        let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+        if let Some(map) = guard.as_ref() {
+            for &(class_id, sym_key) in map.keys() {
+                slots.push(SymbolSideTableRootSlot::ClassStaticSymbol { class_id, sym_key });
+            }
+        }
+    }
+
+    {
+        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
+        if let Some(set) = guard.as_ref() {
+            for &ptr in set.iter() {
+                slots.push(SymbolSideTableRootSlot::SymbolPointer { ptr });
+            }
+        }
+    }
+
+    slots
+}
+
+fn scan_symbol_side_table_root_slot(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    slot: SymbolSideTableRootSlot,
+) {
+    match slot {
+        SymbolSideTableRootSlot::SymbolPropertyOwner { owner } => {
+            rewrite_symbol_property_owner_if_forwarded(visitor, owner);
+        }
+        SymbolSideTableRootSlot::SymbolPropertyEntry { owner, sym_key } => {
+            let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+            let Some((entry_sym, value_bits)) = guard
+                .as_mut()
+                .and_then(|map| map.get_mut(&owner))
+                .and_then(|entries| entries.iter_mut().find(|entry| entry.0 == sym_key))
+            else {
+                return;
+            };
+            visitor.visit_usize_slot(entry_sym);
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+        SymbolSideTableRootSlot::ClassStaticSymbol { class_id, sym_key } => {
+            rewrite_class_static_symbol_entry_if_forwarded(visitor, class_id, sym_key);
+        }
+        SymbolSideTableRootSlot::SymbolPointer { ptr } => {
+            rewrite_symbol_pointer_metadata_if_forwarded(visitor, ptr);
+        }
+    }
+}
+
+fn rewrite_symbol_property_owner_if_forwarded(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    owner: usize,
+) {
+    let mut new_owner = owner;
+    if !visitor.visit_metadata_usize_slot(&mut new_owner) || new_owner == owner {
+        return;
+    }
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    if let Some(map) = guard.as_mut() {
+        if let Some(entries) = map.remove(&owner) {
+            match map.entry(new_owner) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    merge_symbol_property_entries(entry.get_mut(), entries);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(entries);
+                }
+            }
+        }
+    }
+}
+
+fn rewrite_class_static_symbol_entry_if_forwarded(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    class_id: u32,
+    sym_key: usize,
+) {
+    let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    let Some(value_bits) = map.get_mut(&(class_id, sym_key)) else {
+        return;
+    };
+    let mut new_sym_key = sym_key;
+    let moved = visitor.visit_usize_slot(&mut new_sym_key);
+    visitor.visit_nanbox_u64_slot(value_bits);
+    if moved && new_sym_key != sym_key {
+        if let Some(value_bits) = map.remove(&(class_id, sym_key)) {
+            map.insert((class_id, new_sym_key), value_bits);
+        }
+    }
+}
+
+fn rewrite_symbol_pointer_metadata_if_forwarded(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    ptr: usize,
+) {
+    let mut new_ptr = ptr;
+    if !visitor.visit_metadata_usize_slot(&mut new_ptr) || new_ptr == ptr {
+        return;
+    }
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
+    if let Some(set) = guard.as_mut() {
+        set.remove(&ptr);
+        if new_ptr != 0 {
+            set.insert(new_ptr);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_symbol_side_table_roots() {
+    *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES) = None;
+    *crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS) = None;
+
+    let mut persistent = Vec::new();
+    {
+        let guard = SYMBOL_REGISTRY.lock().unwrap();
+        if let Some(map) = guard.as_ref() {
+            persistent.extend(map.values().copied());
+        }
+    }
+    {
+        let guard = WELL_KNOWN_SYMBOLS.lock().unwrap();
+        if let Some(map) = guard.as_ref() {
+            persistent.extend(map.values().copied());
+        }
+    }
+
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
+    if persistent.is_empty() {
+        *guard = None;
+    } else {
+        *guard = Some(persistent.into_iter().collect());
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_symbol_property_root(owner: usize, sym_key: usize, value_bits: u64) {
+    if owner != 0 && sym_key != 0 {
+        store_object_symbol_property_root(owner, sym_key, value_bits);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_property_roots(owner: usize) -> Vec<(usize, u64)> {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    guard
+        .as_ref()
+        .and_then(|map| map.get(&owner))
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<u64> {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    guard.as_ref().and_then(|map| {
+        map.get(&owner)
+            .and_then(|entries| entries.iter().find(|entry| entry.0 == sym_key))
+            .map(|entry| entry.1)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_property_owner_exists(owner: usize) -> bool {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    guard.as_ref().is_some_and(|map| map.contains_key(&owner))
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
+    if class_id != 0 && sym_key != 0 {
+        store_class_static_symbol_root(class_id, sym_key, value_bits);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_class_static_symbol_root_bits(class_id: u32, sym_key: usize) -> Option<u64> {
+    let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+    guard
+        .as_ref()
+        .and_then(|map| map.get(&(class_id, sym_key)).copied())
+}
+
+#[cfg(test)]
+pub(crate) fn test_class_static_symbol_roots_for_class(class_id: u32) -> Vec<(usize, u64)> {
+    let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+    guard
+        .as_ref()
+        .map(|map| {
+            map.iter()
+                .filter_map(|(&(cid, sym_key), &value_bits)| {
+                    (cid == class_id).then_some((sym_key, value_bits))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_symbol_pointer_root(ptr: usize) {
+    if ptr != 0 {
+        register_symbol_pointer(ptr);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_pointer_root_contains(ptr: usize) -> bool {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
+    guard.as_ref().is_some_and(|set| set.contains(&ptr))
 }
 
 /// `Object.prototype.hasOwnProperty.call(obj, sym)` for Symbol keys.
@@ -662,7 +1048,7 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
-    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     if let Some(map) = guard.as_ref() {
         if let Some(entries) = map.get(&obj_key) {
             for &(sk, _) in entries.iter() {
@@ -695,7 +1081,7 @@ pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f
     if obj_key == 0 || sym_key == 0 {
         return None;
     }
-    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     if let Some(map) = guard.as_ref() {
         if let Some(entries) = map.get(&obj_key) {
             for &(sk, vb) in entries.iter() {
@@ -1031,7 +1417,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if obj_key == 0 {
         return crate::array::js_array_alloc(0) as i64;
     }
-    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     let entries = match guard.as_ref().and_then(|m| m.get(&obj_key)) {
         Some(v) if !v.is_empty() => v.clone(),
         _ => return crate::array::js_array_alloc(0) as i64,

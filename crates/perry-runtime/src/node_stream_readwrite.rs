@@ -1566,6 +1566,9 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> f64 {
         let arr = crate::array::js_array_push_f64(arr, iterable);
         return box_pointer(arr as *const u8);
     }
+    if let Some(chunks) = flatten_async_iterable_value(iterable) {
+        return box_pointer(chunks as *const u8);
+    }
     if let Some(chunks) = flatten_sync_iterable_value(iterable) {
         return box_pointer(chunks as *const u8);
     }

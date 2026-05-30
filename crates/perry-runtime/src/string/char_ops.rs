@@ -102,6 +102,7 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
         let nanboxed =
             f64::from_bits(crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK));
         unsafe {
+            // GC_STORE_AUDIT(BARRIERED): char array slot is immediately recorded via note_array_slot.
             *elements.add(i) = nanboxed;
             crate::array::note_array_slot(arr, i, nanboxed.to_bits());
         }

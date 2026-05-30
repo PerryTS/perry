@@ -383,6 +383,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let dst_elements =
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): clone bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
             rebuild_array_layout_exact(result);
@@ -444,12 +445,14 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
             let pair = js_array_alloc(2);
             (*pair).length = 2;
             let pair_elems = (pair as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): entries pair slots are immediately recorded via note_array_slot.
             *pair_elems.add(0) = i as f64;
             *pair_elems.add(1) = *src_elements.add(i);
             note_array_slot(pair, 0, (i as f64).to_bits());
             note_array_slot(pair, 1, (*src_elements.add(i)).to_bits());
             // NaN-box the inner array pointer so the outer storage slot keeps tag info.
             let pair_value = crate::value::js_nanbox_pointer(pair as i64);
+            // GC_STORE_AUDIT(BARRIERED): outer entries slot is immediately recorded via note_array_slot.
             *dst_elements.add(i) = pair_value;
             note_array_slot(result, i, pair_value.to_bits());
         }
@@ -482,6 +485,7 @@ pub extern "C" fn js_array_keys(arr: *const ArrayHeader) -> *mut ArrayHeader {
         (*result).length = len;
         let dst_elements = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for i in 0..len as usize {
+            // GC_STORE_AUDIT(POINTER_FREE): keys array stores numeric indices only.
             *dst_elements.add(i) = i as f64;
         }
         result
@@ -516,6 +520,7 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
                 (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let dst_elements =
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): values bulk copy is followed by layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
             (*result).length = len;
             rebuild_array_layout(result);

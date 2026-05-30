@@ -45,7 +45,7 @@ RUST_PROMISE_FIELD_STORE_RE = re.compile(
     r"\(\*[^)\n]+\)\.(?P<field>on_fulfilled|on_rejected|next)\s*="
 )
 RUST_POINTER_FIELD_STORE_RE = re.compile(
-    r"\b(?P<owner>[A-Za-z_][A-Za-z0-9_]*)\.(?P<field>string_ptr)\s*="
+    r"\b(?P<owner>[A-Za-z_][A-Za-z0-9_]*)\.(?P<field>string_ptr)\s*=(?!=)"
 )
 RUST_GLOBAL_INDEX_STORE_RE = re.compile(
     r"\b(?P<target>[A-Z][A-Z0-9_]*)\s*\[[^\]]+\]\s*="
@@ -68,20 +68,20 @@ RUST_ATOMIC_COMPARE_EXCHANGE_RE = re.compile(
 
 
 SCAN_PATHS = [
-    Path("crates/perry-codegen/src/expr"),
-    Path("crates/perry-runtime/src/array.rs"),
+    Path("crates/perry-codegen/src"),
+    Path("crates/perry-runtime/src/array"),
     Path("crates/perry-runtime/src/object"),
-    Path("crates/perry-runtime/src/closure.rs"),
-    Path("crates/perry-runtime/src/json.rs"),
+    Path("crates/perry-runtime/src/closure"),
+    Path("crates/perry-runtime/src/json"),
     Path("crates/perry-runtime/src/regex.rs"),
     Path("crates/perry-runtime/src/plugin.rs"),
     Path("crates/perry-runtime/src/thread.rs"),
     Path("crates/perry-runtime/src/promise"),
     Path("crates/perry-runtime/src/map.rs"),
     Path("crates/perry-runtime/src/set.rs"),
-    Path("crates/perry-runtime/src/string.rs"),
+    Path("crates/perry-runtime/src/string"),
     Path("crates/perry-runtime/src/typedarray.rs"),
-    Path("crates/perry-runtime/src/buffer.rs"),
+    Path("crates/perry-runtime/src/buffer"),
     Path("crates/perry-stdlib/src"),
 ]
 
@@ -223,6 +223,24 @@ def iter_scan_roots() -> Iterable[Path]:
             yield from sorted(src.rglob("*.rs"))
 
 
+def repo_rel(path: Path) -> str:
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def is_codegen_path(path: Path) -> bool:
+    return repo_rel(path).startswith("crates/perry-codegen/src/")
+
+
+def is_runtime_module(path: Path, module: str) -> bool:
+    rel = repo_rel(path)
+    flat = f"crates/perry-runtime/src/{module}.rs"
+    directory = f"crates/perry-runtime/src/{module}/"
+    return rel == flat or rel.startswith(directory)
+
+
 def is_comment_or_blank(line: str) -> bool:
     stripped = line.strip()
     return not stripped or stripped.startswith("//") or stripped.startswith("///")
@@ -274,7 +292,7 @@ def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
     if RUST_TLS_INDEX_STORE_RE.search(line) and is_risky_tls_index_store(window):
         return "raw TLS cache pointer table store"
 
-    if "crates/perry-runtime/src/promise/" in path.as_posix():
+    if is_runtime_module(path, "promise"):
         if RUST_PROMISE_FIELD_STORE_RE.search(line):
             return "raw Promise heap pointer field store"
 
@@ -284,7 +302,7 @@ def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
 
     deref = RUST_DEREF_ASSIGN_RE.search(line)
     if deref and any(hint in deref.group("target") for hint in RUST_DEREF_RISK_TARGETS):
-        if path.name in {"buffer.rs", "typedarray.rs"}:
+        if is_runtime_module(path, "buffer") or path.name == "typedarray.rs":
             return None
         return "raw direct slot assignment"
 
@@ -299,13 +317,17 @@ def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
     if RUST_COPY_RE.search(line):
         if any(hint in window for hint in STACK_COPY_HINTS):
             return "raw stack/temporary argument copy"
-        if path.name in {"string.rs", "buffer.rs", "typedarray.rs"}:
+        if (
+            is_runtime_module(path, "string")
+            or is_runtime_module(path, "buffer")
+            or path.name == "typedarray.rs"
+        ):
             return None
         if any(hint in window for hint in RUST_POINTER_FREE_COPY_HINTS):
             return None
         if any(hint in window for hint in RUST_COPY_RISK_HINTS):
             return "raw slot copy"
-        if path.name == "array.rs":
+        if is_runtime_module(path, "array"):
             return "raw array slot copy"
     return None
 
@@ -349,7 +371,7 @@ def scan_file(path: Path) -> list[Finding]:
             continue
 
         reason: str | None = None
-        if "crates/perry-codegen/src/expr" in path.as_posix():
+        if is_codegen_path(path):
             if is_risky_codegen_store(line):
                 reason = "raw generated heap/global store"
         else:
@@ -427,6 +449,11 @@ def run_self_tests() -> int:
         "crates/perry-runtime/src/string.rs",
         ["entry.string_ptr = key as usize;"],
         "raw cache/global pointer field store",
+    )
+    check(
+        "crates/perry-runtime/src/string/intern.rs",
+        ["if entry.string_ptr == 0 {"],
+        None,
     )
     check(
         "crates/perry-runtime/src/string.rs",
@@ -519,6 +546,15 @@ def run_self_tests() -> int:
         ["(*promise).next = next;"],
         "raw Promise heap pointer field store",
     )
+
+    scanned_paths = {repo_rel(path) for path in iter_scan_roots()}
+    for expected_path in (
+        "crates/perry-runtime/src/array/alloc.rs",
+        "crates/perry-runtime/src/buffer/from.rs",
+        "crates/perry-codegen/src/lower_call/new.rs",
+    ):
+        if expected_path not in scanned_paths:
+            failures.append(f"scanner roots: missing {expected_path}")
 
     if failures:
         print("GC store-site inventory self-test failed:")

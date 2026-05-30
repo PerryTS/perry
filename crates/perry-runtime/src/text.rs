@@ -85,6 +85,109 @@ pub extern "C" fn js_text_encoder_encode_llvm(value: f64) -> i64 {
     buf as i64
 }
 
+#[derive(Clone, Copy)]
+enum TextEncoderDest {
+    Buffer(*mut BufferHeader),
+    TypedArray(*mut crate::typedarray::TypedArrayHeader),
+}
+
+fn text_value_pointer_addr(value: f64) -> usize {
+    let ptr = crate::value::js_nanbox_get_pointer(value);
+    if ptr <= 0 {
+        0
+    } else {
+        ptr as usize
+    }
+}
+
+fn text_string_header_to_string(ptr: *const StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn text_encoder_describe_received(value: f64) -> String {
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        let ptr = unsafe { crate::symbol::js_symbol_to_string(value) } as *const StringHeader;
+        return format!("type symbol ({})", text_string_header_to_string(ptr));
+    }
+
+    let addr = text_value_pointer_addr(value);
+    if addr >= 0x1000 {
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+            return format!("an instance of {}", crate::typedarray::name_for_kind(kind));
+        }
+        if crate::buffer::is_data_view(addr) {
+            return "an instance of DataView".to_string();
+        }
+        if crate::buffer::is_uint8array_buffer(addr) {
+            return "an instance of Uint8Array".to_string();
+        }
+        if crate::buffer::is_array_buffer(addr) {
+            return "an instance of ArrayBuffer".to_string();
+        }
+        if crate::buffer::is_shared_array_buffer(addr) {
+            return "an instance of SharedArrayBuffer".to_string();
+        }
+        if crate::buffer::is_registered_buffer(addr) {
+            return "an instance of Buffer".to_string();
+        }
+    }
+
+    crate::fs::validate::describe_received(value)
+}
+
+fn throw_invalid_encode_into_source(value: f64) -> ! {
+    let message = format!(
+        "The \"src\" argument must be of type string. Received {}",
+        text_encoder_describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_invalid_encode_into_dest(value: f64) -> ! {
+    let message = format!(
+        "The \"dest\" argument must be an instance of Uint8Array. Received {}",
+        text_encoder_describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn text_encoder_encode_into_source(source: f64) -> *const StringHeader {
+    let value = crate::value::JSValue::from_bits(source.to_bits());
+    if !value.is_any_string() {
+        throw_invalid_encode_into_source(source);
+    }
+
+    let ptr = crate::value::js_get_string_pointer_unified(source) as *const StringHeader;
+    if ptr.is_null() {
+        throw_invalid_encode_into_source(source);
+    }
+    ptr
+}
+
+fn text_encoder_encode_into_dest(dest: f64) -> TextEncoderDest {
+    let addr = text_value_pointer_addr(dest);
+    if addr >= 0x1000 {
+        if crate::typedarray::lookup_typed_array_kind(addr) == Some(crate::typedarray::KIND_UINT8) {
+            return TextEncoderDest::TypedArray(addr as *mut crate::typedarray::TypedArrayHeader);
+        }
+        if crate::buffer::is_registered_buffer(addr)
+            && !crate::buffer::is_any_array_buffer(addr)
+            && !crate::buffer::is_data_view(addr)
+        {
+            return TextEncoderDest::Buffer(addr as *mut BufferHeader);
+        }
+    }
+
+    throw_invalid_encode_into_dest(dest)
+}
+
 fn text_encoder_result(read: usize, written: usize) -> *mut ObjectHeader {
     let obj = js_object_alloc(0, 2);
     if obj.is_null() {
@@ -136,28 +239,34 @@ fn text_encoder_prefix_len(src: &[u8], dest_len: usize) -> (usize, usize) {
 /// the destination and never splits a UTF-8 sequence.
 #[no_mangle]
 pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i64 {
-    let str_ptr_i = crate::value::js_get_string_pointer_unified(source);
-    let dest_ptr_i = crate::value::js_nanbox_get_pointer(dest);
-
-    if str_ptr_i == 0 || dest_ptr_i == 0 || (dest_ptr_i as usize) < 0x1000 {
-        return text_encoder_result(0, 0) as i64;
-    }
-
-    let str_ptr = str_ptr_i as *const StringHeader;
-    let dest_ptr = dest_ptr_i as *mut BufferHeader;
-    if str_ptr.is_null() || dest_ptr.is_null() {
-        return text_encoder_result(0, 0) as i64;
-    }
+    let str_ptr = text_encoder_encode_into_source(source);
+    let dest = text_encoder_encode_into_dest(dest);
 
     unsafe {
         let src_len = (*str_ptr).byte_len as usize;
         let src_data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let src = std::slice::from_raw_parts(src_data, src_len);
-        let dest_len = (*dest_ptr).length as usize;
+        let dest_len = match dest {
+            TextEncoderDest::Buffer(dest_ptr) => (*dest_ptr).length as usize,
+            TextEncoderDest::TypedArray(dest_ptr) => {
+                crate::typedarray::typed_array_bytes_mut(dest_ptr)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(0)
+            }
+        };
         let (read, written) = text_encoder_prefix_len(src, dest_len);
 
-        for (idx, byte) in src.iter().copied().take(written).enumerate() {
-            crate::buffer::js_buffer_set(dest_ptr, idx as i32, byte as i32);
+        match dest {
+            TextEncoderDest::Buffer(dest_ptr) => {
+                for (idx, byte) in src.iter().copied().take(written).enumerate() {
+                    crate::buffer::js_buffer_set(dest_ptr, idx as i32, byte as i32);
+                }
+            }
+            TextEncoderDest::TypedArray(dest_ptr) => {
+                if let Some(bytes) = crate::typedarray::typed_array_bytes_mut(dest_ptr) {
+                    bytes[..written].copy_from_slice(&src[..written]);
+                }
+            }
         }
 
         text_encoder_result(read, written) as i64

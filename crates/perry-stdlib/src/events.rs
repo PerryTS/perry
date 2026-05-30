@@ -74,34 +74,56 @@ unsafe fn stream_listeners_for_heap_object(
     )
 }
 
-fn throw_max_listeners_out_of_range() -> ! {
-    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_RANGE_ERROR.call_once(|| {
-        perry_runtime::object::js_register_class_extends_error(
-            perry_runtime::error::CLASS_ID_RANGE_ERROR,
-        );
-    });
+fn format_max_listeners_received(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if n.fract() == 0.0 && n.abs() < 1e21 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
+    }
+}
 
-    let obj = js_object_alloc(perry_runtime::error::CLASS_ID_RANGE_ERROR, 4);
-    let string_value = |bytes: &[u8]| -> f64 {
-        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        js_nanbox_string(ptr as i64)
-    };
-    let set = |key: &[u8], value: f64| {
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        perry_runtime::js_object_set_field_by_name(obj, key_ptr, value);
-    };
-    set(b"name", string_value(b"RangeError"));
-    set(b"code", string_value(b"ERR_OUT_OF_RANGE"));
-    set(b"message", string_value(b"The value is out of range"));
-    perry_runtime::exception::js_throw(js_nanbox_pointer(obj as i64))
+fn throw_max_listeners_invalid_type(value: f64) -> ! {
+    let message = format!(
+        "The \"setMaxListeners\" argument must be of type number. Received {}",
+        perry_runtime::fs::validate::describe_received(value)
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_max_listeners_out_of_range(n: f64) -> ! {
+    let message = format!(
+        "The value of \"setMaxListeners\" is out of range. It must be >= 0. Received {}",
+        format_max_listeners_received(n)
+    );
+    perry_runtime::fs::validate::throw_range_error_with_code(&message)
 }
 
 #[inline]
-fn validate_max_listeners(n: f64) {
-    if n.is_nan() || n < 0.0 {
-        throw_max_listeners_out_of_range();
+fn validate_max_listeners(value: f64) -> f64 {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !perry_runtime::fs::validate::is_numeric(js_value) {
+        throw_max_listeners_invalid_type(value);
     }
+    let n = if js_value.is_int32() {
+        js_value.as_int32() as f64
+    } else {
+        js_value.as_number()
+    };
+    if n.is_nan() || n < 0.0 {
+        throw_max_listeners_out_of_range(n);
+    }
+    n
 }
 
 use crate::common::{for_each_handle_mut_of, get_handle, get_handle_mut, register_handle, Handle};
@@ -905,7 +927,7 @@ pub unsafe extern "C" fn js_event_emitter_listener_count(
 /// EventEmitter.setMaxListeners(n).
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f64) -> Handle {
-    validate_max_listeners(n);
+    let n = validate_max_listeners(n);
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         emitter.max_listeners = n;
     }
@@ -1392,7 +1414,7 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
     n: f64,
     handles_ptr: *const ArrayHeader,
 ) -> f64 {
-    validate_max_listeners(n);
+    let n = validate_max_listeners(n);
     if !handles_ptr.is_null() {
         let len = js_array_length(handles_ptr);
         for i in 0..len {

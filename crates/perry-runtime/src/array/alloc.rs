@@ -83,6 +83,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
         (*ptr).capacity = actual_capacity;
         let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
         for i in 0..capacity as usize {
+            // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }
         clear_array_numeric_layout(ptr);
@@ -148,6 +149,7 @@ pub extern "C" fn js_array_from_f64(elements: *const f64, count: u32) -> *mut Ar
     unsafe {
         (*arr).length = count;
         let arr_elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // GC_STORE_AUDIT(BARRIERED): bulk array initialization is followed by layout/barrier rebuild.
         ptr::copy_nonoverlapping(elements, arr_elements, count as usize);
         rebuild_array_layout(arr);
     }
@@ -186,10 +188,12 @@ pub(crate) unsafe fn js_array_from_arraylike(
     for i in 0..len {
         // Pre-init to undefined in case the key lookup returns the
         // wrong type / produces a sentinel we want to coerce.
+        // GC_STORE_AUDIT(POINTER_FREE): undefined prefill is a non-pointer sentinel.
         *elements.add(i as usize) = undefined;
         let key_str = i.to_string();
         let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);
         let v = crate::object::js_object_get_field_by_name_f64(obj, key);
+        // GC_STORE_AUDIT(BARRIERED): arraylike element write is immediately recorded via note_array_slot.
         *elements.add(i as usize) = v;
         note_array_slot(arr, i as usize, v.to_bits());
     }
@@ -229,6 +233,7 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
         let s_ref = ch.encode_utf8(&mut buf);
         let s_ptr = crate::string::js_string_from_bytes(s_ref.as_ptr(), s_ref.len() as u32);
         let value = crate::value::js_nanbox_string(s_ptr as i64);
+        // GC_STORE_AUDIT(BARRIERED): string codepoint array slot is immediately recorded via note_array_slot.
         *elements.add(i) = value;
         note_array_slot(arr, i, value.to_bits());
     }

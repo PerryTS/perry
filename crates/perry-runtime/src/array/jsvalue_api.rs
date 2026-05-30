@@ -36,6 +36,7 @@ pub extern "C" fn js_array_from_jsvalue(elements: *const u64, count: u32) -> *mu
         // Each u64 contains NaN-boxed JSValue bits, store as f64 bits
         for i in 0..count as usize {
             let bits = *elements.add(i);
+            // GC_STORE_AUDIT(BARRIERED): JSValue array initialization is followed by layout/barrier rebuild.
             ptr::write(arr_elements.add(i), f64::from_bits(bits));
         }
         rebuild_array_layout(arr);
