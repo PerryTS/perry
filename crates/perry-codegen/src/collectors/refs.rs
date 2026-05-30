@@ -250,6 +250,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::MathLog10(operand)
         | Expr::MathLog1p(operand)
         | Expr::MathClz32(operand)
+        | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand) => {
             walk(operand, out);

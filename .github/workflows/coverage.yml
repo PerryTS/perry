@@ -54,6 +54,7 @@ jobs:
         # this is a visibility job, not a gate.
         run: |
           cargo llvm-cov --workspace --no-fail-fast \
+            --exclude perry-doc-fixture-my-bindings \
             --exclude perry-ui-macos \
             --exclude perry-ui-ios \
             --exclude perry-ui-visionos \
@@ -64,6 +65,7 @@ jobs:
             --exclude perry-ui-windows \
             --html --output-dir target/llvm-cov-html
           cargo llvm-cov report --no-fail-fast \
+            --exclude perry-doc-fixture-my-bindings \
             --exclude perry-ui-macos \
             --exclude perry-ui-ios \
             --exclude perry-ui-visionos \
@@ -74,6 +76,7 @@ jobs:
             --exclude perry-ui-windows \
             --lcov --output-path target/lcov.info
           cargo llvm-cov report --no-fail-fast \
+            --exclude perry-doc-fixture-my-bindings \
             --exclude perry-ui-macos \
             --exclude perry-ui-ios \
             --exclude perry-ui-visionos \

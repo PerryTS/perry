@@ -10,7 +10,7 @@
 //! `new (someFn)(args)` form via `Expr::NewDynamic`.
 
 use anyhow::{anyhow, Result};
-use perry_types::LocalId;
+use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
@@ -29,6 +29,30 @@ fn peel_new_callee(mut expr: &ast::Expr) -> &ast::Expr {
             ast::Expr::TsConstAssertion(ts_const) => expr = ts_const.expr.as_ref(),
             _ => return expr,
         }
+    }
+}
+
+fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr {
+    let helper = match name {
+        "Symbol" => "js_throw_symbol_constructor_type_error",
+        "BigInt" => "js_throw_bigint_constructor_type_error",
+        _ => unreachable!(),
+    };
+    let throw_expr = Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: helper.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    };
+
+    if args.is_empty() {
+        throw_expr
+    } else {
+        args.push(throw_expr);
+        Expr::Sequence(args)
     }
 }
 
@@ -412,6 +436,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         });
                     }
                 }
+            }
+            if matches!(class_name.as_str(), "Symbol" | "BigInt") {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(nonconstructable_builtin_throw_expr(&class_name, args));
             }
             if class_name == "Proxy" {
                 let args = new_expr
@@ -934,6 +971,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .transpose()?
                 .unwrap_or_default();
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && matches!(property.as_str(), "Symbol" | "BigInt")
+                {
+                    return Ok(nonconstructable_builtin_throw_expr(property, args));
+                }
                 if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "File" {
                     ctx.uses_fetch = true;
                     return Ok(Expr::New {

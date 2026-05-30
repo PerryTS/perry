@@ -1396,16 +1396,20 @@ pub extern "C" fn js_fs_fstat_sync(fd_value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_fstat_sync_options(fd_value: f64, options_value: f64) -> f64 {
+    crate::fs::validate::validate_fd(fd_value);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
     let fd = fd_value as i32;
+    match fstat_stats_value(fd, bigint) {
+        Ok(stats) => stats,
+        Err(err) => crate::exception::js_throw(err),
+    }
+}
+
+pub(crate) fn fstat_stats_value(fd: i32, bigint: bool) -> Result<f64, f64> {
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
-            return unsafe {
-                build_stats_object(
-                    false, false, false, 0, 0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, bigint, None,
-                )
-            };
+            return Err(crate::fs::validate::build_ebadf_error_value("fstat"));
         };
         match file.metadata() {
             Ok(meta) => {
@@ -1421,7 +1425,7 @@ pub extern "C" fn js_fs_fstat_sync_options(fd_value: f64, options_value: f64) ->
                 let (uid, gid) = metadata_owner_ids(&meta);
                 let nlink = metadata_nlink(&meta);
                 let (atime, mtime, ctime, birth) = metadata_times_ms(&meta);
-                unsafe {
+                Ok(unsafe {
                     build_stats_object(
                         ft.is_file(),
                         ft.is_dir(),
@@ -1438,13 +1442,9 @@ pub extern "C" fn js_fs_fstat_sync_options(fd_value: f64, options_value: f64) ->
                         bigint,
                         Some(&meta),
                     )
-                }
+                })
             }
-            Err(_) => unsafe {
-                build_stats_object(
-                    false, false, false, 0, 0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, bigint, None,
-                )
-            },
+            Err(_) => Err(crate::fs::validate::build_ebadf_error_value("fstat")),
         }
     })
 }
@@ -1757,6 +1757,16 @@ unsafe fn build_fs_error_value(err: &std::io::Error, syscall: &'static str, path
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
     crate::node_submodules::register_error_syscall(msg_ptr, syscall);
     crate::node_submodules::register_error_path(msg_ptr, path.to_string());
+    crate::value::js_nanbox_pointer(err_ptr as i64)
+}
+
+unsafe fn build_fs_error_value_no_path(err: &std::io::Error, syscall: &'static str) -> f64 {
+    let code = io_error_code(err);
+    let msg = format!("{}: {}, {}", code, err, syscall);
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 

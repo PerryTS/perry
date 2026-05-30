@@ -223,7 +223,7 @@ pub(super) fn try_module_static_methods(
                                 ))));
                             }
                         }
-                        "toNamespacedPath" => {
+                        "toNamespacedPath" | "_makeLong" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
                                     args.into_iter().next().unwrap(),
@@ -658,6 +658,13 @@ pub(super) fn try_module_static_methods(
                         "fround" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::MathFround(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
+                            }
+                        }
+                        "f16round" => {
+                            if !args.is_empty() {
+                                return Ok(Ok(Expr::MathF16round(Box::new(
                                     args.into_iter().next().unwrap(),
                                 ))));
                             }

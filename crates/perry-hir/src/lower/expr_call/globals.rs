@@ -577,7 +577,7 @@ pub(super) fn try_global_builtins(
                             ))));
                         }
                     }
-                    "toNamespacedPath" => {
+                    "toNamespacedPath" | "_makeLong" => {
                         if !args.is_empty() {
                             return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
                                 args.into_iter().next().unwrap(),

@@ -228,9 +228,8 @@ fn to_ascii(domain: &str) -> String {
 /// `punycode.toUnicode(domain)` — decode each `xn--` label back to Unicode.
 fn to_unicode(domain: &str) -> Result<String, &'static str> {
     map_labels_result(domain, |label| {
-        let lower = label.to_ascii_lowercase();
-        if let Some(rest) = lower.strip_prefix("xn--") {
-            decode(rest)
+        if let Some(rest) = label.strip_prefix("xn--") {
+            decode(&rest.to_ascii_lowercase())
         } else {
             Ok(label.to_string())
         }

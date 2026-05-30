@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1578 entries across 87 modules.
+Total: 1782 entries across 88 modules.
 
 ## Modules
 
@@ -21,6 +21,7 @@ Total: 1578 entries across 87 modules.
 - [`cluster`](#cluster)
 - [`commander`](#commander)
 - [`console`](#console)
+- [`constants`](#constants)
 - [`cron`](#cron)
 - [`crypto`](#crypto)
 - [`date-fns`](#date-fns)
@@ -171,8 +172,13 @@ Total: 1578 entries across 87 modules.
 - `ok` — module
 - `partialDeepStrictEqual` — module
 - `rejects` — module
+- `strict` — module
 - `strictEqual` — module
 - `throws` — module
+
+### Properties
+
+- `strict`
 
 ## `async_hooks`
 
@@ -389,6 +395,209 @@ Total: 1578 entries across 87 modules.
 - `trace` — module
 - `warn` — module
 
+## `constants`
+
+### Properties
+
+- `COPYFILE_EXCL`
+- `COPYFILE_FICLONE`
+- `COPYFILE_FICLONE_FORCE`
+- `DH_CHECK_P_NOT_PRIME`
+- `DH_CHECK_P_NOT_SAFE_PRIME`
+- `DH_NOT_SUITABLE_GENERATOR`
+- `DH_UNABLE_TO_CHECK_GENERATOR`
+- `E2BIG`
+- `EACCES`
+- `EADDRINUSE`
+- `EADDRNOTAVAIL`
+- `EAFNOSUPPORT`
+- `EAGAIN`
+- `EALREADY`
+- `EBADF`
+- `EBADMSG`
+- `EBUSY`
+- `ECANCELED`
+- `ECHILD`
+- `ECONNABORTED`
+- `ECONNREFUSED`
+- `ECONNRESET`
+- `EDEADLK`
+- `EDESTADDRREQ`
+- `EDOM`
+- `EDQUOT`
+- `EEXIST`
+- `EFAULT`
+- `EFBIG`
+- `EHOSTUNREACH`
+- `EIDRM`
+- `EILSEQ`
+- `EINPROGRESS`
+- `EINTR`
+- `EINVAL`
+- `EIO`
+- `EISCONN`
+- `EISDIR`
+- `ELOOP`
+- `EMFILE`
+- `EMLINK`
+- `EMSGSIZE`
+- `EMULTIHOP`
+- `ENAMETOOLONG`
+- `ENETDOWN`
+- `ENETRESET`
+- `ENETUNREACH`
+- `ENFILE`
+- `ENGINE_METHOD_ALL`
+- `ENGINE_METHOD_CIPHERS`
+- `ENGINE_METHOD_DH`
+- `ENGINE_METHOD_DIGESTS`
+- `ENGINE_METHOD_DSA`
+- `ENGINE_METHOD_EC`
+- `ENGINE_METHOD_NONE`
+- `ENGINE_METHOD_PKEY_ASN1_METHS`
+- `ENGINE_METHOD_PKEY_METHS`
+- `ENGINE_METHOD_RAND`
+- `ENGINE_METHOD_RSA`
+- `ENOBUFS`
+- `ENODATA`
+- `ENODEV`
+- `ENOENT`
+- `ENOEXEC`
+- `ENOLCK`
+- `ENOLINK`
+- `ENOMEM`
+- `ENOMSG`
+- `ENOPROTOOPT`
+- `ENOSPC`
+- `ENOSR`
+- `ENOSTR`
+- `ENOSYS`
+- `ENOTCONN`
+- `ENOTDIR`
+- `ENOTEMPTY`
+- `ENOTSOCK`
+- `ENOTSUP`
+- `ENOTTY`
+- `ENXIO`
+- `EOPNOTSUPP`
+- `EOVERFLOW`
+- `EPERM`
+- `EPIPE`
+- `EPROTO`
+- `EPROTONOSUPPORT`
+- `EPROTOTYPE`
+- `ERANGE`
+- `EROFS`
+- `ESPIPE`
+- `ESRCH`
+- `ESTALE`
+- `ETIME`
+- `ETIMEDOUT`
+- `ETXTBSY`
+- `EWOULDBLOCK`
+- `EXDEV`
+- `F_OK`
+- `OPENSSL_VERSION_NUMBER`
+- `O_APPEND`
+- `O_CREAT`
+- `O_EXCL`
+- `O_NOFOLLOW`
+- `O_RDONLY`
+- `O_RDWR`
+- `O_TRUNC`
+- `O_WRONLY`
+- `POINT_CONVERSION_COMPRESSED`
+- `POINT_CONVERSION_HYBRID`
+- `POINT_CONVERSION_UNCOMPRESSED`
+- `PRIORITY_ABOVE_NORMAL`
+- `PRIORITY_BELOW_NORMAL`
+- `PRIORITY_HIGH`
+- `PRIORITY_HIGHEST`
+- `PRIORITY_LOW`
+- `PRIORITY_NORMAL`
+- `RSA_NO_PADDING`
+- `RSA_PKCS1_OAEP_PADDING`
+- `RSA_PKCS1_PADDING`
+- `RSA_PKCS1_PSS_PADDING`
+- `RSA_PSS_SALTLEN_AUTO`
+- `RSA_PSS_SALTLEN_DIGEST`
+- `RSA_PSS_SALTLEN_MAX_SIGN`
+- `RSA_X931_PADDING`
+- `RTLD_DEEPBIND`
+- `RTLD_GLOBAL`
+- `RTLD_LAZY`
+- `RTLD_LOCAL`
+- `RTLD_NOW`
+- `R_OK`
+- `SIGABRT`
+- `SIGALRM`
+- `SIGBUS`
+- `SIGCHLD`
+- `SIGCONT`
+- `SIGFPE`
+- `SIGHUP`
+- `SIGILL`
+- `SIGINT`
+- `SIGIO`
+- `SIGIOT`
+- `SIGKILL`
+- `SIGPIPE`
+- `SIGPROF`
+- `SIGQUIT`
+- `SIGSEGV`
+- `SIGSTOP`
+- `SIGSYS`
+- `SIGTERM`
+- `SIGTRAP`
+- `SIGTSTP`
+- `SIGTTIN`
+- `SIGTTOU`
+- `SIGURG`
+- `SIGUSR1`
+- `SIGUSR2`
+- `SIGVTALRM`
+- `SIGWINCH`
+- `SIGXCPU`
+- `SIGXFSZ`
+- `SSL_OP_ALL`
+- `SSL_OP_ALLOW_NO_DHE_KEX`
+- `SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION`
+- `SSL_OP_CIPHER_SERVER_PREFERENCE`
+- `SSL_OP_CISCO_ANYCONNECT`
+- `SSL_OP_COOKIE_EXCHANGE`
+- `SSL_OP_CRYPTOPRO_TLSEXT_BUG`
+- `SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS`
+- `SSL_OP_LEGACY_SERVER_CONNECT`
+- `SSL_OP_NO_COMPRESSION`
+- `SSL_OP_NO_ENCRYPT_THEN_MAC`
+- `SSL_OP_NO_QUERY_MTU`
+- `SSL_OP_NO_RENEGOTIATION`
+- `SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION`
+- `SSL_OP_NO_SSLv2`
+- `SSL_OP_NO_SSLv3`
+- `SSL_OP_NO_TICKET`
+- `SSL_OP_NO_TLSv1`
+- `SSL_OP_NO_TLSv1_1`
+- `SSL_OP_NO_TLSv1_2`
+- `SSL_OP_NO_TLSv1_3`
+- `SSL_OP_PRIORITIZE_CHACHA`
+- `SSL_OP_TLS_ROLLBACK_BUG`
+- `S_IRGRP`
+- `S_IROTH`
+- `S_IRUSR`
+- `S_IWGRP`
+- `S_IWOTH`
+- `S_IWUSR`
+- `S_IXGRP`
+- `S_IXOTH`
+- `S_IXUSR`
+- `TLS1_1_VERSION`
+- `TLS1_2_VERSION`
+- `TLS1_3_VERSION`
+- `TLS1_VERSION`
+- `W_OK`
+- `X_OK`
+
 ## `cron`
 
 ### Methods
@@ -442,6 +651,7 @@ Total: 1578 entries across 87 modules.
 - `publicDecrypt` — module
 - `publicEncrypt` — module
 - `randomBytes` — module
+- `randomFill` — module
 - `randomFillSync` — module
 - `randomInt` — module
 - `randomInt` — module
@@ -1224,6 +1434,7 @@ Total: 1578 entries across 87 modules.
 
 ### Methods
 
+- `_makeLong` — module
 - `basename` — module
 - `dirname` — module
 - `extname` — module
@@ -1248,6 +1459,7 @@ Total: 1578 entries across 87 modules.
 
 ### Methods
 
+- `_makeLong` — module
 - `basename` — module
 - `dirname` — module
 - `extname` — module
@@ -1272,6 +1484,7 @@ Total: 1578 entries across 87 modules.
 
 ### Methods
 
+- `_makeLong` — module
 - `basename` — module
 - `dirname` — module
 - `extname` — module

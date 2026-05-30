@@ -144,6 +144,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_transform_stream_writable",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_stream_unwrap_handle",                     OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     // #1545: node:stream/web QueuingStrategy constructors.
+    ("js_streams_strategy_high_water_mark",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_count_queuing_strategy_new",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_byte_length_queuing_strategy_new",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
 
@@ -317,13 +318,17 @@ pub fn take_used_providers() -> HashSet<OwnerKind> {
 mod tests {
     use super::*;
 
+    static PROVIDER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     // `USED_PROVIDERS` is a process-wide static; other tests in the same
-    // process may concurrently insert into it via `LlBlock::call`. We
-    // therefore check membership rather than exact set equality. The
-    // non-registered-FFI check uses a deliberately unique symbol name
-    // that no other test will ever insert.
+    // process may concurrently insert into it via `LlBlock::call`, and these
+    // module tests drain it. Serialize the explicit drain/record assertions so
+    // one test cannot steal another test's providers.
     #[test]
     fn registry_dispatch_routes_to_correct_owner() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
         // Drain anything left over from prior tests.
         let _ = take_used_providers();
 
@@ -380,6 +385,9 @@ mod tests {
     /// `Undefined symbols: _js_node_http_create_server_with_options`.
     #[test]
     fn emitted_create_server_symbol_routes_to_http() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
         let _ = take_used_providers();
         record_ffi_call("js_node_http_create_server_with_options");
         let got = take_used_providers();

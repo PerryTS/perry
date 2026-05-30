@@ -943,6 +943,13 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::LocalGet(id) => {
             matches!(ctx.local_types.get(id), Some(HirType::String))
         }
+        Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
+        Expr::PathWin32 {
+            method: perry_hir::PathWin32Method::ToNamespacedPath,
+            args,
+        } => args
+            .first()
+            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
         Expr::StringCoerce(_)
         | Expr::TypeOf(_)
         | Expr::ArrayJoin { .. }
@@ -961,7 +968,6 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
         | Expr::PathNormalize(_)
-        | Expr::PathToNamespacedPath(_)
         | Expr::PathResolveJoin(..)
         | Expr::PathWin32Join(..)
         | Expr::PathWin32 {
@@ -974,8 +980,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 | perry_hir::PathWin32Method::Format
                 | perry_hir::PathWin32Method::Relative
                 | perry_hir::PathWin32Method::Resolve
-                | perry_hir::PathWin32Method::ResolveJoin
-                | perry_hir::PathWin32Method::ToNamespacedPath,
+                | perry_hir::PathWin32Method::ResolveJoin,
             ..
         }
         | Expr::ProcessVersion
@@ -1121,6 +1126,13 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary { op: BinaryOp::Add, left, right } => {
             is_string_expr(ctx, left) || is_string_expr(ctx, right)
         }
+        Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
+        Expr::PathWin32 {
+            method: perry_hir::PathWin32Method::ToNamespacedPath,
+            args,
+        } => args
+            .first()
+            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
         // String coerce, JSON.stringify, ArrayJoin, etc. all return
         // strings.
         Expr::StringCoerce(_)
@@ -1135,7 +1147,6 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
         | Expr::PathNormalize(_)
-        | Expr::PathToNamespacedPath(_)
         | Expr::PathResolveJoin(..)
         | Expr::PathWin32Join(..)
         | Expr::PathWin32 {
@@ -1148,8 +1159,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 | perry_hir::PathWin32Method::Format
                 | perry_hir::PathWin32Method::Relative
                 | perry_hir::PathWin32Method::Resolve
-                | perry_hir::PathWin32Method::ResolveJoin
-                | perry_hir::PathWin32Method::ToNamespacedPath,
+                | perry_hir::PathWin32Method::ResolveJoin,
             ..
         } => true,
         // String.fromCodePoint(...) / String.fromCharCode(...) / str.at(i)
