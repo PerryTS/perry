@@ -2467,11 +2467,17 @@ pub(crate) unsafe fn get_native_module_constant(
         // when they should have been running. (#2135)
         "worker_threads" => match property {
             "isMainThread" => Some(f64::from_bits(JSValue::bool(true).bits())),
+            "isInternalThread" => Some(f64::from_bits(JSValue::bool(false).bits())),
+            "parentPort" | "workerData" => Some(f64::from_bits(crate::value::TAG_NULL)),
             "threadId" => Some(0.0),
+            "threadName" => Some(str_val("")),
             "resourceLimits" => {
                 let obj = crate::object::js_object_alloc(0, 0);
                 Some(crate::value::js_nanbox_pointer(obj as i64))
             }
+            "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
+                "nodejs.worker_threads.SHARE_ENV",
+            ))),
             _ => None,
         },
         // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
