@@ -590,7 +590,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // arrives. Other property shapes still fall through to
             // `0.0`.
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
-                if property == "captureStackTrace" {
+                // #2904: V8/Node static Error members read as values
+                // (`typeof Error.isError`, `Error.stackTraceLimit`, …). The
+                // HIR collapses every builtin global receiver to
+                // `GlobalGet(0)`, so route by property name alone: resolve the
+                // real `Error` constructor closure and read the named field
+                // off it (where `install_error_static_methods` stored them).
+                if matches!(
+                    property.as_str(),
+                    "captureStackTrace" | "isError" | "stackTraceLimit" | "prepareStackTrace"
+                ) {
                     let error_idx = ctx.strings.intern("Error");
                     let error_bytes_global =
                         format!("@{}", ctx.strings.entry(error_idx).bytes_global);

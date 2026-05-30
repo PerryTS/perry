@@ -85,18 +85,27 @@ pub(super) fn try_inline_array_methods(
                             }
                         }
                         "indexOf" => {
+                            // #2804: carry the optional fromIndex (2nd arg).
                             if !args.is_empty() {
+                                let mut it = args.into_iter();
+                                let value = it.next().unwrap();
+                                let from_index = it.next().map(Box::new);
                                 return Ok(Ok(Expr::ArrayIndexOf {
                                     array: Box::new(array_expr),
-                                    value: Box::new(args.into_iter().next().unwrap()),
+                                    value: Box::new(value),
+                                    from_index,
                                 }));
                             }
                         }
                         "includes" => {
                             if !args.is_empty() {
+                                let mut it = args.into_iter();
+                                let value = it.next().unwrap();
+                                let from_index = it.next().map(Box::new);
                                 return Ok(Ok(Expr::ArrayIncludes {
                                     array: Box::new(array_expr),
-                                    value: Box::new(args.into_iter().next().unwrap()),
+                                    value: Box::new(value),
+                                    from_index,
                                 }));
                             }
                         }

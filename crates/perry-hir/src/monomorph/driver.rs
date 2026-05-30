@@ -436,9 +436,21 @@ fn collect_instantiations_in_expr(
         | Expr::ArrayPushSpread { source: value, .. } => {
             collect_instantiations_in_expr(value, ctx, module, idx);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             collect_instantiations_in_expr(array, ctx, module, idx);
             collect_instantiations_in_expr(value, ctx, module, idx);
+            if let Some(fi) = from_index {
+                collect_instantiations_in_expr(fi, ctx, module, idx);
+            }
         }
         Expr::ArraySlice { array, start, end } => {
             collect_instantiations_in_expr(array, ctx, module, idx);

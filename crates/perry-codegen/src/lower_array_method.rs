@@ -410,13 +410,20 @@ pub(crate) fn lower_array_method(
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         "includes" => {
-            if args.len() != 1 {
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: Array.includes expects 1 arg, got {}",
+                    "perry-codegen: Array.includes expects 1-2 args, got {}",
                     args.len()
                 );
             }
             let val_box = lower_expr(ctx, &args[0])?;
+            // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
+            // when present; otherwise has_from=0 with a placeholder DOUBLE.
+            let (from_box, has_from) = if args.len() == 2 {
+                (lower_expr(ctx, &args[1])?, "1")
+            } else {
+                (val_box.clone(), "0")
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // Use `js_array_includes_jsvalue` for deep equality so
@@ -427,7 +434,12 @@ pub(crate) fn lower_array_method(
             let i32_v = blk.call(
                 I32,
                 "js_array_includes_jsvalue",
-                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &val_box),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
             );
             // Convert i32 boolean to NaN-boxed true/false
             let bit = blk.icmp_ne(I32, &i32_v, "0");
@@ -441,13 +453,20 @@ pub(crate) fn lower_array_method(
             Ok(blk.bitcast_i64_to_double(&tagged))
         }
         "indexOf" => {
-            if args.len() != 1 {
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: Array.indexOf expects 1 arg, got {}",
+                    "perry-codegen: Array.indexOf expects 1-2 args, got {}",
                     args.len()
                 );
             }
             let val_box = lower_expr(ctx, &args[0])?;
+            // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
+            // when present; otherwise has_from=0 with a placeholder DOUBLE.
+            let (from_box, has_from) = if args.len() == 2 {
+                (lower_expr(ctx, &args[1])?, "1")
+            } else {
+                (val_box.clone(), "0")
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // Issue #214: route through `_jsvalue` so string elements
@@ -459,7 +478,12 @@ pub(crate) fn lower_array_method(
             let i32_v = blk.call(
                 I32,
                 "js_array_indexOf_jsvalue",
-                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &val_box),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
             );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
