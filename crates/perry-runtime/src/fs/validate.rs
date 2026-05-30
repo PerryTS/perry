@@ -258,6 +258,24 @@ pub(crate) fn throw_ebadf_pub(syscall: &'static str) -> ! {
     throw_ebadf(syscall)
 }
 
+/// Issue #3332 — callback-style fd helpers (`fs.close`, `fs.fsync`,
+/// `fs.fdatasync`, `fs.fchmod`) must DELIVER the `EBADF` error to the
+/// callback rather than throw it. The fd *type* validation still throws
+/// synchronously (matching Node's `validateInt32` on a non-numeric fd);
+/// only the "valid type but unknown descriptor" case becomes a deferred
+/// callback error. Returns `Some(err_value)` when the fd is not open,
+/// `None` when it is registered.
+pub(crate) fn fd_open_callback_error(value: f64, syscall: &'static str) -> Option<f64> {
+    validate_fd(value);
+    let jv = JSValue::from_bits(value.to_bits());
+    let fd = numeric_to_i32(jv);
+    if crate::fs::fd_is_registered(fd) {
+        None
+    } else {
+        Some(build_ebadf_error_value(syscall))
+    }
+}
+
 /// Validate that `value` is a finite integer in `[min, max]`. On type or
 /// range failure throws Node's `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE`
 /// with the same `Received` clause shape Node uses.

@@ -9,10 +9,175 @@
 
 use anyhow::Result;
 use perry_types::Type;
+use std::collections::HashSet;
 use swc_ecma_ast as ast;
 
 use super::*;
 use crate::ir::*;
+
+fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> HashSet<String> {
+    fn collect_from_stmt(stmt: &ast::Stmt, out: &mut HashSet<String>) {
+        match stmt {
+            ast::Stmt::Block(block) => {
+                for stmt in &block.stmts {
+                    collect_from_stmt(stmt, out);
+                }
+            }
+            ast::Stmt::Expr(expr_stmt) => collect_from_expr(&expr_stmt.expr, out),
+            ast::Stmt::If(if_stmt) => {
+                collect_from_expr(&if_stmt.test, out);
+                collect_from_stmt(&if_stmt.cons, out);
+                if let Some(alt) = &if_stmt.alt {
+                    collect_from_stmt(alt, out);
+                }
+            }
+            ast::Stmt::While(while_stmt) => {
+                collect_from_expr(&while_stmt.test, out);
+                collect_from_stmt(&while_stmt.body, out);
+            }
+            ast::Stmt::DoWhile(do_while) => {
+                collect_from_stmt(&do_while.body, out);
+                collect_from_expr(&do_while.test, out);
+            }
+            ast::Stmt::For(for_stmt) => {
+                if let Some(init) = &for_stmt.init {
+                    match init {
+                        ast::VarDeclOrExpr::Expr(expr) => collect_from_expr(expr, out),
+                        ast::VarDeclOrExpr::VarDecl(_) => {}
+                    }
+                }
+                if let Some(test) = &for_stmt.test {
+                    collect_from_expr(test, out);
+                }
+                if let Some(update) = &for_stmt.update {
+                    collect_from_expr(update, out);
+                }
+                collect_from_stmt(&for_stmt.body, out);
+            }
+            ast::Stmt::ForIn(for_in) => {
+                collect_from_expr(&for_in.right, out);
+                collect_from_stmt(&for_in.body, out);
+            }
+            ast::Stmt::ForOf(for_of) => {
+                collect_from_expr(&for_of.right, out);
+                collect_from_stmt(&for_of.body, out);
+            }
+            ast::Stmt::Labeled(labeled) => collect_from_stmt(&labeled.body, out),
+            ast::Stmt::Switch(switch_stmt) => {
+                collect_from_expr(&switch_stmt.discriminant, out);
+                for case in &switch_stmt.cases {
+                    if let Some(test) = &case.test {
+                        collect_from_expr(test, out);
+                    }
+                    for stmt in &case.cons {
+                        collect_from_stmt(stmt, out);
+                    }
+                }
+            }
+            ast::Stmt::Try(try_stmt) => {
+                for stmt in &try_stmt.block.stmts {
+                    collect_from_stmt(stmt, out);
+                }
+                if let Some(handler) = &try_stmt.handler {
+                    for stmt in &handler.body.stmts {
+                        collect_from_stmt(stmt, out);
+                    }
+                }
+                if let Some(finalizer) = &try_stmt.finalizer {
+                    for stmt in &finalizer.stmts {
+                        collect_from_stmt(stmt, out);
+                    }
+                }
+            }
+            ast::Stmt::Return(ret) => {
+                if let Some(arg) = &ret.arg {
+                    collect_from_expr(arg, out);
+                }
+            }
+            ast::Stmt::Throw(throw_stmt) => collect_from_expr(&throw_stmt.arg, out),
+            ast::Stmt::Decl(_)
+            | ast::Stmt::Break(_)
+            | ast::Stmt::Continue(_)
+            | ast::Stmt::Debugger(_)
+            | ast::Stmt::Empty(_) => {}
+            _ => {}
+        }
+    }
+
+    fn collect_from_expr(expr: &ast::Expr, out: &mut HashSet<String>) {
+        match expr {
+            ast::Expr::Assign(assign) => {
+                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) =
+                    &assign.left
+                {
+                    out.insert(ident.id.sym.to_string());
+                }
+                collect_from_expr(&assign.right, out);
+            }
+            ast::Expr::Paren(paren) => collect_from_expr(&paren.expr, out),
+            ast::Expr::Seq(seq) => {
+                for expr in &seq.exprs {
+                    collect_from_expr(expr, out);
+                }
+            }
+            ast::Expr::Cond(cond) => {
+                collect_from_expr(&cond.test, out);
+                collect_from_expr(&cond.cons, out);
+                collect_from_expr(&cond.alt, out);
+            }
+            ast::Expr::Bin(bin) => {
+                collect_from_expr(&bin.left, out);
+                collect_from_expr(&bin.right, out);
+            }
+            ast::Expr::Unary(unary) => collect_from_expr(&unary.arg, out),
+            ast::Expr::Update(update) => {
+                if let ast::Expr::Ident(ident) = update.arg.as_ref() {
+                    out.insert(ident.sym.to_string());
+                }
+            }
+            ast::Expr::Call(call) => {
+                if let ast::Callee::Expr(callee) = &call.callee {
+                    collect_from_expr(callee, out);
+                }
+                for arg in &call.args {
+                    collect_from_expr(&arg.expr, out);
+                }
+            }
+            ast::Expr::New(new_expr) => {
+                collect_from_expr(&new_expr.callee, out);
+                if let Some(args) = &new_expr.args {
+                    for arg in args {
+                        collect_from_expr(&arg.expr, out);
+                    }
+                }
+            }
+            ast::Expr::Member(member) => {
+                collect_from_expr(&member.obj, out);
+                if let ast::MemberProp::Computed(computed) = &member.prop {
+                    collect_from_expr(&computed.expr, out);
+                }
+            }
+            ast::Expr::TsAs(ts_as) => collect_from_expr(&ts_as.expr, out),
+            ast::Expr::TsNonNull(ts_non_null) => collect_from_expr(&ts_non_null.expr, out),
+            ast::Expr::TsTypeAssertion(ts_assert) => collect_from_expr(&ts_assert.expr, out),
+            ast::Expr::TsSatisfies(ts_satisfies) => collect_from_expr(&ts_satisfies.expr, out),
+            ast::Expr::TsConstAssertion(ts_const) => collect_from_expr(&ts_const.expr, out),
+            _ => {}
+        }
+    }
+
+    let mut out = HashSet::new();
+    for item in &ast_module.body {
+        match item {
+            ast::ModuleItem::Stmt(stmt) => collect_from_stmt(stmt, &mut out),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(default_expr)) => {
+                collect_from_expr(&default_expr.expr, &mut out);
+            }
+            _ => {}
+        }
+    }
+    out
+}
 
 pub fn lower_module(
     ast_module: &ast::Module,
@@ -181,6 +346,7 @@ pub fn lower_module_full(
     // First pass: collect all function declarations (both exported and non-exported)
     // Skip 'declare function' statements (functions with no body) - they are external FFI
     // BUT: also skip overload signatures if an implementation exists
+    let reassigned_function_candidates = collect_assigned_function_binding_candidates(ast_module);
     for item in &ast_module.body {
         // Extract function declaration from both regular statements and export declarations
         let fn_decl = match item {
@@ -234,6 +400,19 @@ pub fn lower_module_full(
             // (inner-scope functions shadow outer-scope same-name functions via reverse lookup)
             let func_id = ctx.fresh_func();
             ctx.register_func(func_name.clone(), func_id);
+            if reassigned_function_candidates.contains(&func_name)
+                && ctx.lookup_local(&func_name).is_none()
+            {
+                let local_id = ctx.define_local(func_name.clone(), Type::Any);
+                ctx.function_valued_locals.insert(local_id);
+                module.init.push(Stmt::Let {
+                    id: local_id,
+                    name: func_name.clone(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::FuncRef(func_id)),
+                });
+            }
 
             // Pre-register return type annotation for call-site type inference
             // (so variables initialized from function calls can infer their type)
