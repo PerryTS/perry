@@ -844,10 +844,13 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         }
                         format!("[\n{}\n]", lines.join("\n"))
                     } else {
-                        // Non-numeric multi-line: 4 per line, no padding
+                        // Non-numeric multi-line: short arrays of wide string
+                        // entries print one item per row in Node's compact
+                        // inspect layout.
                         let indent = "  ";
+                        let chunk_size = if length <= 6 { 1 } else { 4 };
                         let mut row_strs: Vec<String> = parts
-                            .chunks(4)
+                            .chunks(chunk_size)
                             .map(|chunk| format!("{}{}", indent, chunk.join(", ")))
                             .collect();
                         let n = row_strs.len();

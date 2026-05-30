@@ -138,7 +138,6 @@ where
         | Expr::FinalizationRegistryNew(v)
         | Expr::ObjectGetOwnPropertyNames(v)
         | Expr::ObjectGetOwnPropertyDescriptors(v)
-        | Expr::ObjectCreate(v)
         | Expr::ObjectFreeze(v)
         | Expr::ObjectSeal(v)
         | Expr::ObjectPreventExtensions(v)
@@ -154,6 +153,7 @@ where
         | Expr::SymbolFor(v)
         | Expr::SymbolKeyFor(v)
         | Expr::SymbolDescription(v)
+        | Expr::RegExpEscape(v)
         | Expr::SymbolToString(v)
         | Expr::RegExpSource(v)
         | Expr::RegExpFlags(v)
@@ -313,6 +313,12 @@ where
         | Expr::ArrayToReversed { array: v }
         | Expr::TemplateRaw(v) => {
             f(v);
+        }
+        Expr::ObjectCreate(proto, props) => {
+            f(proto);
+            if let Some(props) = props {
+                f(props);
+            }
         }
         Expr::BufferConcatWithLength { list, total_length } => {
             f(list);
@@ -626,6 +632,15 @@ where
         Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
             f(v);
         }
+        Expr::StringRaw {
+            call_site,
+            substitutions,
+        } => {
+            f(call_site);
+            for s in substitutions {
+                f(s);
+            }
+        }
         Expr::StringAt { string, index } | Expr::StringCodePointAt { string, index } => {
             f(string);
             f(index);
@@ -661,7 +676,7 @@ where
             f(b);
             f(c);
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             f(items);
             f(key_fn);
         }
@@ -834,23 +849,25 @@ where
             }
         }
         Expr::BoxedPrimitiveNew { arg, .. } => f(arg),
-        Expr::DateSetUtcFullYear { date, value }
-        | Expr::DateSetUtcMonth { date, value }
-        | Expr::DateSetUtcDate { date, value }
-        | Expr::DateSetUtcHours { date, value }
-        | Expr::DateSetUtcMinutes { date, value }
-        | Expr::DateSetUtcSeconds { date, value }
-        | Expr::DateSetUtcMilliseconds { date, value }
-        | Expr::DateSetFullYear { date, value }
-        | Expr::DateSetMonth { date, value }
-        | Expr::DateSetDate { date, value }
-        | Expr::DateSetHours { date, value }
-        | Expr::DateSetMinutes { date, value }
-        | Expr::DateSetSeconds { date, value }
-        | Expr::DateSetMilliseconds { date, value }
-        | Expr::DateSetTime { date, value } => {
+        Expr::DateSetUtcFullYear { date, args }
+        | Expr::DateSetUtcMonth { date, args }
+        | Expr::DateSetUtcDate { date, args }
+        | Expr::DateSetUtcHours { date, args }
+        | Expr::DateSetUtcMinutes { date, args }
+        | Expr::DateSetUtcSeconds { date, args }
+        | Expr::DateSetUtcMilliseconds { date, args }
+        | Expr::DateSetFullYear { date, args }
+        | Expr::DateSetMonth { date, args }
+        | Expr::DateSetDate { date, args }
+        | Expr::DateSetHours { date, args }
+        | Expr::DateSetMinutes { date, args }
+        | Expr::DateSetSeconds { date, args }
+        | Expr::DateSetMilliseconds { date, args }
+        | Expr::DateSetTime { date, args } => {
             f(date);
-            f(value);
+            for a in args {
+                f(a);
+            }
         }
         Expr::ErrorNew(opt) => {
             if let Some(v) = opt {

@@ -23,15 +23,21 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         }
         return promise;
     }
-    let promise = js_promise_new();
+    // Issue #2823: `Promise.resolve(p)` MUST return `p` itself when `p` is
+    // already a native Promise (constructor === Promise). The spec defines
+    // Promise.resolve to short-circuit and return the argument unchanged in
+    // that case — object identity and pending-promise sharing are
+    // observable (`Promise.resolve(p) === p`). Perry only constructs native
+    // `Promise` instances, so a GC_TYPE_PROMISE value always satisfies the
+    // "constructor is Promise" check. Return the existing pointer directly
+    // instead of allocating a fresh wrapper and chaining to it.
     if js_value_is_promise(value) != 0 {
-        bump(&MT_INNER_PROMISE_UNWRAP_COUNT);
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
-        if !inner.is_null() && inner != promise {
-            js_promise_resolve_with_promise(promise, inner);
-            return promise;
+        if !inner.is_null() {
+            return inner;
         }
     }
+    let promise = js_promise_new();
 
     // Issue #586: ECMAScript thenable assimilation. The async-to-generator
     // transform rewrites every `await x` into `Promise.resolve(x).then(...)`

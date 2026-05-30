@@ -1498,6 +1498,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArraySplice { .. }
         | Expr::ObjectFromEntries(..)
         | Expr::ObjectGroupBy { .. }
+        | Expr::MapGroupBy { .. }
         | Expr::StringMatch { .. }
         | Expr::StringMatchAll { .. }
         | Expr::PropertyUpdate { .. }
@@ -1629,6 +1630,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegExpExecGroups => misc_methods::lower(ctx, expr),
         Expr::SetClear(..)
         | Expr::StringFromCodePoint(..)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::StringCodePointAt { .. }
         | Expr::RegExpSource(..)
@@ -1685,6 +1687,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SymbolFor(..)
         | Expr::SymbolKeyFor(..)
         | Expr::SymbolDescription(..)
+        | Expr::RegExpEscape(..)
         | Expr::SymbolToString(..)
         | Expr::ObjectGetOwnPropertySymbols(..)
         | Expr::TextEncoderNew

@@ -1809,6 +1809,12 @@ pub extern "C" fn js_object_get_field_by_name(
                     {
                         return JSValue::number(arity as f64);
                     }
+                    // #3143: built-in proto methods share one func_ptr, so the
+                    // func-ptr arity registry can't tell `map` (1) from `slice`
+                    // (2) — read the per-closure recorded spec length first.
+                    if let Some(len) = super::native_module::builtin_closure_length(obj as usize) {
+                        return JSValue::number(len as f64);
+                    }
                     let arity =
                         crate::closure::closure_arity(obj as *const crate::closure::ClosureHeader);
                     return JSValue::number(arity.unwrap_or(0) as f64);

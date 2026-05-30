@@ -1195,6 +1195,53 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // `PropertyGet { GlobalGet(0), <method> }` (for `Math.min.name` /
     // `Promise.race.name`). Local shadowing (`const Math = …`) lowers the
     // receiver to a `LocalGet` instead, so the fold is correctly skipped.
+    // #3143: spec `.length` own-property on built-in constructors. Same
+    // gating as the `.name` fold below — bare `GlobalGet(0)` receiver (no
+    // local shadowing) and a recognized standard constructor name. Built-in
+    // constructors share a no-op closure thunk with no per-name arity, so a
+    // value-read would otherwise return 0 instead of the spec count
+    // (`Array.length === 1`, `Date.length === 7`).
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if prop_ident.sym.as_ref() == "length" {
+            // Peel transparent TS/paren wrappers so `(Array as any).length` —
+            // the pervasive Test262 / cast idiom — folds the same as the bare
+            // `Array.length`.
+            let mut recv = member.obj.as_ref();
+            loop {
+                recv = match recv {
+                    ast::Expr::TsAs(x) => x.expr.as_ref(),
+                    ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+                    ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+                    ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+                    ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+                    ast::Expr::Paren(x) => x.expr.as_ref(),
+                    _ => break,
+                };
+            }
+            if let ast::Expr::Ident(obj_ident) = recv {
+                let name = obj_ident.sym.as_ref();
+                // The receiver must resolve to the *global* builtin (not a
+                // local shadow). A bare ident lowers to `GlobalGet(0)` (after
+                // the reroute-undo above); wrapped in a cast/paren it keeps the
+                // #973 value-form `PropertyGet { GlobalGet(0), <name> }`. A
+                // shadowing local would lower to `LocalGet`, matching neither —
+                // so the fold is correctly skipped.
+                let is_global_builtin = match &object_expr {
+                    Expr::GlobalGet(0) => true,
+                    Expr::PropertyGet { object, property } => {
+                        matches!(object.as_ref(), Expr::GlobalGet(0)) && property.as_str() == name
+                    }
+                    _ => false,
+                };
+                if is_global_builtin {
+                    if let Some(len) = crate::analysis::builtin_constructor_length(name) {
+                        return Ok(Expr::Number(len as f64));
+                    }
+                }
+            }
+        }
+    }
+
     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
         if prop_ident.sym.as_ref() == "name" {
             match &object_expr {

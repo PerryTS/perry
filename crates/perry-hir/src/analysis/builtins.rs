@@ -76,6 +76,37 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
     )
 }
 
+/// Spec-defined `.length` (declared-parameter count) of a built-in
+/// *constructor*, used by the `<Builtin>.length` HIR fold (#3143). Built-in
+/// constructors are backed by a shared no-op closure thunk in the runtime
+/// (`global_this_builtin_noop_thunk`) with no per-constructor arity recorded,
+/// so a value-read of `.length` returns 0 instead of the spec count
+/// (`Array.length === 1`, `Date.length === 7`, …). Folding the read here at
+/// lowering time yields the spec constant directly.
+///
+/// Returns `None` for names that are *not* standard constructors with a
+/// well-defined `.length` (`globalThis`, `process`, `console`, `Buffer`,
+/// `TextEncoderStream`, `TextDecoderStream`) — those keep their existing
+/// lowering so the read falls through to the runtime unchanged.
+///
+/// Only consulted when the receiver lowered to bare `GlobalGet(0)` (no local
+/// shadowing), exactly mirroring the `.name` fold's gating.
+pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
+    let len = match name {
+        "Array" | "Object" | "String" | "Number" | "Boolean" | "Function" | "Error"
+        | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
+        | "URIError" | "Promise" | "WeakRef" | "BigInt" => 1,
+        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" => 0,
+        "RegExp" | "Proxy" | "File" => 2,
+        "Date" => 7,
+        "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
+        | "Int32Array" | "Float32Array" | "Float64Array" | "BigInt64Array" | "BigUint64Array"
+        | "Uint8ClampedArray" => 3,
+        _ => return None,
+    };
+    Some(len)
+}
+
 /// Spec-defined static *function* members of built-in namespaces /
 /// constructors. Used by the `<Builtin>.<member>.name` HIR fold (#2144)
 /// to recognize cases where `.name` should resolve to the member ident

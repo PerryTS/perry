@@ -596,7 +596,7 @@ pub enum Expr {
     ObjectGetOwnPropertyDescriptor(Box<Expr>, Box<Expr>), // Object.getOwnPropertyDescriptor(obj, key)
     ObjectGetOwnPropertyDescriptors(Box<Expr>), // Object.getOwnPropertyDescriptors(obj) -> { [k]: descriptor }
     ObjectGetOwnPropertyNames(Box<Expr>),       // Object.getOwnPropertyNames(obj) -> string[]
-    ObjectCreate(Box<Expr>),                    // Object.create(proto)
+    ObjectCreate(Box<Expr>, Option<Box<Expr>>), // Object.create(proto[, propertiesObject])
     ObjectFreeze(Box<Expr>),                    // Object.freeze(obj)
     ObjectSeal(Box<Expr>),                      // Object.seal(obj)
     ObjectPreventExtensions(Box<Expr>),         // Object.preventExtensions(obj)
@@ -613,7 +613,9 @@ pub enum Expr {
     SymbolFor(Box<Expr>),         // Symbol.for(key) -> registered symbol
     SymbolKeyFor(Box<Expr>),      // Symbol.keyFor(sym) -> key | undefined
     SymbolDescription(Box<Expr>), // sym.description
-    SymbolToString(Box<Expr>),    // sym.toString()
+    /// RegExp.escape(str) -> escaped string (TC39 proposal, Node 24+)
+    RegExpEscape(Box<Expr>),
+    SymbolToString(Box<Expr>), // sym.toString()
 
     // URL operations
     FileURLToPath(Box<Expr>), // url.fileURLToPath(url) -> string
@@ -1349,6 +1351,13 @@ pub enum Expr {
     StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
     StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string
     StringFromCodePoint(Box<Expr>),    // String.fromCodePoint(code) -> string
+    StringRaw {
+        // Callable String.raw(callSite, ...substitutions) — the non-tagged
+        // form. `call_site` is the `{ raw: [...] }` (array-like) object;
+        // `substitutions` are the interpolated values. (#2789)
+        call_site: Box<Expr>,
+        substitutions: Vec<Expr>,
+    },
     StringAt {
         string: Box<Expr>,
         index: Box<Expr>,
@@ -1464,68 +1473,70 @@ pub enum Expr {
     DateGetUtcSeconds(Box<Expr>),      // date.getUTCSeconds() -> number (0-59)
     DateGetUtcMilliseconds(Box<Expr>), // date.getUTCMilliseconds() -> number (0-999)
 
-    // Date setters (UTC variants) — return the new timestamp
+    // Date setters (UTC variants) — return the new timestamp. `args` carries
+    // all call arguments (Node setters accept optional trailing components,
+    // e.g. `setUTCHours(h, min?, sec?, ms?)`) — #2851.
     DateSetUtcFullYear {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMonth {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcDate {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcHours {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMinutes {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcSeconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMilliseconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Date setters (local-time variants) — return the new timestamp (#1187)
     DateSetFullYear {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMonth {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetDate {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetHours {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMinutes {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetSeconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMilliseconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetTime {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Date misc
@@ -1820,6 +1831,13 @@ pub enum Expr {
     /// Walks `items` and groups each element by the string key returned
     /// from `keyFn(item, index)`. Lowered through `js_object_group_by`.
     ObjectGroupBy {
+        items: Box<Expr>,
+        key_fn: Box<Expr>,
+    },
+    /// Map.groupBy(items, keyFn) -> Map<key, items[]>
+    /// Like ObjectGroupBy but the result is a `Map` and callback keys are
+    /// used directly (no string coercion). Lowered through `js_map_group_by`.
+    MapGroupBy {
         items: Box<Expr>,
         key_fn: Box<Expr>,
     },

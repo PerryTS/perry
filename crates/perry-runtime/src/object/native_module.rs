@@ -44,6 +44,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 /// Special class ID for native module namespace objects
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
+const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
@@ -54,6 +55,20 @@ pub(crate) fn buffer_pool_size() -> f64 {
 
 pub(crate) fn set_buffer_pool_size(value: f64) {
     BUFFER_POOL_SIZE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn worker_threads_locks_value() -> f64 {
+    let name = "LockManager";
+    unsafe {
+        js_register_class_id(WORKER_THREADS_LOCK_MANAGER_CLASS_ID);
+        js_register_class_name(
+            WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+            name.as_ptr(),
+            name.len() as u32,
+        );
+    }
+    let obj = js_object_alloc(WORKER_THREADS_LOCK_MANAGER_CLASS_ID, 0);
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 /// Create a native module namespace object
@@ -837,6 +852,35 @@ pub(crate) fn set_bound_native_closure_name(
     crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
 }
 
+thread_local! {
+    /// Per-closure spec `.length` for built-in *prototype methods*. Those
+    /// methods all share one no-op closure thunk
+    /// (`global_this_builtin_noop_thunk`), so the func-ptr-keyed
+    /// `CLOSURE_ARITY_REGISTRY` can't give `Array.prototype.map.length === 1`
+    /// while `Array.prototype.slice.length === 2` — the last install would
+    /// win for every method. Recording the length per *closure instance* here
+    /// (keyed by the closure pointer, like the user-facing dynamic-prop table
+    /// but isolated from it so a user `fn.length = x` write can't perturb it)
+    /// lets the `.length` value-read and `getOwnPropertyDescriptor` agree with
+    /// the spec count. #3143.
+    static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<std::collections::HashMap<usize, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record the spec `.length` for a built-in prototype-method closure. See
+/// [`BUILTIN_CLOSURE_LENGTH`].
+pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
+    BUILTIN_CLOSURE_LENGTH.with(|m| {
+        m.borrow_mut().insert(closure, length);
+    });
+}
+
+/// Look up the recorded spec `.length` for a built-in prototype-method
+/// closure, or `None` if this closure isn't one. See [`BUILTIN_CLOSURE_LENGTH`].
+pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
+    BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
+}
+
 /// Whitelist of (module, property) pairs for which property-read should
 /// produce a callable handle (a bound-method closure) rather than undefined.
 /// Needed so `typeof tty.ReadStream === "function"` matches Node — the
@@ -885,7 +929,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         // #1533: node:stream `promises` namespace exports.
         ("stream/promises", "pipeline")
             | ("stream/promises", "finished")
+            | ("module", "createRequire")
+            | ("module", "findPackageJSON")
+            | ("module", "findSourceMap")
+            | ("module", "flushCompileCache")
+            | ("module", "getCompileCacheDir")
+            | ("module", "getSourceMapsSupport")
+            | ("module", "register")
+            | ("module", "registerHooks")
+            | ("module", "runMain")
+            | ("module", "setSourceMapsSupport")
+            | ("module", "stripTypeScriptTypes")
+            | ("module", "syncBuiltinESMExports")
+            | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
+            | ("module", "SourceMap")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
@@ -932,6 +990,16 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "hrtime")
             | ("worker_threads", "getEnvironmentData")
             | ("worker_threads", "setEnvironmentData")
+            | ("worker_threads", "markAsUntransferable")
+            | ("worker_threads", "isMarkedAsUntransferable")
+            | ("worker_threads", "markAsUncloneable")
+            | ("worker_threads", "moveMessagePortToContext")
+            | ("worker_threads", "receiveMessageOnPort")
+            | ("worker_threads", "postMessageToThread")
+            | ("worker_threads", "Worker")
+            | ("worker_threads", "MessageChannel")
+            | ("worker_threads", "MessagePort")
+            | ("worker_threads", "BroadcastChannel")
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
@@ -2271,6 +2339,11 @@ pub(crate) unsafe fn get_native_module_constant(
             "NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE" => Some(64.0),
             _ => None,
         },
+        "module" => match property {
+            "builtinModules" => Some(crate::process::js_module_builtin_modules()),
+            "constants" => Some(crate::process::js_module_constants()),
+            _ => None,
+        },
         "constants" => fs_const(property)
             .or_else(|| os_signal_const(property))
             .or_else(|| os_errno_const(property))
@@ -2479,6 +2552,7 @@ pub(crate) unsafe fn get_native_module_constant(
                 let obj = crate::object::js_object_alloc(0, 0);
                 Some(crate::value::js_nanbox_pointer(obj as i64))
             }
+            "locks" => Some(worker_threads_locks_value()),
             "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
                 "nodejs.worker_threads.SHARE_ENV",
             ))),

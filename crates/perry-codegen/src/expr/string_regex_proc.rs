@@ -66,6 +66,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_string_from_code_point", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
+        // -------- Callable String.raw(callSite, ...substitutions) (#2789) --------
+        Expr::StringRaw {
+            call_site,
+            substitutions,
+        } => {
+            // callSite as a NaN-boxed value; substitutions collected into a
+            // NaN-boxed array. The runtime reads `callSite.raw` (array-like),
+            // interleaves the substitutions, and throws TypeError on nullish
+            // callSite / raw.
+            let cs = lower_expr(ctx, call_site)?;
+            let subs_arr = lower_array_literal(ctx, substitutions)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_string_raw", &[(DOUBLE, &cs), (DOUBLE, &subs_arr)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
         // -------- str.at(i) — returns single-char string or undefined --------
         Expr::StringAt { string, index } => {
             let s_box = lower_expr(ctx, string)?;
@@ -210,15 +225,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]))
         }
-        Expr::DateSetUtcFullYear { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_full_year",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
+        Expr::DateSetUtcFullYear { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_FULL_YEAR,
+        ),
         Expr::DateGetDate(d) => {
             let v = lower_expr(ctx, d)?;
             Ok(ctx
@@ -414,24 +427,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_atanh", &[(DOUBLE, &v)]))
         }
-        Expr::DateSetUtcDate { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_date",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
-        Expr::DateSetUtcHours { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_hours",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
+        Expr::DateSetUtcDate { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_DATE,
+        ),
+        Expr::DateSetUtcHours { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_HOURS,
+        ),
         Expr::ProcessKill { pid, signal } => {
             let pid_d = lower_expr(ctx, pid)?;
             let sig_d = match signal {
@@ -467,6 +476,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_symbol_key_for", &[(DOUBLE, &s_box)]))
+        }
+        // RegExp.escape(str) — runtime returns a NaN-boxed string f64.
+        Expr::RegExpEscape(arg) => {
+            let a_box = lower_expr(ctx, arg)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_regexp_escape", &[(DOUBLE, &a_box)]))
         }
         Expr::SymbolDescription(sym) => {
             let s_box = lower_expr(ctx, sym)?;

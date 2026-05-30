@@ -361,36 +361,60 @@ pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
-    if crate::array::js_array_is_array(iterable).to_bits() != TAG_TRUE {
-        return map;
-    }
-    let arr_ptr = js_nanbox_get_pointer(iterable) as *const ArrayHeader;
+    use crate::collection_iter::{classify_init, InitIter};
+
+    // #2772: consume ANY iterable (Map/Set/custom), throw on non-iterables,
+    // require each yielded value to be an entry object, and require each key
+    // to be an object (`js_weakmap_set` validates the key).
+    let arr_ptr = match classify_init(iterable) {
+        InitIter::Empty => return map,
+        InitIter::Values(p) => p as *const ArrayHeader,
+    };
     if arr_ptr.is_null() {
         return map;
     }
     unsafe {
         let len = js_array_length(arr_ptr) as usize;
         for i in 0..len {
-            let pair = js_array_get_f64(arr_ptr, i as u32);
-            if crate::array::js_array_is_array(pair).to_bits() != TAG_TRUE {
-                continue;
+            let entry = js_array_get_f64(arr_ptr, i as u32);
+            if !crate::collection_iter::is_entry_object(entry) {
+                crate::collection_iter::throw_not_entry_object(entry);
             }
-            let pair_ptr = js_nanbox_get_pointer(pair) as *const ArrayHeader;
-            if pair_ptr.is_null() {
-                continue;
-            }
-            js_weakmap_set(
-                map,
-                js_array_get_f64(pair_ptr, 0),
-                js_array_get_f64(pair_ptr, 1),
-            );
+            let entry_bits = entry.to_bits() as i64;
+            let key = crate::object::js_object_get_index_polymorphic(entry_bits, 0.0);
+            let val = crate::object::js_object_get_index_polymorphic(entry_bits, 1.0);
+            js_weakmap_set(map, key, val);
         }
     }
     map
 }
 
+/// Throw `TypeError: Invalid value used as weak map key` (WeakMap key must be
+/// an object). Never returns.
+fn throw_invalid_weakmap_key() -> ! {
+    let msg = "Invalid value used as weak map key";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+}
+
+/// Throw `TypeError: Invalid value used in weak set` (WeakSet value must be an
+/// object). Never returns.
+fn throw_invalid_weakset_value() -> ! {
+    let msg = "Invalid value used in weak set";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+}
+
 #[no_mangle]
 pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
+    // #2772: WeakMap keys must be objects. Validate at runtime so a primitive
+    // arriving through a variable / dynamic expression still throws (not only
+    // the AST-literal fast path in lowering).
+    if !crate::collection_iter::is_entry_object(key) {
+        throw_invalid_weakmap_key();
+    }
     let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
     if map_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -531,10 +555,14 @@ pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
-    if crate::array::js_array_is_array(iterable).to_bits() != TAG_TRUE {
-        return set;
-    }
-    let arr_ptr = js_nanbox_get_pointer(iterable) as *const ArrayHeader;
+    use crate::collection_iter::{classify_init, InitIter};
+
+    // #2772: consume ANY iterable (Map/Set/custom), throw on non-iterables,
+    // and require each value to be an object (`js_weakset_add` validates).
+    let arr_ptr = match classify_init(iterable) {
+        InitIter::Empty => return set,
+        InitIter::Values(p) => p as *const ArrayHeader,
+    };
     if arr_ptr.is_null() {
         return set;
     }
@@ -549,6 +577,13 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_add(set: f64, value: f64) -> f64 {
+    // #2772: WeakSet values must be objects — throw the WeakSet-specific
+    // message *before* delegating (js_weakmap_set throws the weak-map-key
+    // message, which is wrong for a Set). Validate at runtime so a primitive
+    // arriving through a variable/dynamic expression still throws.
+    if !crate::collection_iter::is_entry_object(value) {
+        throw_invalid_weakset_value();
+    }
     // Reuse js_weakmap_set with value as both key and value (matches JS Set spec).
     js_weakmap_set(set, value, value);
     set

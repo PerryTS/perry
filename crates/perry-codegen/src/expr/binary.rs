@@ -147,6 +147,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     BinaryOp::BitXor => Some("js_dynamic_bitxor"),
                     BinaryOp::Shl => Some("js_dynamic_shl"),
                     BinaryOp::Shr => Some("js_dynamic_shr"),
+                    // `bigint ** bigint` is a BigInt operation (RangeError on
+                    // negative exponent); `>>>` on any BigInt is a TypeError.
+                    // Both are routed through the dynamic helpers so the
+                    // numeric fallback only fires when neither side is a
+                    // BigInt at runtime (#2908).
+                    BinaryOp::Pow => Some("js_dynamic_pow"),
+                    BinaryOp::UShr => Some("js_dynamic_ushr"),
                     _ => None,
                 };
                 if let Some(fname) = helper {

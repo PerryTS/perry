@@ -10,7 +10,8 @@ use crate::walker::{walk_expr_children, walk_expr_children_mut};
 
 mod builtins;
 pub(crate) use builtins::{
-    is_builtin_function, is_builtin_global_value_name, is_builtin_static_function_member,
+    builtin_constructor_length, is_builtin_function, is_builtin_global_value_name,
+    is_builtin_static_function_member,
 };
 
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
@@ -1056,7 +1057,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::ObjectKeys(obj) | Expr::ObjectValues(obj) | Expr::ObjectEntries(obj) => {
             collect_assigned_locals_expr(obj, assigned);
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             collect_assigned_locals_expr(items, assigned);
             collect_assigned_locals_expr(key_fn, assigned);
         }

@@ -40,6 +40,28 @@ fn is_stream_class_ref(expr: &ast::Expr) -> bool {
     matches!(name, "Readable" | "Duplex" | "Transform" | "PassThrough")
 }
 
+fn is_module_builtin_modules_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Member(member) = unwrap_transparent_expr(expr) else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop_ident) = &member.prop else {
+        return false;
+    };
+    if prop_ident.sym.as_ref() != "builtinModules" {
+        return false;
+    }
+    let ast::Expr::Ident(obj_ident) = unwrap_transparent_expr(member.obj.as_ref()) else {
+        return false;
+    };
+    let obj_name = obj_ident.sym.as_ref();
+    obj_name == "module"
+        || ctx.lookup_builtin_module_alias(obj_name) == Some("module")
+        || ctx
+            .lookup_native_module(obj_name)
+            .map(|(module_name, _)| module_name == "module")
+            .unwrap_or(false)
+}
+
 /// Does this expression's method chain originate from a node:stream
 /// source — `Readable.from(...)` / `Readable.of(...)`, `new Transform()`,
 /// or a chain of lazy iterator helpers (`map`/`filter`/`flatMap`/`take`/
@@ -455,6 +477,19 @@ pub(super) fn try_array_only_methods(
                             comparator: Box::new(args.into_iter().next().unwrap()),
                         }));
                     }
+                    "slice"
+                        if args.len() <= 2 && is_module_builtin_modules_expr(ctx, &member.obj) =>
+                    {
+                        let array_expr = lower_expr(ctx, &member.obj)?;
+                        let mut args_iter = args.into_iter();
+                        let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                        let end = args_iter.next();
+                        return Ok(Ok(Expr::ArraySlice {
+                            array: Box::new(array_expr),
+                            start: Box::new(start),
+                            end: end.map(Box::new),
+                        }));
+                    }
                     // .slice() exists on both Array and String, so we can only safely
                     // lower to ArraySlice when the receiver is definitely an
                     // array-producing expression (matches the indexOf/includes pattern
@@ -665,11 +700,21 @@ pub(super) fn try_array_only_methods(
                             comparator,
                         }));
                     }
-                    "toSpliced" if args.len() >= 2 => {
+                    "toSpliced" => {
+                        // #2794: Node treats omitted args as valid. 0 args ->
+                        // shallow copy (start 0, deleteCount 0); 1 arg -> delete
+                        // from start through the end (deleteCount = +Infinity,
+                        // clamped in the runtime); 2+ args -> explicit count.
                         let array_expr = lower_expr(ctx, &member.obj)?;
+                        let arg_count = args.len();
                         let mut args_iter = args.into_iter();
-                        let start = args_iter.next().unwrap();
-                        let delete_count = args_iter.next().unwrap();
+                        let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                        let delete_count = match args_iter.next() {
+                            Some(dc) => dc,
+                            // 1 arg: delete through end; 0 args: delete nothing.
+                            None if arg_count >= 1 => Expr::Number(f64::INFINITY),
+                            None => Expr::Number(0.0),
+                        };
                         let items: Vec<Expr> = args_iter.collect();
                         return Ok(Ok(Expr::ArrayToSpliced {
                             array: Box::new(array_expr),

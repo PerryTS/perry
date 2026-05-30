@@ -58,6 +58,12 @@ pub(super) fn try_module_class_static(
                                 // value-method dispatch instead of building a
                                 // bogus NativeMethodCall(class="supportedEntryTypes").
                                 | ("perf_hooks", "supportedEntryTypes")
+                                // `module.builtinModules` is an Array value,
+                                // so `module.builtinModules.slice()` must
+                                // dispatch as an array method, not a
+                                // `module.builtinModules.slice` class static.
+                                | ("module", "builtinModules")
+                                | ("node:module", "builtinModules")
                                 // `process.version` is a string value. Let
                                 // String.prototype methods dispatch through
                                 // the normal value-method path instead of

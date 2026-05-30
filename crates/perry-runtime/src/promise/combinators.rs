@@ -213,6 +213,210 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     }
 }
 
+/// Issue #2822: compute the Node-compatible prefix for the
+/// "<x> is not iterable (cannot read property Symbol(Symbol.iterator))"
+/// TypeError message for a non-iterable combinator argument.
+///
+/// Node's `%TypeError%` text varies by `typeof`:
+///   number 1 / number -3.5 / boolean true → "<type> <value>"
+///   object null                            → "object null"
+///   undefined / object / symbol / function / bigint → "<type>"
+fn not_iterable_prefix(value: f64) -> String {
+    use crate::value::JSValue;
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jsval.is_null() {
+        return "object null".to_string();
+    }
+    if jsval.is_number() {
+        let s = crate::value::js_jsvalue_to_string(value);
+        let num_str = crate::string::string_as_str(s);
+        return format!("number {}", num_str);
+    }
+    if jsval.is_bool() {
+        let b = value.to_bits() == crate::value::TAG_TRUE;
+        return format!("boolean {}", b);
+    }
+    if jsval.is_bigint() {
+        return "bigint".to_string();
+    }
+    if jsval.is_any_string() {
+        // Strings ARE iterable; this branch should never be reached for
+        // strings, but keep it defensive.
+        return "string".to_string();
+    }
+    if jsval.is_pointer() {
+        let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::symbol::is_registered_symbol(raw) {
+            return "symbol".to_string();
+        }
+        if crate::closure::is_closure_ptr(raw) {
+            return "function".to_string();
+        }
+        return "object".to_string();
+    }
+    "object".to_string()
+}
+
+/// Build a rejected Promise carrying a `TypeError: <prefix> is not iterable
+/// (cannot read property Symbol(Symbol.iterator))` — Node's exact message for
+/// a non-iterable Promise-combinator argument (issue #2822).
+fn rejected_not_iterable(value: f64) -> *mut Promise {
+    let msg = format!(
+        "{} is not iterable (cannot read property Symbol(Symbol.iterator))",
+        not_iterable_prefix(value)
+    );
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    let p = js_promise_new();
+    js_promise_reject(p, f64::from_bits(err_value));
+    p
+}
+
+/// Issue #2822: decide whether a boxed pointer value is iterable, and if so
+/// return its elements as a flat array. Returns `Ok(arr)` for iterables
+/// (arrays, Set, Map, strings, generators / objects with `[Symbol.iterator]`,
+/// iterator objects with a `.next` field) and `Err(())` for everything else.
+///
+/// Reuses `js_array_clone`'s established iterable-collection path (the same
+/// engine that backs spread / `Array.from`), but gates it behind an explicit
+/// iterability probe so non-iterable primitives and plain objects reject with
+/// a `TypeError` instead of silently coercing to `[]`.
+fn combinator_iterable_to_array(value: f64) -> Result<*mut crate::array::ArrayHeader, ()> {
+    use crate::value::JSValue;
+
+    // Arrays and strings are always iterable.
+    if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        return Ok(crate::array::js_array_clone(
+            crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader,
+        ));
+    }
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        return Ok(crate::array::js_array_clone(
+            crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader,
+        ));
+    }
+    if !jsval.is_pointer() {
+        return Err(());
+    }
+
+    let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if raw < 0x100000 {
+        return Err(());
+    }
+
+    // Side-table iterables.
+    if crate::set::is_registered_set(raw) || crate::map::is_registered_map(raw) {
+        return Ok(crate::array::js_array_clone(
+            raw as *const crate::array::ArrayHeader,
+        ));
+    }
+    if crate::buffer::is_registered_buffer(raw) {
+        return Ok(crate::array::js_array_clone(
+            raw as *const crate::array::ArrayHeader,
+        ));
+    }
+
+    // Symbols / closures are not iterable.
+    if crate::symbol::is_registered_symbol(raw) || crate::closure::is_closure_ptr(raw) {
+        return Err(());
+    }
+
+    // GC_TYPE_OBJECT: iterable only if it exposes `[Symbol.iterator]` or a
+    // `.next` closure field (a bare iterator object).
+    let obj_type = unsafe {
+        if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+            return Err(());
+        }
+        let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*hdr).obj_type
+    };
+    if obj_type == crate::gc::GC_TYPE_OBJECT {
+        let has_iterator = {
+            let iter_sym = crate::symbol::well_known_symbol("iterator");
+            if iter_sym.is_null() {
+                false
+            } else {
+                let sym_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+                let iter_fn =
+                    unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
+                iter_fn.to_bits() != crate::value::TAG_UNDEFINED
+            }
+        };
+        let has_next_field = {
+            let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+            let next_val = crate::object::js_object_get_field_by_name(
+                raw as *const crate::object::ObjectHeader,
+                next_key,
+            );
+            let next_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(next_val.bits()));
+            !next_val.is_undefined() && crate::closure::is_closure_ptr(next_ptr as usize)
+        };
+        if has_iterator || has_next_field {
+            return Ok(crate::array::js_array_clone(
+                raw as *const crate::array::ArrayHeader,
+            ));
+        }
+    }
+
+    Err(())
+}
+
+/// Iterable-accepting entry for `Promise.all` (issue #2822). Coerces any
+/// iterable to an array (rejecting non-iterables with a `TypeError`) before
+/// delegating to the array-shaped `js_promise_all`.
+#[no_mangle]
+pub extern "C" fn js_promise_all_iterable(value: f64) -> *mut Promise {
+    match combinator_iterable_to_array(value) {
+        Ok(arr) => js_promise_all(arr),
+        Err(()) => rejected_not_iterable(value),
+    }
+}
+
+/// Iterable-accepting entry for `Promise.race` (issue #2822).
+#[no_mangle]
+pub extern "C" fn js_promise_race_iterable(value: f64) -> *mut Promise {
+    match combinator_iterable_to_array(value) {
+        Ok(arr) => js_promise_race(arr),
+        Err(()) => rejected_not_iterable(value),
+    }
+}
+
+/// Iterable-accepting entry for `Promise.allSettled` (issue #2822).
+#[no_mangle]
+pub extern "C" fn js_promise_all_settled_iterable(value: f64) -> *mut Promise {
+    match combinator_iterable_to_array(value) {
+        Ok(arr) => js_promise_all_settled(arr),
+        Err(()) => rejected_not_iterable(value),
+    }
+}
+
+/// Iterable-accepting entry for `Promise.any` (issue #2822).
+#[no_mangle]
+pub extern "C" fn js_promise_any_iterable(value: f64) -> *mut Promise {
+    match combinator_iterable_to_array(value) {
+        Ok(arr) => js_promise_any(arr),
+        Err(()) => rejected_not_iterable(value),
+    }
+}
+
+/// #2822/#3320: keepalive anchors so the whole-program LLVM (auto-optimize)
+/// build does not dead-strip these codegen-only `#[no_mangle]` entry points.
+#[used]
+static KEEP_PROMISE_ALL_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_all_iterable;
+#[used]
+static KEEP_PROMISE_RACE_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_race_iterable;
+#[used]
+static KEEP_PROMISE_ALL_SETTLED_ITERABLE: extern "C" fn(f64) -> *mut Promise =
+    js_promise_all_settled_iterable;
+#[used]
+static KEEP_PROMISE_ANY_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_any_iterable;
+
 // Queue for scheduled promise resolutions
 thread_local! {
     pub(in crate::promise) static SCHEDULED_RESOLVES: RefCell<Vec<(*mut Promise, f64)>> = const { RefCell::new(Vec::new()) };
