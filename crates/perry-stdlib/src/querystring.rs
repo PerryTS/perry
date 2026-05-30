@@ -171,23 +171,31 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
+fn throw_symbol_to_string_type_error() -> ! {
+    let message = b"Cannot convert a Symbol value to a string";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = perry_runtime::error::js_typeerror_new(msg);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+unsafe fn querystring_public_arg_to_string(value: f64) -> String {
+    if perry_runtime::symbol::js_is_symbol(value) != 0 {
+        throw_symbol_to_string_type_error();
+    }
+    jsvalue_to_owned_string(value)
+}
+
 /// `querystring.escape(str)` → string.
 #[no_mangle]
 pub unsafe extern "C" fn js_querystring_escape(str_arg: f64) -> f64 {
-    let s = match nanboxed_to_string(str_arg) {
-        Some(s) => s,
-        None => return f64::from_bits(JSValue::undefined().bits()),
-    };
+    let s = querystring_public_arg_to_string(str_arg);
     nanbox_string(intern_string(&percent_encode(&s)))
 }
 
 /// `querystring.unescape(str)` → string.
 #[no_mangle]
 pub unsafe extern "C" fn js_querystring_unescape(str_arg: f64) -> f64 {
-    let s = match nanboxed_to_string(str_arg) {
-        Some(s) => s,
-        None => return f64::from_bits(JSValue::undefined().bits()),
-    };
+    let s = querystring_public_arg_to_string(str_arg);
     nanbox_string(intern_string(&percent_decode(&s, false)))
 }
 
