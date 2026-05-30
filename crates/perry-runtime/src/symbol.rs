@@ -180,6 +180,19 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     guard.as_ref().is_some_and(|s| s.contains(&ptr))
 }
 
+/// True for symbols created through `Symbol.for(...)`. These are known symbols
+/// too, but WeakRef / FinalizationRegistry must reject them while accepting
+/// fresh and well-known symbols.
+pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
+    if !is_registered_symbol(ptr) {
+        return false;
+    }
+    unsafe {
+        let sym = ptr as *const SymbolHeader;
+        !sym.is_null() && (*sym).magic == SYMBOL_MAGIC && (*sym).registered != 0
+    }
+}
+
 // Side-table for symbol-keyed properties on objects. The object pointer is
 // the key (as usize); the value is a list of (symbol_ptr, value_bits) pairs.
 // Storage is intentionally simple (linear scan per lookup) — symbol-keyed
