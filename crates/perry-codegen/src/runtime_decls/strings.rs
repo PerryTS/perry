@@ -1779,7 +1779,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_url_revoke_object_url", VOID, &[DOUBLE]);
     module.declare_function("js_buffer_resolve_object_url", DOUBLE, &[DOUBLE]);
     // Static factories.
-    module.declare_function("js_response_static_json", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_response_static_json",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, DOUBLE],
+    );
     module.declare_function("js_response_static_redirect", DOUBLE, &[I64, DOUBLE]);
 
     // ──────────────────────────────────────────────────────────────────
