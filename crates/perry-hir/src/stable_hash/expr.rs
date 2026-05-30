@@ -549,7 +549,7 @@ impl SH for Expr {
             Expr::ReflectConstruct { target, args } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); }
             Expr::ReflectDefineProperty { target, key, descriptor, } => { tag(h, 440); target.as_ref().hash(h); key.as_ref().hash(h); descriptor.as_ref().hash(h); }
             Expr::ReflectGetPrototypeOf(e) => { tag(h, 441); e.as_ref().hash(h); }
-            Expr::ReflectIsExtensible(e) => { tag(h, 12045); e.as_ref().hash(h); }
+            Expr::ReflectIsExtensible(e) => { tag(h, 12048); e.as_ref().hash(h); }
             Expr::ReflectPreventExtensions(e) => { tag(h, 12046); e.as_ref().hash(h); }
             Expr::ReflectDefineMetadata { key, value, target, property_key, } => { tag(h, 12023); key.as_ref().hash(h); value.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
             Expr::ReflectGetMetadata { key, target, property_key, } => { tag(h, 12024); key.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }
