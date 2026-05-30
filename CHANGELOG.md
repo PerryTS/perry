@@ -2,6 +2,17 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1040 — remove duplicate querystring symbol-error helper (main red fix)
+
+`crates/perry-stdlib/src/querystring.rs` defined `throw_symbol_to_string_type_error`
+twice at module scope, so `perry-stdlib` failed to compile with
+`error[E0428]: the name ... is defined multiple times`. PR #3087 added the
+helper; PR #3105 added an identical copy and merged without rebasing onto
+#3087, so the collision landed on `main` (the admin merge bypassed the
+cargo-test that would have caught it). This drops the duplicate copy; the
+surviving definition is behaviorally identical (`TypeError: Cannot convert a
+Symbol value to a string`) and all callers resolve to it.
+
 ## v0.5.1039 — validate path and throw real errors from `fs.statfsSync` (#2921)
 
 `fs.statfsSync(path[, options])` returned a zero-filled `StatFs` object when the
