@@ -247,11 +247,5 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) \u2014 chain produces wrong output. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/compose/composite-end-event": {
-    "issue": "1531",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: composite 'end' event does not fire after src exhausts. Flips to PASS when #1531 lands."
   }
 }
