@@ -596,7 +596,7 @@ pub enum Expr {
     ObjectGetOwnPropertyDescriptor(Box<Expr>, Box<Expr>), // Object.getOwnPropertyDescriptor(obj, key)
     ObjectGetOwnPropertyDescriptors(Box<Expr>), // Object.getOwnPropertyDescriptors(obj) -> { [k]: descriptor }
     ObjectGetOwnPropertyNames(Box<Expr>),       // Object.getOwnPropertyNames(obj) -> string[]
-    ObjectCreate(Box<Expr>),                    // Object.create(proto)
+    ObjectCreate(Box<Expr>, Option<Box<Expr>>), // Object.create(proto[, propertiesObject])
     ObjectFreeze(Box<Expr>),                    // Object.freeze(obj)
     ObjectSeal(Box<Expr>),                      // Object.seal(obj)
     ObjectPreventExtensions(Box<Expr>),         // Object.preventExtensions(obj)
@@ -613,7 +613,9 @@ pub enum Expr {
     SymbolFor(Box<Expr>),         // Symbol.for(key) -> registered symbol
     SymbolKeyFor(Box<Expr>),      // Symbol.keyFor(sym) -> key | undefined
     SymbolDescription(Box<Expr>), // sym.description
-    SymbolToString(Box<Expr>),    // sym.toString()
+    /// RegExp.escape(str) -> escaped string (TC39 proposal, Node 24+)
+    RegExpEscape(Box<Expr>),
+    SymbolToString(Box<Expr>), // sym.toString()
 
     // URL operations
     FileURLToPath(Box<Expr>), // url.fileURLToPath(url) -> string
@@ -829,6 +831,7 @@ pub enum Expr {
     // Crypto operations
     CryptoRandomBytes(Box<Expr>), // crypto.randomBytes(size) -> string (hex)
     CryptoRandomUUID,             // crypto.randomUUID() -> string
+    CryptoRandomUUIDv7,           // crypto.randomUUIDv7() -> string (RFC 9562 v7)
     CryptoSha256(Box<Expr>),      // crypto.sha256(data) -> string (hex)
     CryptoMd5(Box<Expr>),         // crypto.md5(data) -> string (hex)
 
@@ -1819,6 +1822,13 @@ pub enum Expr {
     /// Walks `items` and groups each element by the string key returned
     /// from `keyFn(item, index)`. Lowered through `js_object_group_by`.
     ObjectGroupBy {
+        items: Box<Expr>,
+        key_fn: Box<Expr>,
+    },
+    /// Map.groupBy(items, keyFn) -> Map<key, items[]>
+    /// Like ObjectGroupBy but the result is a `Map` and callback keys are
+    /// used directly (no string coercion). Lowered through `js_map_group_by`.
+    MapGroupBy {
         items: Box<Expr>,
         key_fn: Box<Expr>,
     },

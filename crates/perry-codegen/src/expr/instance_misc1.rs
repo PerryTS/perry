@@ -691,7 +691,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             blk.store(I64, "0", &out_slot);
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let count_i32 = blk.fptosi(DOUBLE, &count_d, I32);
+            let count_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
 
             let (items_ptr, items_count_str) = if item_vals.is_empty() {
                 ("null".to_string(), "0".to_string())
@@ -748,17 +748,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Object.groupBy(items, keyFn) --------
-        // Routes through `js_object_group_by(items_value, callback_ptr)`.
-        // The callback is a closure pointer (i64).
+        // Routes through `js_object_group_by(items_value, callback)`.
+        // Both args are NaN-boxed f64; the runtime validates iterability and
+        // callback callability (TypeError on failure) per Node semantics.
         Expr::ObjectGroupBy { items, key_fn } => {
             let items_v = lower_expr(ctx, items)?;
             let cb_v = lower_expr(ctx, key_fn)?;
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_v);
             Ok(blk.call(
                 DOUBLE,
                 "js_object_group_by",
-                &[(DOUBLE, &items_v), (I64, &cb_handle)],
+                &[(DOUBLE, &items_v), (DOUBLE, &cb_v)],
+            ))
+        }
+
+        // -------- Map.groupBy(items, keyFn) --------
+        // Routes through `js_map_group_by(items_value, callback)` — returns a
+        // Map keyed by callback results without string coercion.
+        Expr::MapGroupBy { items, key_fn } => {
+            let items_v = lower_expr(ctx, items)?;
+            let cb_v = lower_expr(ctx, key_fn)?;
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_map_group_by",
+                &[(DOUBLE, &items_v), (DOUBLE, &cb_v)],
             ))
         }
 

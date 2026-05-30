@@ -822,6 +822,7 @@ pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32
     match (module.as_str(), method.as_str()) {
         ("console", "Console") => Some(1),
         ("util", "isArray") => Some(1),
+        ("module", "isBuiltin") => Some(1),
         ("process", "getBuiltinModule") => Some(1),
         _ => native_callable_export_arity(module.as_str(), method.as_str()),
     }
@@ -913,6 +914,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         // #1533: node:stream `promises` namespace exports.
         ("stream/promises", "pipeline")
             | ("stream/promises", "finished")
+            | ("module", "createRequire")
+            | ("module", "findPackageJSON")
+            | ("module", "findSourceMap")
+            | ("module", "flushCompileCache")
+            | ("module", "getCompileCacheDir")
+            | ("module", "getSourceMapsSupport")
+            | ("module", "register")
+            | ("module", "registerHooks")
+            | ("module", "runMain")
+            | ("module", "setSourceMapsSupport")
+            | ("module", "stripTypeScriptTypes")
+            | ("module", "syncBuiltinESMExports")
+            | ("module", "enableCompileCache")
+            | ("module", "isBuiltin")
+            | ("module", "SourceMap")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
@@ -1407,6 +1423,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "secureHeapUsed")
             | ("crypto", "randomBytes")
             | ("crypto", "randomUUID")
+            | ("crypto", "randomUUIDv7")
             | ("crypto", "randomInt")
             | ("crypto", "generatePrime")
             | ("crypto", "generatePrimeSync")
@@ -2295,6 +2312,11 @@ pub(crate) unsafe fn get_native_module_constant(
             "NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE" => Some(16.0),
             "NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY" => Some(32.0),
             "NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE" => Some(64.0),
+            _ => None,
+        },
+        "module" => match property {
+            "builtinModules" => Some(crate::process::js_module_builtin_modules()),
+            "constants" => Some(crate::process::js_module_constants()),
             _ => None,
         },
         "constants" => fs_const(property)

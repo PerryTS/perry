@@ -971,8 +971,15 @@ fn test_unboxed_object_accessor_define_property_falls_back() {
 
     let obj = unboxed_point_for_shape_change_test(86_105);
     let x_key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
-    let desc =
-        descriptor_object_with_single_field(86_106, b"get", crate::value::JSValue::number(1.0));
+    // #2817: an accessor descriptor's `get` must be callable — a non-function
+    // value now throws. Use a real (capture-less) closure as the getter so we
+    // still exercise the accessor shape-invalidation path under test.
+    let getter = crate::closure::js_closure_alloc(std::ptr::null(), 0);
+    let desc = descriptor_object_with_single_field(
+        86_106,
+        b"get",
+        crate::value::JSValue::pointer(getter as *const u8),
+    );
 
     crate::object::js_object_define_property(
         crate::value::js_nanbox_pointer(obj as i64),

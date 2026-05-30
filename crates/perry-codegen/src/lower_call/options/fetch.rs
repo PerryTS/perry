@@ -40,9 +40,53 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
-                let handle = ctx
-                    .block()
-                    .call(DOUBLE, "js_response_static_json", &[(DOUBLE, &v)]);
+                // #2638: honor the optional `init` arg
+                // (`Response.json(data, { status, statusText, headers })`).
+                // Mirror `new Response(body, init)` field extraction: pull
+                // `status` (NaN-boxed f64), `statusText` (raw string ptr) and
+                // `headers` (a Headers handle, built inline from an object
+                // literal) and feed them to the widened runtime helper. Missing
+                // fields keep their sentinels (status 200, no statusText, no
+                // headers) so the default `Response.json(data)` is unchanged.
+                let mut status_val = "200.0".to_string();
+                let mut status_text_ptr = "0".to_string();
+                let mut headers_handle = "0.0".to_string();
+                if args.len() >= 2 {
+                    if let Some(props) = super::extract_options_fields(ctx, &args[1]) {
+                        for (k, vexpr) in &props {
+                            match k.as_str() {
+                                "status" => {
+                                    status_val = lower_expr(ctx, vexpr)?;
+                                }
+                                "statusText" => {
+                                    status_text_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                                }
+                                "headers" => {
+                                    if let Some(hprops) = super::extract_options_fields(ctx, vexpr)
+                                    {
+                                        headers_handle =
+                                            super::build_headers_from_object(ctx, &hprops)?;
+                                    } else {
+                                        headers_handle = lower_expr(ctx, vexpr)?;
+                                    }
+                                }
+                                _ => {
+                                    let _ = lower_expr(ctx, vexpr)?;
+                                }
+                            }
+                        }
+                    }
+                }
+                let handle = ctx.block().call(
+                    DOUBLE,
+                    "js_response_static_json",
+                    &[
+                        (DOUBLE, &v),
+                        (DOUBLE, &status_val),
+                        (I64, &status_text_ptr),
+                        (DOUBLE, &headers_handle),
+                    ],
+                );
                 return Ok(Some(handle));
             }
             "static_redirect" => {

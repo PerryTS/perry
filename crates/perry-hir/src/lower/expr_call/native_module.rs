@@ -671,9 +671,10 @@ pub(super) fn try_native_module_methods(
                             ))));
                         }
                         "create" => {
-                            return Ok(Ok(Expr::ObjectCreate(Box::new(
-                                args.into_iter().next().unwrap_or(Expr::Undefined),
-                            ))));
+                            let mut it = args.into_iter();
+                            let proto = it.next().unwrap_or(Expr::Undefined);
+                            let props = it.next().map(Box::new);
+                            return Ok(Ok(Expr::ObjectCreate(Box::new(proto), props)));
                         }
                         "isFrozen" => {
                             return Ok(Ok(Expr::ObjectIsFrozen(Box::new(
@@ -856,6 +857,33 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::SymbolKeyFor(Box::new(sym))));
                         }
                         _ => {} // Fall through to generic handling
+                    }
+                }
+            }
+
+            // Check for RegExp static methods: RegExp.escape (#2899)
+            if obj_name == "RegExp" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "escape" {
+                        let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::RegExpEscape(Box::new(arg))));
+                    }
+                }
+            }
+
+            // Check for Map static methods: Map.groupBy
+            if obj_name == "Map" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if method_name == "groupBy" && args.len() >= 2 {
+                        let mut iter = args.into_iter();
+                        let items = iter.next().unwrap();
+                        let key_fn = iter.next().unwrap();
+                        let key_fn = ctx.maybe_wrap_builtin_callback(key_fn, &call.args[1]);
+                        return Ok(Ok(Expr::MapGroupBy {
+                            items: Box::new(items),
+                            key_fn: Box::new(key_fn),
+                        }));
                     }
                 }
             }

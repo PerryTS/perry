@@ -1498,6 +1498,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArraySplice { .. }
         | Expr::ObjectFromEntries(..)
         | Expr::ObjectGroupBy { .. }
+        | Expr::MapGroupBy { .. }
         | Expr::StringMatch { .. }
         | Expr::StringMatchAll { .. }
         | Expr::PropertyUpdate { .. }
@@ -1578,6 +1579,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessSetTitle(..)
         | Expr::RegExpExecIndex
         | Expr::CryptoRandomUUID
+        | Expr::CryptoRandomUUIDv7
         | Expr::CryptoRandomBytes(..)
         | Expr::CryptoSha256(..)
         | Expr::CryptoMd5(..)
@@ -1684,6 +1686,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SymbolFor(..)
         | Expr::SymbolKeyFor(..)
         | Expr::SymbolDescription(..)
+        | Expr::RegExpEscape(..)
         | Expr::SymbolToString(..)
         | Expr::ObjectGetOwnPropertySymbols(..)
         | Expr::TextEncoderNew

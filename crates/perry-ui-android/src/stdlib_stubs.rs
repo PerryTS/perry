@@ -312,6 +312,10 @@ pub extern "C" fn js_crypto_random_uuid() -> i64 {
     0
 }
 #[no_mangle]
+pub extern "C" fn js_crypto_random_uuidv7() -> i64 {
+    0
+}
+#[no_mangle]
 pub extern "C" fn js_crypto_scrypt() -> i64 {
     0
 }

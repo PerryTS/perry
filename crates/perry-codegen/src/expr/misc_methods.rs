@@ -154,6 +154,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_crypto_random_uuid", &[(DOUBLE, &undefined)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
+        Expr::CryptoRandomUUIDv7 => {
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_crypto_random_uuidv7", &[]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
         Expr::CryptoRandomBytes(operand) => {
             // Returns a raw *mut BufferHeader i64. NaN-box with
             // POINTER_TAG so downstream BUFFER_REGISTRY checks

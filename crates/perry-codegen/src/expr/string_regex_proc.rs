@@ -58,10 +58,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- String.fromCodePoint(cp) — returns single-char string --------
         Expr::StringFromCodePoint(o) => {
+            // #2788: pass the raw NaN-boxed value; the runtime validates the
+            // code point and throws RangeError for negative/non-integer/>0x10FFFF.
+            // A prior fptosi truncated `3.14` to `3` and hid the error.
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();
-            let i32_v = blk.fptosi(DOUBLE, &v, I32);
-            let handle = blk.call(I64, "js_string_from_code_point", &[(I32, &i32_v)]);
+            let handle = blk.call(I64, "js_string_from_code_point", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
         // -------- str.at(i) — returns single-char string or undefined --------
@@ -378,10 +380,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- String.fromCharCode(code) --------
         Expr::StringFromCharCode(o) => {
+            // #2788: pass the raw NaN-boxed value; the runtime applies ToUint16
+            // so negative/out-of-range codes wrap modulo 65536. A prior fptosi
+            // is UB on a NaN and dropped the wrap semantics.
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();
-            let i32_v = blk.fptosi(DOUBLE, &v, I32);
-            let handle = blk.call(I64, "js_string_from_char_code", &[(I32, &i32_v)]);
+            let handle = blk.call(I64, "js_string_from_char_code", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
         Expr::RegExpSetLastIndex { regex, value } => {
@@ -463,6 +467,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_symbol_key_for", &[(DOUBLE, &s_box)]))
+        }
+        // RegExp.escape(str) — runtime returns a NaN-boxed string f64.
+        Expr::RegExpEscape(arg) => {
+            let a_box = lower_expr(ctx, arg)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_regexp_escape", &[(DOUBLE, &a_box)]))
         }
         Expr::SymbolDescription(sym) => {
             let s_box = lower_expr(ctx, sym)?;

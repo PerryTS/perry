@@ -56,15 +56,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         Expr::UrlNew { url, base } => {
+            // #3055: `new URL(input[, base])` applies `String(value)` coercion
+            // to both arguments (numbers/null/objects stringify, Symbols throw)
+            // BEFORE parsing. `js_url_coerce_string` replaces plain
+            // string-pointer extraction, which dropped non-string values to a
+            // null/garbage pointer.
             let url_v = lower_expr(ctx, url)?;
-            let url_ptr =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &url_v)]);
+            let url_ptr = ctx
+                .block()
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &url_v)]);
             let obj = if let Some(base) = base {
                 let base_v = lower_expr(ctx, base)?;
-                let base_ptr =
-                    ctx.block()
-                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &base_v)]);
+                let base_ptr = ctx
+                    .block()
+                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &base_v)]);
                 ctx.block().call(
                     I64,
                     "js_url_new_with_base",
@@ -141,10 +146,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Issue #650: URL.canParse(s) -> boolean. Runtime returns 1/0 as i32;
         // we NaN-box to TAG_TRUE / TAG_FALSE to match perry's boolean repr.
         Expr::UrlCanParse(arg) => {
+            // #3054: coerce the input via `String(value)` (Symbols throw).
             let v = lower_expr(ctx, arg)?;
             let str_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &v)]);
             let result_i32 = ctx
                 .block()
                 .call(I32, "js_url_can_parse", &[(I64, &str_ptr)]);
@@ -161,14 +167,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         Expr::UrlCanParseWithBase { input, base } => {
+            // #3054: coerce input + base via `String(value)` (Symbols throw).
             let input_v = lower_expr(ctx, input)?;
-            let input_ptr =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &input_v)]);
+            let input_ptr = ctx
+                .block()
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &input_v)]);
             let base_v = lower_expr(ctx, base)?;
-            let base_ptr =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &base_v)]);
+            let base_ptr = ctx
+                .block()
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &base_v)]);
             let result_i32 = ctx.block().call(
                 I32,
                 "js_url_can_parse_with_base",
@@ -190,10 +197,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // ObjectHeader* `js_url_new` produces on success, or null when the
         // input fails to parse.
         Expr::UrlParse(arg) => {
+            // #3054: coerce the input via `String(value)` (Symbols throw).
             let v = lower_expr(ctx, arg)?;
             let str_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &v)]);
             let obj = ctx.block().call(I64, "js_url_parse", &[(I64, &str_ptr)]);
             // Runtime returns 0 for parse failure; we map that to TAG_NULL so
             // `URL.parse(bad)?.href` short-circuits via optional-chain semantics.
@@ -206,14 +214,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         Expr::UrlParseWithBase { input, base } => {
+            // #3054: coerce input + base via `String(value)` (Symbols throw).
             let input_v = lower_expr(ctx, input)?;
-            let input_ptr =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &input_v)]);
+            let input_ptr = ctx
+                .block()
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &input_v)]);
             let base_v = lower_expr(ctx, base)?;
-            let base_ptr =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &base_v)]);
+            let base_ptr = ctx
+                .block()
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &base_v)]);
             let obj = ctx.block().call(
                 I64,
                 "js_url_parse_with_base",

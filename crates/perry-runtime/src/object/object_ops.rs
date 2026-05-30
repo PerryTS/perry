@@ -15,6 +15,235 @@ fn throw_from_entries_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Throw a `TypeError` with the given UTF-8 message bytes. Used by the
+/// `Object.defineProperty` / `Object.create` descriptor + invariant validation
+/// paths (#2817 / #2843 / #2816).
+pub(crate) fn throw_object_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Throw `TypeError: <prefix><suffix>` where `suffix` is a runtime-built
+/// string (e.g. the offending descriptor value rendered with the same
+/// formatting Node uses in its messages). #2817.
+fn throw_object_type_error_with_suffix(prefix: &str, suffix: &str) -> ! {
+    let full = format!("{prefix}{suffix}");
+    let msg = crate::string::js_string_from_bytes(full.as_ptr(), full.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Render a value the way Node does inside its `Object.defineProperty`
+/// descriptor TypeError messages (e.g. `Property description must be an
+/// object: 1` / `... : undefined` / `Getter must be a function: 1`).
+/// Primitives render via their natural string form; objects render as
+/// `[object Object]` etc. — but in practice these error paths only fire on
+/// primitives, so a simple coercion suffices.
+unsafe fn describe_value_for_type_error(value: f64) -> String {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jv.is_null() {
+        return "null".to_string();
+    }
+    let s = crate::value::js_jsvalue_to_string(value);
+    if s.is_null() {
+        return String::new();
+    }
+    let len = (*s).byte_len as usize;
+    let data = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).unwrap_or("").to_string()
+}
+
+/// Is `value` a non-nullish object reference that `Object.defineProperty` /
+/// `Object.create` accepts as a descriptor / properties bag? (#2817)
+/// Functions/closures count as objects too.
+pub(crate) unsafe fn value_is_object_like(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        // Module-level raw-I64 object pointers (top16 == 0) — accept if it
+        // resolves to a real heap object.
+        let bits = value.to_bits();
+        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+            return is_valid_obj_ptr(bits as *const u8)
+                || crate::closure::is_closure_ptr(bits as usize);
+        }
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>() as usize;
+    if ptr < 0x10000 {
+        return false;
+    }
+    is_valid_obj_ptr(ptr as *const u8) || crate::closure::is_closure_ptr(ptr)
+}
+
+/// Is `value` callable (a closure / function) — used to validate `get`/`set`
+/// descriptor fields. Per spec, an *omitted* (undefined) accessor is allowed;
+/// only a present non-callable value throws. (#2817)
+unsafe fn value_is_callable(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>() as usize;
+        return ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr);
+    }
+    // Class refs (INT32-tagged, top16 == 0x7FFE) are callable constructors.
+    (value.to_bits() >> 48) == 0x7FFE
+}
+
+/// Validate a property descriptor object per ES `ToPropertyDescriptor`
+/// invariants that Node surfaces as `TypeError`s (#2817). Assumes
+/// `descriptor_value` is already known to be an object. Throws on:
+///   - mixing accessor (`get`/`set`) and data (`value`/`writable`) fields,
+///   - a present, non-callable `get`,
+///   - a present, non-callable `set`.
+unsafe fn validate_property_descriptor(descriptor_value: f64) {
+    let desc_ptr = extract_obj_ptr(descriptor_value);
+    if desc_ptr.is_null() {
+        return;
+    }
+    let desc = desc_ptr as *const ObjectHeader;
+
+    let has_field = |name: &[u8]| -> bool {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        own_key_present(desc_ptr, key)
+    };
+    let read = |name: &[u8]| -> crate::value::JSValue {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_get_field_by_name(desc, key)
+    };
+
+    let has_get = has_field(b"get");
+    let has_set = has_field(b"set");
+    let has_value = has_field(b"value");
+    let has_writable = has_field(b"writable");
+
+    if (has_get || has_set) && (has_value || has_writable) {
+        // Node renders the offending descriptor object after the message; for
+        // the plain-object descriptors that hit this path it prints `#<Object>`.
+        throw_object_type_error(
+            b"Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, #<Object>",
+        );
+    }
+
+    if has_get {
+        let g = read(b"get");
+        if !g.is_undefined() && !value_is_callable(f64::from_bits(g.bits())) {
+            let s = describe_value_for_type_error(f64::from_bits(g.bits()));
+            throw_object_type_error_with_suffix("Getter must be a function: ", &s);
+        }
+    }
+    if has_set {
+        let s_field = read(b"set");
+        if !s_field.is_undefined() && !value_is_callable(f64::from_bits(s_field.bits())) {
+            let s = describe_value_for_type_error(f64::from_bits(s_field.bits()));
+            throw_object_type_error_with_suffix("Setter must be a function: ", &s);
+        }
+    }
+}
+
+/// #2843: enforce frozen / sealed / non-extensible invariants for
+/// `Object.defineProperty`. `obj` is the resolved heap object, `key` the
+/// coerced key string. Throws the Node `TypeError` when the definition would
+/// violate an invariant; returns normally when the definition is permitted.
+///
+/// Rules (matching Node v25):
+///   - Adding a NEW key to a non-extensible object:
+///       `Cannot define property <k>, object is not extensible`
+///   - Redefining an EXISTING non-configurable key (frozen, or sealed when
+///     the descriptor changes more than a writable data value):
+///       `Cannot redefine property: <k>`
+///   - A sealed (but not frozen) object still allows rewriting an existing
+///     writable data property's value, so that case is permitted.
+unsafe fn enforce_define_property_invariants(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    key_name: &str,
+    descriptor_value: f64,
+) {
+    if obj.is_null() || (obj as usize) <= 0x10000 {
+        return;
+    }
+    let gc = gc_header_for(obj);
+    let flags = (*gc)._reserved;
+    let frozen = flags & crate::gc::OBJ_FLAG_FROZEN != 0;
+    let sealed = flags & crate::gc::OBJ_FLAG_SEALED != 0;
+    let no_extend = flags & crate::gc::OBJ_FLAG_NO_EXTEND != 0;
+    if !frozen && !sealed && !no_extend {
+        return;
+    }
+
+    let exists = own_key_present(obj, key);
+
+    if !exists {
+        // Adding a new property to a non-extensible object always throws.
+        if no_extend {
+            throw_object_type_error_with_suffix(
+                "Cannot define property ",
+                &format!("{key_name}, object is not extensible"),
+            );
+        }
+        return;
+    }
+
+    // Redefining an existing property. The property is non-configurable iff
+    // the object is frozen or sealed (both drop `configurable` on every key).
+    let attrs =
+        get_property_attrs(obj as usize, key_name).unwrap_or(PropertyAttrs::new(true, true, true));
+    if attrs.configurable() {
+        return; // still configurable — redefinition allowed
+    }
+
+    // Non-configurable existing property. Node permits exactly one mutation:
+    // changing the *value* of a still-writable data property (sealed-but-not-
+    // frozen objects keep `writable`). Any attempt to change configurability,
+    // enumerability, writability (to true), turn it into an accessor, or
+    // write to a non-writable property is rejected with "Cannot redefine".
+    let desc_ptr = extract_obj_ptr(descriptor_value);
+    let is_accessor_desc = if desc_ptr.is_null() {
+        false
+    } else {
+        let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+        let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
+        own_key_present(desc_ptr, get_key) || own_key_present(desc_ptr, set_key)
+    };
+
+    let read_desc_bool = |name: &[u8]| -> Option<bool> {
+        if desc_ptr.is_null() {
+            return None;
+        }
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        if !own_key_present(desc_ptr, key) {
+            return None;
+        }
+        let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, key);
+        Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+    };
+
+    let wants_configurable = read_desc_bool(b"configurable").unwrap_or(false);
+    let wants_writable = read_desc_bool(b"writable");
+    let wants_enumerable = read_desc_bool(b"enumerable");
+
+    // A bare value-only redefinition of a still-writable data property is the
+    // only allowed mutation on a non-configurable property.
+    let only_value_change = !is_accessor_desc
+        && !wants_configurable
+        && wants_enumerable
+            .map(|e| e == attrs.enumerable())
+            .unwrap_or(true)
+        && wants_writable
+            .map(|w| w == attrs.writable())
+            .unwrap_or(true)
+        && attrs.writable();
+    if only_value_change {
+        return;
+    }
+
+    throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
+}
+
 fn throw_from_entries_not_iterable() -> ! {
     throw_from_entries_type_error(b"undefined is not iterable")
 }
@@ -192,97 +421,6 @@ pub extern "C" fn js_object_from_entries(entries_value: f64) -> f64 {
     }
 }
 
-/// `Object.groupBy(items, callback)` — Node 22+ static method.
-/// Walks `items` (an array), calls `callback(item, index)` to compute a
-/// string key per item, and returns a new object whose keys are the
-/// distinct callback results and whose values are arrays of the items
-/// that produced each key.
-///
-/// `items_value` is the NaN-boxed array pointer; `callback` is the
-/// closure to invoke per element. Returns the result object as a
-/// NaN-boxed POINTER_TAG f64 so codegen can pass it through the normal
-/// f64 plumbing.
-#[no_mangle]
-pub extern "C" fn js_object_group_by(
-    items_value: f64,
-    callback: *const crate::closure::ClosureHeader,
-) -> f64 {
-    // Strip NaN-box and validate the array pointer.
-    let bits = items_value.to_bits();
-    let raw = if (bits >> 48) == 0x7FFD {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader
-    } else if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF {
-        bits as *const ArrayHeader
-    } else {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    };
-    if raw.is_null() {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-
-    unsafe {
-        let length = (*raw).length as usize;
-        let elements = (raw as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-
-        // Build a side table: key (UTF-8 String) -> Vec<f64> of group elements.
-        // We materialize the result object only at the end so we don't have to
-        // worry about per-push reallocation invalidating an array stored
-        // inside the object's field slot.
-        use std::collections::BTreeMap;
-        let mut groups: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-        // Preserve insertion order for the keys array (Node iterates the
-        // result object in insertion order, not sorted order).
-        let mut order: Vec<String> = Vec::new();
-
-        for i in 0..length {
-            let item = *elements.add(i);
-            let key_val = crate::closure::js_closure_call2(callback, item, i as f64);
-            // Coerce the key to a UTF-8 String.
-            let key_ptr = crate::builtins::js_string_coerce(key_val);
-            let key_string = if key_ptr.is_null() {
-                "undefined".to_string()
-            } else {
-                let len = (*key_ptr).byte_len as usize;
-                let data =
-                    (key_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                std::str::from_utf8(bytes).unwrap_or("").to_string()
-            };
-
-            if !groups.contains_key(&key_string) {
-                order.push(key_string.clone());
-            }
-            groups.entry(key_string).or_default().push(item);
-        }
-
-        // Materialize the result object. Allocate with the right field count
-        // up front so the keys_array is sized correctly.
-        let obj = js_object_alloc(0, order.len() as u32);
-        if obj.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        for key in &order {
-            // Build the JS string for the key.
-            let key_str_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            // Build the per-group Array<f64> from the materialized Vec.
-            let items_for_key = groups.get(key).unwrap();
-            let arr = crate::array::js_array_alloc(items_for_key.len() as u32);
-            (*arr).length = items_for_key.len() as u32;
-            let arr_data = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-            for (i, v) in items_for_key.iter().enumerate() {
-                // GC_STORE_AUDIT(INIT): groupBy result array is unpublished; layout is rebuilt before publication.
-                std::ptr::write(arr_data.add(i), *v);
-            }
-            super::rebuild_array_layout_from_slots(arr);
-            // NaN-box the array pointer with POINTER_TAG before storing.
-            let arr_boxed = f64::from_bits((arr as u64) | 0x7FFD_0000_0000_0000);
-            js_object_set_field_by_name(obj, key_str_ptr, arr_boxed);
-        }
-        // Return the result object NaN-boxed.
-        f64::from_bits((obj as u64) | 0x7FFD_0000_0000_0000)
-    }
-}
-
 /// Object.is(a, b) — SameValue algorithm
 /// Like ===, except: NaN === NaN (true) and +0 !== -0 (false).
 /// Returns NaN-boxed boolean.
@@ -405,7 +543,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
 }
 
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.
-unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
+pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
     let jsval = crate::JSValue::from_bits(value.to_bits());
     if jsval.is_pointer() {
         jsval.as_pointer::<ObjectHeader>() as *mut ObjectHeader
@@ -525,6 +663,23 @@ pub extern "C" fn js_object_define_property(
     descriptor_value: f64,
 ) -> f64 {
     unsafe {
+        // #2817: ES Object.defineProperty validation.
+        //   1. Target must be an object (or class-ref / function — all objects
+        //      in Node). Primitives / null / undefined throw.
+        //   2. Descriptor must be an object; otherwise
+        //      `Property description must be an object: <desc>`.
+        //   3. Accessor + data fields can't be mixed.
+        //   4. Present `get`/`set` must be callable.
+        let target_is_class_ref = super::class_ref_id(obj_value).is_some();
+        if !target_is_class_ref && !value_is_object_like(obj_value) {
+            throw_object_type_error(b"Object.defineProperty called on non-object");
+        }
+        if !value_is_object_like(descriptor_value) {
+            let desc = describe_value_for_type_error(descriptor_value);
+            throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
+        }
+        validate_property_descriptor(descriptor_value);
+
         // #2159: when the receiver is a class-ref (`Class.prototype` evaluates
         // back to the class itself in Perry — see `class_ref_id` /
         // `js_object_get_own_property_descriptor`'s class-ref arm), route the
@@ -591,7 +746,6 @@ pub extern "C" fn js_object_define_property(
         if key_str.is_null() {
             return obj_value;
         }
-        super::mark_object_dynamic_shape_unknown(obj);
         // Extract the key as a Rust string for the descriptor side-table lookup.
         let key_rust: Option<String> = {
             let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -599,6 +753,13 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
+        // #2843: enforce frozen / sealed / non-extensible invariants BEFORE any
+        // mutation, so a rejected definition leaves the object untouched and the
+        // thrown TypeError matches Node.
+        if let Some(ref k) = key_rust {
+            enforce_define_property_invariants(obj, key_str, k, descriptor_value);
+        }
+        super::mark_object_dynamic_shape_unknown(obj);
         // Extract descriptor object
         let desc_ptr = extract_obj_ptr(descriptor_value);
         if desc_ptr.is_null() {
@@ -888,245 +1049,6 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     );
 }
 
-/// Object.getOwnPropertyDescriptor(obj, key) — returns a data descriptor
-/// `{ value, writable, enumerable, configurable }` for data properties, or an
-/// accessor descriptor `{ get, set, enumerable, configurable }` for properties
-/// installed via `Object.defineProperty(obj, key, { get, set })`. Returns
-/// TAG_UNDEFINED if the property doesn't exist.
-#[no_mangle]
-pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    unsafe {
-        if let Some(class_id) = class_ref_id(obj_value) {
-            let method_name = metadata_key_to_string(key_value);
-            if let Some(method_name) = method_name {
-                if method_name == "constructor" || class_has_own_method(class_id, &method_name) {
-                    let value = if method_name == "constructor" {
-                        obj_value
-                    } else {
-                        class_prototype_method_value_for_name(class_id, &method_name)
-                    };
-                    let packed = b"value\0writable\0enumerable\0configurable";
-                    let desc = js_object_alloc_with_shape(
-                        0x0D_E5_C2,
-                        4,
-                        packed.as_ptr(),
-                        packed.len() as u32,
-                    );
-                    let header_size = std::mem::size_of::<ObjectHeader>();
-                    let fields = (desc as *mut u8).add(header_size) as *mut f64;
-                    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-                    *fields = value;
-                    *fields.add(1) = f64::from_bits(TAG_TRUE);
-                    *fields.add(2) = f64::from_bits(TAG_FALSE);
-                    *fields.add(3) = f64::from_bits(TAG_TRUE);
-                    super::rebuild_object_field_layout(desc, 4);
-                    return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
-                }
-            }
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-
-        // #2059: function objects (closures) are not `ObjectHeader`s — routing
-        // them through `extract_obj_ptr`/`own_key_present` below reads an
-        // out-of-bounds "keys_array" slot (offset 16, past a 0-capture
-        // closure's payload) and segfaults. Resolve their descriptors here:
-        // the built-in `name`/`length` slots (non-writable, non-enumerable,
-        // configurable per spec) plus any user-attached own data property.
-        {
-            let jsv = crate::JSValue::from_bits(obj_value.to_bits());
-            if jsv.is_pointer() {
-                let ptr = jsv.as_pointer::<u8>() as usize;
-                if crate::closure::is_closure_ptr(ptr) {
-                    let key_str = crate::builtins::js_string_coerce(key_value);
-                    if key_str.is_null() {
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
-                    }
-                    let name_ptr =
-                        (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    let name_len = (*key_str).byte_len as usize;
-                    let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
-                        .unwrap_or("");
-
-                    // (value, writable, configurable). `name`/`length` are the
-                    // built-in own data slots; anything else falls back to the
-                    // user-attached dynamic-property side table.
-                    // Built-in `name`/`length` are spec'd `{ writable: false,
-                    // configurable: true }`. A registered descriptor (e.g.
-                    // from `install_proto_method`, #3143, or a user
-                    // `Object.defineProperty`) overrides those defaults.
-                    let registered = super::get_property_attrs(ptr, name);
-                    let writable_default = registered.map(|a| a.writable());
-                    let configurable_default = registered.map(|a| a.configurable()).unwrap_or(true);
-                    let resolved: Option<(f64, bool, bool)> = match name {
-                        "length" => {
-                            let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
-                            let arity = if let Some(arity) =
-                                super::native_module::bound_native_callable_value_arity(
-                                    closure_value,
-                                ) {
-                                arity
-                            } else if let Some(len) =
-                                super::native_module::builtin_closure_length(ptr)
-                            {
-                                // #3143: per-closure spec length for built-in
-                                // proto methods (shared func_ptr can't carry it).
-                                len
-                            } else {
-                                crate::closure::closure_arity(
-                                    ptr as *const crate::closure::ClosureHeader,
-                                )
-                                .unwrap_or(0)
-                            };
-                            // Numbers are NaN-boxed as their raw f64 bits.
-                            Some((
-                                arity as f64,
-                                writable_default.unwrap_or(false),
-                                configurable_default,
-                            ))
-                        }
-                        "name" => {
-                            let dynv = crate::closure::closure_get_dynamic_prop(ptr, "name");
-                            if dynv.to_bits() != crate::value::TAG_UNDEFINED {
-                                // Function `.name` is spec'd non-writable; honor
-                                // a registered override but otherwise report
-                                // `writable: false` (#3143), not the old default
-                                // of `true`.
-                                Some((
-                                    dynv,
-                                    writable_default.unwrap_or(false),
-                                    configurable_default,
-                                ))
-                            } else {
-                                let func_ptr = (*(ptr as *const crate::closure::ClosureHeader))
-                                    .func_ptr
-                                    as usize;
-                                let fname = crate::builtins::function_name_for_ptr(func_ptr)
-                                    .unwrap_or_default();
-                                let s = crate::string::js_string_from_bytes(
-                                    fname.as_ptr(),
-                                    fname.len() as u32,
-                                );
-                                Some((crate::js_nanbox_string(s as i64), false, true))
-                            }
-                        }
-                        _ => {
-                            let dynv = crate::closure::closure_get_dynamic_prop(ptr, name);
-                            if dynv.to_bits() != crate::value::TAG_UNDEFINED {
-                                Some((dynv, true, true))
-                            } else {
-                                None
-                            }
-                        }
-                    };
-                    let Some((value, writable, configurable)) = resolved else {
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
-                    };
-                    // `name`/`length` are non-enumerable; user data props are.
-                    let enumerable = !matches!(name, "name" | "length");
-                    let packed = b"value\0writable\0enumerable\0configurable";
-                    let desc = js_object_alloc_with_shape(
-                        0x0D_E5_C0,
-                        4,
-                        packed.as_ptr(),
-                        packed.len() as u32,
-                    );
-                    let header_size = std::mem::size_of::<ObjectHeader>();
-                    let fields = (desc as *mut u8).add(header_size) as *mut f64;
-                    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-                    *fields = value;
-                    *fields.add(1) = f64::from_bits(if writable { TAG_TRUE } else { TAG_FALSE });
-                    *fields.add(2) = f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
-                    *fields.add(3) =
-                        f64::from_bits(if configurable { TAG_TRUE } else { TAG_FALSE });
-                    super::rebuild_object_field_layout(desc, 4);
-                    return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
-                }
-            }
-        }
-
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        // Extract key string
-        let key_str = crate::builtins::js_string_coerce(key_value);
-        if key_str.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        // Extract key as a Rust string for descriptor lookup.
-        let key_rust: Option<String> = {
-            let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let name_len = (*key_str).byte_len as usize;
-            let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
-            std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
-        };
-
-        // Check whether the key is actually present on the object. A property can
-        // legitimately hold `undefined`, and accessor descriptors have no value slot,
-        // so we check the keys_array directly instead of relying on "value != undefined".
-        let present = own_key_present(obj, key_str);
-        if !present {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-
-        // Look up descriptor flags (default: all true).
-        let attrs = key_rust
-            .as_ref()
-            .and_then(|k| get_property_attrs(obj as usize, k))
-            .unwrap_or(PropertyAttrs::new(true, true, true));
-        let bool_to_f64 = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
-
-        // Accessor descriptor path.
-        if let Some(acc) = key_rust
-            .as_ref()
-            .and_then(|k| get_accessor_descriptor(obj as usize, k))
-        {
-            let packed = b"get\0set\0enumerable\0configurable";
-            let desc =
-                js_object_alloc_with_shape(0x0D_E5_C1, 4, packed.as_ptr(), packed.len() as u32);
-            let header_size = std::mem::size_of::<ObjectHeader>();
-            let fields = (desc as *mut u8).add(header_size) as *mut f64;
-            // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-            *fields = if acc.get != 0 {
-                f64::from_bits(acc.get)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            *fields.add(1) = if acc.set != 0 {
-                f64::from_bits(acc.set)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            // GC_STORE_AUDIT(INIT): descriptor boolean fields are pointer-free and layout is rebuilt below.
-            *fields.add(2) = bool_to_f64(attrs.enumerable());
-            *fields.add(3) = bool_to_f64(attrs.configurable());
-            super::rebuild_object_field_layout(desc, 4);
-            return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
-        }
-
-        // Data descriptor path.
-        let value = js_object_get_field_by_name(obj, key_str);
-        let packed = b"value\0writable\0enumerable\0configurable";
-        let desc = js_object_alloc_with_shape(
-            0x0D_E5_C0, // unique shape_id for property descriptors
-            4,
-            packed.as_ptr(),
-            packed.len() as u32,
-        );
-        let header_size = std::mem::size_of::<ObjectHeader>();
-        let fields = (desc as *mut u8).add(header_size) as *mut f64;
-        // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-        *fields = f64::from_bits(value.bits()); // value
-        *fields.add(1) = bool_to_f64(attrs.writable()); // writable
-        *fields.add(2) = bool_to_f64(attrs.enumerable()); // enumerable
-        *fields.add(3) = bool_to_f64(attrs.configurable()); // configurable
-        super::rebuild_object_field_layout(desc, 4);
-        f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
-    }
-}
-
 /// Helper: does `key` appear in `obj.keys_array`?
 pub(crate) unsafe fn own_key_present(
     obj: *mut ObjectHeader,
@@ -1273,127 +1195,6 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     let value = js_object_get_field_by_name(global_obj, key);
     let bits = value.bits();
     f64::from_bits(bits)
-}
-
-/// Object.getOwnPropertyNames(obj) — returns all own property names (including non-enumerable).
-/// Takes a NaN-boxed f64 object pointer, returns a NaN-boxed f64 array pointer.
-#[no_mangle]
-pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
-    unsafe {
-        if let Some(class_id) = class_ref_id(obj_value) {
-            let mut names: Vec<String> = vec!["constructor".to_string()];
-            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                if let Some(reg) = registry.as_ref() {
-                    if let Some(vtable) = reg.get(&class_id) {
-                        let mut methods: Vec<String> = vtable.methods.keys().cloned().collect();
-                        methods.sort();
-                        names.extend(methods);
-                    }
-                }
-            }
-            let result = crate::array::js_array_alloc(names.len() as u32);
-            for name in names {
-                let str_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                crate::array::js_array_push(result, JSValue::string_ptr(str_ptr));
-            }
-            return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
-        }
-
-        // String / array values have no `ObjectHeader.keys_array`; their own
-        // property names are the index names `"0".."len-1"` plus `"length"`.
-        // Reading a bogus `keys_array` off their header segfaulted (#800).
-        {
-            const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
-            let jv = JSValue::from_bits(obj_value.to_bits());
-            let n: Option<u32> = if jv.is_any_string() {
-                let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                match crate::string::str_bytes_from_jsvalue(obj_value, &mut scratch) {
-                    Some((p, blen)) if !p.is_null() => {
-                        Some(crate::string::compute_utf16_len(p, blen))
-                    }
-                    _ => Some(0),
-                }
-            } else if crate::array::js_array_is_array(obj_value).to_bits() == TAG_TRUE_BITS {
-                let ap = extract_obj_ptr(obj_value) as *const crate::array::ArrayHeader;
-                Some(crate::array::js_array_length(ap))
-            } else {
-                None
-            };
-            if let Some(n) = n {
-                let result = crate::array::js_array_alloc(n + 1);
-                for i in 0..n {
-                    let s = i.to_string();
-                    let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    crate::array::js_array_push(result, JSValue::string_ptr(k));
-                }
-                let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-                crate::array::js_array_push(result, JSValue::string_ptr(lk));
-                return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
-            }
-        }
-
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() {
-            let empty = crate::array::js_array_alloc(0);
-            return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
-        }
-        let keys = (*obj).keys_array;
-        if keys.is_null() {
-            let empty = crate::array::js_array_alloc(0);
-            return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
-        }
-        // Clone the keys array — Object.getOwnPropertyNames includes ALL keys (even non-enumerable).
-        let len = crate::array::js_array_length(keys) as usize;
-        let result = crate::array::js_array_alloc(len as u32);
-        for i in 0..len {
-            let key_val = crate::array::js_array_get(keys, i as u32);
-            crate::array::js_array_push_f64(result, f64::from_bits(key_val.bits()));
-        }
-        f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000)
-    }
-}
-
-/// Object.getOwnPropertyDescriptors(obj) — returns a new object whose own
-/// property keys (the same set `Object.getOwnPropertyNames` reports, including
-/// non-enumerable keys and class-ref method names) each map to the property
-/// descriptor produced by `js_object_get_own_property_descriptor`. Spec:
-/// "for each own property key K of O, set result[K] = descriptor(O, K)".
-///
-/// effect's `SchemaAST.annotations` builds a fresh AST node via
-/// `Object.create(Object.getPrototypeOf(ast), Object.getOwnPropertyDescriptors(ast))`,
-/// so without this the plural call lowered to a null callee and Schema.ts
-/// module init threw `TypeError: value is not a function` (#1791/#1758).
-#[no_mangle]
-pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 {
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    unsafe {
-        // Enumerate own keys exactly like Object.getOwnPropertyNames — this
-        // handles class refs and plain objects, and includes non-enumerable
-        // keys, matching the spec's [[OwnPropertyKeys]] string-key set.
-        let names_value = js_object_get_own_property_names(obj_value);
-        let names_arr =
-            crate::value::js_nanbox_get_pointer(names_value) as *const crate::array::ArrayHeader;
-
-        // Fresh result object that collects { key: descriptor } entries.
-        // Like js_object_entries / js_object_get_own_property_names above, the
-        // intermediate allocations aren't rooted — Perry's builder helpers
-        // follow this convention.
-        let result = js_object_alloc(0, 0);
-
-        if !names_arr.is_null() {
-            let len = crate::array::js_array_length(names_arr) as usize;
-            for i in 0..len {
-                let key_val = crate::array::js_array_get(names_arr, i as u32);
-                let key_f64 = f64::from_bits(key_val.bits());
-                let desc = js_object_get_own_property_descriptor(obj_value, key_f64);
-                let key_str = crate::builtins::js_string_coerce(key_f64);
-                if !key_str.is_null() {
-                    js_object_set_field_by_name(result, key_str, desc);
-                }
-            }
-        }
-        f64::from_bits((result as u64) | POINTER_TAG)
-    }
 }
 
 /// Object.create(proto) — create empty object. Perry ignores prototype; Object.create(null) returns {}.
@@ -1736,6 +1537,22 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 /// on that so `const x = Object.defineProperties(...)` still binds `x`.
 #[no_mangle]
 pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> f64 {
+    // #2817: target must be an object (or class-ref). Node throws
+    // `Object.defineProperties called on non-object` for primitives.
+    let target_is_class_ref = super::class_ref_id(target).is_some();
+    if !target_is_class_ref && !unsafe { value_is_object_like(target) } {
+        throw_object_type_error(b"Object.defineProperties called on non-object");
+    }
+    // #2817: the properties bag must be coercible to an object. Node throws
+    // `Cannot convert undefined or null to object` for null/undefined, and
+    // primitives are boxed (no own enumerable keys → no-op). Match the nullish
+    // case explicitly.
+    {
+        let jv = crate::value::JSValue::from_bits(descriptors.to_bits());
+        if jv.is_undefined() || jv.is_null() {
+            throw_object_type_error(b"Cannot convert undefined or null to object");
+        }
+    }
     let desc_obj = unsafe { extract_obj_ptr(descriptors) };
     if desc_obj.is_null() || !is_valid_obj_ptr(desc_obj as *const u8) {
         return target;

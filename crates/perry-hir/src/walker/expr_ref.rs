@@ -68,6 +68,7 @@ where
         | Expr::TextEncoderNew
         | Expr::TextDecoderNew
         | Expr::CryptoRandomUUID
+        | Expr::CryptoRandomUUIDv7
         | Expr::OsPlatform
         | Expr::OsArch
         | Expr::OsHostname
@@ -137,7 +138,6 @@ where
         | Expr::FinalizationRegistryNew(v)
         | Expr::ObjectGetOwnPropertyNames(v)
         | Expr::ObjectGetOwnPropertyDescriptors(v)
-        | Expr::ObjectCreate(v)
         | Expr::ObjectFreeze(v)
         | Expr::ObjectSeal(v)
         | Expr::ObjectPreventExtensions(v)
@@ -153,6 +153,7 @@ where
         | Expr::SymbolFor(v)
         | Expr::SymbolKeyFor(v)
         | Expr::SymbolDescription(v)
+        | Expr::RegExpEscape(v)
         | Expr::SymbolToString(v)
         | Expr::RegExpSource(v)
         | Expr::RegExpFlags(v)
@@ -312,6 +313,12 @@ where
         | Expr::ArrayToReversed { array: v }
         | Expr::TemplateRaw(v) => {
             f(v);
+        }
+        Expr::ObjectCreate(proto, props) => {
+            f(proto);
+            if let Some(props) = props {
+                f(props);
+            }
         }
         Expr::BufferConcatWithLength { list, total_length } => {
             f(list);
@@ -660,7 +667,7 @@ where
             f(b);
             f(c);
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             f(items);
             f(key_fn);
         }

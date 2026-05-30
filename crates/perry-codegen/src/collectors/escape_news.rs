@@ -521,6 +521,10 @@ fn collect_used_new_fields_in_expr(
         | Expr::ObjectGroupBy {
             items: iterable,
             key_fn: map_fn,
+        }
+        | Expr::MapGroupBy {
+            items: iterable,
+            key_fn: map_fn,
         } => {
             collect_used_new_fields_in_expr(iterable, non_escaping_news, used);
             collect_used_new_fields_in_expr(map_fn, non_escaping_news, used);

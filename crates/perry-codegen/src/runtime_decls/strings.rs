@@ -440,6 +440,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
+    // #2787: NaN-safe JS index coercion (undefined/NaN -> 0, trunc, clamp) for
+    // the char-access methods, replacing a raw `fptosi` that is UB on a NaN.
+    module.declare_function("js_string_index_to_i32", I32, &[DOUBLE]);
     // Issue #514: tag-aware dynamic index dispatch — routes `obj[idx]` to
     // `js_string_char_at` / `js_array_get_f64` / `js_object_get_field_by_name_f64`
     // based on the receiver's NaN-box tag at runtime. Used by IndexGet's
@@ -605,6 +608,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);
@@ -749,6 +753,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // realloc). Param order is (arr, start, delete_count, items_ptr,
     // items_count, out_arr_ptr).
     module.declare_function("js_array_splice", I64, &[I64, I32, I32, PTR, I32, PTR]);
+    module.declare_function("js_array_splice_delete_count", I32, &[DOUBLE]);
     module.declare_function("js_parse_int", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_parse_float", DOUBLE, &[I64]);
     module.declare_function("js_array_reduce", DOUBLE, &[I64, I64, I32, DOUBLE]);
@@ -772,6 +777,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_regexp_new", I64, &[I64, I64]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
+    // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
+    module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);
     module.declare_function("js_get_string_pointer_unified", I64, &[DOUBLE]);
     // Closes #580: alias-on-copy refcount bump for string locals. The
     // call site at `crates/perry-codegen/src/stmt.rs:725` was added by
@@ -812,6 +819,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_dynamic_bitxor", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_dynamic_shl", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_dynamic_shr", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #2908: `bigint ** bigint` (RangeError on negative exponent) and `>>>`
+    // (always TypeError for BigInt operands). Numeric fallback inside.
+    module.declare_function("js_dynamic_pow", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_dynamic_ushr", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_instanceof", DOUBLE, &[DOUBLE, I32]);
     // v0.5.749: dynamic instanceof — `value instanceof type` where type
     // is a runtime expression (function arg holding class ref).
@@ -1204,6 +1215,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_object_get_symbol_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);
+    // #2816: Object.create(proto[, propertiesObject]) — validates the
+    // prototype and applies the optional descriptor bag.
+    module.declare_function("js_object_create_with_props", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_freeze", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_seal", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_prevent_extensions", DOUBLE, &[DOUBLE]);
@@ -1217,8 +1231,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // String extras (already in string.rs; expr.rs was stubbing or missing dispatch).
     module.declare_function("js_string_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_code_point_at", DOUBLE, &[I64, I32]);
-    module.declare_function("js_string_from_code_point", I64, &[I32]);
-    module.declare_function("js_string_from_char_code", I64, &[I32]);
+    // #2788: take the raw NaN-boxed f64 so the runtime can apply ToUint16
+    // (fromCharCode) / RangeError validation (fromCodePoint) — a prior fptosi
+    // truncated fractional/non-finite inputs before they could be observed.
+    module.declare_function("js_string_from_code_point", I64, &[DOUBLE]);
+    module.declare_function("js_string_from_char_code", I64, &[DOUBLE]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
     module.declare_function(
@@ -1341,6 +1358,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_bytes_async", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[DOUBLE]);
+    module.declare_function("js_crypto_random_uuidv7", I64, &[]);
     // crypto.randomInt([min,] max[, cb]) -> number; codegen passes min=0 for the
     // single-arg form. Returns the integer as a plain double.
     module.declare_function("js_crypto_random_int", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -1687,6 +1705,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_promise_race", I64, &[I64]);
     module.declare_function("js_promise_any", I64, &[I64]);
     module.declare_function("js_promise_all_settled", I64, &[I64]);
+    // #2822: iterable-accepting combinator entries (take a boxed f64 value,
+    // coerce iterables to an array, reject non-iterables with TypeError).
+    module.declare_function("js_promise_all_iterable", I64, &[DOUBLE]);
+    module.declare_function("js_promise_race_iterable", I64, &[DOUBLE]);
+    module.declare_function("js_promise_any_iterable", I64, &[DOUBLE]);
+    module.declare_function("js_promise_all_settled_iterable", I64, &[DOUBLE]);
     module.declare_function("js_promise_with_resolvers", I64, &[]);
     module.declare_function("js_promise_try", I64, &[DOUBLE, I64]);
     module.declare_function("js_array_unshift_f64", I64, &[I64, DOUBLE]);
@@ -1779,7 +1803,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_url_revoke_object_url", VOID, &[DOUBLE]);
     module.declare_function("js_buffer_resolve_object_url", DOUBLE, &[DOUBLE]);
     // Static factories.
-    module.declare_function("js_response_static_json", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_response_static_json",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, DOUBLE],
+    );
     module.declare_function("js_response_static_redirect", DOUBLE, &[I64, DOUBLE]);
 
     // ──────────────────────────────────────────────────────────────────

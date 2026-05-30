@@ -941,6 +941,26 @@ fn test_array_splice_delete_to_end() {
 }
 
 #[test]
+fn test_array_splice_delete_count_coerces_js_values() {
+    assert_eq!(
+        js_array_splice_delete_count(f64::from_bits(crate::value::TAG_UNDEFINED)),
+        0
+    );
+    assert_eq!(
+        js_array_splice_delete_count(f64::from_bits(crate::value::TAG_NULL)),
+        0
+    );
+    assert_eq!(
+        js_array_splice_delete_count(crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(b"2.8".as_ptr(), 3) as i64,
+        )),
+        2
+    );
+    assert_eq!(js_array_splice_delete_count(f64::INFINITY), i32::MAX);
+    assert_eq!(js_array_splice_delete_count(f64::NAN), 0);
+}
+
+#[test]
 fn test_array_splice_negative_start() {
     // [1,2,3,4].splice(-2, 1) -> deleted=[3], arr=[1,2,4]
     let arr = js_array_alloc(8);
@@ -1005,5 +1025,28 @@ fn join_routes_objects_and_nested_arrays_through_tostring() {
         let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
         let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
         assert_eq!(s, "1,2;[object Object]");
+    }
+}
+
+#[test]
+fn join_accepts_heap_string_tagged_elements() {
+    unsafe {
+        let left = crate::string::js_string_from_bytes(b"alpha".as_ptr(), 5);
+        let right = crate::string::js_string_from_bytes(b"beta".as_ptr(), 4);
+        let left_v =
+            f64::from_bits(crate::value::STRING_TAG | (left as u64 & crate::value::POINTER_MASK));
+        let right_v =
+            f64::from_bits(crate::value::STRING_TAG | (right as u64 & crate::value::POINTER_MASK));
+
+        let mut arr = js_array_alloc(2);
+        arr = js_array_push_f64(arr, left_v);
+        arr = js_array_push_f64(arr, right_v);
+
+        let sep = crate::string::js_string_from_bytes(b"|".as_ptr(), 1);
+        let out = js_array_join(arr, sep);
+        let len = (*out).byte_len as usize;
+        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
+        assert_eq!(s, "alpha|beta");
     }
 }

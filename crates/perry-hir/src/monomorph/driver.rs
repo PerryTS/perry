@@ -535,6 +535,7 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(expr, ctx, module, idx);
         }
         Expr::CryptoRandomUUID => {}
+        Expr::CryptoRandomUUIDv7 => {}
         // Date operations
         Expr::DateNow => {}
         Expr::DateNew(args) => {

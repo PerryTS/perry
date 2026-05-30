@@ -74,12 +74,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:https` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_module": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:module` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_net": {
     "issue": "793",
     "added": "2026-05-15",
@@ -152,12 +146,6 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
   },
-  "node-suite/stream/readable/wrap-old-stream": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readable.wrap(oldStream) bridge doesn't deliver data events. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/multiple-transforms": {
     "issue": "1539",
     "added": "2026-05-24",
@@ -169,12 +157,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
-  },
-  "node-suite/stream/compose/single-transform": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/single-sync-fn": {
     "issue": "1531",
@@ -218,23 +200,11 @@
     "category": "bug-open",
     "reason": "node:stream/web: ws.abort() during active pipeTo \u2014 pipeTo Promise doesn't reject. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/wrap-pipe-chain": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: wrap(EE) + pipe(dst) \u2014 piped output empty or wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/from-async-generator-function": {
     "issue": "1545",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(asyncGen()) \u2014 iteration wrong or fails. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/double-pipe-through": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeThrough().pipeThrough() chain \u2014 second transform output wrong. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",
@@ -271,17 +241,5 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) \u2014 chain produces wrong output. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/transform-piped-twice": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeThrough().pipeThrough() \u2014 second transform output wrong. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/compose/composite-end-event": {
-    "issue": "1531",
-    "added": "2026-05-25",
-    "category": "bug-open",
-    "reason": "node:stream: composite 'end' event does not fire after src exhausts. Flips to PASS when #1531 lands."
   }
 }

@@ -640,8 +640,15 @@ pub(crate) unsafe fn decode_flags_string(value: f64) -> Option<String> {
 #[no_mangle]
 pub extern "C" fn js_fs_close_callback(fd_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    // #3332: deliver EBADF to the callback for a bad descriptor rather than
+    // throwing it; the close only runs when the fd is open.
+    if let Some(err_val) = crate::fs::validate::fd_open_callback_error(fd_value, "close") {
+        unsafe { call_cb_err1(cb, err_val) };
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let _ = js_fs_close_sync(fd_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -700,8 +707,13 @@ pub extern "C" fn js_fs_ftruncate_callback(fd_value: f64, len_value: f64, callba
 #[no_mangle]
 pub extern "C" fn js_fs_fsync_callback(fd_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    if let Some(err_val) = crate::fs::validate::fd_open_callback_error(fd_value, "fsync") {
+        unsafe { call_cb_err1(cb, err_val) };
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let _ = js_fs_fsync_sync(fd_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -709,8 +721,13 @@ pub extern "C" fn js_fs_fsync_callback(fd_value: f64, callback: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_fs_fdatasync_callback(fd_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    if let Some(err_val) = crate::fs::validate::fd_open_callback_error(fd_value, "fdatasync") {
+        unsafe { call_cb_err1(cb, err_val) };
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let _ = js_fs_fdatasync_sync(fd_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -718,8 +735,13 @@ pub extern "C" fn js_fs_fdatasync_callback(fd_value: f64, callback: f64) -> f64 
 #[no_mangle]
 pub extern "C" fn js_fs_fchmod_callback(fd_value: f64, mode_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = last_callback(&[callback]);
+    if let Some(err_val) = crate::fs::validate::fd_open_callback_error(fd_value, "fchmod") {
+        unsafe { call_cb_err1(cb, err_val) };
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let _ = js_fs_fchmod_sync(fd_value, mode_value);
-    call_cb0(last_callback(&[callback]));
+    call_cb0(cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 

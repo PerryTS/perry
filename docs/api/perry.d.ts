@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1782 entries across 88 modules
+// Coverage: 1801 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -871,6 +871,8 @@ declare module "crypto" {
   /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
+  export function randomUUIDv7(...args: any[]): any;
+  /** stdlib */
   export function scryptSync(...args: any[]): any;
   /** stdlib */
   export function sha256(...args: any[]): any;
@@ -1332,6 +1334,45 @@ declare module "lodash" {
 declare module "lru-cache" {
   /** stdlib */
   export default function (p0: any): any;
+}
+
+declare module "module" {
+  /** stdlib */
+  export class SourceMap { [key: string]: any; }
+  /** stdlib */
+  export const builtinModules: any;
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  export function SourceMap(...args: any[]): any;
+  /** stdlib */
+  export function createRequire(...args: any[]): any;
+  /** stdlib */
+  export function enableCompileCache(...args: any[]): any;
+  /** stdlib */
+  export function findPackageJSON(...args: any[]): any;
+  /** stdlib */
+  export function findSourceMap(...args: any[]): any;
+  /** stdlib */
+  export function flushCompileCache(...args: any[]): any;
+  /** stdlib */
+  export function getCompileCacheDir(...args: any[]): any;
+  /** stdlib */
+  export function getSourceMapsSupport(...args: any[]): any;
+  /** stdlib */
+  export function isBuiltin(...args: any[]): any;
+  /** stdlib */
+  export function register(...args: any[]): any;
+  /** stdlib */
+  export function registerHooks(...args: any[]): any;
+  /** stdlib */
+  export function runMain(...args: any[]): any;
+  /** stdlib */
+  export function setSourceMapsSupport(...args: any[]): any;
+  /** stdlib */
+  export function stripTypeScriptTypes(...args: any[]): any;
+  /** stdlib */
+  export function syncBuiltinESMExports(...args: any[]): any;
 }
 
 declare module "moment" {

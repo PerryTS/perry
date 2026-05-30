@@ -643,7 +643,7 @@ pub extern "C" fn js_array_join(
 
             // Convert element to string based on its type
             if jsvalue.is_string() {
-                let str_ptr = jsvalue.as_pointer() as *const StringHeader;
+                let str_ptr = jsvalue.as_string_ptr();
                 let str_len = (*str_ptr).byte_len as usize;
                 let str_data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
                 let s =
