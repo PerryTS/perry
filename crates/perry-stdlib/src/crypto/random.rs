@@ -54,7 +54,7 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
     size: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
     let size = validate_random_bytes_size(size);
-    if size == 0 || size > 1024 * 1024 {
+    if size == 0 {
         return perry_runtime::buffer::buffer_alloc(0);
     }
 
@@ -89,11 +89,7 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
 /// crypto.randomBytes(size).toString('hex') -> string
 #[no_mangle]
 pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
-    let size = size as usize;
-    if size == 0 || size > 1024 * 1024 {
-        // Limit to 1MB
-        return std::ptr::null_mut();
-    }
+    let size = validate_random_bytes_size(size);
 
     let mut bytes = vec![0u8; size];
     rand::thread_rng().fill_bytes(&mut bytes);

@@ -18,6 +18,14 @@ use super::super::{
 };
 use super::os::user_info_expr_for_call;
 
+fn path_submodule_name(module_name: &str) -> Option<&'static str> {
+    match module_name.strip_prefix("node:").unwrap_or(module_name) {
+        "path/posix" | "path.posix" => Some("posix"),
+        "path/win32" | "path.win32" => Some("win32"),
+        _ => None,
+    }
+}
+
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
@@ -1130,6 +1138,22 @@ pub(super) fn try_native_module_methods(
                             }
                             return Ok(Ok(Expr::UrlParse(Box::new(input))));
                         }
+                    }
+                }
+
+                if let Some(submodule) = path_submodule_name(module_name) {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.to_string();
+                        return Ok(
+                            match super::nested_namespace::dispatch_path_subnamespace(
+                                submodule,
+                                &method_name,
+                                args,
+                            ) {
+                                Ok(expr) => Ok(expr),
+                                Err(args) => Err(args),
+                            },
+                        );
                     }
                 }
 

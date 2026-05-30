@@ -148,6 +148,8 @@ pub(super) fn register_stub_arities() {
     register(pipe_drain_callback as *const u8, 0);
     register(pipe_finish_destination_callback as *const u8, 0);
     register(writable_write_callback_noop as *const u8, 0);
+    register(duplex_pair_write_callback as *const u8, 3);
+    register(duplex_pair_final_callback as *const u8, 1);
     register(transform_write_callback as *const u8, 2);
     register(transform_flush_callback as *const u8, 2);
     register(pipeline_success_callback as *const u8, 0);

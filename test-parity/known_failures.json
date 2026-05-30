@@ -8,12 +8,6 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
-  "test_gap_regexp_advanced": {
-    "issue": null,
-    "added": "2026-05-15",
-    "category": "gap-categorical",
-    "reason": "Lookbehind regex assertions \u2014 Rust's `regex` crate doesn't support `(?<=)` / `(?<!)`. Documented in CLAUDE.md as a known categorical gap. Unblocking requires swapping the regex backend or implementing a separate matcher for lookbehind."
-  },
   "test_issue_422_socket_connect": {
     "issue": "1634",
     "added": "2026-05-15",
@@ -218,12 +212,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncIterable) doesn't drive the source / forward data. Reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/duplex-pair/wired-comms": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: duplexPair() \u2014 fails to compile (export not yet wired through perry-stdlib stream re-exports). Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/single-sync-fn": {
     "issue": "1531",
     "added": "2026-05-23",
@@ -235,12 +223,6 @@
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: Duplex.from(asyncIterable) \u2014 async-gen \u2192 Duplex form not yet wired. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/events/finish-end-close-order": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex with finish/end/close event ordering \u2014 fails to compile (this/method context inside arrow callback). Flips to PASS when #1532 lands."
   },
   "node-suite/stream/duplex/from-object-form": {
     "issue": "1532",
@@ -367,12 +349,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(arrayOfBuffers) \u2014 chunk count or type wrong. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/from-iterator-throws": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(iter that throws on next) \u2014 'error' event not emitted. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/transform-readable-cancel-propagates": {
     "issue": "1545",
