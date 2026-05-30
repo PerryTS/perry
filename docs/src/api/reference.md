@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1546 entries across 85 modules.
+Total: 1580 entries across 87 modules.
 
 ## Modules
 
@@ -52,6 +52,8 @@ Total: 1546 entries across 85 modules.
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
 - [`path`](#path)
+- [`path/posix`](#path-posix)
+- [`path/win32`](#path-win32)
 - [`perf_hooks`](#perf-hooks)
 - [`perry/ads`](#perry-ads)
 - [`perry/audio`](#perry-audio)
@@ -169,8 +171,13 @@ Total: 1546 entries across 85 modules.
 - `ok` — module
 - `partialDeepStrictEqual` — module
 - `rejects` — module
+- `strict` — module
 - `strictEqual` — module
 - `throws` — module
+
+### Properties
+
+- `strict`
 
 ## `async_hooks`
 
@@ -1219,6 +1226,54 @@ Total: 1546 entries across 85 modules.
 - `devNull`
 
 ## `path`
+
+### Methods
+
+- `basename` — module
+- `dirname` — module
+- `extname` — module
+- `format` — module
+- `isAbsolute` — module
+- `join` — module
+- `matchesGlob` — module
+- `normalize` — module
+- `parse` — module
+- `relative` — module
+- `resolve` — module
+- `toNamespacedPath` — module
+
+### Properties
+
+- `delimiter`
+- `posix`
+- `sep`
+- `win32`
+
+## `path/posix`
+
+### Methods
+
+- `basename` — module
+- `dirname` — module
+- `extname` — module
+- `format` — module
+- `isAbsolute` — module
+- `join` — module
+- `matchesGlob` — module
+- `normalize` — module
+- `parse` — module
+- `relative` — module
+- `resolve` — module
+- `toNamespacedPath` — module
+
+### Properties
+
+- `delimiter`
+- `posix`
+- `sep`
+- `win32`
+
+## `path/win32`
 
 ### Methods
 

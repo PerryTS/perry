@@ -112,16 +112,41 @@ pub extern "C" fn js_create_native_module_namespace(
 }
 
 fn normalize_native_module_alias(module_name: &str) -> &str {
-    if module_name == "sys" {
-        crate::node_submodules::emit_sys_deprecation_warning_once();
-        "util"
-    } else {
-        module_name
+    match module_name {
+        "sys" => {
+            crate::node_submodules::emit_sys_deprecation_warning_once();
+            "util"
+        }
+        "path/posix" => "path.posix",
+        "path/win32" => "path.win32",
+        _ => module_name,
     }
 }
 
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
+        "assert/strict" => Some(&[
+            b"AssertionError",
+            b"ok",
+            b"fail",
+            b"equal",
+            b"notEqual",
+            b"deepEqual",
+            b"notDeepEqual",
+            b"deepStrictEqual",
+            b"notDeepStrictEqual",
+            b"strictEqual",
+            b"notStrictEqual",
+            b"partialDeepStrictEqual",
+            b"match",
+            b"doesNotMatch",
+            b"throws",
+            b"rejects",
+            b"doesNotThrow",
+            b"doesNotReject",
+            b"ifError",
+            b"strict",
+        ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
         "querystring" => Some(&[
             b"unescapeBuffer",
@@ -173,7 +198,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 }
 
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
-    matches!(module_name, "util" | "util.types")
+    matches!(
+        module_name,
+        "assert/strict" | "util" | "util.types" | "path.posix" | "path.win32"
+    )
 }
 
 /// #1479: read the module-name string stored in field 0 of a
@@ -626,6 +654,25 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
     }
+    if matches!(module, "path.posix" | "path.win32")
+        && matches!(
+            prop,
+            "join"
+                | "dirname"
+                | "basename"
+                | "extname"
+                | "resolve"
+                | "isAbsolute"
+                | "relative"
+                | "normalize"
+                | "parse"
+                | "format"
+                | "toNamespacedPath"
+                | "matchesGlob"
+        )
+    {
+        return true;
+    }
 
     matches!(
         (module, prop),
@@ -705,6 +752,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("events", "EventEmitter")
             | ("events", "on")
             | ("stream", "compose")
+            | ("stream", "duplexPair")
             | ("stream", "pipeline")
             | ("stream", "Readable")
             | ("stream", "Writable")
@@ -2030,11 +2078,15 @@ pub(crate) unsafe fn get_native_module_constant(
         "path.posix" => match property {
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
+            "posix" => Some(native_namespace_or_create("path.posix", namespace_obj)),
+            "win32" => Some(create_sub_namespace("path.win32")),
             _ => None,
         },
         "path.win32" => match property {
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
+            "posix" => Some(create_sub_namespace("path.posix")),
+            "win32" => Some(native_namespace_or_create("path.win32", namespace_obj)),
             _ => None,
         },
         "fs" => match property {
@@ -2135,6 +2187,10 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "assert" => match property {
             "strict" => Some(create_sub_namespace("assert/strict")),
+            _ => None,
+        },
+        "assert/strict" => match property {
+            "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
             _ => None,
         },
         "stream" => match property {

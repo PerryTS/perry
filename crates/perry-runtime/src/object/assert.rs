@@ -142,6 +142,10 @@ fn constructor_name_matches_builtin_error(thrown: f64, expected: f64) -> bool {
         "ReferenceError"
     } else if expected.to_bits() == global_builtin(b"SyntaxError").to_bits() {
         "SyntaxError"
+    } else if expected.to_bits() == global_builtin(b"EvalError").to_bits() {
+        "EvalError"
+    } else if expected.to_bits() == global_builtin(b"URIError").to_bits() {
+        "URIError"
     } else if expected.to_bits() == global_builtin(b"AggregateError").to_bits() {
         "AggregateError"
     } else {
@@ -157,6 +161,8 @@ fn constructor_name_matches_builtin_error(thrown: f64, expected: f64) -> bool {
                 | "RangeError"
                 | "ReferenceError"
                 | "SyntaxError"
+                | "EvalError"
+                | "URIError"
                 | "AggregateError"
         ) {
             return false;

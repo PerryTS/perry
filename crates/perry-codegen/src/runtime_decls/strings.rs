@@ -685,6 +685,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_loose_eq", I64, &[I64, I64]);
     module.declare_function("js_number_to_fixed", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_replace_regex", I64, &[I64, I64, I64]);
+    module.declare_function("js_string_replace_all_regex", I64, &[I64, I64, I64]);
     module.declare_function("js_array_at", DOUBLE, &[I64, DOUBLE]);
     // Date getters: all take a timestamp double, return a double.
     module.declare_function("js_date_get_time", DOUBLE, &[DOUBLE]);
@@ -897,6 +898,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);
     module.declare_function("js_referenceerror_new", I64, &[I64]);
+    module.declare_function("js_evalerror_new", I64, &[I64]);
+    module.declare_function("js_urierror_new", I64, &[I64]);
     // WeakMap / WeakSet / WeakRef / FinalizationRegistry — called
     // via ExternFuncRef from the HIR lowering (which synthesizes
     // `Call(ExternFuncRef("js_weakmap_set"), [...])`). The f64/f64
@@ -1235,7 +1238,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_regexp_get_source", I64, &[I64]);
     module.declare_function("js_regexp_get_flags", I64, &[I64]);
     module.declare_function("js_string_replace_regex_named", I64, &[I64, I64, I64]);
+    module.declare_function("js_string_replace_all_regex_named", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_regex_fn", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_string_replace_all_regex_fn", I64, &[I64, I64, DOUBLE]);
     // structuredClone(v) — real deep copy, was stubbed as passthrough.
     module.declare_function("js_structured_clone", DOUBLE, &[DOUBLE]);
     // WeakRef / FinalizationRegistry (weakref.rs). `js_weakref_new` /
@@ -1677,6 +1682,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_promise_any", I64, &[I64]);
     module.declare_function("js_promise_all_settled", I64, &[I64]);
     module.declare_function("js_promise_with_resolvers", I64, &[]);
+    module.declare_function("js_promise_try", I64, &[DOUBLE, I64]);
     module.declare_function("js_array_unshift_f64", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_entries", I64, &[I64]);
     module.declare_function("js_array_keys", I64, &[I64]);

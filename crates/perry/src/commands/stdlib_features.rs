@@ -27,7 +27,10 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // ── Web Streams API ──────────────────────────────────────────
         // Per-binding gate `bundled-streams` (v0.5.572) — the
         // well-known flip routes `import 'streams'` to perry-ext-streams.
-        "streams" => &["bundled-streams"],
+        // `node:stream/web` imports are normalized to `stream/web` before
+        // the resolver records the known-submodule key `stream_web`; both
+        // spellings need the same feature for auto-optimized stdlib builds.
+        "streams" | "stream/web" | "stream_web" => &["bundled-streams"],
 
         // ── HTTP client (reqwest) ─────────────────────────────────────
         // `http` / `https` / `http2` join the `http-client` umbrella since
@@ -247,4 +250,21 @@ pub fn compute_required_features(
 /// `--features`.
 pub fn features_to_cargo_arg(features: &BTreeSet<&'static str>) -> String {
     features.iter().copied().collect::<Vec<_>>().join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_web_imports_enable_bundled_streams() {
+        assert_eq!(module_to_features("stream/web"), &["bundled-streams"]);
+        assert_eq!(module_to_features("stream_web"), &["bundled-streams"]);
+
+        let mut imports = BTreeSet::new();
+        imports.insert("stream_web".to_string());
+
+        let features = compute_required_features(&imports, false, false);
+        assert!(features.contains("bundled-streams"));
+    }
 }

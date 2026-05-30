@@ -167,6 +167,210 @@ fn root_string_arg_handle<'scope>(
     }
 }
 
+fn throw_type_error_message(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+pub(crate) fn throw_object_value_of_nullish_receiver() -> ! {
+    throw_type_error_message(b"Cannot convert undefined or null to object")
+}
+
+pub(crate) fn throw_object_to_locale_string_nullish_receiver() -> ! {
+    throw_type_error_message(b"Object.prototype.toLocaleString called on null or undefined")
+}
+
+fn throw_object_to_string_not_function() -> ! {
+    crate::error::js_throw_type_error_not_a_function(
+        std::ptr::null(),
+        0,
+        b"toString".as_ptr(),
+        "toString".len(),
+    )
+}
+
+#[inline]
+unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr = jsval.as_pointer::<u8>();
+    if ptr.is_null()
+        || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+        || !is_valid_obj_ptr(ptr as *const u8)
+    {
+        return None;
+    }
+    let addr = ptr as usize;
+    if crate::set::is_registered_set(addr)
+        || crate::map::is_registered_map(addr)
+        || crate::regex::is_regex_pointer(ptr as *const u8)
+        || crate::symbol::is_registered_symbol(addr)
+    {
+        return None;
+    }
+    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    Some((ptr, (*gc_header).obj_type))
+}
+
+#[inline]
+unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
+    if gc_type == crate::gc::GC_TYPE_OBJECT {
+        Some(ptr as *mut ObjectHeader)
+    } else {
+        None
+    }
+}
+
+unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
+    let gc_header =
+        (object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    ((*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
+}
+
+unsafe fn call_object_to_string_method(object: f64) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object_handle = scope.root_nanbox_f64(object);
+    let receiver = object_handle.get_nanbox_f64();
+    let obj_ptr = object_ptr_from_value(receiver)?;
+    let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let key_handle = scope.root_string_ptr(key);
+    let key_ptr = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let method = js_object_get_field_by_name(obj_ptr as *const ObjectHeader, key_ptr);
+    if method.is_undefined() {
+        if own_key_present(obj_ptr, key_ptr) || object_has_null_proto_flag(obj_ptr) {
+            throw_object_to_string_not_function();
+        }
+        return None;
+    }
+    if method.is_null() {
+        throw_object_to_string_not_function();
+    }
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != crate::value::POINTER_TAG {
+        throw_object_to_string_not_function();
+    }
+    let method_ptr = (method_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        throw_object_to_string_not_function();
+    }
+    let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let result = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(result)
+}
+
+pub(crate) unsafe fn js_object_default_value_of(receiver: f64) -> f64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        throw_object_value_of_nullish_receiver();
+    }
+    receiver
+}
+
+pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        throw_object_to_locale_string_nullish_receiver();
+    }
+    if !jsval.is_pointer() {
+        return js_native_call_method(
+            receiver,
+            b"toString".as_ptr() as *const i8,
+            "toString".len(),
+            std::ptr::null(),
+            0,
+        );
+    }
+    if let Some(result) = call_object_to_string_method(receiver) {
+        return result;
+    }
+    crate::object::js_object_to_string(receiver)
+}
+
+/// Shared implementation for `Object.prototype.isPrototypeOf`.
+pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64) -> bool {
+    let receiver_ptr = match object_ptr_from_value(receiver) {
+        Some(ptr) => ptr,
+        None => return false,
+    };
+
+    let target_jsval = JSValue::from_bits(target.to_bits());
+    if !target_jsval.is_pointer() {
+        return false;
+    }
+
+    if let Some(target_ptr) = object_ptr_from_value(target) {
+        let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
+        let mut depth = 0usize;
+        let mut visited: [u32; 32] = [0; 32];
+        while cid != 0 && depth < visited.len() {
+            if visited[..depth].contains(&cid) {
+                break;
+            }
+            visited[depth] = cid;
+
+            let proto_obj = crate::object::class_registry::class_prototype_object(cid);
+            let mut next_cid = 0;
+            if !proto_obj.is_null() {
+                if std::ptr::addr_eq(proto_obj, receiver_ptr) {
+                    return true;
+                }
+                next_cid = crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
+            }
+
+            if next_cid != 0 && next_cid != cid {
+                cid = next_cid;
+                depth += 1;
+                continue;
+            }
+
+            match crate::object::class_registry::get_parent_class_id(cid) {
+                Some(parent_id) if parent_id != 0 && parent_id != cid => {
+                    cid = parent_id;
+                    depth += 1;
+                }
+                _ => break,
+            }
+        }
+    } else {
+        let (_, target_gc_type) = match gc_pointer_and_type_from_value(target) {
+            Some(info) => info,
+            None => return false,
+        };
+        if target_gc_type != crate::gc::GC_TYPE_CLOSURE {
+            return false;
+        }
+    }
+
+    let mut current = target;
+    for _ in 0..32 {
+        let current_ptr = object_ptr_from_value(current);
+        let proto = crate::object::js_object_get_prototype_of(current);
+        let proto_jsval = JSValue::from_bits(proto.to_bits());
+        if proto_jsval.is_null() || proto_jsval.is_undefined() {
+            break;
+        }
+        let proto_ptr = match object_ptr_from_value(proto) {
+            Some(ptr) => ptr,
+            None => break,
+        };
+        if current_ptr.is_some_and(|ptr| std::ptr::addr_eq(ptr, proto_ptr)) {
+            break;
+        }
+        if std::ptr::addr_eq(proto_ptr, receiver_ptr) {
+            return true;
+        }
+        current = proto;
+    }
+
+    false
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -747,7 +951,22 @@ pub unsafe extern "C" fn js_native_call_method(
                 // helper. Static call sites for typed string receivers keep
                 // their inline paths in `lower_string_method.rs` and don't
                 // come through this dispatcher.
-                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" | "concat" => {
+                "concat" => {
+                    let acc_handle = root_scope.root_string_ptr(receiver_string());
+                    for i in 0..args_len {
+                        let value = arg_at(i)
+                            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                        let result = crate::string::js_string_concat_value(
+                            acc_handle.get_raw_const_ptr::<crate::StringHeader>(),
+                            value,
+                        );
+                        acc_handle.set_raw_const_ptr(result as *const crate::StringHeader);
+                    }
+                    let result = acc_handle.get_raw_const_ptr::<crate::StringHeader>()
+                        as *mut crate::StringHeader;
+                    return f64::from_bits(JSValue::string_ptr(result).bits());
+                }
+                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" => {
                     let arg_str = |i: usize| -> *const crate::StringHeader {
                         if i < args_len && !args_ptr.is_null() {
                             let v = unsafe { *args_ptr.add(i) };
@@ -787,9 +1006,6 @@ pub unsafe extern "C" fn js_native_call_method(
                             "includes" | "startsWith" | "endsWith" => {
                                 f64::from_bits(JSValue::bool(false).bits())
                             }
-                            "concat" => f64::from_bits(
-                                JSValue::string_ptr(s_ptr as *mut crate::StringHeader).bits(),
-                            ),
                             _ => f64::from_bits(JSValue::undefined().bits()),
                         };
                     }
@@ -822,10 +1038,6 @@ pub unsafe extern "C" fn js_native_call_method(
                             let at = if args_len >= 2 { arg_i32(1) } else { len_i32 };
                             let b = crate::string::js_string_ends_with_at(s_ptr, needle, at);
                             f64::from_bits(JSValue::bool(b != 0).bits())
-                        }
-                        "concat" => {
-                            let r = crate::string::js_string_concat(s_ptr, needle);
-                            f64::from_bits(JSValue::string_ptr(r).bits())
                         }
                         _ => f64::from_bits(JSValue::undefined().bits()),
                     };
@@ -923,9 +1135,7 @@ pub unsafe extern "C" fn js_native_call_method(
                             // Probe whether the pointer is a RegExpHeader by
                             // checking the GC type tag the regex helpers
                             // already validate; if it's not, the regex helper
-                            // returns the original string unchanged. The
-                            // global flag on the RegExp determines whether
-                            // it replaces all or just the first.
+                            // returns the original string unchanged.
                             let regex_ptr = jsv.as_pointer::<crate::regex::RegExpHeader>();
                             // Heuristic: a non-null POINTER_TAG that's not a
                             // string/array (those have different GC type tags)
@@ -933,11 +1143,19 @@ pub unsafe extern "C" fn js_native_call_method(
                             // already validates internally and falls back
                             // safely on mismatch.
                             if !regex_ptr.is_null() {
-                                let r = crate::regex::js_string_replace_regex(
-                                    receiver_string(),
-                                    regex_ptr,
-                                    repl_str(),
-                                );
+                                let r = if method_name == "replaceAll" {
+                                    crate::regex::js_string_replace_all_regex(
+                                        receiver_string(),
+                                        regex_ptr,
+                                        repl_str(),
+                                    )
+                                } else {
+                                    crate::regex::js_string_replace_regex(
+                                        receiver_string(),
+                                        regex_ptr,
+                                        repl_str(),
+                                    )
+                                };
                                 return f64::from_bits(JSValue::string_ptr(r).bits());
                             }
                         }
@@ -1883,37 +2101,37 @@ pub unsafe extern "C" fn js_native_call_method(
             return f64::from_bits(JSValue::bool(enumerable).bits());
         }
 
-        // `prim.isPrototypeOf(v)` — true iff the receiver appears in `v`'s
-        // prototype chain. #2058: a primitive receiver (number/string/boolean,
-        // reached via the `js_class_method_bind` value-read path) is never on
-        // another object's prototype chain, so the result is always `false`.
-        // Scoped to non-pointer receivers so object/class-prototype receivers
-        // keep their existing dispatch. Returning a clean boolean keeps
-        // `typeof n.isPrototypeOf === "function"` honest: the bound value is
-        // actually callable rather than throwing.
-        "isPrototypeOf" if !jsval.is_pointer() => {
-            return f64::from_bits(JSValue::bool(false).bits());
-        }
-
-        // `prim.valueOf()` — a primitive's `valueOf` returns the primitive
-        // itself (number/boolean/string/bigint). #2058: makes the bound
-        // value-read `const f = n.valueOf` callable. Pointer receivers keep
-        // their existing object/handle-specific handling above.
-        "valueOf" if !jsval.is_pointer() => {
-            return object;
-        }
-
-        // `value.toLocaleString()` — for primitives Node returns the same
-        // string as `toString()` (no locale data). Delegate so the bound
-        // value-read (#2058) is callable.
-        "toLocaleString" if !jsval.is_pointer() => {
-            return js_native_call_method(
-                object,
-                b"toString".as_ptr() as *const i8,
-                "toString".len(),
-                args_ptr,
-                args_len,
+        // `obj.isPrototypeOf(v)` — true iff `obj` appears in `v`'s modeled
+        // prototype chain. Object.create links live in Perry's synthetic
+        // class/prototype side table; closure/static prototype links use
+        // `Object.getPrototypeOf` state. Primitive/nullish receivers or
+        // arguments are never a match.
+        "isPrototypeOf" => {
+            let arg = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return f64::from_bits(
+                JSValue::bool(js_object_is_prototype_of_value(object, arg)).bits(),
             );
+        }
+
+        // `Object.prototype.valueOf` returns the receiver after ToObject.
+        // Perry does not box primitives here; preserving the existing
+        // primitive return keeps #2058's bound primitive method reads working,
+        // while ordinary objects now get the inherited default instead of
+        // falling through to "valueOf is not a function".
+        "valueOf" => {
+            return js_object_default_value_of(object);
+        }
+
+        // `Object.prototype.toLocaleString` invokes the receiver's
+        // `toString`. If no custom method is present, fall back to the
+        // default `[object Tag]` string. Primitive receivers delegate to
+        // their existing `toString` behavior.
+        "toLocaleString" => {
+            return js_object_default_to_locale_string(object);
         }
 
         // Function.prototype.call(thisArg, ...args) — invoke the receiver
