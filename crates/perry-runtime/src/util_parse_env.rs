@@ -1,40 +1,100 @@
-//! `util.parseEnv(content)` (#2514) — parse `.env`-format text into a plain
-//! object. Mirrors Node's built-in parser: skip blank / `#`-comment lines,
+//! `util.parseEnv(content)` (#2514) — parse `.env`-format text into a
+//! null-prototype object. Mirrors Node's built-in parser: skip blank / `#`-comment lines,
 //! strip an optional `export ` prefix, split on the first `=`, trim key+value;
-//! quoted values (`"`, `'`, backtick) keep their inner content (double-quoted
-//! values process `\n`/`\t`/`\r`/`\\`/`\"` escapes and treat `#` literally),
+//! quoted values (`"`, `'`, backtick) keep their inner content across lines
+//! and treat `#` literally, double-quoted `\n` escapes become newlines, and
 //! unquoted values drop an inline `# comment`. Last duplicate key wins.
 
 use crate::url::{create_string_f64, get_string_content};
 
-/// Parse `.env` text → ordered `(key, value)` pairs (insertion order, last
-/// duplicate's value, first occurrence's position).
+/// Parse `.env` text → ordered `(key, value)` pairs (sorted by key after
+/// parsing; last duplicate's value wins).
 fn parse_env(content: &str) -> Vec<(String, String)> {
+    let bytes = content.as_bytes();
     let mut out: Vec<(String, String)> = Vec::new();
-    for raw_line in content.lines() {
-        let line = raw_line.trim_start();
-        if line.is_empty() || line.starts_with('#') {
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        if bytes[i] == b'\n' {
+            i += 1;
             continue;
         }
-        // Optional `export ` prefix (Node strips it).
-        let line = match line.strip_prefix("export ") {
-            Some(rest) => rest.trim_start(),
-            None => line,
-        };
-        let Some((raw_key, raw_value)) = line.split_once('=') else {
+        if bytes[i] == b'#' {
+            skip_to_next_line(bytes, &mut i);
             continue;
-        };
-        let key = raw_key.trim();
+        }
+
+        if bytes[i..].starts_with(b"export")
+            && bytes
+                .get(i + b"export".len())
+                .is_some_and(|b| matches!(*b, b' ' | b'\t'))
+        {
+            i += b"export".len();
+            while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+                i += 1;
+            }
+        }
+
+        let key_start = i;
+        while i < bytes.len() && bytes[i] != b'=' && bytes[i] != b'\n' {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] == b'\n' {
+            skip_to_next_line(bytes, &mut i);
+            continue;
+        }
+
+        let key = content[key_start..i].trim();
+        i += 1; // '='
         if key.is_empty() {
+            skip_to_next_line(bytes, &mut i);
             continue;
         }
-        let value = parse_value(raw_value.trim());
-        if let Some(slot) = out.iter_mut().find(|(k, _)| k == key) {
-            slot.1 = value; // last duplicate wins
-        } else {
-            out.push((key.to_string(), value));
+
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+            i += 1;
         }
+
+        let value = if i < bytes.len() && matches!(bytes[i], b'"' | b'\'' | b'`') {
+            let quote = bytes[i];
+            i += 1;
+            let value_start = i;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            let inner = &content[value_start..i];
+            let value = if quote == b'"' {
+                unescape_double(inner)
+            } else {
+                inner.to_string()
+            };
+            if i < bytes.len() {
+                i += 1;
+            }
+            skip_to_next_line(bytes, &mut i);
+            value
+        } else {
+            let value_start = i;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                if bytes[i] == b'#' && (i == value_start || matches!(bytes[i - 1], b' ' | b'\t')) {
+                    break;
+                }
+                i += 1;
+            }
+            let value = content[value_start..i].trim_end().to_string();
+            skip_to_next_line(bytes, &mut i);
+            value
+        };
+
+        push_entry(&mut out, key, value);
     }
+
     // Node's C++ parser stores into a sorted map, so the result object's keys
     // come out byte-lexicographically sorted (e.g. `A`,`M`,`Z`,`m`), NOT in
     // insertion order. Match that.
@@ -42,38 +102,24 @@ fn parse_env(content: &str) -> Vec<(String, String)> {
     out
 }
 
-fn parse_value(v: &str) -> String {
-    let chars: Vec<char> = v.chars().collect();
-    if let Some(&first) = chars.first() {
-        if first == '"' || first == '\'' || first == '`' {
-            if let Some(end_rel) = chars[1..].iter().position(|&c| c == first) {
-                let inner: String = chars[1..1 + end_rel].iter().collect();
-                return if first == '"' {
-                    unescape_double(&inner)
-                } else {
-                    inner
-                };
-            }
-            // No closing quote — fall through to the unquoted handling.
-        }
+fn push_entry(out: &mut Vec<(String, String)>, key: &str, value: String) {
+    if let Some(slot) = out.iter_mut().find(|(k, _)| k == key) {
+        slot.1 = value;
+    } else {
+        out.push((key.to_string(), value));
     }
-    strip_inline_comment(v).trim_end().to_string()
 }
 
-/// Drop an inline `# comment` — a `#` at the start or preceded by whitespace.
-fn strip_inline_comment(v: &str) -> &str {
-    let b = v.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'#' && (i == 0 || b[i - 1] == b' ' || b[i - 1] == b'\t') {
-            return &v[..i];
-        }
-        i += 1;
+fn skip_to_next_line(bytes: &[u8], i: &mut usize) {
+    while *i < bytes.len() && bytes[*i] != b'\n' {
+        *i += 1;
     }
-    v
+    if *i < bytes.len() {
+        *i += 1;
+    }
 }
 
-/// Process backslash escapes inside a double-quoted value.
+/// Process the only escape Node's dotenv parser decodes in double quotes.
 fn unescape_double(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -81,10 +127,6 @@ fn unescape_double(s: &str) -> String {
         if c == '\\' {
             match chars.next() {
                 Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('r') => out.push('\r'),
-                Some('\\') => out.push('\\'),
-                Some('"') => out.push('"'),
                 Some(other) => {
                     out.push('\\');
                     out.push(other);
@@ -98,12 +140,20 @@ fn unescape_double(s: &str) -> String {
     out
 }
 
-/// `util.parseEnv(content)` → plain object of parsed key/value strings.
+/// `util.parseEnv(content)` → null-prototype object of parsed key/value strings.
 #[no_mangle]
 pub extern "C" fn js_util_parse_env(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        let message = format!(
+            "The \"content\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
     let content = get_string_content(value);
     let entries = parse_env(&content);
-    let obj = crate::object::js_object_alloc(0, (entries.len() as u32).max(1));
+    let obj = crate::object::js_object_alloc_null_proto(0, (entries.len() as u32).max(1));
     for (k, v) in &entries {
         let key_ptr = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
         let val = create_string_f64(v);
@@ -133,6 +183,11 @@ mod tests {
             parse_env("A=\"l1\\nl2\""),
             vec![("A".into(), "l1\nl2".into())]
         );
+        assert_eq!(
+            parse_env("A=\"l1\nl2\""),
+            vec![("A".into(), "l1\nl2".into())]
+        );
+        assert_eq!(parse_env("A=\"x\\ty\""), vec![("A".into(), "x\\ty".into())]);
         assert_eq!(parse_env("JUSTKEY\nA=1"), vec![("A".into(), "1".into())]);
         assert_eq!(
             parse_env("\n# hi\n  # ind\nA=1"),
