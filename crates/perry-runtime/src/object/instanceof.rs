@@ -71,6 +71,22 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     if is_buffer_constructor_value(type_ref) {
         return js_instanceof(value, crate::buffer::BUFFER_TYPE_ID);
     }
+    if let Some(name) = identify_global_builtin_constructor(type_ref) {
+        let class_id = match name {
+            "Error" => crate::error::CLASS_ID_ERROR,
+            "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
+            "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,
+            "ReferenceError" => crate::error::CLASS_ID_REFERENCE_ERROR,
+            "SyntaxError" => crate::error::CLASS_ID_SYNTAX_ERROR,
+            "EvalError" => crate::error::CLASS_ID_EVAL_ERROR,
+            "URIError" => crate::error::CLASS_ID_URI_ERROR,
+            "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
+            _ => 0,
+        };
+        if class_id != 0 {
+            return js_instanceof(value, class_id);
+        }
+    }
     if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
         return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
             f64::from_bits(crate::value::TAG_TRUE)
@@ -438,6 +454,20 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 }
                 crate::error::CLASS_ID_SYNTAX_ERROR => {
                     if kind == crate::error::ERROR_KIND_SYNTAX_ERROR {
+                        true_val
+                    } else {
+                        false_val
+                    }
+                }
+                crate::error::CLASS_ID_EVAL_ERROR => {
+                    if kind == crate::error::ERROR_KIND_EVAL_ERROR {
+                        true_val
+                    } else {
+                        false_val
+                    }
+                }
+                crate::error::CLASS_ID_URI_ERROR => {
+                    if kind == crate::error::ERROR_KIND_URI_ERROR {
                         true_val
                     } else {
                         false_val
