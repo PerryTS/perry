@@ -3,6 +3,7 @@
 //! assimilation, the scheduled-resolve queue, and `is_promise` probes.
 
 use super::*;
+use std::os::raw::c_int;
 
 #[derive(Clone, Copy)]
 pub(super) struct PromiseAllState {
@@ -79,6 +80,88 @@ pub extern "C" fn js_promise_rejected(reason: f64) -> *mut Promise {
     let promise = js_promise_new();
     js_promise_reject(promise, reason);
     promise
+}
+
+fn string_header_to_string(ptr: *const crate::string::StringHeader) -> String {
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        if len > 1 << 30 {
+            return String::new();
+        }
+        let bytes_ptr = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let bytes = std::slice::from_raw_parts(bytes_ptr, len);
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+fn promise_try_type_error_value(callback: f64) -> f64 {
+    let type_name = string_header_to_string(crate::builtins::js_value_typeof(callback));
+    let rendered = string_header_to_string(crate::value::js_jsvalue_to_string(callback));
+    let message = match (type_name.as_str(), rendered.as_str()) {
+        ("", "") => "value is not a function".to_string(),
+        (_, "") => format!("{type_name} is not a function"),
+        ("undefined", _) => "undefined is not a function".to_string(),
+        _ => format!("{type_name} {rendered} is not a function"),
+    };
+    let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_typeerror_new(message_ptr);
+    let bits = crate::value::JSValue::pointer(error as *const u8).bits();
+    f64::from_bits(bits)
+}
+
+fn promise_try_closure_ptr(callback: f64) -> Option<*const crate::closure::ClosureHeader> {
+    let ptr = crate::value::js_nanbox_get_pointer(callback) as usize;
+    if ptr < 0x100000 {
+        return None;
+    }
+    crate::closure::is_closure_ptr(ptr).then_some(ptr as *const crate::closure::ClosureHeader)
+}
+
+fn promise_try_call(callback: f64, args_ptr: *const f64, args_len: usize) -> Result<f64, f64> {
+    let Some(closure) = promise_try_closure_ptr(callback) else {
+        return Err(promise_try_type_error_value(callback));
+    };
+
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    let result = if jumped == 0 {
+        let value = unsafe {
+            crate::closure::js_closure_call_array(closure as i64, args_ptr, args_len as i64)
+        };
+        Ok(value)
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(exc)
+    };
+    crate::exception::js_try_end();
+    result
+}
+
+/// `Promise.try(fn, ...args)`: call `fn` with forwarded args and normalize the
+/// result or synchronous throw into a Promise.
+#[no_mangle]
+pub extern "C" fn js_promise_try(
+    callback: f64,
+    args: *const crate::array::ArrayHeader,
+) -> *mut Promise {
+    let (args_ptr, args_len) = if args.is_null() {
+        (std::ptr::null(), 0)
+    } else {
+        let len = unsafe { (*args).length as usize };
+        let data = unsafe {
+            (args as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64
+        };
+        (data, len)
+    };
+
+    match promise_try_call(callback, args_ptr, args_len) {
+        Ok(value) => js_promise_resolved(value),
+        Err(reason) => js_promise_rejected(reason),
+    }
 }
 
 /// Check if a value is a promise (by checking if it's a valid pointer)
