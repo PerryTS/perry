@@ -14,6 +14,9 @@ thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
+    static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
+    static UTIL_INSPECT_STYLES: Cell<u64> = const { Cell::new(0) };
+    static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
@@ -26,6 +29,27 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    UTIL_INSPECT_DEFAULT_OPTIONS.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    UTIL_INSPECT_STYLES.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    UTIL_INSPECT_COLORS.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -554,6 +578,20 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
             crate::util_promisify::promisify_custom_symbol(),
         );
     }
+    if module_name == "util" && property_name == "inspect" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "custom",
+            util_inspect_custom_symbol(),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "defaultOptions",
+            util_inspect_default_options_value(),
+        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "styles", util_inspect_styles());
+        crate::closure::closure_set_dynamic_prop(closure_addr, "colors", util_inspect_colors());
+    }
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
         c.borrow_mut().insert(key, value.to_bits());
@@ -716,6 +754,137 @@ pub(crate) fn is_buffer_constructor_value(value: f64) -> bool {
     BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
         let cached = slot.get();
         cached != 0 && cached == value.to_bits()
+    })
+}
+
+fn native_string_value(value: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn native_bool_value(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+fn native_object_value(obj: *mut ObjectHeader) -> f64 {
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+fn native_set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(obj, key, value);
+}
+
+fn native_color_tuple(open: i32, close: i32) -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(2);
+    crate::array::js_array_set_f64(arr, 0, open as f64);
+    crate::array::js_array_set_f64(arr, 1, close as f64);
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+fn util_inspect_custom_symbol() -> f64 {
+    unsafe { crate::symbol::js_symbol_for(native_string_value("nodejs.util.inspect.custom")) }
+}
+
+pub(crate) fn util_inspect_default_options_value() -> f64 {
+    UTIL_INSPECT_DEFAULT_OPTIONS.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        native_set_field(obj, "showHidden", native_bool_value(false));
+        native_set_field(obj, "depth", 2.0);
+        native_set_field(obj, "colors", native_bool_value(false));
+        native_set_field(obj, "customInspect", native_bool_value(true));
+        native_set_field(obj, "showProxy", native_bool_value(false));
+        native_set_field(obj, "maxArrayLength", 100.0);
+        native_set_field(obj, "maxStringLength", 10000.0);
+        native_set_field(obj, "breakLength", 80.0);
+        native_set_field(obj, "compact", 3.0);
+        native_set_field(obj, "sorted", native_bool_value(false));
+        native_set_field(obj, "getters", native_bool_value(false));
+        native_set_field(obj, "numericSeparator", native_bool_value(false));
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+fn util_inspect_styles() -> f64 {
+    UTIL_INSPECT_STYLES.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        native_set_field(obj, "special", native_string_value("cyan"));
+        native_set_field(obj, "number", native_string_value("yellow"));
+        native_set_field(obj, "bigint", native_string_value("yellow"));
+        native_set_field(obj, "boolean", native_string_value("yellow"));
+        native_set_field(obj, "undefined", native_string_value("grey"));
+        native_set_field(obj, "null", native_string_value("bold"));
+        native_set_field(obj, "string", native_string_value("green"));
+        native_set_field(obj, "symbol", native_string_value("green"));
+        native_set_field(obj, "date", native_string_value("magenta"));
+        native_set_field(obj, "regexp", native_string_value("red"));
+        native_set_field(obj, "module", native_string_value("underline"));
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+fn util_inspect_colors() -> f64 {
+    UTIL_INSPECT_COLORS.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        for (name, open, close) in [
+            ("reset", 0, 0),
+            ("bold", 1, 22),
+            ("dim", 2, 22),
+            ("italic", 3, 23),
+            ("underline", 4, 24),
+            ("blink", 5, 25),
+            ("inverse", 7, 27),
+            ("hidden", 8, 28),
+            ("strikethrough", 9, 29),
+            ("black", 30, 39),
+            ("red", 31, 39),
+            ("green", 32, 39),
+            ("yellow", 33, 39),
+            ("blue", 34, 39),
+            ("magenta", 35, 39),
+            ("cyan", 36, 39),
+            ("white", 37, 39),
+            ("gray", 90, 39),
+            ("grey", 90, 39),
+            ("bgBlack", 40, 49),
+            ("bgRed", 41, 49),
+            ("bgGreen", 42, 49),
+            ("bgYellow", 43, 49),
+            ("bgBlue", 44, 49),
+            ("bgMagenta", 45, 49),
+            ("bgCyan", 46, 49),
+            ("bgWhite", 47, 49),
+        ] {
+            native_set_field(obj, name, native_color_tuple(open, close));
+        }
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
     })
 }
 
