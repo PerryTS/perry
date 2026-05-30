@@ -2804,6 +2804,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     //     the rest are documented stubs) ---
     method("util", "inspect", false, None),
     method("util", "format", false, None),
+    method("util", "convertProcessSignalToExitCode", false, None),
     // #2514: libuv-style errno helpers.
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
@@ -2836,6 +2837,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "isDeepStrictEqual", false, None),
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
+    method("util", "styleText", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. Required
@@ -2885,6 +2887,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // runtime routes `node:sys` through the util namespace.
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
+    method("sys", "convertProcessSignalToExitCode", false, None),
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
     method("sys", "getSystemErrorMap", false, None),
@@ -2908,6 +2911,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "isDeepStrictEqual", false, None),
     method("sys", "parseArgs", false, None),
     method("sys", "stripVTControlCharacters", false, None),
+    method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),

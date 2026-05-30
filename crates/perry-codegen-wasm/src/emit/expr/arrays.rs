@@ -264,13 +264,23 @@ impl<'a> FuncEmitCtx<'a> {
                 }));
                 self.emit_memcall(func, "array_join", 2);
             }
-            Expr::ArrayIndexOf { array, value } => {
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index: _,
+            } => {
+                // NOTE: the wasm backend's array_index_of helper does not yet
+                // honor the optional fromIndex (#2804 covers the native path).
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, value);
                 self.emit_memcall(func, "array_index_of", 2);
             }
-            Expr::ArrayIncludes { array, value } => {
+            Expr::ArrayIncludes {
+                array,
+                value,
+                from_index: _,
+            } => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, value);

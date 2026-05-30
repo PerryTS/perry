@@ -1117,50 +1117,9 @@ pub extern "C" fn js_process_next_tick(callback: *const crate::closure::ClosureH
 mod chdir;
 pub use chdir::js_process_chdir;
 
-/// process.kill(pid, signal?) — send signal to process. signal=0 means existence check.
-#[no_mangle]
-pub extern "C" fn js_process_kill(pid: f64, signal: f64) {
-    // #2013 — pid must be a number (`validateInteger(pid, 'pid')`); a
-    // non-numeric pid throws TypeError ERR_INVALID_ARG_TYPE before any
-    // syscall runs. Signal must be a string-or-number; an object/array
-    // throws TypeError ERR_UNKNOWN_SIGNAL (Node's specific shape — the
-    // signal-name lookup table runs before the numeric coercion).
-    use crate::fs::validate::{describe_received, is_numeric, throw_type_error_with_code};
-    let pid_jv = crate::value::JSValue::from_bits(pid.to_bits());
-    if !is_numeric(pid_jv) {
-        let message = format!(
-            "The \"pid\" argument must be of type number. Received {}",
-            describe_received(pid)
-        );
-        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
-    let sig_jv = crate::value::JSValue::from_bits(signal.to_bits());
-    if !sig_jv.is_undefined() && !is_numeric(sig_jv) && !sig_jv.is_any_string() {
-        // Match Node's "Unknown signal: <stringify>" message for the
-        // object/array/boolean shapes that don't reach the numeric path.
-        let received = describe_received(signal);
-        let message = format!("Unknown signal: {}", received);
-        throw_type_error_with_code(&message, "ERR_UNKNOWN_SIGNAL");
-    }
-    let pid_i = pid as i32;
-    let sig_i = if signal.is_nan() || signal == 0.0 {
-        0
-    } else {
-        signal as i32
-    };
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid_i, sig_i);
-    }
-    #[cfg(windows)]
-    {
-        let _ = (pid_i, sig_i);
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (pid_i, sig_i);
-    }
-}
+// Signal normalization is shared with `util.convertProcessSignalToExitCode`.
+mod signal;
+pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 
 /// Coerce a NaN-boxed JSValue to its display bytes, suitable for raw
 /// stream writes. Used by `process.stdout.write` / `process.stderr.write`.
