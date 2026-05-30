@@ -270,6 +270,23 @@ pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHead
     }
 }
 
+fn throw_builtin_not_constructor(name: &'static str) -> ! {
+    let message = format!("{name} is not a constructor");
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_symbol_constructor_type_error() -> f64 {
+    throw_builtin_not_constructor("Symbol")
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
+    throw_builtin_not_constructor("BigInt")
+}
+
 fn throw_capture_stack_trace_target_type_error() -> ! {
     let message = b"The \"targetObject\" argument must be an object";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);

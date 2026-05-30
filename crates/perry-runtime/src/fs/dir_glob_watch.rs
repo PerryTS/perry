@@ -8,29 +8,39 @@ use crate::closure::ClosureHeader;
 use super::*;
 
 pub extern "C" fn js_fs_opendir_sync(path_value: f64) -> f64 {
+    match js_fs_opendir_value(path_value) {
+        Ok(dir) => dir,
+        Err(err) => crate::exception::js_throw(err),
+    }
+}
+
+pub(crate) fn js_fs_opendir_value(path_value: f64) -> Result<f64, f64> {
+    validate::validate_path("path", path_value);
     unsafe {
         let path = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return build_dir_object(alloc_dir_state(Vec::new()), ""),
+            Some(path) => path,
+            None => validate::throw_invalid_path_arg("path", path_value),
+        };
+        let read_dir = match fs::read_dir(&path) {
+            Ok(read_dir) => read_dir,
+            Err(err) => return Err(build_fs_error_value_no_path(&err, "opendir")),
         };
         let mut entries = Vec::new();
-        if let Ok(read_dir) = fs::read_dir(&path) {
-            let mut items: Vec<(String, std::fs::FileType)> = Vec::new();
-            for entry in read_dir.flatten() {
-                if let (Some(name), Ok(ft)) = (entry.file_name().to_str(), entry.file_type()) {
-                    items.push((name.to_string(), ft));
-                }
-            }
-            items.sort_by(|a, b| a.0.cmp(&b.0));
-            for (name, ft) in items {
-                entries.push(build_dirent_object(
-                    &name,
-                    &path,
-                    DirentKind::from_file_type(&ft),
-                ));
+        let mut items: Vec<(String, std::fs::FileType)> = Vec::new();
+        for entry in read_dir.flatten() {
+            if let (Some(name), Ok(ft)) = (entry.file_name().to_str(), entry.file_type()) {
+                items.push((name.to_string(), ft));
             }
         }
-        build_dir_object(alloc_dir_state(entries), &path)
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, ft) in items {
+            entries.push(build_dirent_object(
+                &name,
+                &path,
+                DirentKind::from_file_type(&ft),
+            ));
+        }
+        Ok(build_dir_object(alloc_dir_state(entries), &path))
     }
 }
 

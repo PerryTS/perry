@@ -82,6 +82,7 @@ pub fn collect_pointer_typed_locals(
             | Expr::MathCbrt(_)
             | Expr::MathHypot(_)
             | Expr::MathFround(_)
+            | Expr::MathF16round(_)
             | Expr::MathClz32(_)
             | Expr::MathExpm1(_)
             | Expr::MathLog1p(_)

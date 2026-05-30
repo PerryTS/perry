@@ -64,9 +64,9 @@ pub extern "C" fn js_process_abort() {
 fn supported_builtin_module_name(name: &str) -> Option<&str> {
     match name {
         "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
-        | "console" | "crypto" | "events" | "fs" | "http" | "http2" | "https" | "net" | "os"
-        | "path" | "perf_hooks" | "process" | "punycode" | "querystring" | "readline"
-        | "stream" | "stream/promises" | "string_decoder" | "sys" | "timers"
+        | "console" | "constants" | "crypto" | "events" | "fs" | "http" | "http2" | "https"
+        | "net" | "os" | "path" | "perf_hooks" | "process" | "punycode" | "querystring"
+        | "readline" | "stream" | "stream/promises" | "string_decoder" | "sys" | "timers"
         | "timers/promises" | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => {
             Some(name)
         }

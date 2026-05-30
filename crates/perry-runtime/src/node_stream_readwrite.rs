@@ -268,7 +268,7 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
             buffer_pending_readable_chunk(stream, chunk);
             continue;
         }
-        consume_readable_buffered_front(stream, chunk);
+        super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
         emit_readable_data_unchecked(stream, chunk);
     }
     if stream_hidden_ended(stream)
@@ -565,6 +565,10 @@ pub(super) fn end_pipe_destinations(stream: f64) {
 pub(super) fn schedule_readable_from_drain(stream: f64) {
     if readable_hidden_chunks(stream).is_none()
         || has_truthy_hidden(stream, hidden_drain_scheduled_key())
+        || has_truthy_hidden(
+            stream,
+            super::readable_from_promises::hidden_readable_from_promise_pending_key(),
+        )
         || readable_is_paused(stream)
         || stream_destroyed(stream)
     {
@@ -796,32 +800,6 @@ pub(super) fn clear_pending_readable_chunks(stream: f64) {
     );
 }
 
-fn consume_readable_buffered_front(stream: f64, chunk: f64) {
-    let Some(chunks) = readable_hidden_chunks(stream) else {
-        return;
-    };
-    if !is_array_like_value(chunks) {
-        clear_readable_buffer(stream);
-        return;
-    }
-    let arr = raw_ptr_from_value(chunks) as *mut crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    if len == 0 {
-        clear_readable_buffer(stream);
-        return;
-    }
-    let _ = crate::array::js_array_shift_f64(arr);
-    if len == 1 {
-        clear_readable_buffer(stream);
-        return;
-    }
-    let consumed = chunk_byte_len(chunk) as f64;
-    let remaining =
-        (get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) - consumed).max(0.0);
-    set_hidden_value(stream, hidden_buffered_key(), remaining);
-    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
-}
-
 pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
     let size_value = JSValue::from_bits(size.to_bits());
     if size_value.is_undefined() || !size_value.is_number() {
@@ -1013,11 +991,14 @@ pub(super) fn drain_readable_from_events(stream: f64) {
                 if !emit_destroyed_tail {
                     return;
                 }
-                consume_readable_buffered_front(stream, chunk);
+                super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
                 emit_readable_data_unchecked(stream, chunk);
                 return;
             }
-            consume_readable_buffered_front(stream, chunk);
+            if super::readable_from_promises::attach_readable_from_promise_chunk(stream, chunk) {
+                return;
+            }
+            super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
             emit_readable_data_unchecked(stream, chunk);
             if stream_destroyed(stream) {
                 emit_destroyed_tail = true;

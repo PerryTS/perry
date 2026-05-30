@@ -662,6 +662,13 @@ pub(super) fn try_module_static_methods(
                                 ))));
                             }
                         }
+                        "f16round" => {
+                            if !args.is_empty() {
+                                return Ok(Ok(Expr::MathF16round(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
+                            }
+                        }
                         "clz32" => {
                             if !args.is_empty() {
                                 return Ok(Ok(Expr::MathClz32(Box::new(

@@ -113,6 +113,7 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
                 | "expm1"
                 | "floor"
                 | "fround"
+                | "f16round"
                 | "hypot"
                 | "imul"
                 | "log"

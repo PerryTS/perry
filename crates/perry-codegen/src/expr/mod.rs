@@ -1565,6 +1565,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::CallSpread { .. } => call_spread::lower(ctx, expr),
         Expr::MathFround(..)
+        | Expr::MathF16round(..)
         | Expr::MapNewFromArray(..)
         | Expr::DateGetTime(..)
         | Expr::DateGetTimezoneOffset(..)

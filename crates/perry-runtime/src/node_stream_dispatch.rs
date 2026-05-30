@@ -173,6 +173,14 @@ pub(super) fn register_stub_arities() {
     register(ns_is_paused0 as *const u8, 0);
     register(ns_unpipe1 as *const u8, 1);
     register(ns_readable_resume_microtask as *const u8, 0);
+    register(
+        super::readable_from_promises::ns_readable_from_promise_fulfilled as *const u8,
+        1,
+    );
+    register(
+        super::readable_from_promises::ns_readable_from_promise_rejected as *const u8,
+        1,
+    );
     register(ns_finished_error_false_close as *const u8, 0);
     register(ns_finished_signal_abort as *const u8, 0);
     register(ns_iter_to_array as *const u8, 1);
