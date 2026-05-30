@@ -322,7 +322,7 @@ extern "C" fn ns_writable_final_callback_done(closure: *const ClosureHeader, err
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    schedule_writable_finish(
+    schedule_writable_finish_then_transform_end(
         stream,
         if is_callable_value(callback) {
             Some(callback)
@@ -1186,7 +1186,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
         set_pending_writable_finish_callback(stream, callback);
         return;
     }
-    schedule_writable_finish(stream, callback);
+    schedule_writable_finish_then_transform_end(stream, callback);
 }
 
 fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
