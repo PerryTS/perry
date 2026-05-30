@@ -31,6 +31,7 @@ mod class_gc_roots;
 mod class_handles;
 mod class_registry;
 mod delete_rest;
+mod descriptors;
 mod field_get_set;
 mod field_set_by_name;
 mod global_this;
@@ -57,6 +58,7 @@ pub(crate) use class_gc_roots::{
 };
 pub use class_registry::*;
 pub use delete_rest::*;
+pub use descriptors::*;
 pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub use global_this::*;
