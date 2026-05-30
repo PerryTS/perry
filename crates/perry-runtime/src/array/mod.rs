@@ -47,6 +47,7 @@ pub use self::indexing::{
     js_array_set_f64_unchecked, js_array_set_index_or_string, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
+pub(crate) use self::iter_methods::throw_reduce_of_empty;
 pub use self::iter_methods::{
     js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
     js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach,

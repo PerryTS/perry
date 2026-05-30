@@ -1322,6 +1322,14 @@ pub extern "C" fn js_typed_array_with(
     }
 }
 
+/// NaN-box a TypedArray header pointer as the JS `array` receiver value passed
+/// as the 3rd/4th callback argument. Per spec the callback observes the
+/// original typed-array receiver.
+#[inline(always)]
+fn ta_receiver_value(ta: *const TypedArrayHeader) -> f64 {
+    f64::from_bits(crate::value::JSValue::pointer(ta as *const u8).bits())
+}
+
 /// `ta.findLast(cb)`. Returns the matched element as a plain f64
 /// (NOT NaN-boxed), or NaN-boxed undefined if none match.
 #[no_mangle]
@@ -1335,9 +1343,10 @@ pub extern "C" fn js_typed_array_find_last(
     }
     unsafe {
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         for i in (0..len).rev() {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return v;
             }
@@ -1358,9 +1367,10 @@ pub extern "C" fn js_typed_array_find_last_index(
     }
     unsafe {
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         for i in (0..len).rev() {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }
@@ -1392,10 +1402,11 @@ pub extern "C" fn js_typed_array_map(
     unsafe {
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         let out = typed_array_alloc(kind, len as u32);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             store_at(out, i, jsvalue_to_f64(r));
         }
         out
@@ -1416,10 +1427,11 @@ pub extern "C" fn js_typed_array_filter(
     unsafe {
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         let mut kept: Vec<f64> = Vec::new();
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 kept.push(v);
             }
@@ -1444,9 +1456,10 @@ pub extern "C" fn js_typed_array_every(
     }
     unsafe {
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) == 0 {
                 return f64::from_bits(crate::value::TAG_FALSE);
             }
@@ -1467,9 +1480,10 @@ pub extern "C" fn js_typed_array_some(
     }
     unsafe {
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return f64::from_bits(crate::value::TAG_TRUE);
             }
@@ -1488,9 +1502,10 @@ pub extern "C" fn js_typed_array_for_each(
     if !ta.is_null() {
         unsafe {
             let len = (*ta).length as usize;
+            let recv = ta_receiver_value(ta);
             for i in 0..len {
                 let v = load_at(ta, i);
-                let _ = crate::closure::js_closure_call2(callback, v, i as f64);
+                let _ = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             }
         }
     }
@@ -1509,9 +1524,10 @@ pub extern "C" fn js_typed_array_find(
     }
     unsafe {
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return v;
             }
@@ -1532,14 +1548,98 @@ pub extern "C" fn js_typed_array_find_index(
     }
     unsafe {
         let len = (*ta).length as usize;
+        let recv = ta_receiver_value(ta);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call2(callback, v, i as f64);
+            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }
         }
         -1.0
+    }
+}
+
+/// `ta.reduce(cb, initial?)` — accumulate left→right. Reads elements through
+/// `load_at` (element-typed) and calls the reducer as
+/// `(accumulator, currentValue, currentIndex, array)`. Throws
+/// `TypeError: Reduce of empty array with no initial value` when the typed
+/// array is empty and no initial value was provided. Issue #2799.
+#[no_mangle]
+pub extern "C" fn js_typed_array_reduce(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    has_initial: i32,
+    initial: f64,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        if has_initial != 0 {
+            return initial;
+        }
+        crate::array::throw_reduce_of_empty();
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        if len == 0 {
+            if has_initial != 0 {
+                return initial;
+            }
+            crate::array::throw_reduce_of_empty();
+        }
+        let recv = ta_receiver_value(ta);
+        let (mut accumulator, start_idx) = if has_initial != 0 {
+            (initial, 0)
+        } else {
+            (load_at(ta, 0), 1)
+        };
+        for i in start_idx..len {
+            let v = load_at(ta, i);
+            accumulator =
+                crate::closure::js_closure_call4(callback, accumulator, v, i as f64, recv);
+        }
+        accumulator
+    }
+}
+
+/// `ta.reduceRight(cb, initial?)` — accumulate right→left. Same reducer
+/// contract as `js_typed_array_reduce`. Issue #2799.
+#[no_mangle]
+pub extern "C" fn js_typed_array_reduce_right(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    has_initial: i32,
+    initial: f64,
+) -> f64 {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        if has_initial != 0 {
+            return initial;
+        }
+        crate::array::throw_reduce_of_empty();
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        if len == 0 {
+            if has_initial != 0 {
+                return initial;
+            }
+            crate::array::throw_reduce_of_empty();
+        }
+        let recv = ta_receiver_value(ta);
+        let (mut accumulator, start_idx) = if has_initial != 0 {
+            (initial, len)
+        } else {
+            (load_at(ta, len - 1), len - 1)
+        };
+        if start_idx > 0 {
+            for i in (0..start_idx).rev() {
+                let v = load_at(ta, i);
+                accumulator =
+                    crate::closure::js_closure_call4(callback, accumulator, v, i as f64, recv);
+            }
+        }
+        accumulator
     }
 }
 

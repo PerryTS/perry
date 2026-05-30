@@ -371,6 +371,161 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     false
 }
 
+/// Dispatch a `%TypedArray%` instance method on an already-resolved
+/// `TypedArrayHeader` pointer. Returns `Some(result)` when handled, `None` when
+/// the method isn't a typed-array method (caller falls through to the generic
+/// dispatch tower / catch-all). Shared between the raw-pointer (#654) and
+/// NaN-boxed POINTER_TAG receiver paths so a `Uint8Array` local reaches the
+/// element-typed `js_typed_array_*` helpers regardless of how codegen boxed
+/// the receiver. Issues #2797 / #2798 / #2799 added the callback-bearing arms.
+unsafe fn dispatch_typed_array_method(
+    ta: *mut crate::typedarray::TypedArrayHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let arg0 = || -> f64 {
+        if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            f64::NAN
+        }
+    };
+    let arg_closure = |i: usize| -> *const crate::closure::ClosureHeader {
+        if i < args_len && !args_ptr.is_null() {
+            let v = *args_ptr.add(i);
+            let bits = v.to_bits();
+            let tag = (bits >> 48) as u16;
+            if tag == 0x7FFD {
+                (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
+            } else {
+                std::ptr::null()
+            }
+        } else {
+            std::ptr::null()
+        }
+    };
+    let r = match method_name {
+        "length" => crate::typedarray::js_typed_array_length(ta) as f64,
+        "at" => crate::typedarray::js_typed_array_at(ta, arg0()),
+        "sort" => {
+            // #2796: validate the comparator (function | undefined) before sorting.
+            let cmp = if args_len >= 1 && !args_ptr.is_null() {
+                crate::array::js_validate_array_comparator(*args_ptr)
+                    as *const crate::closure::ClosureHeader
+            } else {
+                std::ptr::null()
+            };
+            let result = if cmp.is_null() {
+                crate::typedarray::js_typed_array_sort_default(ta)
+            } else {
+                crate::typedarray::js_typed_array_sort_with_comparator(ta, cmp)
+            };
+            f64::from_bits(result as u64)
+        }
+        "toSorted" => {
+            let cmp = if args_len >= 1 && !args_ptr.is_null() {
+                crate::array::js_validate_array_comparator(*args_ptr)
+                    as *const crate::closure::ClosureHeader
+            } else {
+                std::ptr::null()
+            };
+            let result = if cmp.is_null() {
+                crate::typedarray::js_typed_array_to_sorted_default(ta)
+            } else {
+                crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, cmp)
+            };
+            f64::from_bits(result as u64)
+        }
+        "toReversed" => f64::from_bits(crate::typedarray::js_typed_array_to_reversed(ta) as u64),
+        // #2879: bulk `set(source, offset?)` and `copyWithin`.
+        "set" => {
+            let source = arg0();
+            let offset = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                0.0
+            };
+            crate::typedarray::js_typed_array_set_from(ta, source, offset)
+        }
+        "copyWithin" => {
+            let target = arg0();
+            let start = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                0.0
+            };
+            let end = if args_len >= 3 && !args_ptr.is_null() {
+                *args_ptr.add(2)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            f64::from_bits(
+                crate::typedarray::js_typed_array_copy_within(ta, target, start, end) as u64,
+            )
+        }
+        "with" => {
+            let idx = arg0();
+            let val = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                f64::NAN
+            };
+            f64::from_bits(crate::typedarray::js_typed_array_with(ta, idx, val) as u64)
+        }
+        "findLast" => {
+            let cb = arg_closure(0);
+            if cb.is_null() {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                crate::typedarray::js_typed_array_find_last(ta, cb)
+            }
+        }
+        "findLastIndex" => {
+            let cb = arg_closure(0);
+            if cb.is_null() {
+                -1.0
+            } else {
+                crate::typedarray::js_typed_array_find_last_index(ta, cb)
+            }
+        }
+        // #2797/#2798/#2799: callback-bearing %TypedArray% methods. The codegen
+        // lowerers only fire for receivers it can statically prove are plain
+        // Arrays; a `Uint8Array` local reaches this dynamic dispatch tower,
+        // where these arms previously fell through to the undefined catch-all
+        // (so `ta.map`/`ta.reduce`/`ta.find` silently no-op'd).
+        "map" => {
+            let result = crate::typedarray::js_typed_array_map(ta, arg_closure(0));
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "filter" => {
+            let result = crate::typedarray::js_typed_array_filter(ta, arg_closure(0));
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+        }
+        "forEach" => crate::typedarray::js_typed_array_for_each(ta, arg_closure(0)),
+        "some" => crate::typedarray::js_typed_array_some(ta, arg_closure(0)),
+        "every" => crate::typedarray::js_typed_array_every(ta, arg_closure(0)),
+        "find" => crate::typedarray::js_typed_array_find(ta, arg_closure(0)),
+        "findIndex" => crate::typedarray::js_typed_array_find_index(ta, arg_closure(0)),
+        "reduce" | "reduceRight" => {
+            let cb = arg_closure(0);
+            // initial value present only when a 2nd arg was passed.
+            let (has_init, init) = if args_len >= 2 && !args_ptr.is_null() {
+                (1, *args_ptr.add(1))
+            } else {
+                (0, f64::NAN)
+            };
+            if method_name == "reduce" {
+                crate::typedarray::js_typed_array_reduce(ta, cb, has_init, init)
+            } else {
+                crate::typedarray::js_typed_array_reduce_right(ta, cb, has_init, init)
+            }
+        }
+        _ => return None,
+    };
+    Some(r)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -726,126 +881,8 @@ pub unsafe extern "C" fn js_native_call_method(
             let addr = raw_bits as usize;
             if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
                 let ta = addr as *mut crate::typedarray::TypedArrayHeader;
-                let arg0 = || -> f64 {
-                    if args_len >= 1 && !args_ptr.is_null() {
-                        unsafe { *args_ptr }
-                    } else {
-                        f64::NAN
-                    }
-                };
-                let arg_closure = |i: usize| -> *const crate::closure::ClosureHeader {
-                    if i < args_len && !args_ptr.is_null() {
-                        let v = unsafe { *args_ptr.add(i) };
-                        let bits = v.to_bits();
-                        let tag = (bits >> 48) as u16;
-                        if tag == 0x7FFD {
-                            (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
-                        } else {
-                            std::ptr::null()
-                        }
-                    } else {
-                        std::ptr::null()
-                    }
-                };
-                match method_name {
-                    "length" => {
-                        return crate::typedarray::js_typed_array_length(ta) as f64;
-                    }
-                    "at" => {
-                        return crate::typedarray::js_typed_array_at(ta, arg0());
-                    }
-                    "sort" => {
-                        // #2796: validate the comparator (function | undefined)
-                        // before sorting — throws TypeError for any other value.
-                        let cmp = if args_len >= 1 && !args_ptr.is_null() {
-                            let raw = unsafe { *args_ptr };
-                            crate::array::js_validate_array_comparator(raw)
-                                as *const crate::closure::ClosureHeader
-                        } else {
-                            std::ptr::null()
-                        };
-                        let result = if cmp.is_null() {
-                            crate::typedarray::js_typed_array_sort_default(ta)
-                        } else {
-                            crate::typedarray::js_typed_array_sort_with_comparator(ta, cmp)
-                        };
-                        return f64::from_bits(result as u64);
-                    }
-                    "toSorted" => {
-                        // #2796: validate comparator before sorting.
-                        let cmp = if args_len >= 1 && !args_ptr.is_null() {
-                            let raw = unsafe { *args_ptr };
-                            crate::array::js_validate_array_comparator(raw)
-                                as *const crate::closure::ClosureHeader
-                        } else {
-                            std::ptr::null()
-                        };
-                        let result = if cmp.is_null() {
-                            crate::typedarray::js_typed_array_to_sorted_default(ta)
-                        } else {
-                            crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, cmp)
-                        };
-                        return f64::from_bits(result as u64);
-                    }
-                    "toReversed" => {
-                        let result = crate::typedarray::js_typed_array_to_reversed(ta);
-                        return f64::from_bits(result as u64);
-                    }
-                    "with" => {
-                        let idx = arg0();
-                        let val = if args_len >= 2 && !args_ptr.is_null() {
-                            unsafe { *args_ptr.add(1) }
-                        } else {
-                            f64::NAN
-                        };
-                        let result = crate::typedarray::js_typed_array_with(ta, idx, val);
-                        return f64::from_bits(result as u64);
-                    }
-                    "findLast" => {
-                        let cb = arg_closure(0);
-                        if cb.is_null() {
-                            return f64::from_bits(crate::value::TAG_UNDEFINED);
-                        }
-                        return crate::typedarray::js_typed_array_find_last(ta, cb);
-                    }
-                    "findLastIndex" => {
-                        let cb = arg_closure(0);
-                        if cb.is_null() {
-                            return -1.0;
-                        }
-                        return crate::typedarray::js_typed_array_find_last_index(ta, cb);
-                    }
-                    // #2879: bulk `set(source, offset?)` and `copyWithin`.
-                    "set" => {
-                        let source = arg0();
-                        let offset = if args_len >= 2 && !args_ptr.is_null() {
-                            unsafe { *args_ptr.add(1) }
-                        } else {
-                            0.0
-                        };
-                        return crate::typedarray::js_typed_array_set_from(ta, source, offset);
-                    }
-                    "copyWithin" => {
-                        let target = arg0();
-                        let start = if args_len >= 2 && !args_ptr.is_null() {
-                            unsafe { *args_ptr.add(1) }
-                        } else {
-                            0.0
-                        };
-                        let end = if args_len >= 3 && !args_ptr.is_null() {
-                            unsafe { *args_ptr.add(2) }
-                        } else {
-                            f64::from_bits(crate::value::TAG_UNDEFINED)
-                        };
-                        let result =
-                            crate::typedarray::js_typed_array_copy_within(ta, target, start, end);
-                        return f64::from_bits(result as u64);
-                    }
-                    _ => {
-                        // Fall through. Other methods aren't handled here
-                        // yet; they hit the primitive-method catch-all
-                        // below — better than silent no-op.
-                    }
+                if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
+                    return r;
                 }
             }
         }
@@ -1278,6 +1315,20 @@ pub unsafe extern "C" fn js_native_call_method(
         // dedicated dispatcher.
         if crate::buffer::is_registered_buffer(raw_ptr) {
             return dispatch_buffer_method(raw_ptr, method_name, args_ptr, args_len);
+        }
+
+        // TypedArray method dispatch for NaN-boxed (POINTER_TAG) receivers.
+        // The raw-pointer path above (#654) only fires when codegen leaves the
+        // typed-array pointer untagged; a `Uint8Array` local loaded as a value
+        // is NaN-boxed with POINTER_TAG and reaches here instead. Route the
+        // callback-bearing + immutable methods to the shared helper before the
+        // GC_TYPE_ARRAY check below (which only matches plain arrays).
+        // Issues #2797 / #2798 / #2799.
+        if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+            let ta = raw_ptr as *mut crate::typedarray::TypedArrayHeader;
+            if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
+                return r;
+            }
         }
 
         // Array method dispatch: when the object is a real or lazy array at runtime,
