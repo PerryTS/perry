@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1782 entries across 88 modules
+// Coverage: 1783 entries across 88 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2688,6 +2688,8 @@ declare module "util" {
   export function promisify(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
+  /** stdlib */
+  export function toUSVString(...args: any[]): any;
 }
 
 declare module "util/types" {
