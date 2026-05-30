@@ -688,6 +688,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(expr, assigned);
         }
         Expr::CryptoRandomUUID => {}
+        Expr::CryptoRandomUUIDv7 => {}
         // OS operations (no assignments)
         Expr::OsPlatform
         | Expr::OsArch

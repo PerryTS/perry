@@ -685,6 +685,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             Expr::CryptoRandomBytes(Box::new(substitute_expr(expr, substitutions)))
         }
         Expr::CryptoRandomUUID => Expr::CryptoRandomUUID,
+        Expr::CryptoRandomUUIDv7 => Expr::CryptoRandomUUIDv7,
         Expr::CryptoSha256(expr) => {
             Expr::CryptoSha256(Box::new(substitute_expr(expr, substitutions)))
         }

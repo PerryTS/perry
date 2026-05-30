@@ -1541,10 +1541,20 @@ pub unsafe extern "C" fn js_response_body(handle: f64) -> f64 {
     response_body_stream(handle_id(handle))
 }
 
-/// Response.json(value) — static method. Allocates a Response with JSON-stringified body
-/// and Content-Type: application/json. The value is passed as NaN-boxed JSValue bits (f64).
+/// Response.json(value, init?) — static method. Allocates a Response with the
+/// JSON-stringified body and `Content-Type: application/json`, honoring the
+/// optional `init` (#2638): `init.status` (default 200), `init.statusText`
+/// (default "" — Node does NOT derive it from the status code for this
+/// factory) and `init.headers` (a Headers handle; user headers are applied
+/// first, then `content-type` defaults to `application/json` only if the init
+/// didn't already set it). The value is passed as NaN-boxed JSValue bits (f64).
 #[no_mangle]
-pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
+pub unsafe extern "C" fn js_response_static_json(
+    value: f64,
+    init_status: f64,
+    init_status_text_ptr: *const StringHeader,
+    headers_handle: f64,
+) -> f64 {
     // Stringify via runtime (type_hint 1 = object)
     extern "C" {
         fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
@@ -1555,11 +1565,33 @@ pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
     } else {
         string_from_header(str_ptr).unwrap_or_else(|| "null".to_string())
     };
-    let mut headers = HeadersStore::default();
-    headers.set("content-type", "application/json");
+    let status_u16 = if init_status.is_nan() || init_status == 0.0 {
+        200
+    } else {
+        init_status as u16
+    };
+    // Node's `Response.json` leaves statusText "" when not provided — it does
+    // not fall back to the status reason phrase.
+    let status_text = string_from_header(init_status_text_ptr).unwrap_or_default();
+    // Start from any user-provided headers, then add the default content-type
+    // only if the init headers didn't already set one.
+    let headers_id = handle_id(headers_handle);
+    let mut headers = if headers_id != 0 {
+        HEADERS_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&headers_id)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        HeadersStore::default()
+    };
+    if !headers.has("content-type") {
+        headers.set("content-type", "application/json");
+    }
     handle_to_f64(alloc_response(
-        200,
-        "OK".to_string(),
+        status_u16,
+        status_text,
         headers,
         body_str.into_bytes(),
         true,

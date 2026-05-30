@@ -424,6 +424,7 @@ pub fn check_object_literal_escapes_in_expr(
         // Time / perf leaf intrinsics
         | Expr::DateNow | Expr::PerformanceNow | Expr::MathRandom
         | Expr::CryptoRandomUUID
+        | Expr::CryptoRandomUUIDv7
         // Iter-result scratch (zero-arg leaves)
         | Expr::IterResultGetValue | Expr::IterResultGetDone
         // Process leaf intrinsics

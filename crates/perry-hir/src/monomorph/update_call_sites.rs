@@ -467,6 +467,7 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(expr, ctx, lookup);
         }
         Expr::CryptoRandomUUID => {}
+        Expr::CryptoRandomUUIDv7 => {}
         // Date operations
         Expr::DateNow => {}
         Expr::DateNew(args) => {

@@ -115,6 +115,11 @@ fn array_slice_value_to_index(value: f64) -> i32 {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_array_splice_delete_count(value: f64) -> i32 {
+    array_slice_value_to_index(value)
+}
+
 fn array_slice_start_index(value: f64) -> i32 {
     array_slice_value_to_index(value)
 }

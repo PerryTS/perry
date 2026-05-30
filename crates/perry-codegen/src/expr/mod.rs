@@ -1578,6 +1578,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessSetTitle(..)
         | Expr::RegExpExecIndex
         | Expr::CryptoRandomUUID
+        | Expr::CryptoRandomUUIDv7
         | Expr::CryptoRandomBytes(..)
         | Expr::CryptoSha256(..)
         | Expr::CryptoMd5(..)

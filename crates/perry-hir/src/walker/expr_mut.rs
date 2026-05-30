@@ -67,6 +67,7 @@ where
         | Expr::TextEncoderNew
         | Expr::TextDecoderNew
         | Expr::CryptoRandomUUID
+        | Expr::CryptoRandomUUIDv7
         | Expr::OsPlatform
         | Expr::OsArch
         | Expr::OsHostname
