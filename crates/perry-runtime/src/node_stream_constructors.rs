@@ -661,8 +661,18 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
     let readable = js_node_stream_readable_new(readable_from_options(opts));
     let raw = raw_ptr_from_value(readable);
     if raw >= 0x10000 {
-        let chunks = normalize_readable_from_input(iterable);
-        js_object_set_field_by_name(raw as *mut ObjectHeader, hidden_chunks_key(), chunks);
+        let trap_buf = crate::exception::js_try_push();
+        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+        if jumped == 0 {
+            let chunks = normalize_readable_from_input(iterable);
+            crate::exception::js_try_end();
+            js_object_set_field_by_name(raw as *mut ObjectHeader, hidden_chunks_key(), chunks);
+        } else {
+            let err = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            crate::exception::js_try_end();
+            destroy_stream(readable, err);
+        }
     }
     readable
 }

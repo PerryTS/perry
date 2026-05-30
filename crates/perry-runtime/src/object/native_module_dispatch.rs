@@ -26,6 +26,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
     } else {
         ""
     };
+    let module_name = match module_name {
+        "path/posix" => "path.posix",
+        "path/win32" => "path.win32",
+        _ => module_name,
+    };
     // Helper: get arg N as f64
     let arg = |n: usize| -> f64 {
         if n < args_len && !args_ptr.is_null() {
