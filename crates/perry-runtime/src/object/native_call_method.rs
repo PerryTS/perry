@@ -796,12 +796,16 @@ pub unsafe extern "C" fn js_native_call_method(
                 return crate::bigint::js_bigint_to_f64(bigint_ptr);
             }
             "toString" => {
-                let result_ptr = if args_len > 0 && !args_ptr.is_null() {
-                    let radix_f64 = *args_ptr;
-                    let radix = radix_f64 as i32;
-                    crate::bigint::js_bigint_to_string_radix(bigint_ptr, radix)
+                // #2864: ToNumber/ToInteger-coerce + validate the radix
+                // (RangeError for out-of-range), `None`/no-arg → decimal.
+                let radix = if args_len > 0 && !args_ptr.is_null() {
+                    crate::value::coerce_validate_radix(*args_ptr)
                 } else {
-                    crate::bigint::js_bigint_to_string(bigint_ptr)
+                    None
+                };
+                let result_ptr = match radix {
+                    Some(r) => crate::bigint::js_bigint_to_string_radix(bigint_ptr, r),
+                    None => crate::bigint::js_bigint_to_string(bigint_ptr),
                 };
                 return f64::from_bits(JSValue::string_ptr(result_ptr).bits());
             }
