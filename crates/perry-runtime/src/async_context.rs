@@ -144,6 +144,29 @@ pub fn scan_snapshot_roots_mut(
     }
 }
 
+pub(crate) fn scan_snapshot_roots_mut_step(
+    snapshot: &mut AsyncContextSnapshot,
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    entry_cursor: &mut usize,
+    store_cursor: &mut usize,
+    remaining: &mut usize,
+) -> bool {
+    while *remaining > 0 && *entry_cursor < snapshot.entries.len() {
+        let entry = &mut snapshot.entries[*entry_cursor];
+        while *remaining > 0 && *store_cursor < entry.stores.len() {
+            visitor.visit_nanbox_f64_slot(&mut entry.stores[*store_cursor]);
+            *store_cursor += 1;
+            *remaining -= 1;
+        }
+        if *store_cursor < entry.stores.len() {
+            return false;
+        }
+        *entry_cursor += 1;
+        *store_cursor = 0;
+    }
+    *entry_cursor >= snapshot.entries.len()
+}
+
 pub fn scan_active_context_roots(mark: &mut dyn FnMut(f64)) {
     ACTIVE_CONTEXT.with(|ctx| {
         let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);

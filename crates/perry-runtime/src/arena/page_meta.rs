@@ -757,6 +757,44 @@ pub(crate) fn old_arena_walk_objects_on_pages(
     count
 }
 
+pub(crate) struct OldArenaPageObjectCursor {
+    pages: Vec<usize>,
+    page_cursor: usize,
+    header_cursor: usize,
+}
+
+impl OldArenaPageObjectCursor {
+    pub(crate) fn new(pages: &crate::fast_hash::PtrHashSet<usize>) -> Self {
+        Self {
+            pages: pages.iter().copied().collect(),
+            page_cursor: 0,
+            header_cursor: 0,
+        }
+    }
+
+    pub(crate) fn next(&mut self) -> Option<usize> {
+        loop {
+            let page = *self.pages.get(self.page_cursor)?;
+            let header = OLD_GEN_PAGE_OBJECTS.with(|index| {
+                index
+                    .borrow()
+                    .get(&page)
+                    .and_then(|headers| headers.get(self.header_cursor).copied())
+            });
+            if let Some(header) = header {
+                self.header_cursor += 1;
+                return Some(header);
+            }
+            self.page_cursor += 1;
+            self.header_cursor = 0;
+        }
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        self.page_cursor >= self.pages.len()
+    }
+}
+
 pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size: usize) {
     if header_addr == 0 || total_size == 0 {
         return;

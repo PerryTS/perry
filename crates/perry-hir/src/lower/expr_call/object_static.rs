@@ -62,7 +62,7 @@ pub(super) fn build_object_static_method_call(method: &str, args: Vec<Expr>) -> 
         "values" => Expr::ObjectValues(Box::new(iter.next().unwrap_or(Expr::Undefined))),
         "entries" => Expr::ObjectEntries(Box::new(iter.next().unwrap_or(Expr::Undefined))),
         "assign" => {
-            let target = iter.next().unwrap_or(Expr::Object(Vec::new()));
+            let target = iter.next().unwrap_or(Expr::Undefined);
             let sources: Vec<Expr> = iter.collect();
             Expr::ObjectAssign {
                 target: Box::new(target),

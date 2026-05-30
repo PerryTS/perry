@@ -1,8 +1,15 @@
 use super::*;
+use std::any::Any;
 
+mod runtime_handles;
 mod scanner_shims;
 mod shadow_stack;
 
+pub(super) use runtime_handles::{
+    new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
+    scan_runtime_handle_roots_mut_step,
+};
+pub use runtime_handles::{RuntimeHandle, RuntimeHandleScope};
 pub use scanner_shims::{
     async_context_mutable_root_scanner, async_context_root_scanner,
     async_hooks_mutable_root_scanner, async_hooks_root_scanner, exception_mutable_root_scanner,
@@ -22,6 +29,9 @@ pub use shadow_stack::{
 pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
 
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
+pub(crate) type BudgetedMutableRootScanner =
+    for<'a> fn(&mut RuntimeRootVisitor<'a>, &mut dyn Any, &mut usize) -> bool;
+pub(crate) type BudgetedMutableRootScannerStateFactory = fn() -> Box<dyn Any>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MutableRootScannerSource {
@@ -33,6 +43,8 @@ pub(super) enum MutableRootScannerSource {
 pub(super) struct MutableRootScannerEntry {
     pub(super) scanner: MutableRootScanner,
     pub(super) source: MutableRootScannerSource,
+    pub(super) budgeted_scanner: Option<BudgetedMutableRootScanner>,
+    pub(super) budgeted_state_factory: Option<BudgetedMutableRootScannerStateFactory>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -203,9 +215,29 @@ pub(super) fn copy_only_root_scanner_counts() -> (usize, usize) {
     (rust_scanners, ffi_scanners)
 }
 
+pub(super) fn registered_root_scanners_block_budgeted_gc() -> bool {
+    let has_copy_only = ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty())
+        || FFI_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty());
+    let has_unbudgeted_mutable = MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners
+            .borrow()
+            .iter()
+            .any(|entry| entry.budgeted_scanner.is_none())
+    });
+    let has_ffi_mutable = FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty())
+        || FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty());
+    has_copy_only || has_unbudgeted_mutable || has_ffi_mutable
+}
+
 /// Register a runtime-owned root scanner that exposes mutable slots.
 /// These scanners are marked like ordinary roots, but their storage is
 /// revisited after evacuation so forwarded references can be rewritten.
+///
+/// This compatibility registration has no resumable cursor. Ordinary
+/// low-pause GC steps therefore treat it as a synchronous-only scanner and
+/// defer while it is registered. Runtime scanners that can participate in
+/// `NormalIncremental`/`MutatorAssist` progress must use
+/// `gc_register_budgeted_mutable_root_scanner_with_source`.
 pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
     gc_register_mutable_root_scanner_with_source(
         scanner,
@@ -225,9 +257,28 @@ pub(super) fn gc_register_mutable_root_scanner_with_source(
     source: MutableRootScannerSource,
 ) {
     MUTABLE_ROOT_SCANNERS.with(|scanners| {
-        scanners
-            .borrow_mut()
-            .push(MutableRootScannerEntry { scanner, source });
+        scanners.borrow_mut().push(MutableRootScannerEntry {
+            scanner,
+            source,
+            budgeted_scanner: None,
+            budgeted_state_factory: None,
+        });
+    });
+}
+
+pub(super) fn gc_register_budgeted_mutable_root_scanner_with_source(
+    scanner: MutableRootScanner,
+    budgeted_scanner: BudgetedMutableRootScanner,
+    budgeted_state_factory: BudgetedMutableRootScannerStateFactory,
+    source: MutableRootScannerSource,
+) {
+    MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(MutableRootScannerEntry {
+            scanner,
+            source,
+            budgeted_scanner: Some(budgeted_scanner),
+            budgeted_state_factory: Some(budgeted_state_factory),
+        });
     });
 }
 
@@ -1215,268 +1266,6 @@ impl<'a> RuntimeRootVisitor<'a> {
     }
 }
 
-/// Scoped owner for transient runtime handles.
-///
-/// Handles are mutable GC roots for values that live only in a runtime
-/// helper's local variables while that helper may allocate. Dropping the
-/// scope removes every handle created from it.
-pub struct RuntimeHandleScope {
-    pub(super) base: usize,
-}
-
-impl RuntimeHandleScope {
-    pub fn new() -> Self {
-        let base = RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len());
-        Self { base }
-    }
-
-    #[inline]
-    pub(super) fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
-        runtime_handle_slot_write_barrier(slot);
-        let index = RUNTIME_HANDLE_STACK.with(|stack| {
-            let mut stack = stack.borrow_mut();
-            let index = stack.len();
-            stack.push(slot);
-            index
-        });
-        RuntimeHandle {
-            index,
-            _scope: PhantomData,
-        }
-    }
-
-    pub fn root_nanbox_f64<'scope>(&'scope self, value: f64) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::Nanbox(value.to_bits()))
-    }
-
-    pub fn root_nanbox_f64_slice<'scope>(
-        &'scope self,
-        values: &[f64],
-    ) -> Vec<RuntimeHandle<'scope>> {
-        values
-            .iter()
-            .map(|value| self.root_nanbox_f64(*value))
-            .collect()
-    }
-
-    pub fn root_nanbox_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::Nanbox(bits))
-    }
-
-    pub fn root_heap_word_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::HeapWord(bits))
-    }
-
-    pub fn root_heap_word_u64_slice<'scope>(
-        &'scope self,
-        values: &[u64],
-    ) -> Vec<RuntimeHandle<'scope>> {
-        values
-            .iter()
-            .map(|bits| self.root_heap_word_u64(*bits))
-            .collect()
-    }
-
-    pub fn refreshed_nanbox_f64_slice(handles: &[RuntimeHandle<'_>]) -> Vec<f64> {
-        handles.iter().map(RuntimeHandle::get_nanbox_f64).collect()
-    }
-
-    pub fn refreshed_heap_word_u64_slice(handles: &[RuntimeHandle<'_>]) -> Vec<u64> {
-        handles
-            .iter()
-            .map(RuntimeHandle::get_heap_word_u64)
-            .collect()
-    }
-
-    pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: POINTER_TAG,
-        })
-    }
-
-    pub fn root_raw_const_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: POINTER_TAG,
-        })
-    }
-
-    pub fn root_string_ptr<'scope>(
-        &'scope self,
-        ptr: *const crate::StringHeader,
-    ) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: STRING_TAG,
-        })
-    }
-
-    pub fn root_bigint_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
-        self.push(RuntimeHandleSlot::RawTagged {
-            addr: ptr as usize,
-            tag: BIGINT_TAG,
-        })
-    }
-
-    #[cfg(test)]
-    pub(super) fn active_len_for_tests() -> usize {
-        RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
-    }
-}
-
-#[inline]
-pub(super) fn runtime_handle_slot_write_barrier(slot: RuntimeHandleSlot) {
-    match slot {
-        RuntimeHandleSlot::Nanbox(bits) => runtime_write_barrier_root_nanbox(bits),
-        RuntimeHandleSlot::HeapWord(bits) => runtime_write_barrier_root_heap_word(bits),
-        RuntimeHandleSlot::RawTagged { addr, tag } => {
-            if addr != 0 {
-                runtime_write_barrier_root_nanbox(tag | (addr as u64 & POINTER_MASK));
-            }
-        }
-    }
-}
-
-impl Default for RuntimeHandleScope {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Drop for RuntimeHandleScope {
-    fn drop(&mut self) {
-        RUNTIME_HANDLE_STACK.with(|stack| {
-            stack.borrow_mut().truncate(self.base);
-        });
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct RuntimeHandle<'scope> {
-    pub(super) index: usize,
-    pub(super) _scope: PhantomData<&'scope RuntimeHandleScope>,
-}
-
-impl<'scope> RuntimeHandle<'scope> {
-    #[inline]
-    pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
-        RUNTIME_HANDLE_STACK.with(|stack| {
-            let stack = stack.borrow();
-            let slot = *stack
-                .get(self.index)
-                .expect("runtime handle used after its scope was dropped");
-            f(slot)
-        })
-    }
-
-    #[inline]
-    pub(super) fn with_slot_mut<R>(&self, f: impl FnOnce(&mut RuntimeHandleSlot) -> R) -> R {
-        RUNTIME_HANDLE_STACK.with(|stack| {
-            let mut stack = stack.borrow_mut();
-            let slot = stack
-                .get_mut(self.index)
-                .expect("runtime handle used after its scope was dropped");
-            f(slot)
-        })
-    }
-
-    pub fn get_nanbox_f64(&self) -> f64 {
-        f64::from_bits(self.get_nanbox_u64())
-    }
-
-    pub fn get_nanbox_u64(&self) -> u64 {
-        self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::Nanbox(bits) => bits,
-            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
-        })
-    }
-
-    pub fn set_nanbox_f64(&self, value: f64) {
-        self.set_nanbox_u64(value.to_bits());
-    }
-
-    pub fn set_nanbox_u64(&self, bits: u64) {
-        self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::Nanbox(current) => *current = bits,
-            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
-        });
-        runtime_write_barrier_root_nanbox(bits);
-    }
-
-    pub fn get_heap_word_u64(&self) -> u64 {
-        self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::HeapWord(bits) => bits,
-            _ => panic!("runtime handle kind mismatch: expected heap word"),
-        })
-    }
-
-    pub fn set_heap_word_u64(&self, bits: u64) {
-        self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::HeapWord(current) => *current = bits,
-            _ => panic!("runtime handle kind mismatch: expected heap word"),
-        });
-        runtime_write_barrier_root_heap_word(bits);
-    }
-
-    pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
-        self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *mut T,
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
-        })
-    }
-
-    pub fn set_raw_mut_ptr<T>(&self, ptr: *mut T) {
-        self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, tag } => {
-                *addr = ptr as usize;
-                if !ptr.is_null() {
-                    runtime_write_barrier_root_nanbox(*tag | (ptr as u64 & POINTER_MASK));
-                }
-            }
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
-        });
-    }
-
-    pub fn get_raw_const_ptr<T>(&self) -> *const T {
-        self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, .. } => addr as *const T,
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
-        })
-    }
-
-    pub fn set_raw_const_ptr<T>(&self, ptr: *const T) {
-        self.with_slot_mut(|slot| match slot {
-            RuntimeHandleSlot::RawTagged { addr, tag } => {
-                *addr = ptr as usize;
-                if !ptr.is_null() {
-                    runtime_write_barrier_root_nanbox(*tag | (ptr as u64 & POINTER_MASK));
-                }
-            }
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
-        });
-    }
-}
-
-pub(super) fn scan_runtime_handle_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
-    RUNTIME_HANDLE_STACK.with(|stack| {
-        let mut stack = stack.borrow_mut();
-        for slot in stack.iter_mut() {
-            match slot {
-                RuntimeHandleSlot::Nanbox(bits) => {
-                    visitor.visit_nanbox_u64_slot(bits);
-                }
-                RuntimeHandleSlot::RawTagged { addr, tag } => {
-                    visitor.visit_tagged_usize_slot(addr, *tag);
-                }
-                RuntimeHandleSlot::HeapWord(bits) => {
-                    visitor.visit_heap_word_u64_slot(bits);
-                }
-            }
-        }
-    });
-}
-
 #[inline]
 pub(super) fn atomic_store_ordering(
     ordering: std::sync::atomic::Ordering,
@@ -1581,6 +1370,90 @@ pub(super) fn visit_mutable_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
     visit_global_root_slots(&mut visit);
 }
 
+#[derive(Default)]
+pub(super) struct MutableRootSlotScanCursor {
+    shadow_seen: usize,
+    global_seen: usize,
+    shadow_done: bool,
+    global_done: bool,
+}
+
+pub(super) fn mark_mutable_root_slots_step(
+    valid_ptrs: &ValidPointerSet,
+    mut shadow_stats: Option<&mut ShadowRootTraceStats>,
+    mut root_sources: Option<&mut RootSourcesTraceStats>,
+    cursor: &mut MutableRootSlotScanCursor,
+    budget: usize,
+) -> bool {
+    let mut remaining = budget;
+    if !cursor.shadow_done {
+        if remaining == 0 {
+            return false;
+        }
+        let mut seen = 0usize;
+        let mut exhausted = true;
+        visit_shadow_stack_root_slots(|slot| unsafe {
+            if seen < cursor.shadow_seen {
+                seen += 1;
+                return;
+            }
+            if remaining == 0 {
+                exhausted = false;
+                return;
+            }
+
+            let bits = slot.read();
+            record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
+            if let Some(stats) = shadow_stats.as_mut() {
+                stats.record_scan(bits);
+            }
+            if bits != 0 {
+                try_mark_value(bits, valid_ptrs);
+            }
+            seen += 1;
+            cursor.shadow_seen = seen;
+            remaining -= 1;
+        });
+        if !exhausted {
+            return false;
+        }
+        cursor.shadow_done = true;
+    }
+
+    if !cursor.global_done {
+        if remaining == 0 {
+            return false;
+        }
+        let mut seen = 0usize;
+        let mut exhausted = true;
+        visit_global_root_slots(|slot| unsafe {
+            if seen < cursor.global_seen {
+                seen += 1;
+                return;
+            }
+            if remaining == 0 {
+                exhausted = false;
+                return;
+            }
+
+            let bits = slot.read();
+            record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
+            if bits != 0 {
+                mark_global_root_bits(bits, valid_ptrs);
+            }
+            seen += 1;
+            cursor.global_seen = seen;
+            remaining -= 1;
+        });
+        if !exhausted {
+            return false;
+        }
+        cursor.global_done = true;
+    }
+
+    true
+}
+
 #[inline]
 pub(super) fn shadow_slot_pointer_root(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
@@ -1658,6 +1531,7 @@ pub(super) fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
 }
 
 /// Mark mutable roots (shadow-stack slots and registered globals).
+#[allow(dead_code)]
 pub(super) fn mark_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
     mut shadow_stats: Option<&mut ShadowRootTraceStats>,
@@ -1818,10 +1692,12 @@ pub(super) fn visit_ffi_mutable_registered_roots_with_sources(
 }
 
 /// Run registered runtime-owned scanners that expose mutable slots.
+#[allow(dead_code)]
 pub(super) fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     mark_mutable_registered_roots_with_sources(valid_ptrs, None);
 }
 
+#[allow(dead_code)]
 pub(super) fn mark_mutable_registered_roots_with_sources(
     valid_ptrs: &ValidPointerSet,
     mut root_sources: Option<&mut RootSourcesTraceStats>,
@@ -1864,6 +1740,7 @@ pub(super) fn mark_mutable_registered_roots_with_sources(
 /// Run legacy copy-only root scanners. When evacuation is enabled,
 /// every discovered root is pinned because the scanner API gives us no
 /// slot to rewrite after forwarding.
+#[allow(dead_code)]
 pub(super) fn mark_registered_roots(
     valid_ptrs: &ValidPointerSet,
     pin_discoveries: bool,

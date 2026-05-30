@@ -503,17 +503,24 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     let methods = duplex_methods();
     let obj = build_object(&methods, DUPLEX_SHAPE_ID + methods.len() as u32);
     let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    if let Some(read) = read_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, duplex));
-    }
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
+        set_hidden_value(
+            duplex,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
     }
     if let Some(writev) = writev_callback_from_options(opts) {
         js_object_set_field_by_name(
             obj,
             hidden_writev_key(),
             rebind_callback_this(writev, duplex),
+        );
+        set_hidden_value(
+            duplex,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
         );
     }
     init_lifecycle_state(duplex, opts);
@@ -528,6 +535,76 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     install_stream_async_dispose_symbol(duplex);
     invoke_construct_callback(duplex, opts);
     duplex
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_duplex_subclass_init(this: f64, opts: f64) -> f64 {
+    register_iter_helper_arities();
+    let raw = raw_ptr_from_value(this);
+    if raw == 0 {
+        return this;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return this;
+    }
+
+    let obj = raw as *mut ObjectHeader;
+    let subclass_read =
+        js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"_read"));
+    let subclass_write = js_object_get_field_by_name_f64(obj, hidden_key(b"_write"));
+    let subclass_writev = js_object_get_field_by_name_f64(obj, hidden_key(b"_writev"));
+
+    let methods = duplex_methods();
+    install_methods_on_existing_object(obj, this, &methods, &[]);
+
+    if let Some(read) = read_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, this));
+    } else if is_callable_value(subclass_read) {
+        js_object_set_field_by_name(obj, hidden_read_key(), subclass_read);
+    }
+    if let Some(write) = write_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, this));
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    } else if is_callable_value(subclass_write) {
+        js_object_set_field_by_name(obj, hidden_write_key(), subclass_write);
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    }
+    if let Some(writev) = writev_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), rebind_callback_this(writev, this));
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    } else if is_callable_value(subclass_writev) {
+        js_object_set_field_by_name(obj, hidden_writev_key(), subclass_writev);
+        set_hidden_value(
+            this,
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        );
+    }
+
+    init_lifecycle_state(this, opts);
+    init_constructor(this, "Duplex");
+    init_readable_state(this, opts);
+    init_writable_state(this, opts);
+    init_duplex_state(this, opts);
+    install_common_lifecycle_callbacks(this, opts);
+    install_writable_lifecycle_callbacks(this, opts);
+    init_abort_signal_state(this, opts);
+    async_iterator::install_readable_async_iterator_symbol(this);
+    install_stream_async_dispose_symbol(this);
+    invoke_construct_callback(this, opts);
+    this
 }
 
 #[no_mangle]

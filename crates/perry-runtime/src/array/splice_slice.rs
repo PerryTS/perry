@@ -99,9 +99,45 @@ pub extern "C" fn js_array_splice(
     }
 }
 
-/// Slice an array, returning a new array with elements from start to end (exclusive)
-/// Handles negative indices (from end of array)
-/// If end is i32::MAX, slices to end of array
+fn array_slice_value_to_index(value: f64) -> i32 {
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_nan() {
+        0
+    } else if number >= i32::MAX as f64 {
+        i32::MAX
+    } else if number <= i32::MIN as f64 {
+        i32::MIN
+    } else {
+        number.trunc() as i32
+    }
+}
+
+fn array_slice_start_index(value: f64) -> i32 {
+    array_slice_value_to_index(value)
+}
+
+fn array_slice_end_index(value: f64) -> i32 {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        i32::MAX
+    } else {
+        array_slice_value_to_index(value)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_slice_values(
+    arr: *const ArrayHeader,
+    start_value: f64,
+    end_value: f64,
+) -> *mut ArrayHeader {
+    let start = array_slice_start_index(start_value);
+    let end = array_slice_end_index(end_value);
+    js_array_slice(arr, start, end)
+}
+
+/// Slice an array, returning a new array with elements from start to end (exclusive).
+/// Handles negative indices (from end of array).
+/// If end is i32::MAX, slices to end of array.
 #[no_mangle]
 pub extern "C" fn js_array_slice(
     arr: *const ArrayHeader,

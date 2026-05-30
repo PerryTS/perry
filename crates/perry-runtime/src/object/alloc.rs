@@ -603,61 +603,89 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
 /// fresh object, breaking `result === target` and orphaning target's
 /// symbol-keyed properties since the side table is keyed by raw pointer).
 ///
-/// Per spec, undefined/null target throws TypeError; here we silently no-op
-/// to match the rest of perry-runtime's permissive style. Non-object sources
-/// are skipped (matching `Object.assign(t, null)` / `Object.assign(t, 5)`
-/// which are spec-allowed).
+fn throw_object_assign_nullish_target() -> ! {
+    let message = "Cannot convert undefined or null to object";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f64 {
+    let target = JSValue::from_bits(target_f64.to_bits());
+    if target.is_undefined() || target.is_null() {
+        throw_object_assign_nullish_target();
+    }
+    target_f64
+}
+
+unsafe fn object_assign_set_string_key(
+    target: *mut ObjectHeader,
+    target_is_array: bool,
+    key_ptr: *const crate::StringHeader,
+    value_f64: f64,
+) {
+    if target_is_array {
+        // Routes integer-index keys to array element-set (extending length);
+        // non-numeric keys fall back to the object setter.
+        crate::array::js_array_set_string_key(
+            target as *mut crate::array::ArrayHeader,
+            key_ptr,
+            value_f64,
+        );
+    } else {
+        js_object_set_field_by_name(target, key_ptr, value_f64);
+    }
+}
+
+unsafe fn object_assign_string_source(
+    target: *mut ObjectHeader,
+    target_is_array: bool,
+    source_f64: f64,
+) {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some((ptr, blen)) = crate::string::str_bytes_from_jsvalue(source_f64, &mut scratch) else {
+        return;
+    };
+    if ptr.is_null() {
+        return;
+    }
+    let bytes = std::slice::from_raw_parts(ptr, blen as usize);
+    let Ok(s) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    for (idx, ch) in s.chars().enumerate() {
+        let key = idx.to_string();
+        let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let mut buf = [0u8; 4];
+        let ch_str = ch.encode_utf8(&mut buf);
+        let value_ptr = crate::string::js_string_from_bytes(ch_str.as_ptr(), ch_str.len() as u32);
+        let value_f64 = f64::from_bits(JSValue::string_ptr(value_ptr).bits());
+        object_assign_set_string_key(target, target_is_array, key_ptr, value_f64);
+    }
+}
+
+/// Per spec, undefined/null target throws TypeError. Non-object sources
+/// are skipped except string primitives, which expose enumerable index
+/// properties (`Object.assign({}, "ab") -> {0:"a",1:"b"}`).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) -> f64 {
-    const POINTER_TAG_LOCAL: u64 = 0x7FFD_0000_0000_0000;
-    const POINTER_MASK_LOCAL: u64 = 0x0000_FFFF_FFFF_FFFF;
+    js_object_assign_validate_target(target_f64);
 
-    // Decode target pointer. Accept either NaN-boxed POINTER_TAG or a raw
-    // pointer value (defensive: callers occasionally pass i64-typed handles).
-    let tgt_bits = target_f64.to_bits();
-    let tgt_top16 = tgt_bits >> 48;
-    let tgt_raw = if tgt_top16 >= 0x7FF8 {
-        if tgt_top16 == 0x7FFC {
-            // undefined/null/bool — spec says throw TypeError; silently return.
-            return target_f64;
-        }
-        (tgt_bits & POINTER_MASK_LOCAL) as usize
-    } else {
-        tgt_bits as usize
-    };
+    let target_value = JSValue::from_bits(target_f64.to_bits());
+    if !target_value.is_pointer() {
+        return target_f64;
+    }
+    let tgt_raw = target_value.as_pointer::<u8>() as usize;
     // A real `ObjectHeader` is heap-allocated and #[repr(C)] with u64 /
     // pointer fields, so a valid object pointer is always 8-byte aligned.
-    // The tag / `< 0x10000` checks let an untagged, unaligned bit pattern
-    // through (observed on Windows: a non-pointer value reaches here as
-    // `source`, e.g. 0x1d81ff6950a). Dereferencing it as `*ObjectHeader`
-    // is a misaligned read — a hard abort under debug pointer-alignment
-    // checks, silent memory corruption (→ later GC out-of-bounds) in
-    // release. Treat a misaligned value as a non-object and skip, exactly
-    // the documented behaviour for `Object.assign(t, <non-object>)`.
+    // If a non-object target reaches here after nullish validation, skip
+    // mutation rather than dereferencing an invalid pointer.
     if tgt_raw < 0x10000 || tgt_raw % 8 != 0 {
         return target_f64;
     }
 
-    // Decode source pointer. Skip null/undefined/non-pointer sources.
-    let src_bits = source_f64.to_bits();
-    let src_top16 = src_bits >> 48;
-    let src_raw = if src_top16 >= 0x7FF8 {
-        if src_top16 == 0x7FFC {
-            return target_f64;
-        }
-        (src_bits & POINTER_MASK_LOCAL) as usize
-    } else {
-        src_bits as usize
-    };
-    // Same alignment guard as the target above — `src` is dereferenced at
-    // `(*src).keys_array` just below; an unaligned non-object source must
-    // be skipped, not dereferenced.
-    if src_raw < 0x10000 || src_raw % 8 != 0 || src_raw == tgt_raw {
-        return target_f64;
-    }
-
     let target = tgt_raw as *mut ObjectHeader;
-    let src = src_raw as *const ObjectHeader;
 
     // #2439: When the target is an array, an integer-keyed source property
     // (e.g. `Object.assign([1,2], {2:3})`) must grow the array's length, not
@@ -670,6 +698,33 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             (target as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
     };
+
+    let source = JSValue::from_bits(source_f64.to_bits());
+    if source.is_undefined() || source.is_null() {
+        return target_f64;
+    }
+    if source.is_any_string() {
+        object_assign_string_source(target, target_is_array, source_f64);
+        return target_f64;
+    }
+
+    // Decode source pointer. Skip null/undefined/non-pointer sources.
+    if !source.is_pointer() {
+        return target_f64;
+    }
+    let src_raw = source.as_pointer::<u8>() as usize;
+    // Same alignment guard as the target above — `src` is dereferenced at
+    // `(*src).keys_array` just below; an unaligned non-object source must
+    // be skipped, not dereferenced.
+    if src_raw < 0x10000
+        || src_raw % 8 != 0
+        || src_raw == tgt_raw
+        || crate::symbol::is_registered_symbol(src_raw)
+    {
+        return target_f64;
+    }
+
+    let src = src_raw as *const ObjectHeader;
 
     // 1) Copy own string-keyed enumerable properties from source to target,
     //    in source insertion order. Mirrors `js_object_copy_own_fields`.
@@ -700,20 +755,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
                 let v = js_object_get_field(src, i as u32);
                 f64::from_bits(v.bits())
             };
-            if target_is_array {
-                // Routes integer-index keys to array element-set (extending
-                // length); non-numeric keys fall back to the object setter.
-                // The array may reallocate on growth, but #233 forwarding
-                // means the original `target_f64` still resolves to the new
-                // head, so we keep returning it for object identity.
-                crate::array::js_array_set_string_key(
-                    target as *mut crate::array::ArrayHeader,
-                    key_ptr,
-                    field_f64,
-                );
-            } else {
-                js_object_set_field_by_name(target, key_ptr, field_f64);
-            }
+            object_assign_set_string_key(target, target_is_array, key_ptr, field_f64);
         }
     }
 
@@ -723,7 +765,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     //    Mutex; holding the lock across the iteration would deadlock.
     let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(src_raw);
     for (sym_ptr, value_bits) in entries {
-        let sym_f64 = f64::from_bits(POINTER_TAG_LOCAL | (sym_ptr as u64 & POINTER_MASK_LOCAL));
+        let sym_f64 = f64::from_bits(JSValue::pointer(sym_ptr as *const u8).bits());
         let value_f64 = f64::from_bits(value_bits);
         crate::symbol::js_object_set_symbol_property(target_f64, sym_f64, value_f64);
     }

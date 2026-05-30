@@ -746,3 +746,16 @@ pub extern "C" fn js_array_join(
         ret
     }
 }
+
+#[no_mangle]
+pub extern "C" fn js_array_join_value(
+    arr: *const ArrayHeader,
+    separator_value: f64,
+) -> *mut crate::string::StringHeader {
+    let separator = if separator_value.to_bits() == crate::value::TAG_UNDEFINED {
+        ptr::null()
+    } else {
+        crate::value::js_jsvalue_to_string(separator_value) as *const crate::string::StringHeader
+    };
+    js_array_join(arr, separator)
+}

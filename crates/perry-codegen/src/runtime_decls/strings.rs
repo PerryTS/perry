@@ -110,6 +110,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_value_typeof", I64, &[DOUBLE]);
     module.declare_function("js_string_starts_with", I32, &[I64, I64]);
     module.declare_function("js_string_ends_with", I32, &[I64, I64]);
+    module.declare_function("js_string_search_value_to_string", I64, &[DOUBLE, I32]);
     // 2-arg form: (s, prefix/suffix, position). Mirrors the spec
     // `String.prototype.startsWith/endsWith(searchString, position)` with
     // UTF-16 code-unit indexing.
@@ -294,6 +295,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_max_array", DOUBLE, &[I64]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
     module.declare_function("js_array_slice", I64, &[I64, I32, I32]);
+    module.declare_function("js_array_slice_values", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_array_shift_f64", DOUBLE, &[I64]);
     module.declare_function("js_set_alloc", I64, &[I32]);
     module.declare_function("js_set_from_array", I64, &[I64]);
@@ -449,7 +451,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // arrays and `js_object_set_field_by_name` for plain objects.
     module.declare_function("js_dyn_index_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_string_to_char_array", I64, &[I64]);
-    module.declare_function("js_string_repeat", I64, &[I64, I32]);
+    module.declare_function("js_string_repeat", I64, &[I64, DOUBLE]);
     module.declare_function("js_string_replace_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
@@ -1202,6 +1204,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Object.assign(target, source): mutate target with source's own
     // string-keyed AND symbol-keyed enumerable properties; returns target.
     // Refs #590.
+    module.declare_function("js_object_assign_validate_target", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_assign_one", DOUBLE, &[DOUBLE, DOUBLE]);
     // String extras (already in string.rs; expr.rs was stubbing or missing dispatch).
     module.declare_function("js_string_at", DOUBLE, &[I64, I32]);

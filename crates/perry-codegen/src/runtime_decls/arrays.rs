@@ -104,8 +104,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)
     // - js_array_join(arr, sep) -> *mut StringHeader (i64)
+    // - js_array_join_value(arr, sep_value) -> *mut StringHeader (i64)
     module.declare_function("js_array_pop_f64", DOUBLE, &[I64]);
     module.declare_function("js_array_join", I64, &[I64, I64]);
+    module.declare_function("js_array_join_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_forEach", VOID, &[I64, I64]);
     module.declare_function("js_array_fill", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_fill_range", I64, &[I64, DOUBLE, DOUBLE, DOUBLE]);

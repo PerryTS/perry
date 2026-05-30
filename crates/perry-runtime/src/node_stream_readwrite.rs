@@ -22,55 +22,6 @@ pub(super) fn mark_disturbed(stream: f64) {
     set_visible_readable_did_read(stream, true);
 }
 
-pub(super) fn push_json_number(buf: &mut String, value: f64) {
-    if value.is_nan() || value.is_infinite() {
-        buf.push_str("null");
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
-        let mut itoa_buf = itoa::Buffer::new();
-        buf.push_str(itoa_buf.format(value as i64));
-    } else {
-        let mut ryu_buf = ryu::Buffer::new();
-        buf.push_str(ryu_buf.format(value));
-    }
-}
-
-pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut String) -> bool {
-    if ptr.is_null() {
-        return false;
-    }
-    let obj = ptr as *const ObjectHeader;
-    let readable = own_field_by_key_bytes(obj, READABLE_FLAG_KEY).is_some();
-    let writable = own_field_by_key_bytes(obj, WRITABLE_FLAG_KEY).is_some();
-    if readable == writable {
-        return false;
-    }
-
-    buf.push_str(r#"{"_events":{},"#);
-    if readable {
-        let hwm =
-            own_field_by_key_bytes(obj, READABLE_HWM_KEY).unwrap_or_else(|| default_hwm(false));
-        let length = own_field_by_key_bytes(obj, READABLE_BUFFERED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_readableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","buffer":[],"bufferIndex":0,"length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","pipes":[],"awaitDrainWriters":null}}"#);
-    } else {
-        let hwm = own_field_by_key_bytes(obj, b"writableHighWaterMark")
-            .unwrap_or_else(|| default_hwm(false));
-        let length = 0.0;
-        let corked = own_field_by_key_bytes(obj, WRITABLE_CORKED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_writableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","corked":"#);
-        push_json_number(buf, corked);
-        buf.push_str(r#","writelen":0,"bufferedIndex":0,"pendingcb":0}}"#);
-    }
-    true
-}
-
 pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     if obj.is_null() {
         return None;
@@ -721,11 +672,10 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
 
 pub(super) fn schedule_writable_finish_then_transform_end(stream: f64, callback: Option<f64>) {
     schedule_writable_finish(stream, callback);
-    if is_transform_stream(stream)
-        && !has_truthy_hidden(stream, hidden_writable_final_pending_key())
-        && (has_truthy_hidden(stream, hidden_finish_scheduled_key())
-            || has_truthy_hidden(stream, hidden_finish_emitted_key()))
-    {
+    let finish_ready = has_truthy_hidden(stream, hidden_finish_scheduled_key())
+        || has_truthy_hidden(stream, hidden_finish_emitted_key());
+    let final_pending = has_truthy_hidden(stream, hidden_writable_final_pending_key());
+    if is_transform_stream(stream) && finish_ready && !final_pending {
         schedule_readable_end(stream);
     }
 }
@@ -774,16 +724,17 @@ pub(super) fn emit_readable_end_once(stream: f64) {
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
         end_pipe_destinations(stream);
-        // autoDestroy (default) tears readable-only streams down after
-        // 'end'. Duplex streams defer `close` until BOTH readable `end`
-        // and writable `finish` have fired; whichever side finishes second
-        // performs the close. Refs node-suite/stream/readable/closed-flag.
+        // autoDestroy (default) tears the stream down after 'end'; the
+        // destroy microtask marks it closed and emits 'close'. Only when
+        // autoDestroy is off do we fall back to the readable-only direct
+        // close path (#2302): a Readable-only stream (no writable side)
+        // emits 'close' after 'end' so `readable.closed` flips to true once
+        // the data is fully consumed. A Duplex defers `close` until BOTH
+        // 'end' and 'finish' have fired (handled in the writable-side
+        // `ns_end1`). Routing both through one branch avoids a double
+        // 'close' emission. Refs node-suite/stream/readable/closed-flag.
         if stream_auto_destroy_enabled(stream) {
-            let writable_pending = get_hidden_value(stream, hidden_writable_flag_key()).is_some()
-                && !has_truthy_hidden(stream, hidden_finish_emitted_key());
-            if !writable_pending {
-                destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
-            }
+            destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
         } else if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
             mark_stream_closed(stream);
             let _ = emit_stream_event(stream, string_value(b"close"), &[]);
@@ -1619,13 +1570,41 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> f64 {
     if is_array_like_value(iterable) {
         return iterable;
     }
-
-    let arr = crate::array::js_array_alloc(1);
     if is_single_chunk_value(iterable) {
+        let arr = crate::array::js_array_alloc(1);
         let arr = crate::array::js_array_push_f64(arr, iterable);
         return box_pointer(arr as *const u8);
     }
+    if let Some(chunks) = flatten_sync_iterable_value(iterable) {
+        return box_pointer(chunks as *const u8);
+    }
+
+    let arr = crate::array::js_array_alloc(1);
     box_pointer(arr as *const u8)
+}
+
+fn flatten_sync_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    if has_symbol_async_iterator(value) {
+        return None;
+    }
+    if crate::object::js_util_types_is_generator_object(value).to_bits() == TAG_TRUE {
+        return crate::array::sync_iterator_to_array_if_not_async(value);
+    }
+    let iter = crate::symbol::js_get_iterator(value);
+    if iter.to_bits() != value.to_bits() {
+        return crate::array::sync_iterator_to_array_if_not_async(iter);
+    }
+    None
+}
+
+fn has_symbol_async_iterator(value: f64) -> bool {
+    let sym = crate::symbol::well_known_symbol("asyncIterator");
+    if sym.is_null() {
+        return false;
+    }
+    let sym_value = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
+    let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_value) };
+    is_callable_value(method)
 }
 
 pub(super) fn readable_from_options(opts: f64) -> f64 {

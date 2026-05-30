@@ -1,6 +1,13 @@
 use super::super::*;
 use super::support::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+
+static SYNC_ONLY_SCANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+fn sync_only_test_mutable_root_scanner(_visitor: &mut RuntimeRootVisitor<'_>) {
+    SYNC_ONLY_SCANNER_CALLS.fetch_add(1, Ordering::Relaxed);
+}
 
 fn trace_snapshot(kind: GcTriggerKind) -> GcTriggerSnapshot {
     GcTriggerSnapshot {
@@ -57,14 +64,226 @@ fn start_minor_fallback_state(trigger: GcTriggerSnapshot) -> GcCycleState {
         trigger,
         trace,
         start,
+        trigger.kind.progress_kind(GcCollectionKind::Minor),
         prev_in_alloc,
         previous_pause_us,
         current_rss_bytes,
         evacuation_policy_allowed,
         force_evacuation,
+        EVACUATION_POLICY_DISABLED_REASON,
         old_page_selection,
         old_page_source_blocks,
     )
+}
+
+fn alloc_tracked_test_closure() -> *mut u8 {
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+    child
+}
+
+const VALID_POINTER_TEST_OBJECT_FIELDS: u32 = 1000;
+
+fn alloc_large_nursery_objects(count: usize) -> Vec<usize> {
+    (0..count)
+        .map(|_| unsafe {
+            let (object, _fields) = alloc_nursery_test_object(VALID_POINTER_TEST_OBJECT_FIELDS);
+            object as usize
+        })
+        .collect()
+}
+
+#[test]
+fn build_valid_pointer_set_slices_large_multi_block_arena_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let objects = alloc_large_nursery_objects(320);
+    assert!(crate::arena::arena_block_count() > 1);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    let mut build_steps = 0usize;
+    while state.phase() == GcCyclePhase::BuildValidPointerSet {
+        let result = state.step(GcWorkBudget::bounded(1));
+        assert_eq!(result.phase, GcCyclePhase::BuildValidPointerSet);
+        build_steps += 1;
+        assert!(
+            build_steps < 100_000,
+            "valid pointer set build did not finish"
+        );
+    }
+
+    assert_eq!(state.phase(), GcCyclePhase::RootScan);
+    assert!(
+        build_steps > crate::arena::arena_block_count(),
+        "arena setup, object walk, and finalization should span multiple build steps"
+    );
+
+    drop(objects);
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+}
+
+#[test]
+fn build_valid_pointer_set_first_tiny_step_only_inspects_one_arena_block() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(260);
+    assert!(crate::arena::arena_block_count() > 1);
+
+    let mut builder = ValidPointerSetBuilder::new();
+    let initial = builder.snapshot_for_tests();
+    assert_eq!(initial.phase, ValidPointerSetBuildPhase::ArenaCursorSetup);
+    assert_eq!(initial.arena_setup_blocks, 0);
+
+    assert!(!builder.step(1));
+    let after = builder.snapshot_for_tests();
+    assert_eq!(after.phase, ValidPointerSetBuildPhase::ArenaCursorSetup);
+    assert_eq!(after.arena_setup_blocks, 1);
+    assert_eq!(after.lookup_count, 0);
+
+    let _ = builder.finish();
+}
+
+#[test]
+fn build_valid_pointer_set_tiny_setup_step_does_not_bulk_order_blocks() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(320);
+    let block_count = crate::arena::arena_block_count();
+    assert!(block_count > 2);
+
+    let mut builder = ValidPointerSetBuilder::new();
+    for expected_blocks in 1..block_count {
+        assert!(!builder.step(1));
+        let snapshot = builder.snapshot_for_tests();
+        assert_eq!(snapshot.phase, ValidPointerSetBuildPhase::ArenaCursorSetup);
+        assert_eq!(snapshot.arena_setup_blocks, expected_blocks);
+        assert_eq!(snapshot.lookup_count, 0);
+    }
+
+    let before_order_finish = builder.snapshot_for_tests();
+    assert_eq!(
+        before_order_finish.phase,
+        ValidPointerSetBuildPhase::ArenaCursorSetup
+    );
+    assert_eq!(before_order_finish.arena_setup_blocks, block_count - 1);
+
+    assert!(!builder.step(1));
+    let after_order_finish = builder.snapshot_for_tests();
+    assert_eq!(
+        after_order_finish.phase,
+        ValidPointerSetBuildPhase::ArenaWalk
+    );
+    assert_eq!(after_order_finish.lookup_count, 0);
+
+    let _ = builder.finish();
+}
+
+#[test]
+fn build_valid_pointer_set_tiny_arena_walk_step_adds_one_lookup_entry() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(64);
+
+    let mut builder = ValidPointerSetBuilder::new();
+    assert!(!builder.step(100_000));
+    let after_setup = builder.snapshot_for_tests();
+    assert_eq!(after_setup.phase, ValidPointerSetBuildPhase::ArenaWalk);
+    assert_eq!(after_setup.lookup_count, 0);
+
+    let mut previous_lookup_count = after_setup.lookup_count;
+    for _ in 0..16 {
+        assert!(!builder.step(1));
+        let snapshot = builder.snapshot_for_tests();
+        assert_eq!(snapshot.phase, ValidPointerSetBuildPhase::ArenaWalk);
+        assert_eq!(
+            snapshot.lookup_count,
+            previous_lookup_count + 1,
+            "one tiny arena-walk step must not rebuild or bulk-fill lookup entries"
+        );
+        previous_lookup_count = snapshot.lookup_count;
+    }
+
+    let _ = builder.finish();
+}
+
+#[test]
+fn build_valid_pointer_set_sliced_build_preserves_contains_and_enclosing_object() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let (arena_object, fields) = unsafe { alloc_nursery_test_object(4) };
+    let arena_object = arena_object as usize;
+    let interior = fields as usize;
+    let arena_strings = (0..1100).map(|_| young_leaf()).collect::<Vec<_>>();
+    let malloc_objects = (0..32)
+        .map(|_| alloc_tracked_test_closure() as usize)
+        .collect::<Vec<_>>();
+
+    let mut builder = ValidPointerSetBuilder::new();
+    let mut steps = 0usize;
+    while !builder.step(7) {
+        steps += 1;
+        assert!(steps < 100_000, "sliced valid pointer build did not finish");
+    }
+    let valid_ptrs = builder.finish();
+
+    assert!(valid_ptrs.contains(&arena_object));
+    assert_eq!(valid_ptrs.enclosing_object(interior), Some(arena_object));
+    for &ptr in arena_strings.iter().take(16) {
+        assert!(valid_ptrs.contains(&ptr));
+    }
+    for &ptr in &malloc_objects {
+        assert!(valid_ptrs.contains(&ptr));
+    }
+}
+
+#[test]
+fn build_valid_pointer_set_finalize_is_separate_bounded_phase() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _objects = alloc_large_nursery_objects(16);
+    let _malloc_objects = (0..4)
+        .map(|_| alloc_tracked_test_closure())
+        .collect::<Vec<_>>();
+
+    let mut builder = ValidPointerSetBuilder::new();
+    assert!(!builder.step(10_000));
+    assert_eq!(
+        builder.snapshot_for_tests().phase,
+        ValidPointerSetBuildPhase::ArenaWalk
+    );
+
+    assert!(!builder.step(1));
+    let after_tiny_arena = builder.snapshot_for_tests();
+    assert_eq!(after_tiny_arena.phase, ValidPointerSetBuildPhase::ArenaWalk);
+    assert!(
+        after_tiny_arena.lookup_count < _objects.len(),
+        "one tiny arena-walk step must not insert the whole arena"
+    );
+
+    while builder.snapshot_for_tests().phase != ValidPointerSetBuildPhase::Finalize {
+        assert!(!builder.step(10_000));
+    }
+    let before_finalize = builder.snapshot_for_tests();
+    assert_eq!(before_finalize.phase, ValidPointerSetBuildPhase::Finalize);
+    assert!(before_finalize.current_arena_run_len > 0 || before_finalize.arena_run_count > 0);
+
+    assert!(!builder.step(0));
+    assert_eq!(
+        builder.snapshot_for_tests().phase,
+        ValidPointerSetBuildPhase::Finalize
+    );
+    assert!(builder.step(1));
+    assert_eq!(
+        builder.snapshot_for_tests().phase,
+        ValidPointerSetBuildPhase::Done
+    );
 }
 
 #[test]
@@ -95,6 +314,383 @@ fn full_cycle_state_steps_through_resumable_phases() {
     }
     assert_eq!(state.phase(), GcCyclePhase::Complete);
     assert!(trace.phase_us.contains_key("reclaim"));
+}
+
+#[test]
+fn root_scan_slices_many_mutable_roots_with_tiny_budget() {
+    let roots = 32_u32;
+    let _guard = CopyingNurseryTestGuard::new(roots);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let first_live_bytes = b"root_scan_sliced_live";
+    let first_live = crate::string::js_string_from_bytes(
+        first_live_bytes.as_ptr(),
+        first_live_bytes.len() as u32,
+    ) as usize;
+    js_shadow_slot_set(0, string_bits(first_live));
+    for slot in 1..roots {
+        js_shadow_slot_set(slot, string_bits(young_leaf()));
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 10_000, "root scan did not finish");
+    }
+    assert!(
+        root_steps > roots as usize,
+        "bounded root scan should require multiple root_scan steps"
+    );
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let outcome = state.take_outcome().expect("cycle should complete");
+    let trace = outcome.trace.expect("test requested GC trace capture");
+    let traced_root_steps = trace
+        .pause_steps
+        .iter()
+        .filter(|step| step.phase_before == GcCyclePhase::RootScan)
+        .count();
+    assert!(
+        traced_root_steps >= root_steps,
+        "trace should retain repeated root_scan pause steps"
+    );
+    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+    unsafe {
+        assert_string_bytes(live_after, first_live_bytes);
+    }
+}
+
+#[test]
+fn root_scan_slices_many_registered_promise_roots_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        promise_mutable_root_scanner,
+        crate::promise::scan_promise_roots_mut_step,
+        crate::promise::new_promise_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+
+    const ROOTS: usize = 32;
+    let children = (0..ROOTS).map(|_| young_leaf()).collect::<Vec<_>>();
+    let values = children
+        .iter()
+        .map(|&child| f64::from_bits(string_bits(child)))
+        .collect::<Vec<_>>();
+    crate::promise::test_seed_many_promise_task_roots(&values);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 10_000, "root scan did not finish");
+    }
+    assert!(
+        root_steps > ROOTS,
+        "promise task roots should require multiple tiny root_scan steps"
+    );
+    for &child in &children {
+        let header = unsafe { header_from_user_ptr(child as *const u8) };
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "promise task value should be marked by the sliced scanner"
+            );
+        }
+    }
+}
+
+#[test]
+fn root_scan_slices_many_registered_timer_roots_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        timer_mutable_root_scanner,
+        crate::timer::scan_timer_roots_mut_step,
+        crate::timer::new_timer_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+
+    const ROOTS: usize = 32;
+    let children = (0..ROOTS).map(|_| young_leaf()).collect::<Vec<_>>();
+    let values = children
+        .iter()
+        .map(|&child| f64::from_bits(string_bits(child)))
+        .collect::<Vec<_>>();
+    crate::timer::test_seed_many_timeout_roots(&values);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 10_000, "root scan did not finish");
+    }
+    assert!(
+        root_steps > ROOTS,
+        "timeout roots should require multiple tiny root_scan steps"
+    );
+    for &child in &children {
+        let header = unsafe { header_from_user_ptr(child as *const u8) };
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "timer value should be marked by the sliced scanner"
+            );
+        }
+    }
+}
+
+#[test]
+fn root_scan_slices_many_registered_tui_state_roots_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::tui::state::test_reset_state_slots();
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        crate::tui::state::scan_state_slot_roots_mut,
+        crate::tui::state::scan_state_slot_roots_mut_step,
+        crate::tui::state::new_state_slot_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+
+    const ROOTS: usize = 32;
+    let children = (0..ROOTS).map(|_| young_leaf()).collect::<Vec<_>>();
+    for &child in &children {
+        crate::tui::state::js_perry_tui_state_alloc(f64::from_bits(string_bits(child)));
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::ArenaBytes));
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 10_000, "root scan did not finish");
+    }
+    assert!(
+        root_steps > ROOTS,
+        "tui state roots should require multiple tiny root_scan steps"
+    );
+    for &child in &children {
+        let header = unsafe { header_from_user_ptr(child as *const u8) };
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "tui state value should be marked by the sliced scanner"
+            );
+        }
+    }
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let outcome = state.take_outcome().expect("cycle should complete");
+    let trace = outcome.trace.expect("test requested GC trace capture");
+    assert!(
+        trace
+            .pause_steps
+            .iter()
+            .filter(|step| step.phase_before == GcCyclePhase::RootScan)
+            .count()
+            >= root_steps,
+        "trace should report repeated root_scan pause steps"
+    );
+    crate::tui::state::test_reset_state_slots();
+}
+
+#[test]
+fn normal_incremental_root_scan_pauses_before_synchronous_only_registered_scanner() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    SYNC_ONLY_SCANNER_CALLS.store(0, Ordering::Relaxed);
+    gc_register_mutable_root_scanner(sync_only_test_mutable_root_scanner);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::ArenaBytes));
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    for _ in 0..8 {
+        state.step(GcWorkBudget::bounded(1));
+    }
+
+    assert_eq!(state.phase(), GcCyclePhase::RootScan);
+    assert_eq!(
+        SYNC_ONLY_SCANNER_CALLS.load(Ordering::Relaxed),
+        0,
+        "ordinary budgeted root scan must not invoke synchronous-only scanners"
+    );
+    incremental_mark_barrier_disable();
+    clear_mark_seeds();
+}
+
+#[test]
+fn root_scan_slices_remembered_set_dirty_slots_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    const SLOTS: usize = 48;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(SLOTS as u32) };
+    let mut children = Vec::with_capacity(SLOTS);
+    for slot in 0..SLOTS {
+        let child = young_leaf();
+        children.push(child);
+        unsafe {
+            runtime_store_jsvalue_slot(
+                old_obj as usize,
+                fields.add(slot) as usize,
+                slot,
+                string_bits(child),
+            );
+        }
+    }
+    assert!(remembered_set_size() > 0);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 10_000, "root scan did not finish");
+    }
+    assert!(
+        root_steps > SLOTS,
+        "dirty remembered slots should be scanned across multiple root_scan steps"
+    );
+    for &child in &children {
+        let header = unsafe { header_from_user_ptr(child as *const u8) };
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "remembered-set root scan should mark every dirty young child"
+            );
+        }
+    }
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let outcome = state.take_outcome().expect("cycle should complete");
+    let trace = outcome.trace.expect("test requested GC trace capture");
+    assert!(
+        trace.remembered_set.dirty_slots_scanned >= SLOTS,
+        "remembered-set telemetry should include the sliced dirty slots"
+    );
+}
+
+#[test]
+fn root_scan_slices_remembered_set_dirty_old_pages_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    const OBJECTS: usize = 24;
+    const FIELDS_PER_OBJECT: u32 = 512;
+    let mut children = Vec::with_capacity(OBJECTS);
+    for _ in 0..OBJECTS {
+        let (old_obj, fields) = unsafe { alloc_old_test_object(FIELDS_PER_OBJECT) };
+        let child = young_leaf();
+        children.push(child);
+        runtime_store_jsvalue_slot(old_obj as usize, fields as usize, 0, string_bits(child));
+    }
+    assert!(remembered_set_size() > 0);
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 100_000, "root scan did not finish");
+    }
+    assert!(
+        root_steps > OBJECTS,
+        "dirty old-page header discovery should require multiple tiny root_scan steps"
+    );
+    for &child in &children {
+        let header = unsafe { header_from_user_ptr(child as *const u8) };
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "remembered-set old-page scan should mark every dirty young child"
+            );
+        }
+    }
+}
+
+#[test]
+fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    const SEEDS: usize = 16;
+    let (parent, fields) = unsafe { alloc_old_test_object(SEEDS as u32) };
+    js_shadow_slot_set(0, ptr_bits(parent as usize));
+    let children = (0..SEEDS).map(|_| young_leaf()).collect::<Vec<_>>();
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::AtomicFinalize);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep incremental barriers active until atomic finalize finishes"
+    );
+
+    for (slot, &child) in children.iter().enumerate() {
+        unsafe {
+            runtime_store_jsvalue_slot(
+                parent as usize,
+                fields.add(slot) as usize,
+                slot,
+                string_bits(child),
+            );
+        }
+    }
+
+    let mut atomic_steps = 0usize;
+    while state.phase() == GcCyclePhase::AtomicFinalize {
+        state.step(GcWorkBudget::bounded(1));
+        atomic_steps += 1;
+        assert!(atomic_steps < 100_000, "atomic finalize did not finish");
+    }
+    assert!(
+        atomic_steps > SEEDS,
+        "barrier seed drain and remembered rebuild should keep tiny steps in atomic_finalize"
+    );
+    assert!(
+        !incremental_mark_barrier_active(),
+        "full cycle should disable incremental barriers before sweep"
+    );
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let outcome = state.take_outcome().expect("cycle should complete");
+    let trace = outcome.trace.expect("test requested GC trace capture");
+    let traced_atomic_steps = trace
+        .pause_steps
+        .iter()
+        .filter(|step| step.phase_before == GcCyclePhase::AtomicFinalize)
+        .count();
+    assert!(
+        traced_atomic_steps >= atomic_steps,
+        "trace should retain repeated atomic_finalize pause steps"
+    );
+    for (slot, &child) in children.iter().enumerate() {
+        unsafe {
+            assert_eq!(*fields.add(slot), string_bits(child));
+        }
+    }
 }
 
 #[test]
@@ -160,6 +756,91 @@ fn bounded_minor_fallback_preserves_age_and_trace_fields() {
     assert_eq!(
         trace.copying_nursery.fallback_reason,
         CopiedMinorFallbackReason::NotAttempted
+    );
+}
+
+#[test]
+fn budgeted_minor_fallback_ignores_forced_evacuation_and_stays_non_moving() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");
+
+    let _old_block_filler =
+        crate::arena::arena_alloc_gc_old(2 * 1024 * 1024 - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
+    let (old_parent, _) = unsafe { alloc_old_test_object(0) };
+    let old_parent_header = unsafe { header_from_user_ptr(old_parent as *const u8) };
+    let old_parent_total = unsafe { (*old_parent_header).size as usize };
+    let mut old_parent_pages = crate::fast_hash::new_ptr_hash_set();
+    for (page, _) in
+        crate::arena::old_object_page_overlaps(old_parent_header as usize, old_parent_total)
+    {
+        old_parent_pages.insert(page);
+    }
+    let _dead_old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING);
+    unsafe {
+        (*old_parent_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    let _ = sweep_with_age_bump(false);
+    let selected_before = select_old_page_defrag_pages(true);
+    assert!(
+        old_parent_pages
+            .iter()
+            .any(|page| selected_before.pages.contains(page)),
+        "test must seed an old-page defrag candidate"
+    );
+
+    js_shadow_slot_set(0, ptr_bits(old_parent as usize));
+    let (nursery_candidate, _) = unsafe { alloc_nursery_test_object(0) };
+    let nursery_candidate_user = nursery_candidate as usize;
+    let nursery_candidate_header = unsafe { header_from_user_ptr(nursery_candidate as *const u8) };
+    unsafe {
+        (*nursery_candidate_header).gc_flags |= GC_FLAG_TENURED;
+    }
+    js_shadow_slot_set(1, ptr_bits(nursery_candidate_user));
+
+    let mut state = test_start_budgeted_minor_fallback_state_with_trace(
+        GcTriggerKind::ArenaBytes,
+        GcProgressKind::NormalIncremental,
+    );
+    run_cycle_in_single_unit_steps(&mut state);
+    let outcome = state.take_outcome().expect("cycle should complete");
+    let trace = outcome.trace.expect("test requested GC trace capture");
+
+    assert_eq!(
+        js_shadow_slot_get(1) & POINTER_MASK,
+        nursery_candidate_user as u64,
+        "budgeted low-pause minor GC must not move a forced nursery candidate"
+    );
+    unsafe {
+        assert_eq!(
+            (*nursery_candidate_header).gc_flags & GC_FLAG_FORWARDED,
+            0,
+            "budgeted low-pause minor GC must not leave a forwarding stub"
+        );
+    }
+    assert_eq!(trace.progress_kind, GcProgressKind::NormalIncremental);
+    assert!(!trace.evacuation_policy.allowed);
+    assert!(!trace.evacuation_policy.force);
+    assert!(!trace.evacuation_policy.considered);
+    assert!(!trace.evacuation_policy.enabled);
+    assert_eq!(
+        trace.evacuation_policy.reason,
+        EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON
+    );
+    assert_eq!(
+        trace.evacuation_policy.snapshot.old_page_selected_pages, 0,
+        "budgeted low-pause startup must skip old-page defrag selection"
+    );
+    assert_eq!(trace.evacuation.moved_objects, 0);
+    assert_eq!(trace.evacuation.moved_bytes, 0);
+    assert_eq!(trace.evacuation.old_page_moved_objects, 0);
+    assert_eq!(trace.evacuation.old_page_moved_bytes, 0);
+    assert_eq!(trace.phase_us.get("evacuation").copied(), Some(0));
+    assert_eq!(trace.phase_us.get("reference_rewrite").copied(), Some(0));
+    assert_eq!(
+        js_shadow_slot_get(0) & POINTER_MASK,
+        old_parent as u64,
+        "old root should remain valid without evacuation"
     );
 }
 

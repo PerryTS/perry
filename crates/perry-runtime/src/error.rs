@@ -254,6 +254,46 @@ pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHead
     }
 }
 
+fn throw_capture_stack_trace_target_type_error() -> ! {
+    let message = b"The \"targetObject\" argument must be an object";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// `Error.captureStackTrace(target[, constructorOpt])`.
+///
+/// Perry's stack strings are intentionally coarse today; this helper installs
+/// the same non-enumerable `stack` data property shape Node exposes and
+/// preserves the invalid-target TypeError contract.
+#[no_mangle]
+pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f64) -> f64 {
+    let target_value = crate::value::JSValue::from_bits(target.to_bits());
+    if !target_value.is_pointer() {
+        throw_capture_stack_trace_target_type_error();
+    }
+
+    unsafe {
+        let target_ptr = target_value.as_pointer::<crate::object::ObjectHeader>()
+            as *mut crate::object::ObjectHeader;
+        if target_ptr.is_null() || !crate::object::is_valid_obj_ptr(target_ptr as *const u8) {
+            throw_capture_stack_trace_target_type_error();
+        }
+
+        let stack = make_stack("Error", "");
+        let key = js_string_from_bytes(b"stack".as_ptr(), 5);
+        let value = crate::value::js_nanbox_string(stack as i64);
+        crate::object::js_object_set_field_by_name(target_ptr, key, value);
+        crate::object::set_property_attrs(
+            target_ptr as usize,
+            "stack".to_string(),
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Read a `StringHeader`'s UTF-8 bytes into an owned `String` (lossy on
 /// invalid UTF-8). Empty on null.
 unsafe fn read_string_header_owned(ptr: *const StringHeader) -> String {

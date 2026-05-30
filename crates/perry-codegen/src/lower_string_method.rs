@@ -14,6 +14,14 @@ use crate::expr::{
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
+fn regexp_search_method_id(property: &str) -> String {
+    match property {
+        "startsWith" => "1".to_string(),
+        "endsWith" => "2".to_string(),
+        _ => "0".to_string(),
+    }
+}
+
 /// Lower `s.method(args…)` for a string-typed receiver. Currently
 /// supported methods: `indexOf` (1 or 2 args), `slice`, `substring`,
 /// `startsWith`, `endsWith`. Anything else bails with an actionable
@@ -216,11 +224,10 @@ pub(crate) fn lower_string_method(
             let count_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let count_i32 = blk.fptosi(DOUBLE, &count_d, I32);
             let result = blk.call(
                 I64,
                 "js_string_repeat",
-                &[(I64, &recv_handle), (I32, &count_i32)],
+                &[(I64, &recv_handle), (DOUBLE, &count_d)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -642,7 +649,12 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let other_handle = unbox_str_handle(blk, &other_box);
+            let method_id = regexp_search_method_id(property);
+            let other_handle = blk.call(
+                I64,
+                "js_string_search_value_to_string",
+                &[(DOUBLE, &other_box), (I32, &method_id)],
+            );
             let result_i32 = if let Some(pos_d) = pos_d {
                 let pos_i32 = blk.fptosi(DOUBLE, &pos_d, I32);
                 let runtime_fn = if property == "startsWith" {
@@ -685,7 +697,12 @@ pub(crate) fn lower_string_method(
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let needle_handle = unbox_str_handle(blk, &needle_box);
+            let method_id = regexp_search_method_id(property);
+            let needle_handle = blk.call(
+                I64,
+                "js_string_search_value_to_string",
+                &[(DOUBLE, &needle_box), (I32, &method_id)],
+            );
             let idx_i32 = blk.call(
                 I32,
                 "js_string_index_of",

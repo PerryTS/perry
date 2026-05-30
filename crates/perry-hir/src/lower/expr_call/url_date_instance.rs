@@ -391,27 +391,23 @@ pub(super) fn try_url_date_weakref_instance(
                     let registry_id = ctx.lookup_local(&recv_name).unwrap_or(0);
                     match method_name {
                         "register" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let target = iter.next().unwrap();
-                                let held = iter.next().unwrap();
-                                let token = iter.next().map(Box::new);
-                                return Ok(Ok(Expr::FinalizationRegistryRegister {
-                                    registry: Box::new(Expr::LocalGet(registry_id)),
-                                    target: Box::new(target),
-                                    held: Box::new(held),
-                                    token,
-                                }));
-                            }
+                            let mut iter = args.into_iter();
+                            let target = iter.next().unwrap_or(Expr::Undefined);
+                            let held = iter.next().unwrap_or(Expr::Undefined);
+                            let token = iter.next().map(Box::new);
+                            return Ok(Ok(Expr::FinalizationRegistryRegister {
+                                registry: Box::new(Expr::LocalGet(registry_id)),
+                                target: Box::new(target),
+                                held: Box::new(held),
+                                token,
+                            }));
                         }
                         "unregister" => {
-                            if !args.is_empty() {
-                                let token = args.into_iter().next().unwrap();
-                                return Ok(Ok(Expr::FinalizationRegistryUnregister {
-                                    registry: Box::new(Expr::LocalGet(registry_id)),
-                                    token: Box::new(token),
-                                }));
-                            }
+                            let token = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::FinalizationRegistryUnregister {
+                                registry: Box::new(Expr::LocalGet(registry_id)),
+                                token: Box::new(token),
+                            }));
                         }
                         _ => {}
                     }

@@ -132,20 +132,52 @@ pub extern "C" fn js_string_pad_end(
 /// Repeat a string a specified number of times
 /// str.repeat(count)
 #[no_mangle]
-pub extern "C" fn js_string_repeat(s: *const StringHeader, count: i32) -> *mut StringHeader {
-    if !is_valid_string_ptr(s) || count <= 0 {
-        // Return empty string
+pub extern "C" fn js_string_repeat(s: *const StringHeader, count_value: f64) -> *mut StringHeader {
+    if !is_valid_string_ptr(s) {
         return js_string_from_bytes("".as_ptr(), 0);
     }
 
     let str_data = string_as_str(s);
-    if str_data.is_empty() {
+    let count_number = crate::builtins::js_number_coerce(count_value);
+    let count_integer = to_integer_or_infinity(count_number);
+    if count_integer < 0.0 || count_integer.is_infinite() {
+        throw_repeat_range_error(count_number);
+    }
+
+    if count_integer == 0.0 || str_data.is_empty() {
         return js_string_from_bytes("".as_ptr(), 0);
     }
 
-    let count = count as usize;
+    let count = count_integer as usize;
     let result = str_data.repeat(count);
     let ret = js_string_from_bytes(result.as_ptr(), result.len() as u32);
     std::hint::black_box(&result);
     ret
+}
+
+fn to_integer_or_infinity(value: f64) -> f64 {
+    if value.is_nan() || value == 0.0 {
+        0.0
+    } else if value.is_infinite() {
+        value
+    } else {
+        value.trunc()
+    }
+}
+
+fn throw_repeat_range_error(count: f64) -> ! {
+    let rendered = if count.is_infinite() {
+        if count.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string()
+    } else {
+        format!("{}", count)
+    };
+    let message = format!("Invalid count value: {}", rendered);
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
