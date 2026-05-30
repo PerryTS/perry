@@ -632,6 +632,47 @@ pub extern "C" fn js_node_stream_transform_new(opts: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_stream_transform_subclass_init(this: f64, opts: f64) -> f64 {
+    let transform = js_node_stream_duplex_subclass_init(this, opts);
+    let raw = raw_ptr_from_value(transform);
+    if raw == 0 {
+        return transform;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return transform;
+    }
+
+    let obj = raw as *mut ObjectHeader;
+    let subclass_transform = js_object_get_field_by_name_f64(obj, hidden_key(b"_transform"));
+    let subclass_flush = js_object_get_field_by_name_f64(obj, hidden_key(b"_flush"));
+
+    if let Some(callback) = transform_callback_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_callback_key(),
+            rebind_callback_this(callback, transform),
+        );
+    } else if is_callable_value(subclass_transform) {
+        set_hidden_value(
+            transform,
+            hidden_transform_callback_key(),
+            subclass_transform,
+        );
+    }
+    if let Some(flush) = transform_flush_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_flush_key(),
+            rebind_callback_this(flush, transform),
+        );
+    } else if is_callable_value(subclass_flush) {
+        set_hidden_value(transform, hidden_transform_flush_key(), subclass_flush);
+    }
+    init_constructor(transform, "Transform");
+    transform
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_stream_passthrough_new(opts: f64) -> f64 {
     let passthrough = js_node_stream_duplex_new(opts);
     set_hidden_value(
