@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1867 entries across 90 modules
+// Coverage: 1871 entries across 90 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2822,6 +2822,14 @@ declare module "v8" {
   export class Deserializer { [key: string]: any; }
   /** stdlib */
   export class Serializer { [key: string]: any; }
+  /** stdlib */
+  export function DefaultDeserializer(...args: any[]): any;
+  /** stdlib */
+  export function DefaultSerializer(...args: any[]): any;
+  /** stdlib */
+  export function Deserializer(...args: any[]): any;
+  /** stdlib */
+  export function Serializer(...args: any[]): any;
   /** stdlib */
   export function cachedDataVersionTag(...args: any[]): any;
   /** stdlib */
