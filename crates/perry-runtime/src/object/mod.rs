@@ -42,6 +42,7 @@ mod native_module_dispatch;
 mod native_module_stream;
 mod object_ops;
 mod polymorphic_index;
+mod reflect_support;
 mod util_types;
 pub use alloc::*;
 pub use assert::*;
@@ -67,6 +68,7 @@ pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
 pub use object_ops::*;
 pub use polymorphic_index::*;
+pub(crate) use reflect_support::*;
 pub use util_types::*;
 
 static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);

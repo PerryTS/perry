@@ -405,7 +405,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
 }
 
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.
-unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
+pub(super) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
     let jsval = crate::JSValue::from_bits(value.to_bits());
     if jsval.is_pointer() {
         jsval.as_pointer::<ObjectHeader>() as *mut ObjectHeader
@@ -420,7 +420,7 @@ unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
 }
 
 /// Helper: get GcHeader for an object pointer
-unsafe fn gc_header_for(obj: *const ObjectHeader) -> *mut crate::gc::GcHeader {
+pub(super) unsafe fn gc_header_for(obj: *const ObjectHeader) -> *mut crate::gc::GcHeader {
     (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
 }
 
