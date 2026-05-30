@@ -1508,6 +1508,7 @@ const STDLIB_NAMESPACE_NAMES: &[&str] = &[
     "async_hooks",
     "readline",
     "string_decoder",
+    "test",
     "tty",
     "worker_threads",
 ];

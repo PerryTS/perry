@@ -53,6 +53,7 @@ pub mod native_handle;
 pub mod net_validate;
 pub mod node_stream;
 pub mod node_submodules;
+pub mod node_test;
 pub mod object;
 pub mod os;
 pub mod path;

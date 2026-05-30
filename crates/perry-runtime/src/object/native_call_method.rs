@@ -1587,6 +1587,11 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            if let Some(result) =
+                crate::node_test::dispatch_object_method((*obj).class_id, method_name)
+            {
+                return result;
+            }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
             let keys = (*obj).keys_array;
