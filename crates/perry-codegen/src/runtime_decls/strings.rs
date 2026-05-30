@@ -816,6 +816,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_dynamic_bitxor", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_dynamic_shl", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_dynamic_shr", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #2908: `bigint ** bigint` (RangeError on negative exponent) and `>>>`
+    // (always TypeError for BigInt operands). Numeric fallback inside.
+    module.declare_function("js_dynamic_pow", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_dynamic_ushr", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_instanceof", DOUBLE, &[DOUBLE, I32]);
     // v0.5.749: dynamic instanceof — `value instanceof type` where type
     // is a runtime expression (function arg holding class ref).
