@@ -21,6 +21,7 @@ mod strings;
 pub use arrays::declare_phase_b_arrays;
 pub use objects::declare_phase_b_objects;
 pub use stdlib_ffi::declare_stdlib_ffi;
+mod strings_extra;
 pub use strings::declare_phase_b_strings;
 
 /// Declare the minimum set of runtime functions needed by Phase 1
