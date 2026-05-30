@@ -1907,11 +1907,13 @@ pub enum Expr {
     /// else drives its `[Symbol.iterator]`. Without it the index loop read
     /// `.length` off a raw Map/Set handle (→ 0) and iterated zero times.
     ForOfToArray(Box<Expr>),
-    /// Array.from(iterable, mapFn) -> Array
+    /// Array.from(iterable, mapFn, thisArg?) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
+    /// `this_arg` (#2773) binds `this` inside a non-arrow mapFn.
     ArrayFromMapped {
         iterable: Box<Expr>,
         map_fn: Box<Expr>,
+        this_arg: Option<Box<Expr>>,
     },
 
     // Global built-in functions

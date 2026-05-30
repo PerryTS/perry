@@ -2,6 +2,7 @@
 mod alloc;
 mod concat_reverse;
 mod flat_clone;
+mod from_concat;
 mod header;
 mod immutable;
 mod indexing;
@@ -31,6 +32,7 @@ pub use self::flat_clone::{
     js_array_clone, js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys,
     js_array_values,
 };
+pub use self::from_concat::{js_array_concat_variadic, js_array_from_mapped, js_array_from_value};
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_is_numeric_f64_layout,
     js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_register_raw,
@@ -64,7 +66,7 @@ pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
 // protocol instead of being appended as a single chunk.
 pub(crate) use self::iterator::{
     async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
-    has_iterator_next, sync_iterator_to_array_if_not_async,
+    entries_array_for_small_handle_id, has_iterator_next, sync_iterator_to_array_if_not_async,
 };
 pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,

@@ -364,14 +364,27 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
                     if let Some(&getter_ptr) = vtable.getters.get(property_name) {
                         // Methods take `this` as f64 (NaN-boxed), not i64.
                         // On Windows x64 ABI, i64 and f64 use different registers.
-                        let this_f64: f64 = f64::from_bits(ptr as u64);
                         let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
-                        return f(this_f64);
+                        return f(obj_value);
                     }
-                    // If the property is a registered method, return truthy so that
-                    // `if (obj.method)` works (method existence checks).
                     if vtable.methods.contains_key(property_name) {
-                        return f64::from_bits(TAG_TRUE);
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(property_name.len().max(1), 1)
+                                    .unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(
+                                property_name.as_ptr(),
+                                ptr,
+                                property_name.len(),
+                            );
+                            ptr
+                        };
+                        return crate::object::js_class_method_bind(
+                            obj_value,
+                            heap_name,
+                            property_name.len(),
+                        );
                     }
                 }
             }

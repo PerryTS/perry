@@ -234,6 +234,10 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         0
     };
 
+    if let Some(entries) = crate::array::entries_array_for_small_handle_id(raw_addr as i64) {
+        return entries;
+    }
+
     // Buffers allocated from the small-buffer slab do not carry a GC header.
     // Detect them before any GC-header probing below; otherwise arbitrary slab
     // bytes immediately before the BufferHeader can be misread as a String or

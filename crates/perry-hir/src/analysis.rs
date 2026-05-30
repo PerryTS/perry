@@ -1067,9 +1067,16 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::ArrayIsArray(value) | Expr::ArrayFrom(value) => {
             collect_assigned_locals_expr(value, assigned);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             collect_assigned_locals_expr(iterable, assigned);
             collect_assigned_locals_expr(map_fn, assigned);
+            if let Some(t) = this_arg {
+                collect_assigned_locals_expr(t, assigned);
+            }
         }
         Expr::RegExpTest { regex, string } => {
             collect_assigned_locals_expr(regex, assigned);

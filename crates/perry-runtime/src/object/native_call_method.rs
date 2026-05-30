@@ -1608,11 +1608,12 @@ pub unsafe extern "C" fn js_native_call_method(
                         let result = crate::array::js_array_flatMap(arr, cb_ptr);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
-                    "concat" if args_len >= 1 && !args_ptr.is_null() => {
-                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        let other_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                        let other_ptr = other_bits as *mut crate::array::ArrayHeader;
-                        let result = crate::array::js_array_concat(arr, other_ptr);
+                    "concat" => {
+                        // #2805: non-mutating, variadic concat with
+                        // Symbol.isConcatSpreadable handling.
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result =
+                            crate::array::js_array_concat_variadic(arr, args_ptr, args_len as i32);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     "indexOf" if args_len >= 1 && !args_ptr.is_null() => {
@@ -2300,6 +2301,24 @@ pub unsafe extern "C" fn js_native_call_method(
         "hasOwnProperty" => {
             if jsval.is_undefined() || jsval.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
+            }
+            if jsval.is_pointer() {
+                let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let key_str = crate::builtins::js_string_coerce(key_value);
+                if key_str.is_null() {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                }
+                let obj_ptr = jsval.as_pointer::<ObjectHeader>();
+                if !obj_ptr.is_null() && is_valid_obj_ptr(obj_ptr as *const u8) {
+                    return f64::from_bits(
+                        JSValue::bool(own_key_present(obj_ptr as *mut ObjectHeader, key_str))
+                            .bits(),
+                    );
+                }
             }
             return f64::from_bits(JSValue::bool(true).bits());
         }

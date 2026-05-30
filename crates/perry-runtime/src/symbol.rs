@@ -1148,6 +1148,27 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Fetch `Headers` values are small pointer-tagged handles. Route the
+    // default iterator symbol to the same bound method as `headers.entries`.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if id > 0 && id < 0x100000 {
+            let iter_wk = well_known_symbol("iterator");
+            if !iter_wk.is_null() {
+                let iter_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                    if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                        let method = b"entries";
+                        let v = dispatch(id, method.as_ptr(), method.len());
+                        if v.to_bits() != TAG_UNDEFINED {
+                            return v;
+                        }
+                    }
+                }
+            }
+        }
+    }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
