@@ -440,6 +440,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
+    // #2787: NaN-safe JS index coercion (undefined/NaN -> 0, trunc, clamp) for
+    // the char-access methods, replacing a raw `fptosi` that is UB on a NaN.
+    module.declare_function("js_string_index_to_i32", I32, &[DOUBLE]);
     // Issue #514: tag-aware dynamic index dispatch — routes `obj[idx]` to
     // `js_string_char_at` / `js_array_get_f64` / `js_object_get_field_by_name_f64`
     // based on the receiver's NaN-box tag at runtime. Used by IndexGet's

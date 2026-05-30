@@ -3,6 +3,28 @@
 
 use super::*;
 
+/// JS index coercion for the String character-access methods (#2787).
+/// Applies `ToIntegerOrInfinity`: `undefined`, `null`, and `NaN` are all NaN /
+/// non-numeric bit patterns that map to `0`; finite values truncate toward
+/// zero; the result is clamped into `i32` so the integer-index helpers below
+/// see a safe value (a far-out-of-range magnitude clamps to a still-OOB index,
+/// which the helpers already handle). Codegen routes the raw NaN-boxed index
+/// through here instead of `fptosi`, which is undefined behavior on a NaN.
+#[no_mangle]
+pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
+    if index.is_nan() {
+        return 0;
+    }
+    let truncated = index.trunc();
+    if truncated <= i32::MIN as f64 {
+        i32::MIN
+    } else if truncated >= i32::MAX as f64 {
+        i32::MAX
+    } else {
+        truncated as i32
+    }
+}
+
 /// Get character code at index (returns UTF-16 code unit, or NaN if out of bounds).
 /// Index is in UTF-16 code units (matches JS spec). For ASCII strings this is
 /// equivalent to byte indexing; for multi-byte UTF-8 we walk codepoints without
