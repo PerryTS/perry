@@ -1041,7 +1041,13 @@ fn test_dynamic_string_add_roots_left_string_across_rhs_coercion_gc() {
 }
 
 #[test]
-fn test_dynamic_bigint_add_roots_left_bigint_across_rhs_coercion_gc() {
+fn test_dynamic_bigint_add_roots_both_bigint_across_gc() {
+    // #2908: a BigInt operator now requires BOTH operands to be BigInt
+    // (`1n + 1` throws TypeError instead of coercing). This test exercises
+    // the same GC-rooting guarantee — the left BigInt must survive a minor
+    // GC scheduled by the right operand's allocation — but with a second
+    // BigInt operand so the dynamic add takes the (now only legal) BigInt
+    // path instead of the removed mixed-coercion path.
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
@@ -1061,12 +1067,15 @@ fn test_dynamic_bigint_add_roots_left_bigint_across_rhs_coercion_gc() {
         let left_scope = RuntimeHandleScope::new();
         let left_root = left_scope.root_bigint_ptr(left as *const crate::bigint::BigIntHeader);
 
+        let right = crate::bigint::js_bigint_from_i64(1);
+        let right_value = crate::value::js_nanbox_bigint(right as i64);
+
         force_next_general_arena_alloc_slow();
         trigger_guard.make_arena_trigger_due();
         let before = gc_collection_count();
-        let result = unsafe { op(left_value, 1.0) };
+        let result = unsafe { op(left_value, right_value) };
         let result_root = left_scope.root_nanbox_f64(result);
-        drain_scheduled_minor_gc(before, &format!("{name} rhs BigInt coercion"));
+        drain_scheduled_minor_gc(before, &format!("{name} both BigInt across GC"));
 
         let rooted_left = left_root.get_raw_const_ptr::<crate::bigint::BigIntHeader>();
         assert_eq!(crate::bigint::js_bigint_to_f64(rooted_left), 41.0);

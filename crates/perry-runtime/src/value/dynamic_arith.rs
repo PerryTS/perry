@@ -19,6 +19,34 @@ unsafe fn coerce_to_bigint_ptr(val: f64) -> *mut crate::bigint::BigIntHeader {
     }
 }
 
+/// Throw `TypeError: Cannot mix BigInt and other types, use explicit
+/// conversions`, matching Node when a BigInt operand is combined with a
+/// non-BigInt operand in an arithmetic / bitwise operation (#2908).
+#[cold]
+unsafe fn throw_mix_bigint() -> ! {
+    let msg = b"Cannot mix BigInt and other types, use explicit conversions";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+}
+
+/// Enforce Node's rule that BigInt operators require *both* operands to be
+/// BigInt. Returns true when both are BigInt (proceed with the BigInt op),
+/// false when neither is (use the numeric path), and throws a TypeError when
+/// exactly one operand is a BigInt.
+#[inline]
+unsafe fn both_bigint_or_throw(a: f64, b: f64) -> bool {
+    let a_big = JSValue::from_bits(a.to_bits()).is_bigint();
+    let b_big = JSValue::from_bits(b.to_bits()).is_bigint();
+    if a_big && b_big {
+        true
+    } else if a_big || b_big {
+        throw_mix_bigint();
+    } else {
+        false
+    }
+}
+
 type BigIntBinaryOp = extern "C" fn(
     *const crate::bigint::BigIntHeader,
     *const crate::bigint::BigIntHeader,
@@ -60,9 +88,7 @@ unsafe fn dynamic_bigint_binary_op_from_handles<'scope>(
 /// Dynamic multiply: BigInt * BigInt if either operand is BigInt, else f64 * f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mul);
     }
     a * b
@@ -71,9 +97,7 @@ pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
 /// Dynamic add: BigInt + BigInt if either operand is BigInt, else f64 + f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_add);
     }
     a + b
@@ -126,8 +150,10 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
         return f64::from_bits(JSValue::string_ptr(result).bits());
     }
 
-    // BigInt: same as js_dynamic_add.
-    if a_val.is_bigint() || b_val.is_bigint() {
+    // BigInt: same as js_dynamic_add. Neither operand is a string here
+    // (the concat branch above already handled that), so a mixed
+    // BigInt/Number `+` throws TypeError just like Node.
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op_from_handles(
             &scope,
             &a_handle,
@@ -154,9 +180,7 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
 /// Dynamic subtract: BigInt - BigInt if either operand is BigInt, else f64 - f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_sub);
     }
     a - b
@@ -165,9 +189,7 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
 /// Dynamic divide: BigInt / BigInt if either operand is BigInt, else f64 / f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_div);
     }
     a / b
@@ -176,9 +198,7 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 /// Dynamic modulo: BigInt % BigInt if either operand is BigInt, else f64 % f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mod);
     }
     // Float modulo: a - trunc(a / b) * b
@@ -203,9 +223,7 @@ pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shr);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
@@ -218,9 +236,7 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
 /// Dynamic left shift: BigInt << if either operand is BigInt, else i32 << for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shl);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
@@ -232,9 +248,7 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise AND: BigInt & if either operand is BigInt, else i32 & for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_and);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
@@ -244,9 +258,7 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise OR: BigInt | if either operand is BigInt, else i32 | for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_or);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
@@ -256,11 +268,45 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise XOR: BigInt ^ if either operand is BigInt, else i32 ^ for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
-    let a_val = JSValue::from_bits(a.to_bits());
-    let b_val = JSValue::from_bits(b.to_bits());
-    if a_val.is_bigint() || b_val.is_bigint() {
+    if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_xor);
     }
     // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
     (((a as i64) as i32) ^ ((b as i64) as i32)) as f64
 }
+
+/// Dynamic exponentiation: `BigInt ** BigInt` when both operands are BigInt
+/// (#2908), else numeric `Math.pow`. A mixed BigInt/Number `**` throws
+/// TypeError; a negative BigInt exponent throws RangeError (handled inside
+/// `js_bigint_pow`).
+#[no_mangle]
+pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
+    if both_bigint_or_throw(a, b) {
+        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_pow);
+    }
+    crate::math::js_math_pow(a, b)
+}
+
+/// Dynamic unsigned right shift. BigInts have no `>>>` operator in
+/// ECMAScript, so any BigInt operand throws TypeError (#2908); otherwise
+/// numeric ToUint32 `>>>`.
+#[no_mangle]
+pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
+    let a_big = JSValue::from_bits(a.to_bits()).is_bigint();
+    let b_big = JSValue::from_bits(b.to_bits()).is_bigint();
+    if a_big || b_big {
+        let msg = b"BigInts have no unsigned right shift, use >> instead";
+        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(s);
+        crate::exception::js_throw(js_nanbox_pointer(err as i64));
+    }
+    // JS ToUint32 then logical shift, count masked to 5 bits.
+    let ai = (a as i64) as u32;
+    let bi = ((b as i64) as i32 as u32) & 0x1f;
+    (ai >> bi) as f64
+}
+
+#[used]
+static KEEP_DYNAMIC_POW: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_pow;
+#[used]
+static KEEP_DYNAMIC_USHR: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_ushr;

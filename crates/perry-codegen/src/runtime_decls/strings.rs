@@ -777,6 +777,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_regexp_new", I64, &[I64, I64]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
+    // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
+    module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);
     module.declare_function("js_get_string_pointer_unified", I64, &[DOUBLE]);
     // Closes #580: alias-on-copy refcount bump for string locals. The
     // call site at `crates/perry-codegen/src/stmt.rs:725` was added by
@@ -817,6 +819,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_dynamic_bitxor", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_dynamic_shl", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_dynamic_shr", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #2908: `bigint ** bigint` (RangeError on negative exponent) and `>>>`
+    // (always TypeError for BigInt operands). Numeric fallback inside.
+    module.declare_function("js_dynamic_pow", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_dynamic_ushr", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_instanceof", DOUBLE, &[DOUBLE, I32]);
     // v0.5.749: dynamic instanceof — `value instanceof type` where type
     // is a runtime expression (function arg holding class ref).
@@ -1209,6 +1215,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_object_get_symbol_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);
+    // #2816: Object.create(proto[, propertiesObject]) — validates the
+    // prototype and applies the optional descriptor bag.
+    module.declare_function("js_object_create_with_props", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_freeze", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_seal", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_prevent_extensions", DOUBLE, &[DOUBLE]);
@@ -1696,6 +1705,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_promise_race", I64, &[I64]);
     module.declare_function("js_promise_any", I64, &[I64]);
     module.declare_function("js_promise_all_settled", I64, &[I64]);
+    // #2822: iterable-accepting combinator entries (take a boxed f64 value,
+    // coerce iterables to an array, reject non-iterables with TypeError).
+    module.declare_function("js_promise_all_iterable", I64, &[DOUBLE]);
+    module.declare_function("js_promise_race_iterable", I64, &[DOUBLE]);
+    module.declare_function("js_promise_any_iterable", I64, &[DOUBLE]);
+    module.declare_function("js_promise_all_settled_iterable", I64, &[DOUBLE]);
     module.declare_function("js_promise_with_resolvers", I64, &[]);
     module.declare_function("js_promise_try", I64, &[DOUBLE, I64]);
     module.declare_function("js_array_unshift_f64", I64, &[I64, DOUBLE]);

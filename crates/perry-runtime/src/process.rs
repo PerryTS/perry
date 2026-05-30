@@ -74,7 +74,7 @@ fn supported_builtin_module_name(name: &str) -> Option<&str> {
     }
 }
 
-const MODULE_BUILTIN_MODULES: &[&str] = &[
+pub(crate) const MODULE_BUILTIN_MODULES: &[&str] = &[
     "_http_agent",
     "_http_client",
     "_http_common",
@@ -148,6 +148,71 @@ const MODULE_BUILTIN_MODULES: &[&str] = &[
     "worker_threads",
     "zlib",
 ];
+
+fn module_string_value(value: &str) -> f64 {
+    let ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn module_object_value(obj: *mut crate::object::ObjectHeader) -> f64 {
+    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
+}
+
+fn module_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_noop_function(name: &str) -> f64 {
+    let func_ptr = module_source_map_noop as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+/// `module.builtinModules` — Node exposes this as an Array of builtin module
+/// specifiers. Perry's supported subset is smaller, but the public inventory
+/// shape should still match Node's module API.
+#[no_mangle]
+pub extern "C" fn js_module_builtin_modules() -> f64 {
+    let arr = crate::array::js_array_alloc_with_length(MODULE_BUILTIN_MODULES.len() as u32);
+    for (i, name) in MODULE_BUILTIN_MODULES.iter().enumerate() {
+        crate::array::js_array_set_f64(arr, i as u32, module_string_value(name));
+    }
+    f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+/// Minimal `module.constants` shape. The compile-cache status values are not
+/// implemented yet; an object at the documented location is enough for feature
+/// detection and parity shape probes.
+#[no_mangle]
+pub extern "C" fn js_module_constants() -> f64 {
+    let constants = crate::object::js_object_alloc(0, 1);
+    let compile_cache_status = crate::object::js_object_alloc(0, 0);
+    module_set_field(
+        constants,
+        "compileCacheStatus",
+        module_object_value(compile_cache_status),
+    );
+    module_object_value(constants)
+}
+
+/// Stub constructor for `new module.SourceMap(payload)`. It preserves the
+/// payload object and exposes method-shaped placeholders, but does not
+/// implement source-map lookup semantics.
+#[no_mangle]
+pub extern "C" fn js_module_source_map_new(payload: f64) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "payload", payload);
+    module_set_field(obj, "findEntry", module_noop_function("findEntry"));
+    module_set_field(obj, "findOrigin", module_noop_function("findOrigin"));
+    module_object_value(obj)
+}
 
 /// Module.isBuiltin(id) -> boolean
 #[no_mangle]

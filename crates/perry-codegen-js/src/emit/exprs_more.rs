@@ -1308,9 +1308,13 @@ impl JsEmitter {
                 self.emit_expr(obj);
                 self.output.push(')');
             }
-            Expr::ObjectCreate(proto) => {
+            Expr::ObjectCreate(proto, props) => {
                 self.output.push_str("Object.create(");
                 self.emit_expr(proto);
+                if let Some(props) = props {
+                    self.output.push_str(", ");
+                    self.emit_expr(props);
+                }
                 self.output.push(')');
             }
             Expr::ObjectFreeze(obj) => {
