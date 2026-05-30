@@ -21,7 +21,8 @@ mod tests;
 
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
-    js_array_alloc_with_length_longlived, js_array_create, js_array_from_f64,
+    js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,
+    js_array_from_f64,
 };
 pub use self::concat_reverse::{
     js_array_concat, js_array_concat_new, js_array_fill, js_array_fill_range, js_array_reverse,
@@ -81,6 +82,7 @@ pub use self::search::{
 pub use self::sort::{js_array_sort_default, js_array_sort_with_comparator};
 pub use self::splice_slice::{js_array_slice, js_array_slice_values, js_array_splice};
 
+pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::header::{
     array_byte_size, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
@@ -89,7 +91,7 @@ pub(crate) use self::header::{
     gc_element_slot_range, mark_array_layout_unknown, note_array_slot, note_array_slot_layout_only,
     rebuild_array_layout, rebuild_array_layout_exact, refresh_array_numeric_layout,
     replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
-    transfer_array_numeric_layout, NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    transfer_array_numeric_layout, value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
 #[cfg(test)]

@@ -505,7 +505,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_box = lower_expr(ctx, key)?;
             Ok(ctx.block().call(
                 DOUBLE,
-                "js_object_has_property",
+                "js_object_has_own",
                 &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
             ))
         }
