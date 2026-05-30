@@ -757,7 +757,18 @@ pub unsafe extern "C" fn js_native_call_method(
                             std::ptr::null()
                         }
                     };
-                    let needle = arg_str(0);
+                    let search_arg_to_string = |method_id: i32| -> *const crate::StringHeader {
+                        let value = arg_at(0)
+                            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                        crate::string::js_string_search_value_to_string(value, method_id)
+                            as *const crate::StringHeader
+                    };
+                    let needle = match method_name {
+                        "includes" => search_arg_to_string(0),
+                        "startsWith" => search_arg_to_string(1),
+                        "endsWith" => search_arg_to_string(2),
+                        _ => arg_str(0),
+                    };
                     // Integer-returning methods MUST return raw `i as f64` (not
                     // NaN-boxed INT32_TAG) — otherwise downstream comparisons
                     // like `idx < url.length` fail because NaN-boxed values

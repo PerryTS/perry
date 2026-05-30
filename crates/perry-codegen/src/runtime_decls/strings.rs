@@ -110,6 +110,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_value_typeof", I64, &[DOUBLE]);
     module.declare_function("js_string_starts_with", I32, &[I64, I64]);
     module.declare_function("js_string_ends_with", I32, &[I64, I64]);
+    module.declare_function("js_string_search_value_to_string", I64, &[DOUBLE, I32]);
     // 2-arg form: (s, prefix/suffix, position). Mirrors the spec
     // `String.prototype.startsWith/endsWith(searchString, position)` with
     // UTF-16 code-unit indexing.

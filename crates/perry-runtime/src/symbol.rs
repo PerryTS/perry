@@ -90,7 +90,7 @@ fn record_registered_symbol_description(sym_ptr: usize, description: &str) {
 }
 
 // Pre-allocated well-known symbols (Symbol.toPrimitive, Symbol.hasInstance,
-// Symbol.toStringTag, Symbol.iterator, Symbol.asyncIterator). Allocated once
+// Symbol.match, Symbol.toStringTag, Symbol.iterator, Symbol.asyncIterator). Allocated once
 // on first access and cached forever. These are distinct from the
 // `Symbol.for(key)` registry — `Symbol.keyFor(wk)` must return undefined
 // for spec compliance, so they live in their own map keyed by the
@@ -1236,7 +1236,13 @@ mod wellknown_desc_tests {
     fn well_known_symbols_use_qualified_description() {
         // Spec: `Symbol.iterator.description === "Symbol.iterator"` (qualified),
         // which is also what `console.log` / `String(sym)` report.
-        for short in ["iterator", "asyncIterator", "hasInstance", "toPrimitive"] {
+        for short in [
+            "iterator",
+            "asyncIterator",
+            "hasInstance",
+            "match",
+            "toPrimitive",
+        ] {
             let ptr = well_known_symbol(short) as usize;
             let desc = registered_symbol_description(ptr);
             assert_eq!(
