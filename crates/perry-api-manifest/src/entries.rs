@@ -2885,6 +2885,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
     method("sys", "getSystemErrorMap", false, None),
+    method("sys", "toUSVString", false, None),
     method("sys", "parseEnv", false, None),
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),
