@@ -12,17 +12,15 @@ use std::sync::{LazyLock, Mutex};
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_call_array,
-    js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_register_closure_rest,
-    ClosureHeader,
+    js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_set_capture_f64,
+    js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
-use crate::value::POINTER_MASK;
+use crate::value::{JSValue, POINTER_MASK};
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const TAG_UNDEFINED_F64: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
 
@@ -127,7 +125,7 @@ pub extern "C" fn js_async_hooks_execution_async_id() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_async_hooks_trigger_async_id() -> f64 {
-    trigger_async_id_u64() as f64
+    async_id_to_js_number(trigger_async_id_u64())
 }
 
 // #854: pointer-boxing helper retained for async_hooks resource tracking (#789)
@@ -157,25 +155,6 @@ fn ptr_from_nanboxed(value: f64) -> *const u8 {
 
 fn closure_from_value(value: f64) -> *const ClosureHeader {
     ptr_from_nanboxed(value) as *const ClosureHeader
-}
-
-fn string_from_value(value: f64, default: &str) -> String {
-    let bits = value.to_bits();
-    let tag = bits & TAG_MASK;
-    if tag != STRING_TAG && tag != POINTER_TAG {
-        return default.to_string();
-    }
-    let ptr = (bits & POINTER_MASK) as *const StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return default.to_string();
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::str::from_utf8(std::slice::from_raw_parts(data, len))
-            .unwrap_or(default)
-            .to_string()
-    }
 }
 
 fn object_field(obj_value: f64, name: &[u8]) -> f64 {
@@ -335,7 +314,7 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
                 callback_handle.get_raw_const_ptr(),
                 async_id as f64,
                 type_value_handle.get_nanbox_f64(),
-                trigger_async_id as f64,
+                async_id_to_js_number(trigger_async_id),
                 resource_handle.get_nanbox_f64(),
             );
         }
@@ -439,22 +418,234 @@ pub fn drain_gc_destroy_queue() -> i32 {
     count
 }
 
-fn value_to_u64(value: f64) -> Option<u64> {
-    let bits = value.to_bits();
-    if (bits & !INT32_MASK) == INT32_TAG {
-        return Some((bits & INT32_MASK) as i32 as u64);
+#[inline]
+fn async_id_to_js_number(id: u64) -> f64 {
+    if id == u64::MAX {
+        -1.0
+    } else {
+        id as f64
     }
-    if (bits >> 48) < 0x7FFC {
-        let n = f64::from_bits(bits);
-        if n.is_finite() && n >= 0.0 {
-            return Some(n as u64);
-        }
+}
+
+fn string_header_to_string(ptr: *const StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
     }
-    None
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn js_string_value_to_string(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    string_header_to_string(ptr)
+}
+
+fn symbol_to_string(value: f64) -> String {
+    if unsafe { crate::symbol::js_is_symbol(value) == 0 } {
+        return "Symbol()".to_string();
+    }
+    let ptr = unsafe { crate::symbol::js_symbol_to_string(value) } as *const StringHeader;
+    string_header_to_string(ptr)
+}
+
+fn value_is_array(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    unsafe {
+        let gc_header = &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+        gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
+    }
+}
+
+fn is_callable_value(value: f64) -> bool {
+    !crate::fs::extract_closure_ptr(value).is_null()
+}
+
+fn describe_received_async_hooks(value: f64) -> String {
+    if is_callable_value(value) {
+        return "function ".to_string();
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        return format!("type symbol ({})", symbol_to_string(value));
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn require_string_arg(arg_name: &str, value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        let message = format!(
+            "The \"{}\" argument must be of type string. Received {}",
+            arg_name,
+            describe_received_async_hooks(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    js_string_value_to_string(value)
+}
+
+fn format_js_number_for_error(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_string()
+    } else if value == f64::INFINITY {
+        "Infinity".to_string()
+    } else if value == f64::NEG_INFINITY {
+        "-Infinity".to_string()
+    } else if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        value.to_string()
+    }
+}
+
+fn trigger_async_id_value(value: f64) -> Option<u64> {
+    let jv = JSValue::from_bits(value.to_bits());
+    let id = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else if jv.is_number() {
+        jv.as_number()
+    } else {
+        return None;
+    };
+
+    if !id.is_finite() || id.fract() != 0.0 || id < -1.0 || id > u64::MAX as f64 {
+        return None;
+    }
+    if id == -1.0 {
+        Some(u64::MAX)
+    } else {
+        Some(id as u64)
+    }
+}
+
+fn render_invalid_trigger_async_id(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jv.is_null() {
+        return "null".to_string();
+    }
+    if jv.is_bool() {
+        return jv.as_bool().to_string();
+    }
+    if jv.is_any_string() {
+        return js_string_value_to_string(value);
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        return symbol_to_string(value);
+    }
+    if jv.is_int32() {
+        return jv.as_int32().to_string();
+    }
+    if jv.is_number() {
+        return format_js_number_for_error(jv.as_number());
+    }
+    if value_is_array(value) {
+        return "[]".to_string();
+    }
+    if jv.is_pointer() {
+        return "{}".to_string();
+    }
+    "undefined".to_string()
 }
 
 fn trigger_id_from_options(options: f64) -> u64 {
-    value_to_u64(object_field(options, b"triggerAsyncId")).unwrap_or_else(execution_async_id_u64)
+    let trigger_value = object_field(options, b"triggerAsyncId");
+    let jv = JSValue::from_bits(trigger_value.to_bits());
+    if jv.is_undefined() {
+        return execution_async_id_u64();
+    }
+    if let Some(id) = trigger_async_id_value(trigger_value) {
+        return id;
+    }
+    let message = format!(
+        "Invalid triggerAsyncId value: {}",
+        render_invalid_trigger_async_id(trigger_value)
+    );
+    crate::fs::validate::throw_range_error_named(&message, "ERR_INVALID_ASYNC_ID")
+}
+
+fn render_apply_value(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jv.is_null() {
+        return "null".to_string();
+    }
+    if jv.is_bool() {
+        return jv.as_bool().to_string();
+    }
+    if jv.is_any_string() {
+        return js_string_value_to_string(value);
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        return symbol_to_string(value);
+    }
+    if jv.is_int32() {
+        return jv.as_int32().to_string();
+    }
+    if jv.is_number() {
+        return format_js_number_for_error(jv.as_number());
+    }
+    if value_is_array(value) {
+        return "[object Array]".to_string();
+    }
+    if jv.is_pointer() {
+        return "#<Object>".to_string();
+    }
+    "undefined".to_string()
+}
+
+fn describe_apply_type(value: f64) -> &'static str {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        "a undefined"
+    } else if jv.is_null() {
+        "null"
+    } else if jv.is_bool() {
+        "a boolean"
+    } else if jv.is_any_string() {
+        "a string"
+    } else if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        "a symbol"
+    } else if jv.is_int32() || jv.is_number() {
+        "a number"
+    } else {
+        "an object"
+    }
+}
+
+fn throw_apply_not_function(value: f64) -> ! {
+    let message = format!(
+        "Function.prototype.apply was called on {}, which is {} and not a function",
+        render_apply_value(value),
+        describe_apply_type(value)
+    );
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn validate_bind_callback(value: f64) {
+    if is_callable_value(value) {
+        return;
+    }
+    let message = format!(
+        "The \"fn\" argument must be of type function. Received {}",
+        describe_received_async_hooks(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
 #[no_mangle]
@@ -462,7 +653,7 @@ pub extern "C" fn js_async_resource_new(type_value: f64, options: f64) -> i64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let type_handle = scope.root_nanbox_f64(type_value);
     let options_handle = scope.root_nanbox_f64(options);
-    let type_name = string_from_value(type_handle.get_nanbox_f64(), "AsyncResource");
+    let type_name = require_string_arg("type", type_handle.get_nanbox_f64());
     let trigger_async_id = trigger_id_from_options(options_handle.get_nanbox_f64());
     let ids = init_resource_with_trigger(&type_name, TAG_UNDEFINED_F64, true, trigger_async_id);
     Box::into_raw(Box::new(AsyncResourceHandle { ids })) as i64
@@ -483,7 +674,7 @@ pub extern "C" fn js_async_resource_trigger_async_id(handle: i64) -> f64 {
         return 0.0;
     }
     let resource = unsafe { &*(handle as *const AsyncResourceHandle) };
-    resource.ids.trigger_async_id as f64
+    async_id_to_js_number(resource.ids.trigger_async_id)
 }
 
 #[no_mangle]
@@ -498,16 +689,28 @@ pub extern "C" fn js_async_resource_emit_destroy(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_async_resource_run_in_async_scope(
     handle: i64,
-    callback: i64,
+    callback_value: f64,
     this_arg: f64,
     args_array: i64,
 ) -> f64 {
-    let _ = this_arg;
-    if handle == 0 || callback == 0 {
+    if handle == 0 {
         return TAG_UNDEFINED_F64;
     }
+    if !is_callable_value(callback_value) {
+        throw_apply_not_function(callback_value);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let callback_handle = scope.root_raw_const_ptr(callback as *const ClosureHeader);
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
+    let rebound_bits = crate::closure::clone_closure_rebind_this(
+        callback_handle.get_nanbox_f64().to_bits(),
+        this_arg_handle.get_nanbox_f64(),
+    );
+    let rebound_handle = scope.root_nanbox_f64(f64::from_bits(rebound_bits));
+    let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
+    if callback.is_null() {
+        throw_apply_not_function(callback_handle.get_nanbox_f64());
+    }
     let args_array_handle = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
     let resource = unsafe { &*(handle as *const AsyncResourceHandle) };
     let previous = crate::async_context::enter_context(&crate::async_context::capture_context());
@@ -515,14 +718,9 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
     crate::async_context::restore_context(previous.clone());
     before(resource.ids.async_id, resource.ids.trigger_async_id);
+    let prev_this = crate::object::js_implicit_this_set(this_arg_handle.get_nanbox_f64());
     let result = if args_array == 0 {
-        unsafe {
-            js_closure_call_array(
-                callback_handle.get_raw_const_ptr::<ClosureHeader>() as i64,
-                ptr::null(),
-                0,
-            )
-        }
+        unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
     } else {
         let arr = args_array_handle.get_raw_const_ptr::<ArrayHeader>();
         let len = js_array_length(arr) as i64;
@@ -531,14 +729,9 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
         } else {
             unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
         };
-        unsafe {
-            js_closure_call_array(
-                callback_handle.get_raw_const_ptr::<ClosureHeader>() as i64,
-                data,
-                len,
-            )
-        }
+        unsafe { js_closure_call_array(callback as i64, data, len) }
     };
+    crate::object::js_implicit_this_set(prev_this);
     let result_handle = scope.root_nanbox_f64(result);
     after(resource.ids.async_id);
     crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
@@ -554,12 +747,13 @@ extern "C" fn async_resource_bind_trampoline(closure: *const ClosureHeader, rest
         return TAG_UNDEFINED_F64;
     }
     let handle = js_closure_get_capture_ptr(closure, 0);
-    let callback = js_closure_get_capture_ptr(closure, 1);
-    if handle == 0 || callback == 0 {
+    let callback = js_closure_get_capture_f64(closure, 1);
+    let this_arg = js_closure_get_capture_f64(closure, 2);
+    if handle == 0 {
         return TAG_UNDEFINED_F64;
     }
     let args_array_ptr = ptr_from_nanboxed(rest) as i64;
-    js_async_resource_run_in_async_scope(handle, callback, TAG_UNDEFINED_F64, args_array_ptr)
+    js_async_resource_run_in_async_scope(handle, callback, this_arg, args_array_ptr)
 }
 
 fn register_bind_trampoline_once() {
@@ -579,23 +773,30 @@ fn register_bind_trampoline_once() {
 }
 
 #[no_mangle]
-pub extern "C" fn js_async_resource_bind(handle: i64, callback: i64) -> i64 {
-    if handle == 0 || callback == 0 {
-        return callback;
+pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_arg: f64) -> i64 {
+    validate_bind_callback(callback_value);
+    if handle == 0 {
+        return 0;
     }
     register_bind_trampoline_once();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let callback_handle = scope.root_raw_const_ptr(callback as *const ClosureHeader);
-    let closure = js_closure_alloc(async_resource_bind_trampoline as *const u8, 2);
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
+    let closure = js_closure_alloc(async_resource_bind_trampoline as *const u8, 3);
     if closure.is_null() {
-        return callback;
+        return 0;
     }
     let closure_handle = scope.root_raw_mut_ptr(closure);
     js_closure_set_capture_ptr(closure_handle.get_raw_mut_ptr(), 0, handle);
-    js_closure_set_capture_ptr(
+    js_closure_set_capture_f64(
         closure_handle.get_raw_mut_ptr(),
         1,
-        callback_handle.get_raw_const_ptr::<ClosureHeader>() as i64,
+        callback_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        2,
+        this_arg_handle.get_nanbox_f64(),
     );
     closure_handle.get_raw_mut_ptr::<ClosureHeader>() as i64
 }
@@ -604,11 +805,29 @@ pub extern "C" fn js_async_resource_bind(handle: i64, callback: i64) -> i64 {
 pub extern "C" fn js_async_resource_static_bind(callback: i64, type_value: f64) -> i64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle = scope.root_raw_const_ptr(callback as *const ClosureHeader);
+    let type_value = if JSValue::from_bits(type_value.to_bits()).is_undefined() {
+        let default_type = b"AsyncResource";
+        box_string(
+            js_string_from_bytes(default_type.as_ptr(), default_type.len() as u32) as *const u8,
+        )
+    } else {
+        type_value
+    };
     let type_handle = scope.root_nanbox_f64(type_value);
+    let callback_value = if callback_handle
+        .get_raw_const_ptr::<ClosureHeader>()
+        .is_null()
+    {
+        TAG_UNDEFINED_F64
+    } else {
+        box_ptr(callback_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
+    };
+    let callback_value_handle = scope.root_nanbox_f64(callback_value);
     let handle = js_async_resource_new(type_handle.get_nanbox_f64(), TAG_UNDEFINED_F64);
     js_async_resource_bind(
         handle,
-        callback_handle.get_raw_const_ptr::<ClosureHeader>() as i64,
+        callback_value_handle.get_nanbox_f64(),
+        TAG_UNDEFINED_F64,
     )
 }
 
