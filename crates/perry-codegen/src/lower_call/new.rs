@@ -315,6 +315,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // ---- Fast path: bump and return data + aligned ----
         ctx.current_block = fast_idx;
         let blk = ctx.block();
+        // GC_STORE_AUDIT(INIT): inline arena bump offset is allocator metadata, not a JS heap edge.
         blk.store(I64, &new_offset, &offset_field_ptr);
         // data ptr is at byte offset 0 in InlineArenaState
         let data_ptr = blk.load(PTR, &state_ptr);
@@ -350,6 +351,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             | (GC_FLAG_ARENA << 8)
             | (GC_LAYOUT_POINTER_FREE << 16)
             | ((total_size as u64) << 32);
+        // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
         blk.store(I64, &gc_packed.to_string(), &raw);
 
         // Write ObjectHeader at raw + 8.
@@ -367,6 +369,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // above is an i64 (carries the ArrayHeader address); store as
         // i64 since the underlying memory is 8 bytes either way.
         let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
+        // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
         blk.store(I64, &keys_ptr, &oh_addr_3);
 
         // User pointer = raw + 8 (the ObjectHeader address — what the

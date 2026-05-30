@@ -218,7 +218,7 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             },
             ExportSpec {
                 name: "setImmediate",
-                thunk: ExportThunk::Fn1(timers_promises_set_immediate),
+                thunk: ExportThunk::Fn2(timers_promises_set_immediate),
             },
             ExportSpec {
                 name: "setInterval",

@@ -53,6 +53,7 @@ pub extern "C" fn js_array_splice(
 
         // Copy deleted elements to return array
         for i in 0..actual_delete as usize {
+            // GC_STORE_AUDIT(BARRIERED): deleted-array initialization is followed by layout/barrier rebuild.
             ptr::write(
                 deleted_elements.add(i),
                 *elements_ptr.add(start_idx as usize + i),
@@ -79,12 +80,14 @@ pub extern "C" fn js_array_splice(
             // Need to shift the tail
             let src = elements_ptr.add(tail_start as usize);
             let dst = elements_ptr.add((start_idx + items_count) as usize);
+            // GC_STORE_AUDIT(BARRIERED): splice tail memmove is followed by layout/barrier rebuild.
             ptr::copy(src, dst, tail_len as usize);
         }
 
         // Insert new items
         if items_count > 0 && !items.is_null() {
             for i in 0..items_count as usize {
+                // GC_STORE_AUDIT(BARRIERED): splice inserted item writes are followed by layout/barrier rebuild.
                 ptr::write(elements_ptr.add(start_idx as usize + i), *items.add(i));
             }
         }
@@ -179,6 +182,7 @@ pub extern "C" fn js_array_slice(
         let dst_elements = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
 
         for i in 0..slice_len as usize {
+            // GC_STORE_AUDIT(BARRIERED): slice result initialization is followed by layout/barrier rebuild.
             ptr::write(
                 dst_elements.add(i),
                 ptr::read(src_elements.add(start_idx as usize + i)),

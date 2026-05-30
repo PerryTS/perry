@@ -915,6 +915,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_node_stream_duplex_from_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // #1534: static introspection helpers reflecting tracked stream state.
     module.declare_function("js_node_stream_is_disturbed", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_is_errored", DOUBLE, &[DOUBLE]);

@@ -562,7 +562,7 @@ pub enum Expr {
     PathFormat(Box<Expr>),                 // path.format({ dir, base }) -> string
     PathSep,                               // path.sep constant
     PathDelimiter,                         // path.delimiter constant
-    PathToNamespacedPath(Box<Expr>),       // path.toNamespacedPath(path) -> string (POSIX: no-op)
+    PathToNamespacedPath(Box<Expr>), // path.toNamespacedPath(path) -> string, or original non-string
     PathMatchesGlob(Box<Expr>, Box<Expr>), // path.matchesGlob(path, pattern) -> boolean
     PathResolveJoin(Box<Expr>, Box<Expr>), // internal: join with reset-on-absolute (multi-arg resolve)
     PathWin32Join(Box<Expr>, Box<Expr>),   // path.win32.join(a, b) -> string (issue #810)

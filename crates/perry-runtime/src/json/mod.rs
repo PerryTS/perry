@@ -334,6 +334,7 @@ pub(crate) unsafe fn parse_shape_keys_array(
             (arr as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
         for (i, &key_ptr) in keys.iter().enumerate() {
             let bits = crate::value::STRING_TAG | (key_ptr as u64 & crate::value::POINTER_MASK);
+            // GC_STORE_AUDIT(INIT): parse shape keys array is filled before cache publication.
             *elements_ptr.add(i) = f64::from_bits(bits);
             crate::array::note_array_slot_layout_only(arr, i, bits);
         }
@@ -448,6 +449,14 @@ pub(crate) fn test_seed_parse_roots(value: f64, key_ptr: *const StringHeader) {
         c.clear();
         c.insert(b"test".to_vec(), key_ptr);
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_parse_roots() {
+    PARSE_ROOTS.with(|r| r.borrow_mut().clear());
+    PARSE_KEY_CACHE.with(|c| c.borrow_mut().clear());
+    PARSE_KEY_RING.with(|ring| ring.borrow_mut().clear());
+    PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 #[cfg(test)]

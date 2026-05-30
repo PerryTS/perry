@@ -764,12 +764,21 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_PTR,
     },
-    // ========== node:stream — Readable.from(iterable) (#631) ==========
+    // ========== node:stream — Readable.from / Duplex.from (#631/#1532) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired
     // via `lower_builtin_new` so the codegen can carry the closure-fields
     // ObjectHeader with NaN-boxed POINTER_TAG; they never reach this
-    // table. `Readable.from` is a static factory call surfaced as
-    // `Readable.from(...)` → `stream.from(...)`, so it lives here.
+    // table. Static factory calls surface as `stream.from(...)` with a
+    // class filter for constructor imports like `Duplex.from(...)`.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "from",
+        class_filter: Some("Duplex"),
+        runtime: "js_node_stream_duplex_from_options",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "stream",
         has_receiver: false,

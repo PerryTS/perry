@@ -1400,13 +1400,7 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
             if valid {
                 let cid =
                     NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                {
-                    let mut write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
-                    if write.is_none() {
-                        *write = Some(HashMap::new());
-                    }
-                    write.as_mut().unwrap().insert(cid, proto_ptr as usize);
-                }
+                class_prototype_object_root_store(cid, proto_ptr);
                 unsafe { js_register_class_id(cid) };
                 // #1805: link the synthetic class_id into the original class's
                 // inheritance chain. `Object.getPrototypeOf(instance)` returns

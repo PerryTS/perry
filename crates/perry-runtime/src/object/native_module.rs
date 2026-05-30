@@ -1577,25 +1577,32 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
 }
 
 pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
-    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-        let mut cache = cache.borrow_mut();
+    if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
+        let cache = cache.borrow();
         if let Some(bits) = cache.get(&(class_id, method_name.to_string())).copied() {
-            return f64::from_bits(bits);
+            return Some(bits);
         }
+        None
+    }) {
+        return f64::from_bits(bits);
+    }
 
-        // Bounded leak: `js_class_method_bind` keeps the byte pointer for the
-        // lifetime of the bound closure (it's stashed inside the closure's
-        // capture frame). We leak one allocation per unique
-        // `(class_id, method_name)` pair the program ever asks for, so the
-        // total leak is bounded by the static set of decorated method
-        // descriptors. The cache below short-circuits repeat queries.
-        let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
-        let class_bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF);
-        let class_ref = f64::from_bits(class_bits);
-        let value = js_class_method_bind(class_ref, leaked.as_ptr(), leaked.len());
-        cache.insert((class_id, method_name.to_string()), value.to_bits());
-        value
-    })
+    // Bounded leak: `js_class_method_bind` keeps the byte pointer for the
+    // lifetime of the bound closure (it's stashed inside the closure's
+    // capture frame). We leak one allocation per unique
+    // `(class_id, method_name)` pair the program ever asks for, so the
+    // total leak is bounded by the static set of decorated method
+    // descriptors. The cache below short-circuits repeat queries.
+    let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+    let class_bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF);
+    let class_ref = f64::from_bits(class_bits);
+    let value = js_class_method_bind(class_ref, leaked.as_ptr(), leaked.len());
+    class_prototype_method_value_cache_root_store(
+        class_id,
+        method_name.to_string(),
+        value.to_bits(),
+    );
+    value
 }
 
 #[no_mangle]

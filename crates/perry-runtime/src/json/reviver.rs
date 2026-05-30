@@ -82,11 +82,8 @@ pub(crate) unsafe fn apply_reviver(
                 );
                 // Write back the revived value
                 let obj =
-                    (value_handle.get_nanbox_u64() & POINTER_MASK) as *const crate::ObjectHeader;
-                let fields_ptr =
-                    (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut f64;
-                *fields_ptr.add(f as usize) = f64::from_bits(revived_child.bits());
-                crate::gc::layout_note_slot(obj as usize, f as usize, revived_child.bits());
+                    (value_handle.get_nanbox_u64() & POINTER_MASK) as *mut crate::ObjectHeader;
+                crate::object::store_object_field_slot(obj, f as usize, revived_child.bits());
             }
         } else if obj_type == crate::gc::GC_TYPE_ARRAY {
             let arr = (value_handle.get_nanbox_u64() & POINTER_MASK) as *const crate::ArrayHeader;
@@ -112,10 +109,6 @@ pub(crate) unsafe fn apply_reviver(
                         );
                         let arr = (value_handle.get_nanbox_u64() & POINTER_MASK)
                             as *mut crate::ArrayHeader;
-                        let elements = (arr as *const u8)
-                            .add(std::mem::size_of::<crate::ArrayHeader>())
-                            as *mut f64;
-                        *elements.add(i as usize) = f64::from_bits(revived_child.bits());
                         crate::array::note_array_slot(arr, i as usize, revived_child.bits());
                     }
                 }

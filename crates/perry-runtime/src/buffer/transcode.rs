@@ -10,11 +10,9 @@
 //!   - `utf16le` / `ucs2` / `ucs-2` / `utf-16le` → `utf8` / `utf-8`
 //!   - `utf8` / `utf-8` / `ascii` / `latin1` / `binary` → `utf16le` / `ucs2`
 //!
-//! Unsupported encoding pairs return an empty Buffer (matching the
-//! "decode failed → empty bytes" surface seen on most icu fallback
-//! paths) rather than throwing — Perry doesn't surface JS-side errors
-//! from receiver-less native module helpers today, so an empty result
-//! is the closest non-crashing parity behaviour.
+//! Unsupported encodings/pairs throw Node's ICU-style
+//! `U_ILLEGAL_ARGUMENT_ERROR`, while invalid sources throw
+//! `ERR_INVALID_ARG_TYPE` for the `source` argument.
 
 use super::*;
 
@@ -52,6 +50,49 @@ fn classify_encoding(value: f64) -> TranscodeEnc {
     }
 }
 
+fn raw_addr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+        bits as usize
+    } else {
+        0
+    }
+}
+
+fn describe_source(value: f64) -> String {
+    let addr = raw_addr_from_value(value);
+    if addr != 0 {
+        if is_data_view(addr) {
+            return "an instance of DataView".to_string();
+        }
+        if is_array_buffer(addr) {
+            return "an instance of ArrayBuffer".to_string();
+        }
+        if is_shared_array_buffer(addr) {
+            return "an instance of SharedArrayBuffer".to_string();
+        }
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn throw_invalid_source(value: f64) -> ! {
+    let message = format!(
+        "The \"source\" argument must be an instance of Buffer or Uint8Array. Received {}",
+        describe_source(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_transcode_error() -> ! {
+    let message = b"Unable to transcode Buffer [U_ILLEGAL_ARGUMENT_ERROR]";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "U_ILLEGAL_ARGUMENT_ERROR");
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn buffer_bytes<'a>(buf_ptr: *const BufferHeader) -> &'a [u8] {
     if buf_ptr.is_null() || (buf_ptr as usize) < 0x1000 {
         return &[];
@@ -61,6 +102,24 @@ fn buffer_bytes<'a>(buf_ptr: *const BufferHeader) -> &'a [u8] {
         let data = buffer_data(buf_ptr);
         std::slice::from_raw_parts(data, len)
     }
+}
+
+fn source_bytes(value: f64) -> &'static [u8] {
+    let addr = raw_addr_from_value(value);
+    if addr != 0 {
+        if is_uint8array_buffer(addr)
+            || (is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
+        {
+            return buffer_bytes(addr as *const BufferHeader);
+        }
+        if crate::typedarray::lookup_typed_array_kind(addr) == Some(crate::typedarray::KIND_UINT8) {
+            let ptr = addr as *const crate::typedarray::TypedArrayHeader;
+            if let Some(bytes) = unsafe { crate::typedarray::typed_array_bytes(ptr) } {
+                return bytes;
+            }
+        }
+    }
+    throw_invalid_source(value)
 }
 
 fn buffer_from_bytes(out: &[u8]) -> *mut BufferHeader {
@@ -122,27 +181,19 @@ fn latin1_to_utf8(bytes: &[u8]) -> Vec<u8> {
 ///
 /// `source_f64` is a NaN-boxed Buffer pointer; `from_enc_f64`/`to_enc_f64`
 /// are NaN-boxed encoding-name strings.  Returns a freshly-allocated
-/// Buffer holding the re-encoded bytes.  Unsupported encoding pairs
-/// return an empty Buffer.
+/// Buffer holding the re-encoded bytes.  Unsupported encoding pairs throw.
 #[no_mangle]
 pub extern "C" fn js_buffer_transcode(
     source_f64: f64,
     from_enc_f64: f64,
     to_enc_f64: f64,
 ) -> *mut BufferHeader {
-    let bits = source_f64.to_bits();
-    let addr = if bits >> 48 >= 0x7FF8 {
-        bits & 0x0000_FFFF_FFFF_FFFF
-    } else {
-        bits
-    };
-    if addr < 0x1000 {
-        return buffer_alloc(0);
-    }
-    let buf_ptr = addr as *const BufferHeader;
-    let src_bytes = buffer_bytes(buf_ptr);
+    let src_bytes = source_bytes(source_f64);
     let from = classify_encoding(from_enc_f64);
     let to = classify_encoding(to_enc_f64);
+    if from == TranscodeEnc::Other || to == TranscodeEnc::Other {
+        throw_transcode_error();
+    }
 
     if from == to {
         return buffer_from_bytes(src_bytes);
@@ -173,7 +224,7 @@ pub extern "C" fn js_buffer_transcode(
             }
             out
         }
-        _ => Vec::new(),
+        _ => throw_transcode_error(),
     };
 
     buffer_from_bytes(&out)
