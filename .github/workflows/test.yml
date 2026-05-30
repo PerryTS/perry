@@ -189,18 +189,41 @@ jobs:
           RUST_TEST_THREADS=1 cargo test -p perry-runtime
           # The remaining workspace includes large `perry` / `perry-stdlib`
           # test binaries. Keep Cargo build jobs serialized so the runner
-          # does not link several of those large test binaries at once.
+          # does not link several of those large test binaries at once, then
+          # run packages one at a time and prune linked test executables so
+          # target/debug/deps does not exhaust the runner disk mid-job.
           export CARGO_BUILD_JOBS=1
-          cargo test --workspace \
-            --exclude perry-runtime \
-            --exclude perry-ui-macos \
-            --exclude perry-ui-ios \
-            --exclude perry-ui-visionos \
-            --exclude perry-ui-tvos \
-            --exclude perry-ui-watchos \
-            --exclude perry-ui-gtk4 \
-            --exclude perry-ui-android \
-            --exclude perry-ui-windows
+          workspace_packages="$(
+            cargo metadata --no-deps --format-version 1 | python3 -c '
+          import json
+          import sys
+
+          excluded = {
+              "perry-runtime",
+              "perry-ui-macos",
+              "perry-ui-ios",
+              "perry-ui-visionos",
+              "perry-ui-tvos",
+              "perry-ui-watchos",
+              "perry-ui-gtk4",
+              "perry-ui-android",
+              "perry-ui-windows",
+              "perry-doc-fixture-my-bindings",
+          }
+          metadata = json.load(sys.stdin)
+          workspace_members = set(metadata["workspace_members"])
+          for package in metadata["packages"]:
+              if package["id"] in workspace_members and package["name"] not in excluded:
+                  print(package["name"])
+          '
+          )"
+
+          for package in $workspace_packages; do
+            echo "::group::cargo test -p $package"
+            cargo test -p "$package"
+            echo "::endgroup::"
+            find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+          done
 
   # ---------------------------------------------------------------------------
   # Compiler-output regression gate
