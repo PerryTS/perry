@@ -923,9 +923,7 @@ pub unsafe extern "C" fn js_native_call_method(
                             // Probe whether the pointer is a RegExpHeader by
                             // checking the GC type tag the regex helpers
                             // already validate; if it's not, the regex helper
-                            // returns the original string unchanged. The
-                            // global flag on the RegExp determines whether
-                            // it replaces all or just the first.
+                            // returns the original string unchanged.
                             let regex_ptr = jsv.as_pointer::<crate::regex::RegExpHeader>();
                             // Heuristic: a non-null POINTER_TAG that's not a
                             // string/array (those have different GC type tags)
@@ -933,11 +931,19 @@ pub unsafe extern "C" fn js_native_call_method(
                             // already validates internally and falls back
                             // safely on mismatch.
                             if !regex_ptr.is_null() {
-                                let r = crate::regex::js_string_replace_regex(
-                                    receiver_string(),
-                                    regex_ptr,
-                                    repl_str(),
-                                );
+                                let r = if method_name == "replaceAll" {
+                                    crate::regex::js_string_replace_all_regex(
+                                        receiver_string(),
+                                        regex_ptr,
+                                        repl_str(),
+                                    )
+                                } else {
+                                    crate::regex::js_string_replace_regex(
+                                        receiver_string(),
+                                        regex_ptr,
+                                        repl_str(),
+                                    )
+                                };
                                 return f64::from_bits(JSValue::string_ptr(r).bits());
                             }
                         }
