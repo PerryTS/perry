@@ -394,3 +394,59 @@ pub extern "C" fn js_array_unshift_jsvalue(arr: *mut ArrayHeader, value: u64) ->
     let bits_as_f64 = f64::from_bits(value);
     js_array_unshift_f64(arr, bits_as_f64)
 }
+
+/// `arr.unshift(...items)` (#2814) — insert zero or more elements at the front
+/// in source order, growing the array if needed. Returns the (possibly
+/// reallocated) array header so the caller can read the new length / write the
+/// new pointer back. With `count == 0` the array is returned unchanged.
+#[no_mangle]
+pub extern "C" fn js_array_unshift_variadic(
+    arr: *mut ArrayHeader,
+    items: *const f64,
+    count: u32,
+) -> *mut ArrayHeader {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return js_array_alloc(0);
+    }
+    if count == 0 {
+        return arr;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _arr_handle = scope.root_raw_mut_ptr(arr);
+    // Copy the items out before any grow can move arena memory; `items`
+    // points at a caller-owned alloca, so it is stable, but we read it
+    // before mutating to keep the logic simple.
+    let item_vec: Vec<f64> = unsafe {
+        if items.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(items, count as usize).to_vec()
+        }
+    };
+    let n = item_vec.len();
+    unsafe {
+        let length = (*arr).length;
+        let capacity = (*arr).capacity;
+        let arr = if length + n as u32 > capacity {
+            js_array_grow(arr, length + n as u32)
+        } else {
+            arr
+        };
+        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // Shift existing elements up by `n`.
+        // GC_STORE_AUDIT(BARRIERED): memmove + new slots followed by layout/barrier rebuild.
+        ptr::copy(elements_ptr, elements_ptr.add(n), length as usize);
+        // Write items in source order at the front.
+        for (i, v) in item_vec.into_iter().enumerate() {
+            ptr::write(elements_ptr.add(i), v);
+        }
+        (*arr).length = length + n as u32;
+        rebuild_array_layout(arr);
+        arr
+    }
+}
+
+#[used]
+static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
+    js_array_unshift_variadic;
