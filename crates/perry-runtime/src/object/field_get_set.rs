@@ -2294,6 +2294,10 @@ pub extern "C" fn js_object_get_field_by_name(
                 if let Some(v) = resolve_proto_chain_field(class_id, key) {
                     return v;
                 }
+                let key_bytes = std::slice::from_raw_parts(
+                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                    (*key).byte_len as usize,
+                );
                 // Issue #838 followup (b): same keyless-receiver gap for
                 // JS-classic prototype methods. An instance allocated via
                 // `js_new_function_construct` (no constructor-body write
@@ -2304,13 +2308,51 @@ pub extern "C" fn js_object_get_field_by_name(
                 // because the keyless branch skipped the regular
                 // `CLASS_PROTOTYPE_METHODS` walk reached further down
                 // — see the matching arm at line ~4083.
-                let key_bytes = std::slice::from_raw_parts(
-                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                    (*key).byte_len as usize,
-                );
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
                     if let Some(v) = lookup_prototype_method(class_id, name) {
                         return JSValue::from_bits(v.to_bits());
+                    }
+                    // Native class vtable accessors and methods are exposed
+                    // from the class, not from own fields, so keyless
+                    // receivers need the same fallback as shaped receivers.
+                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                        if let Some(ref reg) = *registry {
+                            let mut cid = class_id;
+                            let mut depth = 0usize;
+                            while depth < 32 {
+                                if let Some(vtable) = reg.get(&cid) {
+                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
+                                        let this_f64 = f64::from_bits(
+                                            crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                                        );
+                                        let f: extern "C" fn(f64) -> f64 =
+                                            std::mem::transmute(getter_ptr);
+                                        return JSValue::from_bits(f(this_f64).to_bits());
+                                    }
+                                }
+                                match get_parent_class_id(cid) {
+                                    Some(p) if p != 0 && p != cid => {
+                                        cid = p;
+                                        depth += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        }
+                    }
+                    if lookup_class_method_in_chain(class_id, name).is_some() {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)
+                                    .unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+                            ptr
+                        };
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                        return JSValue::from_bits(result.to_bits());
                     }
                 }
             }

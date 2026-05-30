@@ -45,6 +45,7 @@ struct ExportSpec {
 }
 
 enum ExportThunk {
+    Fn0(extern "C" fn(*const ClosureHeader) -> f64),
     Fn1(extern "C" fn(*const ClosureHeader, f64) -> f64),
     Fn2(extern "C" fn(*const ClosureHeader, f64, f64) -> f64),
     Fn3(extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64),
@@ -53,6 +54,7 @@ enum ExportThunk {
 impl ExportThunk {
     fn as_ptr(&self) -> *const u8 {
         match self {
+            ExportThunk::Fn0(f) => *f as *const u8,
             ExportThunk::Fn1(f) => *f as *const u8,
             ExportThunk::Fn2(f) => *f as *const u8,
             ExportThunk::Fn3(f) => *f as *const u8,
@@ -60,6 +62,7 @@ impl ExportThunk {
     }
     fn arity(&self) -> u32 {
         match self {
+            ExportThunk::Fn0(_) => 0,
             ExportThunk::Fn1(_) => 1,
             ExportThunk::Fn2(_) => 2,
             ExportThunk::Fn3(_) => 3,
@@ -110,6 +113,7 @@ mod fs_promises;
 mod hono_jsx;
 mod stream_promises;
 mod timers;
+mod trace_events;
 
 // #1671: hono/jsx/server + hono/jsx/streaming. Re-export the stream-creation
 // registration so perry-stdlib's `bundled-streams` init can wire it up.
@@ -148,6 +152,7 @@ use timers::{
     timers_promises_scheduler, timers_promises_scheduler_wait, timers_promises_scheduler_yield,
     timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
+use trace_events::{trace_events_create_tracing, trace_events_get_enabled_categories};
 
 // node:sys is a deprecated alias for node:util. Known util-backed
 // exports are rebound to util's callable singletons below so identity
@@ -227,6 +232,19 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "scheduler",
                 thunk: ExportThunk::Fn1(timers_promises_scheduler),
+            },
+        ],
+    },
+    SubmoduleSpec {
+        key: "trace_events",
+        exports: &[
+            ExportSpec {
+                name: "createTracing",
+                thunk: ExportThunk::Fn1(trace_events_create_tracing),
+            },
+            ExportSpec {
+                name: "getEnabledCategories",
+                thunk: ExportThunk::Fn0(trace_events_get_enabled_categories),
             },
         ],
     },
@@ -846,6 +864,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
             visitor.visit_raw_mut_ptr_slot(&mut trace.obj);
         }
     });
+    trace_events::scan_trace_events_roots_mut(visitor);
 }
 
 #[cfg(test)]
@@ -1052,6 +1071,7 @@ mod tests {
     fn find_submodule_for_known_keys() {
         for key in [
             "timers_promises",
+            "trace_events",
             "readline_promises",
             "stream_promises",
             "stream_consumers",

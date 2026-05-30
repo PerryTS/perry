@@ -2080,6 +2080,24 @@ pub unsafe extern "C" fn js_native_call_method(
             if jsval.is_undefined() || jsval.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
+            if jsval.is_pointer() {
+                let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let key_str = crate::builtins::js_string_coerce(key_value);
+                if key_str.is_null() {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                }
+                let obj_ptr = jsval.as_pointer::<ObjectHeader>();
+                if !obj_ptr.is_null() && is_valid_obj_ptr(obj_ptr as *const u8) {
+                    return f64::from_bits(
+                        JSValue::bool(own_key_present(obj_ptr as *mut ObjectHeader, key_str))
+                            .bits(),
+                    );
+                }
+            }
             return f64::from_bits(JSValue::bool(true).bits());
         }
 
