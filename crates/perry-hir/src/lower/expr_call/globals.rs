@@ -29,7 +29,7 @@ pub(super) fn try_global_builtins(
                 let string_arg = if !args.is_empty() {
                     Box::new(args.remove(0))
                 } else {
-                    return Err(anyhow!("parseInt requires at least one argument"));
+                    Box::new(Expr::Undefined)
                 };
                 let radix_arg = if !args.is_empty() {
                     Some(Box::new(args.remove(0)))
@@ -45,7 +45,7 @@ pub(super) fn try_global_builtins(
                 if !args.is_empty() {
                     return Ok(Ok(Expr::ParseFloat(Box::new(args.remove(0)))));
                 } else {
-                    return Err(anyhow!("parseFloat requires one argument"));
+                    return Ok(Ok(Expr::ParseFloat(Box::new(Expr::Undefined))));
                 }
             }
             "Number" => {
