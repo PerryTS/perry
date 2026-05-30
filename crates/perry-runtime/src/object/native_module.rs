@@ -349,6 +349,9 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"strict",
         ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        // Deprecated path alias enumerable on the top-level and style
+        // sub-namespaces, matching Node's `Object.keys(...).includes`.
+        "path" | "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "constants" => Some(DEPRECATED_CONSTANTS_KEYS),
         "querystring" => Some(&[
             b"unescapeBuffer",
@@ -2279,6 +2282,10 @@ pub(crate) unsafe fn get_native_module_constant(
                     Some(str_val(":"))
                 }
             }
+            "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                "path",
+                "toNamespacedPath",
+            )),
             "posix" => Some(create_sub_namespace("path.posix")),
             "win32" => Some(create_sub_namespace("path.win32")),
             _ => None,
@@ -2286,6 +2293,10 @@ pub(crate) unsafe fn get_native_module_constant(
         "path.posix" => match property {
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
+            "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                "path.posix",
+                "toNamespacedPath",
+            )),
             "posix" => Some(native_namespace_or_create("path.posix", namespace_obj)),
             "win32" => Some(create_sub_namespace("path.win32")),
             _ => None,
@@ -2293,6 +2304,10 @@ pub(crate) unsafe fn get_native_module_constant(
         "path.win32" => match property {
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
+            "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                "path.win32",
+                "toNamespacedPath",
+            )),
             "posix" => Some(create_sub_namespace("path.posix")),
             "win32" => Some(native_namespace_or_create("path.win32", namespace_obj)),
             _ => None,
