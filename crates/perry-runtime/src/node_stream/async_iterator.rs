@@ -102,6 +102,41 @@ fn set_stream_consume_index(stream: f64, index: u32) {
     );
 }
 
+fn settle_iterator_return_value(value: f64) {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return;
+    }
+    let promise = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
+    if promise.is_null() {
+        return;
+    }
+    for _ in 0..10_000 {
+        if unsafe { (*promise).state } != crate::promise::PromiseState::Pending {
+            return;
+        }
+        if crate::promise::js_promise_run_microtasks() == 0 {
+            return;
+        }
+    }
+}
+
+fn call_source_iterator_return(stream: f64) {
+    let Some(source_iterator) = get_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
+    else {
+        return;
+    };
+    let returned = unsafe {
+        crate::object::js_native_call_method(
+            source_iterator,
+            b"return".as_ptr() as *const i8,
+            6,
+            std::ptr::null(),
+            0,
+        )
+    };
+    settle_iterator_return_value(returned);
+}
+
 extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     let iterator = this_value(closure);
     if get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_DONE_KEY))
@@ -179,6 +214,7 @@ extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 
     );
     if !already_done && iterator_has_yielded(iterator) && iterator_destroys_on_return(iterator) {
         if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+            call_source_iterator_return(stream);
             destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
         }
     }

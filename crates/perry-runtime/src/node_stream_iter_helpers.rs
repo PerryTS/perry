@@ -670,14 +670,19 @@ pub(super) extern "C" fn ns_iter_flat_map(
 ///
 /// `None` signals "not iterable" so the caller can fall back to the
 /// "append as a single chunk" path that pre-#1572 was the only branch.
-pub(super) fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+pub(super) fn flatten_async_iterable_with_source(
+    value: f64,
+) -> Option<(*mut crate::array::ArrayHeader, Option<f64>)> {
     use crate::array::{
         async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
         has_iterator_next,
     };
     use crate::symbol::js_get_iterator;
     if let Some(async_iter) = call_symbol_async_iterator_for_flat_map(value) {
-        return Some(async_iterator_to_array_for_flat_map(async_iter));
+        return Some((
+            async_iterator_to_array_for_flat_map(async_iter),
+            Some(async_iter),
+        ));
     }
     if has_iterator_next(value) {
         // Async generator step values may be already-settled promises that
@@ -685,13 +690,20 @@ pub(super) fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::arr
         // helper for a bare-iterator receiver too — `js_async_iterator_to_array`
         // is a strict superset of `js_iterator_to_array` (it transparently
         // returns non-promise step results unchanged).
-        return Some(async_iterator_to_array_for_flat_map(value));
+        return Some((async_iterator_to_array_for_flat_map(value), Some(value)));
     }
     let sync_iter = js_get_iterator(value);
     if sync_iter.to_bits() != value.to_bits() {
-        return Some(async_iterator_to_array_for_flat_map(sync_iter));
+        return Some((
+            async_iterator_to_array_for_flat_map(sync_iter),
+            Some(sync_iter),
+        ));
     }
     None
+}
+
+pub(super) fn flatten_async_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+    flatten_async_iterable_with_source(value).map(|(chunks, _)| chunks)
 }
 
 pub(super) extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {

@@ -2,6 +2,92 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1044 — fix(fs): deliver EBADF to callback for bad fd in close/fsync/fdatasync/fchmod (#3332)
+
+The callback forms of `fs.close`, `fs.fsync`, `fs.fdatasync`, and `fs.fchmod`
+previously routed through the sync helpers (which *throw* `EBADF` on a bad
+descriptor) and then unconditionally invoked the success callback. Node delivers
+the filesystem error to the callback's first argument for these async forms
+rather than throwing synchronously.
+
+Added `fs::validate::fd_open_callback_error(value, syscall)` — it still validates
+the fd *type* synchronously (matching Node's `validateInt32` on a non-numeric
+fd) but returns the `EBADF` error value for a valid-typed-but-unregistered
+descriptor instead of throwing. The four callback wrappers in
+`crates/perry-runtime/src/fs/callbacks.rs` now deliver that error via
+`call_cb_err1(...)` and only run the underlying sync op when the fd is open.
+
+New fixture `test-parity/node-suite/fs/callbacks/fd-callback-errors.ts` proves
+byte-identical `close/fsync/fdatasync/fchmod EBADF <syscall>` output against
+Node v25.
+
+## v0.5.1043 — fix(runtime): restore the default auto-optimize compile (keepalive anchors)
+
+The default `perry file.ts -o out` flow (auto-optimize on) was broken on `main`:
+linking failed with `Undefined symbols for architecture arm64` for
+`_js_write_barrier_root_nanbox`, `_js_write_barrier_root_heap_word`, and
+`_js_array_join_value`. Any program with module-level string variables (which
+emit barrier-root calls in `__perry_init_strings`) or an `arr.join(sep)` call
+could not compile.
+
+**Root cause.** #2345 ("Tighten GC root and barrier contracts") added the two
+`js_write_barrier_root_*` entry points and made codegen emit them, but added no
+symbol-retention anchor. `js_array_join_value` has the same exposure. These are
+`#[no_mangle]` functions called only from generated code (and, for join, an
+in-crate caller behind a dispatch path the optimizer can prove unreachable). The
+default `.a` staticlib keeps them via staticlib-export semantics, but the
+auto-optimize build round-trips the runtime through whole-program LLVM bitcode
+and is free to internalize and dead-strip an unreferenced `#[no_mangle]` symbol —
+so the auto-optimized `libperry_runtime.a` dropped all three, breaking the link.
+PR CI did not catch this because `compile-smoke` is gated to tag pushes only
+(v0.5.1018), not PRs.
+
+**Fix.** Add `#[used]` keepalive anchors for the three symbols — `KEEP_*` statics
+holding their function pointers — mirroring the established pattern in
+`node_stream_keepalive.rs` / `typedarray.rs`. The anchors pin retained reference
+edges so the symbols survive every link mode (default staticlib + auto-optimize
+bitcode). Verified by clearing the `perry-auto-*` cache and compiling/running
+representative programs (module strings, classes, async/await, `arr.join`,
+objects, `Map`/`Set`, `JSON.stringify`, `reduce`) with auto-optimize on — all
+link and produce correct output, and the three symbols are present in the
+rebuilt auto-optimized runtime lib.
+
+## v0.5.1042 — validate AsyncLocalStorage run/exit callbacks (#3092)
+
+`AsyncLocalStorage#run(store, callback, ...)` and `#exit(callback, ...)` lowered
+the callback to a raw pointer and treated a null pointer as a no-op, so a
+non-callable callback returned `undefined` instead of throwing. Node rejects
+every non-callable callback with a `TypeError` (through its function-apply path).
+
+- `crates/perry-codegen/src/lower_call/native_table/async_decimal.rs` and the
+  matching `runtime_decls/stdlib_ffi.rs` declaration now pass the `run`/`exit`
+  callback as a full NaN-boxed value (`NA_F64`/`DOUBLE`) rather than a raw
+  pointer, so the runtime can inspect its type.
+- `crates/perry-stdlib/src/async_local_storage.rs` adds `validate_callback`: a
+  callable closure (POINTER_TAG + `is_closure_ptr`, the SSO-safe order) is
+  invoked; anything else throws a `TypeError`. Validation runs before the async
+  context is mutated, so an invalid callback never leaves a pushed/cleared store
+  behind. `enterWith(store)` stays permissive.
+
+Rest-argument forwarding to the callback is not part of this change.
+
+New `test-parity/node-suite/async_hooks/als-run-exit-callback-validation.ts` is
+byte-identical to `node --experimental-strip-types`: every non-callable callback
+throws `TypeError` for both `run` and `exit`, and the valid path preserves store
+visibility.
+
+## v0.5.1041 — unblock main lint: rustfmt + allowlist oversized expr_member.rs
+
+#3161 (allowedNodeEnvironmentFlags) landed two `lint`-gate failures on main:
+its `process_allowed_node_flags_literal` in
+`crates/perry-hir/src/lower/expr_member.rs` had an unwrapped
+`.iter().map().collect()` that `cargo fmt --all -- --check` rejects, and the
+inlined flag list pushed the file to 2121 lines, past the 2000-line
+`scripts/check_file_size.sh` gate (the file was not allowlisted). Both were
+admin-merged without `lint` passing, so the gate failed on main and every PR
+rebased onto it. This reflows the literal and allowlists the file; a proper
+per-namespace split of the literal builders is tracked under #1435.
+
 ## v0.5.1040 — remove duplicate querystring symbol-error helper (main red fix)
 
 `crates/perry-stdlib/src/querystring.rs` defined `throw_symbol_to_string_type_error`

@@ -8,11 +8,15 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::thread::ThreadId;
 
-use crate::closure::{js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader};
+use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
+use crate::closure::{
+    js_closure_get_capture_f64, js_closure_set_capture_f64,
+    js_register_closure_synthetic_arguments, ClosureHeader,
+};
 use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::thread::SerializedValue;
-use crate::value::JSValue;
+use crate::value::{js_nanbox_get_pointer, JSValue};
 
 use super::*;
 
@@ -1132,9 +1136,9 @@ pub(crate) fn run_stores_method_closure(id: i64) -> f64 {
 /// Allocates on the current thread's arena; callers must ensure the runtime
 /// is initialized (always true on the diagnostics_channel call path).
 unsafe fn build_arg_array(values: &[f64]) -> f64 {
-    let arr = js_array_new();
+    let mut arr = js_array_alloc(values.len() as u32);
     for &v in values {
-        js_array_push(arr, v);
+        arr = js_array_push_f64(arr, v);
     }
     boxed_ptr(arr)
 }
@@ -1146,18 +1150,12 @@ fn unbox_arg_array(arr_value: f64) -> Vec<f64> {
     if arr.is_null() {
         return Vec::new();
     }
-    unsafe {
-        let len = (*arr).length as usize;
-        let data = (*arr).data;
-        if data.is_null() {
-            return Vec::new();
-        }
-        let mut out = Vec::with_capacity(len);
-        for i in 0..len {
-            out.push(f64::from_bits((*data.add(i)).bits()));
-        }
-        out
+    let len = js_array_length(arr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        out.push(js_array_get_f64(arr, i));
     }
+    out
 }
 
 pub(crate) extern "C" fn diag_channel_run_stores(

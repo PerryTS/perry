@@ -1340,7 +1340,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_secure_heap_used", I64, &[]);
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_bytes_async", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_crypto_random_uuid", I64, &[]);
+    module.declare_function("js_crypto_random_uuid", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_uuidv7", I64, &[]);
     // crypto.randomInt([min,] max[, cb]) -> number; codegen passes min=0 for the
     // single-arg form. Returns the integer as a plain double.
@@ -1350,9 +1350,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
-    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args are unboxed
-    // to raw i64 pointers (Buffer / TypedArray / string).
-    module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[I64, I64]);
+    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args stay boxed so
+    // stdlib can validate BufferSource types before reading bytes.
+    module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
     module.declare_function("js_crypto_get_hashes", I64, &[]);
     module.declare_function("js_crypto_get_ciphers", I64, &[]);
@@ -1633,6 +1633,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_console_count_value", VOID, &[DOUBLE]);
     module.declare_function("js_console_count_reset_value", VOID, &[DOUBLE]);
     module.declare_function("js_console_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_console_new2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_console_group_begin", VOID, &[]);
     module.declare_function("js_console_group_end", VOID, &[]);
     module.declare_function("js_console_clear", VOID, &[]);

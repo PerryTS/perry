@@ -272,6 +272,7 @@ pub(crate) fn lower_node_stream_super_init(
         "readable" => "js_node_stream_readable_subclass_init",
         "writable" => "js_node_stream_writable_subclass_init",
         "duplex" => "js_node_stream_duplex_subclass_init",
+        "transform" => "js_node_stream_transform_subclass_init",
         _ => unreachable!(
             "lower_node_stream_super_init: unexpected Node stream kind {}",
             kind

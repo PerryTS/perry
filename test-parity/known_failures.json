@@ -152,29 +152,11 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
   },
-  "test_stream_on": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream EventEmitter wiring incomplete \u2014 re-validated 2026-05-24 (v0.5.1026, Linux): still FAILS. Real Perry gap (not ci-env); rolled under the open stream-events tracker #1532."
-  },
-  "node-suite/stream/readable/wrap-old-stream": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: readable.wrap(oldStream) bridge doesn't deliver data events. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/multiple-transforms": {
     "issue": "1539",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: stream.compose() composite Duplex doesn't forward data through the chain, so the joined output never arrives. Shape sub-tests pass; reopened #1539 for pipeline execution."
-  },
-  "node-suite/stream/subclass/extends-transform": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: class extends Transform + _transform doesn't deliver. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/with-async-fn": {
     "issue": "1539",
@@ -182,29 +164,11 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(asyncGenerator) doesn't run the async stage / forward data. Reopened #1539 for pipeline execution."
   },
-  "node-suite/stream/compose/single-transform": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/compose/from-async-iterable": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: stream.compose(asyncIterable) doesn't drive the source / forward data. Reopened #1539 for pipeline execution."
-  },
   "node-suite/stream/compose/single-sync-fn": {
     "issue": "1531",
     "added": "2026-05-23",
     "category": "bug-open",
     "reason": "node:stream: compose(readable, asyncGenFn) \u2014 fails to compile (single-fn compose form not yet wired). Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/duplex/from-async-iterable": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex.from(asyncIterable) \u2014 async-gen \u2192 Duplex form not yet wired. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/compose/compose-array-form": {
     "issue": "1531",
@@ -212,23 +176,11 @@
     "category": "bug-open",
     "reason": "node:stream: compose(src, transform, sink) \u2014 spread-arg form does not produce a working pipeline. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/from-infinite-take": {
-    "issue": "1558",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(infiniteGen).take(N) \u2014 take helper does not abort upstream early; iteration hangs or returns wrong items. Flips to PASS when #1558 lands."
-  },
   "node-suite/stream/compose/error-mid-chain": {
     "issue": "1531",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose() \u2014 error in middle transform does not propagate to composite 'error' event. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/transform-cancel-propagates": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TransformStream readable.cancel() does not propagate to writable \u2014 writes still succeed after cancel. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/compose/async-handler-promise": {
     "issue": "1531",
@@ -242,12 +194,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw \u2014 composite does not emit 'error'. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/compose/buffer-preserves": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose() \u2014 Buffer chunks not preserved through pipeline (typed as string?). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/error-propagates-to-source": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -260,41 +206,11 @@
     "category": "bug-open",
     "reason": "node:stream/web: ws.abort() during active pipeTo \u2014 pipeTo Promise doesn't reject. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/wrap-pipe-chain": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: wrap(EE) + pipe(dst) \u2014 piped output empty or wrong. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/web/from-async-generator-function": {
     "issue": "1545",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(asyncGen()) \u2014 iteration wrong or fails. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/compose-with-passthrough": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose(src, PassThrough) \u2014 data not preserved through PT in composite. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/double-pipe-through": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeThrough().pipeThrough() chain \u2014 second transform output wrong. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/transform-readable-cancel-propagates": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TS readable.cancel \u2014 writable.write does not reject after. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/from-promise-iterable": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: ReadableStream.from(customIterable) \u2014 value or done wrong. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",
@@ -314,12 +230,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: cancel() during pull \u2014 read() does not resolve {done:true}. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/iter-with-custom-return": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: for-await break \u2014 custom iterator.return() not invoked. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/three-stages-order": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -337,12 +247,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) \u2014 chain produces wrong output. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/transform-piped-twice": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeThrough().pipeThrough() \u2014 second transform output wrong. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/compose/composite-end-event": {
     "issue": "1531",

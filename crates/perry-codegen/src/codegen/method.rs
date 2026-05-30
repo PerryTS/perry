@@ -25,6 +25,7 @@ fn node_stream_parent_kind(
         match name {
             "Readable" => return Some("readable"),
             "Duplex" => return Some("duplex"),
+            "Transform" => return Some("transform"),
             _ => {}
         }
         cur = classes
@@ -293,6 +294,7 @@ pub(super) fn compile_method(
             let builtin_parent_runtime = match class.extends_name.as_deref() {
                 Some("Writable") => Some("js_node_stream_writable_subclass_init"),
                 Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
+                Some("Transform") => Some("js_node_stream_transform_subclass_init"),
                 _ => None,
             };
             let mut effective_parent: Option<&str> = if builtin_parent_runtime.is_some() {
@@ -334,6 +336,7 @@ pub(super) fn compile_method(
                     let runtime_fn = match kind {
                         "readable" => "js_node_stream_readable_subclass_init",
                         "duplex" => "js_node_stream_duplex_subclass_init",
+                        "transform" => "js_node_stream_transform_subclass_init",
                         _ => unreachable!("node stream parent kind {}", kind),
                     };
                     ctx.block().call(

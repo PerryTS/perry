@@ -737,6 +737,21 @@ pub(super) fn collect_modules(
             import.is_native = perry_hir::is_native_module(&import.source);
         }
 
+        // `node:stream/web` is routed as a runtime submodule so its named
+        // imports keep their singleton shape, but the implementations live in
+        // perry-stdlib's `bundled-streams` module. Mark the import explicitly
+        // instead of relying only on codegen-side FFI provenance, which object
+        // cache hits can skip.
+        if import
+            .source
+            .strip_prefix("node:")
+            .unwrap_or(&import.source)
+            == "stream/web"
+        {
+            ctx.needs_stdlib = true;
+            ctx.native_module_imports.insert("stream/web".to_string());
+        }
+
         // Refs #665: an opt-in via `perry.compilePackages` overrides the
         // built-in native binding. HIR lowering set `is_native` based on the
         // NATIVE_MODULES manifest alone; downgrade it here so the import

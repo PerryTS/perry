@@ -760,3 +760,15 @@ pub extern "C" fn js_array_join_value(
     };
     js_array_join(arr, separator)
 }
+
+// Symbol retention: codegen lowers `arr.join(sep)` to a call to
+// `js_array_join_value`, but its only in-crate caller sits behind a dispatch
+// path the auto-optimize whole-program-bitcode build can prove unreachable and
+// dead-strip — which broke the default `perry file.ts -o out` link with
+// `undefined _js_array_join_value`. The `#[used]` static pins the symbol so it
+// survives every link mode. Same pattern as `node_stream_keepalive.rs`.
+#[used]
+static KEEP_ARRAY_JOIN_VALUE: extern "C" fn(
+    *const ArrayHeader,
+    f64,
+) -> *mut crate::string::StringHeader = js_array_join_value;

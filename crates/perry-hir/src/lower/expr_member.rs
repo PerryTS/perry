@@ -2065,7 +2065,10 @@ fn process_allowed_node_flags_literal() -> Expr {
         "-r",
     ];
     Expr::SetNewFromArray(Box::new(Expr::Array(
-        FLAGS.iter().map(|f| Expr::String((*f).to_string())).collect(),
+        FLAGS
+            .iter()
+            .map(|f| Expr::String((*f).to_string()))
+            .collect(),
     )))
 }
 

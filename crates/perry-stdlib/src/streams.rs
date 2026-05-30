@@ -798,6 +798,9 @@ unsafe fn js_readable_stream_cancel_inner(
         reject_type_error(promise, "ReadableStream is locked");
         return promise;
     }
+    if let Some(writable_id) = transform_writable_for_readable(id) {
+        let _ = js_writable_stream_abort(writable_id as f64, reason);
+    }
     if cb != 0 {
         js_closure_call1(cb as *const ClosureHeader, reason);
     }
@@ -838,30 +841,46 @@ pub unsafe extern "C" fn js_readable_stream_from_response(_resp_id: f64) -> f64 
     alloc_readable_from_bytes(Vec::new()) as f64
 }
 
-/// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web
-/// ReadableStream pre-loaded with the iterable's items, then closed. Today we
-/// handle the synchronous-array case (the overwhelmingly common form: a literal
-/// array, a spread, `[...set]`, etc.); each element becomes one chunk so
-/// `getReader().read()` / `for await` yield them in order, then `done`.
-#[no_mangle]
-pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
-    ensure_gc_registered();
+fn ptr_addr_from_nanbox(value: f64) -> Option<usize> {
     let bits = value.to_bits();
     let top = bits >> 48;
-    let ptr_addr = if top == 0x7FFD || top == 0x7FFF {
+    if top == 0x7FFD || top == 0x7FFF {
         Some((bits & POINTER_MASK) as usize)
     } else if top == 0 && bits >= 0x10000 {
         Some(bits as usize)
     } else {
         None
-    };
+    }
+}
+
+unsafe fn chunks_from_array_ptr(arr_ptr: *const perry_runtime::ArrayHeader) -> Vec<u64> {
+    let len = perry_runtime::array::js_array_length(arr_ptr);
+    (0..len)
+        .map(|i| perry_runtime::array::js_array_get(arr_ptr, i).bits())
+        .collect()
+}
+
+unsafe fn chunks_from_sync_iterable(value: f64) -> Option<Vec<u64>> {
+    let iter = perry_runtime::symbol::js_get_iterator(value);
+    if iter.to_bits() == value.to_bits() {
+        return None;
+    }
+    let arr = perry_runtime::array::js_iterator_to_array(iter);
+    Some(chunks_from_array_ptr(arr))
+}
+
+/// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web
+/// ReadableStream pre-loaded with the iterable's items, then closed. Each
+/// element becomes one chunk so `getReader().read()` / `for await` yield them
+/// in order, then `done`.
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
+    ensure_gc_registered();
+    let ptr_addr = ptr_addr_from_nanbox(value);
 
     let chunks: Vec<u64> = if perry_runtime::array::js_array_is_array(value).to_bits() == TAG_TRUE {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
-        let len = perry_runtime::array::js_array_length(arr_ptr);
-        (0..len)
-            .map(|i| perry_runtime::array::js_array_get(arr_ptr, i).bits())
-            .collect()
+        chunks_from_array_ptr(arr_ptr)
     } else if let Some(addr) = ptr_addr {
         if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
             let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
@@ -877,6 +896,8 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
             let len = (*buf).length as usize;
             let data = perry_runtime::buffer::buffer_data(buf);
             (0..len).map(|i| (*data.add(i) as f64).to_bits()).collect()
+        } else if let Some(chunks) = chunks_from_sync_iterable(value) {
+            chunks
         } else {
             throw_type_error("ReadableStream.from requires an iterable");
         }
@@ -1918,12 +1939,35 @@ lazy_static::lazy_static! {
     static ref TRANSFORM_PAIRS: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
 }
 
+fn transform_writable_for_readable(readable_id: usize) -> Option<usize> {
+    TRANSFORM_STREAMS
+        .lock()
+        .unwrap()
+        .values()
+        .find_map(|t| (t.readable_handle == readable_id).then_some(t.writable_handle))
+}
+
 /// Replacement `writer.write` for the writable side of a TransformStream
 /// — invokes the user transform with (chunk, transformController) where
 /// the transformController is the readable-side stream handle (so
 /// `controller.enqueue(...)` reuses the readable controller path).
 unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     let promise = js_promise_new();
+    {
+        let g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get(&writable_id) {
+            Some(s) if s.state == WritableState::Writable => {}
+            Some(s) if s.state == WritableState::Errored => {
+                js_promise_reject(promise, f64::from_bits(s.error_value));
+                return promise;
+            }
+            _ => {
+                let err = make_error_with_message("Stream is closed or closing");
+                js_promise_reject(promise, f64::from_bits(err));
+                return promise;
+            }
+        }
+    }
     let (transform_cb, readable_id) = {
         let pairs = TRANSFORM_PAIRS.lock().unwrap();
         match pairs.get(&writable_id) {
@@ -2191,6 +2235,12 @@ pub(crate) unsafe fn dispatch_stream_method(
             "cancel" => return Some(box_promise(js_readable_stream_cancel(handle, arg0))),
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0, arg1))),
+            "pipeThrough" => {
+                let transform = js_stream_unwrap_handle(arg0);
+                let writable = js_transform_stream_writable(transform);
+                let readable = js_transform_stream_readable(transform);
+                return Some(js_readable_stream_pipe_through(handle, writable, readable));
+            }
             // #1644: a readable handle is also its own controller. The
             // start/transform/flush callbacks receive it as `controller`, so
             // `controller.enqueue/close/error/terminate` dispatch here when the

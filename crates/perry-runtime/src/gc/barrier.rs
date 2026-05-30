@@ -1290,6 +1290,20 @@ pub extern "C" fn js_write_barrier_root_nanbox(value_bits: u64) {
     runtime_write_barrier_root_nanbox(value_bits);
 }
 
+// #2345 symbol retention. Codegen emits calls to these two root write-barrier
+// entry points from `__perry_init_strings` (module-level string roots), but no
+// Rust caller in the crate graph references them. The default `.a` staticlib
+// keeps them via staticlib-export semantics; the auto-optimize build round-trips
+// the runtime through whole-program LLVM bitcode and is free to internalize and
+// dead-strip an unreferenced `#[no_mangle]` symbol — which broke the default
+// `perry file.ts -o out` link with `undefined _js_write_barrier_root_*`. The
+// `#[used]` statics pin retained reference edges so both survive every link mode.
+// Same pattern as `node_stream_keepalive.rs` / `typedarray.rs`.
+#[used]
+static KEEP_WRITE_BARRIER_ROOT_HEAP_WORD: extern "C" fn(u64) = js_write_barrier_root_heap_word;
+#[used]
+static KEEP_WRITE_BARRIER_ROOT_NANBOX: extern "C" fn(u64) = js_write_barrier_root_nanbox;
+
 #[inline]
 pub(crate) fn runtime_store_gc_heap_word_slot(
     parent_user: usize,

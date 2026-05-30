@@ -52,6 +52,14 @@ pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 /// as heap objects.
 pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 
+/// Narrow registration hook for runtime code that needs to attach an
+/// EventEmitter listener without routing through the generic handle dispatcher.
+pub type EventEmitterOnFn = unsafe extern "C" fn(
+    handle: i64,
+    event: *const crate::string::StringHeader,
+    callback: i64,
+) -> i64;
+
 // Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)
 // and read from many threads thereafter (perry/thread workers run user code that
 // hits these). Stored as AtomicPtr to make reads/writes data-race-free; the
@@ -63,6 +71,7 @@ static HANDLE_PROPERTY_SET_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::nul
 static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 #[inline]
 pub fn handle_method_dispatch() -> Option<HandleMethodDispatchFn> {
@@ -147,6 +156,21 @@ pub fn event_emitter_handle_probe() -> Option<EventEmitterHandleProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_event_emitter_handle_probe(f: EventEmitterHandleProbeFn) {
     EVENT_EMITTER_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn event_emitter_on() -> Option<EventEmitterOnFn> {
+    let p = EVENT_EMITTER_ON_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterOnFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_on(f: EventEmitterOnFn) {
+    EVENT_EMITTER_ON_PTR.store(f as *mut (), Ordering::Release);
 }
 
 /// Register a function to handle property access on handle-based objects.

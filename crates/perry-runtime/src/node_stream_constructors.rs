@@ -632,6 +632,47 @@ pub extern "C" fn js_node_stream_transform_new(opts: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_node_stream_transform_subclass_init(this: f64, opts: f64) -> f64 {
+    let transform = js_node_stream_duplex_subclass_init(this, opts);
+    let raw = raw_ptr_from_value(transform);
+    if raw == 0 {
+        return transform;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return transform;
+    }
+
+    let obj = raw as *mut ObjectHeader;
+    let subclass_transform = js_object_get_field_by_name_f64(obj, hidden_key(b"_transform"));
+    let subclass_flush = js_object_get_field_by_name_f64(obj, hidden_key(b"_flush"));
+
+    if let Some(callback) = transform_callback_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_callback_key(),
+            rebind_callback_this(callback, transform),
+        );
+    } else if is_callable_value(subclass_transform) {
+        set_hidden_value(
+            transform,
+            hidden_transform_callback_key(),
+            subclass_transform,
+        );
+    }
+    if let Some(flush) = transform_flush_from_options(opts) {
+        set_hidden_value(
+            transform,
+            hidden_transform_flush_key(),
+            rebind_callback_this(flush, transform),
+        );
+    } else if is_callable_value(subclass_flush) {
+        set_hidden_value(transform, hidden_transform_flush_key(), subclass_flush);
+    }
+    init_constructor(transform, "Transform");
+    transform
+}
+
+#[no_mangle]
 pub extern "C" fn js_node_stream_passthrough_new(opts: f64) -> f64 {
     let passthrough = js_node_stream_duplex_new(opts);
     set_hidden_value(
@@ -664,9 +705,20 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
         let trap_buf = crate::exception::js_try_push();
         let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
         if jumped == 0 {
-            let chunks = normalize_readable_from_input(iterable);
+            let normalized = normalize_readable_from_input(iterable);
             crate::exception::js_try_end();
-            js_object_set_field_by_name(raw as *mut ObjectHeader, hidden_chunks_key(), chunks);
+            js_object_set_field_by_name(
+                raw as *mut ObjectHeader,
+                hidden_chunks_key(),
+                normalized.chunks,
+            );
+            if let Some(source_iterator) = normalized.source_iterator {
+                js_object_set_field_by_name(
+                    raw as *mut ObjectHeader,
+                    hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+                    source_iterator,
+                );
+            }
         } else {
             let err = crate::exception::js_get_exception();
             crate::exception::js_clear_exception();
@@ -920,7 +972,8 @@ pub extern "C" fn js_node_stream_duplex_from_options(body: f64, _opts: f64) -> f
 /// #1539: `stream.compose(...streams)` chains a sequence of streams
 /// into one composite Duplex (data flows through them in order). Perry
 /// now handles Node's single-source fast path by returning a Duplex
-/// wrapper whose readable side drains the source snapshot; multi-stage
+/// wrapper whose readable side drains the source snapshot, and the
+/// single-Transform stage form by returning the stage itself. Multi-stage
 /// composition remains tracked separately.
 #[no_mangle]
 pub extern "C" fn js_node_stream_compose(args: *const crate::array::ArrayHeader) -> f64 {
@@ -935,7 +988,15 @@ pub extern "C" fn js_node_stream_compose_args(args: *const crate::array::ArrayHe
         throw_pipeline_missing_streams();
     }
     if args.len() == 1 {
+        if is_transform_stream(args[0]) {
+            return args[0];
+        }
         return node_stream_duplex_from_source_chunks(args[0]);
+    }
+    if args.len() == 2 {
+        if let Some(readable) = compose_readable_snapshot(args[0], args[1]) {
+            return node_stream_duplex_from_source_chunks(readable);
+        }
     }
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }

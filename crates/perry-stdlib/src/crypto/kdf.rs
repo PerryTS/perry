@@ -155,17 +155,50 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
 
 /// Constant-time equality for equal-length byte inputs.
 #[no_mangle]
-pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_ptr: i64, b_ptr: i64) -> f64 {
-    let a = bytes_from_ptr(a_ptr);
-    let b = bytes_from_ptr(b_ptr);
+pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_bits: f64, b_bits: f64) -> f64 {
+    let a = validate_timing_safe_equal_buffer_source(a_bits, "buf1");
+    let b = validate_timing_safe_equal_buffer_source(b_bits, "buf2");
     if a.len() != b.len() {
-        return f64::from_bits(JSValue::bool(false).bits());
+        perry_runtime::fs::validate::throw_range_error_named(
+            "Input buffers must have the same byte length",
+            "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH",
+        );
     }
     let mut diff = 0u8;
     for (x, y) in a.iter().zip(b.iter()) {
         diff |= x ^ y;
     }
     f64::from_bits(JSValue::bool(diff == 0).bits())
+}
+
+unsafe fn validate_timing_safe_equal_buffer_source(value: f64, arg_name: &str) -> Vec<u8> {
+    let addr = {
+        let bits = value.to_bits();
+        if (bits >> 48) >= 0x7FF8 {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else {
+            bits as usize
+        }
+    };
+    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(
+            addr as *const perry_runtime::typedarray::TypedArrayHeader,
+        ) {
+            return bytes.to_vec();
+        }
+    }
+    if perry_runtime::buffer::is_registered_buffer(addr) {
+        let buf = addr as *const perry_runtime::buffer::BufferHeader;
+        let len = (*buf).length as usize;
+        let data =
+            (buf as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+        return std::slice::from_raw_parts(data, len).to_vec();
+    }
+    let message = format!(
+        "The \"{}\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+        arg_name
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
 #[no_mangle]

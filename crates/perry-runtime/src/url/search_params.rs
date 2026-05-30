@@ -819,6 +819,9 @@ pub extern "C" fn js_url_search_params_for_each(
     callback: f64,
     this_arg: f64,
 ) {
+    // #3058: Node validates the callback before iterating — a missing or
+    // non-function argument throws `TypeError [ERR_INVALID_ARG_TYPE]`.
+    crate::fs::validate::validate_function("callback", callback);
     let entries = get_url_search_params_entries(params);
     let this_value = crate::value::js_nanbox_pointer(params as i64);
     for (key, value) in entries {

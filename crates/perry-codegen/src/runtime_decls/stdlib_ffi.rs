@@ -368,29 +368,27 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_resource_static_bind", I64, &[I64, DOUBLE]);
     module.declare_function("js_async_local_storage_disable", VOID, &[I64]);
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
-    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, I64, I64]);
+    // #3092 — callback is passed as a full NaN-boxed value (DOUBLE), not a raw
+    // pointer, so the runtime can reject non-callable callbacks.
+    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
     module.declare_function("js_async_local_storage_new", I64, &[]);
-    module.declare_function(
-        "js_async_local_storage_run",
-        DOUBLE,
-        &[I64, DOUBLE, I64, I64],
-    );
+    module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, DOUBLE]);
 
     // ========== zlib ==========
-    module.declare_function("js_zlib_deflate_sync", I64, &[I64]);
+    module.declare_function("js_zlib_deflate_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_gunzip", I64, &[I64]);
-    module.declare_function("js_zlib_gunzip_sync", I64, &[I64]);
+    module.declare_function("js_zlib_gunzip_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_gzip", I64, &[I64]);
-    module.declare_function("js_zlib_gzip_sync", I64, &[I64]);
-    module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
-    module.declare_function("js_zlib_deflate_raw_sync", I64, &[I64]);
-    module.declare_function("js_zlib_inflate_raw_sync", I64, &[I64]);
-    module.declare_function("js_zlib_unzip_sync", I64, &[I64]);
-    module.declare_function("js_zlib_crc32", DOUBLE, &[I64, DOUBLE]);
-    // #1843 — Brotli one-shots (StringHeader ptr in/out; async returns a Promise ptr).
-    module.declare_function("js_zlib_brotli_compress_sync", I64, &[I64]);
-    module.declare_function("js_zlib_brotli_decompress_sync", I64, &[I64]);
+    module.declare_function("js_zlib_gzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_unzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #1843 — Brotli one-shots (sync validates JS values; async returns a Promise ptr).
+    module.declare_function("js_zlib_brotli_compress_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_brotli_compress", I64, &[I64]);
     module.declare_function("js_zlib_brotli_decompress", I64, &[I64]);
     // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
@@ -912,6 +910,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[DOUBLE, DOUBLE],
     );
     module.declare_function("js_node_stream_transform_new", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_transform_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);
     module.declare_function(
@@ -994,12 +997,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
     // Module-level helpers
-    module.declare_function("js_events_once", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_events_on", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_events_add_abort_listener", I64, &[I64, I64]);
-    module.declare_function("js_events_get_event_listeners", I64, &[I64, I64]);
-    module.declare_function("js_events_listener_count", DOUBLE, &[I64, I64]);
-    module.declare_function("js_events_get_max_listeners", DOUBLE, &[I64]);
+    module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
+    module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
+    module.declare_function("js_events_add_abort_listener", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_events_get_event_listeners", I64, &[DOUBLE, I64]);
+    module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
 
     // ========== StringDecoder (issue #848) ==========

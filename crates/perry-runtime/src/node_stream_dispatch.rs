@@ -115,6 +115,11 @@ pub(super) fn register_stub_arities() {
     };
     register(ns_chain0 as *const u8, 0);
     register(ns_chain1 as *const u8, 1);
+    register(ns_wrap1 as *const u8, 1);
+    register(ns_wrap_data as *const u8, 1);
+    register(ns_wrap_end as *const u8, 0);
+    register(ns_wrap_error as *const u8, 1);
+    register(ns_wrap_close as *const u8, 0);
     register(ns_destroy_error_microtask as *const u8, 0);
     register(ns_stream_abort_listener as *const u8, 0);
     register(ns_destroy1 as *const u8, 1);

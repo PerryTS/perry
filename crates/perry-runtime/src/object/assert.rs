@@ -292,7 +292,17 @@ fn make_assertion_error(
         set("message", string_f64(&message));
         set("actual", actual);
         set("expected", expected);
-        set("operator", string_f64(operator));
+        // An absent operator surfaces as `undefined` (matching Node), not an
+        // empty string. The assert.* helpers always pass a non-empty operator,
+        // so this only affects `new AssertionError({ ... })` with no operator.
+        set(
+            "operator",
+            if operator.is_empty() {
+                undefined_f64()
+            } else {
+                string_f64(operator)
+            },
+        );
         set(
             "generatedMessage",
             f64::from_bits(crate::value::JSValue::bool(generated).bits()),
@@ -887,49 +897,65 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, _expected: f64, message:
 /// carries the `CLASS_ID_ASSERTION_ERROR` class id, satisfies
 /// `instanceof Error`, and has the standard `actual` / `expected` /
 /// `operator` / `code` / `message` / `generatedMessage` fields Node
-/// attaches. Unspecified fields default to `undefined`. When `message`
-/// is missing, the operator-derived "<actual> <op> <expected>" default
-/// is left to the caller (Node's behaviour computes a stringy summary
-/// — we currently default to the operator string itself, which matches
-/// what Perry's failing-assert helpers produce).
+/// attaches.
+///
+/// #3034 — Node requires an options object: a missing/null/primitive
+/// `options` throws `TypeError [ERR_INVALID_ARG_TYPE]`. When `message` is
+/// absent, Node generates a default from `actual`/`operator`/`expected`. We
+/// emit the generic comparison summary `"<actual> <operator> <expected>"`
+/// (the format Node uses for non-diffing operators like `===`, and the one
+/// the issue's surface exercises); the elaborate per-operator diff messages
+/// for `strictEqual`/`deepStrictEqual`/… are produced by the assert.* helpers
+/// themselves, not by this direct-construction path.
 #[no_mangle]
 pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
-    let undef = undefined_f64();
     let opts_is_obj = {
         let jv = crate::value::JSValue::from_bits(options.to_bits());
         jv.is_pointer() && !jv.as_pointer::<u8>().is_null()
     };
-    let (actual, expected, operator_str, message, generated) = if opts_is_obj {
-        unsafe {
-            let read = |key: &str| -> f64 {
-                let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-                let obj_ptr = crate::value::JSValue::from_bits(options.to_bits())
-                    .as_pointer::<ObjectHeader>();
-                let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr);
-                f64::from_bits(v.to_bits())
-            };
-            let actual = read("actual");
-            let expected = read("expected");
-            let operator_v = read("operator");
-            let message_v = read("message");
-            let operator_str = if is_null_or_undefined(operator_v) {
-                String::new()
-            } else {
-                value_to_string(operator_v)
-            };
-            let (msg, generated) = if is_null_or_undefined(message_v) {
-                // Default to the operator name so the resulting message is
-                // non-empty; users typically pass an explicit message.
-                (operator_str.clone(), true)
-            } else {
-                (value_to_string(message_v), false)
-            };
-            (actual, expected, operator_str, msg, generated)
-        }
-    } else {
-        (undef, undef, String::new(), String::new(), true)
-    };
-    make_assertion_error(message, actual, expected, &operator_str, generated)
+    if !opts_is_obj {
+        let message = format!(
+            "The \"options\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(options)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    unsafe {
+        let read = |key: &str| -> f64 {
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            let obj_ptr =
+                crate::value::JSValue::from_bits(options.to_bits()).as_pointer::<ObjectHeader>();
+            let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr);
+            f64::from_bits(v.to_bits())
+        };
+        let actual = read("actual");
+        let expected = read("expected");
+        let operator_v = read("operator");
+        let message_v = read("message");
+        let operator_str = if is_null_or_undefined(operator_v) {
+            String::new()
+        } else {
+            value_to_string(operator_v)
+        };
+        let (message, generated) = if is_null_or_undefined(message_v) {
+            // Node's generated default for a directly-constructed
+            // AssertionError is the comparison summary
+            // `<actual> <operator> <expected>`, with each absent operand and
+            // the operator itself rendered via String() (`undefined` when
+            // missing). E.g. `{}` -> "undefined undefined undefined",
+            // `{actual:1,expected:2,operator:"==="}` -> "1 === 2".
+            let summary = format!(
+                "{} {} {}",
+                value_to_string(actual),
+                value_to_string(operator_v),
+                value_to_string(expected)
+            );
+            (summary, true)
+        } else {
+            (value_to_string(message_v), false)
+        };
+        make_assertion_error(message, actual, expected, &operator_str, generated)
+    }
 }
 
 #[no_mangle]
