@@ -16,7 +16,7 @@ use super::super::{
 
 fn text_encoder_encode_into(args: Vec<Expr>) -> Expr {
     let mut args = args.into_iter();
-    let source = args.next().unwrap_or_else(|| Expr::String(String::new()));
+    let source = args.next().unwrap_or(Expr::Undefined);
     let dest = args.next().unwrap_or(Expr::Undefined);
     Expr::TextEncoderEncodeInto {
         source: Box::new(source),
