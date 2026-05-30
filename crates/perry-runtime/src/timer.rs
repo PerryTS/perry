@@ -17,6 +17,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+extern "C" {
+    fn js_stdlib_has_active_handles() -> i32;
+}
+
 /// A scheduled timer
 struct Timer {
     /// When this timer should fire
@@ -25,6 +29,8 @@ struct Timer {
     promise: *mut Promise,
     /// The value to resolve with (typically undefined/0.0)
     value: f64,
+    /// Whether this promise timer should keep the event loop alive.
+    has_ref: bool,
 }
 
 // SAFETY: Promise pointers are only accessed from the pump thread
@@ -55,24 +61,26 @@ pub extern "C" fn js_timer_now() -> f64 {
 /// Returns the promise that will be resolved
 #[no_mangle]
 pub extern "C" fn js_set_timeout(delay_ms: f64) -> *mut Promise {
-    ensure_initialized();
-
-    let promise = js_promise_new();
-    let delay = Duration::from_millis(normalize_timer_delay(delay_ms));
-    let deadline = Instant::now() + delay;
-
-    TIMER_QUEUE.lock().unwrap().push(Timer {
-        deadline,
-        promise,
-        value: 0.0, // setTimeout resolves with undefined
-    });
-
-    promise
+    schedule_promise_timer(delay_ms, 0.0, true)
 }
 
 /// Schedule a timer with a specific resolve value
 #[no_mangle]
 pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promise {
+    schedule_promise_timer(delay_ms, value, true)
+}
+
+/// Schedule a promise timer with explicit event-loop liveness.
+#[no_mangle]
+pub extern "C" fn js_set_timeout_value_ref(
+    delay_ms: f64,
+    value: f64,
+    has_ref: i32,
+) -> *mut Promise {
+    schedule_promise_timer(delay_ms, value, has_ref != 0)
+}
+
+fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Promise {
     ensure_initialized();
 
     let promise = js_promise_new();
@@ -83,9 +91,28 @@ pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promis
         deadline,
         promise,
         value,
+        has_ref,
     });
 
     promise
+}
+
+fn has_refed_promise_timer() -> bool {
+    TIMER_QUEUE
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|timer| timer.has_ref)
+}
+
+fn other_event_sources_keep_loop_alive() -> bool {
+    js_callback_timer_has_pending() != 0
+        || js_interval_timer_has_pending() != 0
+        || unsafe { js_stdlib_has_active_handles() != 0 }
+}
+
+fn should_run_unref_promise_timers() -> bool {
+    has_refed_promise_timer() || other_event_sources_keep_loop_alive()
 }
 
 /// Process any expired timers, resolving their promises
@@ -93,6 +120,7 @@ pub extern "C" fn js_set_timeout_value(delay_ms: f64, value: f64) -> *mut Promis
 #[no_mangle]
 pub extern "C" fn js_timer_tick() -> i32 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_promise_timers();
     let mut fired = 0;
 
     // Collect expired timers
@@ -101,7 +129,7 @@ pub extern "C" fn js_timer_tick() -> i32 {
         let mut expired = Vec::new();
         let mut i = 0;
         while i < queue.len() {
-            if queue[i].deadline <= now {
+            if queue[i].deadline <= now && (queue[i].has_ref || allow_unref) {
                 expired.push(queue.remove(i));
             } else {
                 i += 1;
@@ -128,22 +156,32 @@ pub extern "C" fn js_timer_tick() -> i32 {
 /// Check if there are any pending timers
 #[no_mangle]
 pub extern "C" fn js_timer_has_pending() -> i32 {
-    if TIMER_QUEUE.lock().unwrap().is_empty() {
-        0
-    } else {
+    if has_refed_promise_timer() {
         1
+    } else {
+        0
     }
+}
+
+/// Compatibility entry used by generated startup drains. `js_timer_tick`
+/// itself enforces promise timer liveness, so this wrapper keeps older
+/// generated call sites explicit without duplicating the policy.
+#[no_mangle]
+pub extern "C" fn js_timer_tick_if_refed() -> i32 {
+    js_timer_tick()
 }
 
 /// Get the time until the next timer fires (in ms), or -1 if no timers
 #[no_mangle]
 pub extern "C" fn js_timer_next_deadline() -> f64 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_promise_timers();
 
     TIMER_QUEUE
         .lock()
         .unwrap()
         .iter()
+        .filter(|t| t.has_ref || allow_unref)
         .map(|t| {
             if t.deadline <= now {
                 0.0
@@ -1286,6 +1324,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         deadline,
         promise,
         value,
+        has_ref: true,
     });
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id: TEST_CALLBACK_TIMER_ID,
@@ -1320,6 +1359,7 @@ pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
             deadline,
             promise: std::ptr::null_mut(),
             value,
+            has_ref: true,
         });
     }
 }
