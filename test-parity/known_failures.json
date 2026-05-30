@@ -44,18 +44,6 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Net test needs a TLS-capable echo server fixture; not available on CI. Environmental \u2014 needs a CI-side fixture."
   },
-  "test_parity_buffer": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:buffer` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_crypto": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:crypto` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_dgram": {
     "issue": "793",
     "added": "2026-05-15",
@@ -145,12 +133,6 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
-  },
-  "test_parity_util": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:util` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_worker_threads": {
     "issue": "793",
@@ -301,12 +283,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: TransformStream readable.cancel() does not propagate to writable \u2014 writes still succeed after cancel. Flips to PASS when #1545 lands."
-  },
-  "test_gap_console_methods": {
-    "issue": "1278",
-    "added": "2026-05-21",
-    "category": "gap-categorical",
-    "reason": "#1278: console.trace / Error.stack frame format diverges from Node (Perry prints native frame addresses like `0: __mh_execute_header` instead of `at <fn> (file:///\u2026:line:col)`). Requires source-position retention through HIR/transform + native-frame \u2192 TS-source mapping. The other two divergences in this fixture (#1276 spurious `Values` column on array-of-arrays, #1277 timer ms numbers) are not gating: #1276 was fixed in v0.5.1019+; #1277 is a misdiagnosis \u2014 Perry's `Instant::now()` is correct and the apparent 1000\u00d7 gap is just AOT-vs-interpreted speedup on the trivial loop workload. Flips to PASS when #1278 lands."
   },
   "node-suite/stream/compose/async-handler-promise": {
     "issue": "1531",
