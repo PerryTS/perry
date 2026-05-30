@@ -146,39 +146,43 @@ pub(super) fn try_local_array_methods(
                     if let Some(array_id) = ctx.lookup_local(&arr_name) {
                         match method_name {
                             "push" => {
-                                if !args.is_empty() {
-                                    // Check if any argument has spread operator —
-                                    // when present, route through the spread path.
-                                    // Multi-arg push without spread is desugared to a
-                                    // Sequence of ArrayPush statements (one per arg);
-                                    // JS spec returns the final array length, which is
-                                    // exactly what the last ArrayPush returns.
-                                    let any_spread = call.args.iter().any(|a| a.spread.is_some());
-                                    if any_spread {
-                                        if args.len() == 1 {
-                                            return Ok(Ok(Expr::ArrayPushSpread {
-                                                array_id,
-                                                source: Box::new(args.into_iter().next().unwrap()),
-                                            }));
-                                        }
-                                        // Mixed regular + spread: bail to generic
-                                        // dispatch (no current single-IR-shape).
-                                    } else {
-                                        if args.len() == 1 {
-                                            return Ok(Ok(Expr::ArrayPush {
-                                                array_id,
-                                                value: Box::new(args.into_iter().next().unwrap()),
-                                            }));
-                                        }
-                                        let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
-                                        for a in args.into_iter() {
-                                            stmts.push(Expr::ArrayPush {
-                                                array_id,
-                                                value: Box::new(a),
-                                            });
-                                        }
-                                        return Ok(Ok(Expr::Sequence(stmts)));
+                                if args.is_empty() {
+                                    return Ok(Ok(Expr::PropertyGet {
+                                        object: Box::new(Expr::LocalGet(array_id)),
+                                        property: "length".to_string(),
+                                    }));
+                                }
+                                // Check if any argument has spread operator —
+                                // when present, route through the spread path.
+                                // Multi-arg push without spread is desugared to a
+                                // Sequence of ArrayPush expressions (one per arg);
+                                // JS spec returns the final array length, which is
+                                // exactly what the last ArrayPush returns.
+                                let any_spread = call.args.iter().any(|a| a.spread.is_some());
+                                if any_spread {
+                                    if args.len() == 1 {
+                                        return Ok(Ok(Expr::ArrayPushSpread {
+                                            array_id,
+                                            source: Box::new(args.into_iter().next().unwrap()),
+                                        }));
                                     }
+                                    // Mixed regular + spread: bail to generic
+                                    // dispatch (no current single-IR-shape).
+                                } else {
+                                    if args.len() == 1 {
+                                        return Ok(Ok(Expr::ArrayPush {
+                                            array_id,
+                                            value: Box::new(args.into_iter().next().unwrap()),
+                                        }));
+                                    }
+                                    let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
+                                    for a in args.into_iter() {
+                                        stmts.push(Expr::ArrayPush {
+                                            array_id,
+                                            value: Box::new(a),
+                                        });
+                                    }
+                                    return Ok(Ok(Expr::Sequence(stmts)));
                                 }
                             }
                             "pop" => {

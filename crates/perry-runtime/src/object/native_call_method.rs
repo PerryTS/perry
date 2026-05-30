@@ -1997,11 +1997,13 @@ pub unsafe extern "C" fn js_native_call_method(
 
         // Array methods - delegate to array runtime
         "push" if jsval.is_pointer() => {
-            let arr =
+            let mut arr =
                 jsval.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
-            if args_len > 0 && !args_ptr.is_null() {
-                let val = *args_ptr;
-                crate::array::js_array_push_f64(arr, val);
+            if !args_ptr.is_null() {
+                for i in 0..args_len {
+                    let val = *args_ptr.add(i);
+                    arr = crate::array::js_array_push_f64(arr, val);
+                }
             }
             return crate::array::js_array_length(arr) as f64;
         }

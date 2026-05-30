@@ -2016,14 +2016,12 @@ pub(crate) fn lower_native_method_call(
 
             ctx.current_block = merge_idx;
         }
-        // Spec: push returns the new length; statement context discards.
-        return Ok(new_box);
+        let blk = ctx.block();
+        let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
+        return Ok(blk.sitofp(I32, &len_i32, DOUBLE));
     }
 
     if module == "array" && (method == "push_single" || method == "push") {
-        if args.is_empty() {
-            bail!("array.push expects ≥1 arg, got 0");
-        }
         // Lower every argument first so closures and string literals get
         // collected, then lower the receiver once. js_array_push_f64 may
         // realloc on each call, so we thread the returned pointer through
@@ -2102,9 +2100,9 @@ pub(crate) fn lower_native_method_call(
 
             ctx.current_block = merge_idx;
         }
-        // push returns the new length in JS spec; for now we return
-        // the new boxed pointer (statement context discards it).
-        return Ok(new_box);
+        let blk = ctx.block();
+        let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
+        return Ok(blk.sitofp(I32, &len_i32, DOUBLE));
     }
 
     if module == "array" && (method == "pop_back" || method == "pop") {
