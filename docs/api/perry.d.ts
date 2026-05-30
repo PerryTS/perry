@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1819 entries across 89 modules
+// Coverage: 1821 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2642,6 +2642,8 @@ declare module "sys" {
   export function promisify(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
+  /** stdlib */
+  export function toUSVString(...args: any[]): any;
 }
 
 declare module "tls" {
@@ -2729,6 +2731,8 @@ declare module "util" {
   export function promisify(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
+  /** stdlib */
+  export function toUSVString(...args: any[]): any;
 }
 
 declare module "util/types" {
@@ -2938,11 +2942,11 @@ declare module "zlib" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
-  export function brotliCompress(p0: string): any;
+  export function brotliCompress(buffer: any, callback: any): void;
   /** stdlib */
   export function brotliCompressSync(p0: string): string;
   /** stdlib */
-  export function brotliDecompress(p0: string): any;
+  export function brotliDecompress(buffer: any, callback: any): void;
   /** stdlib */
   export function brotliDecompressSync(p0: string): string;
   /** stdlib */
@@ -2970,31 +2974,31 @@ declare module "zlib" {
   /** stdlib */
   export function createZstdDecompress(options?: any): any;
   /** stdlib */
-  export function deflate(...args: any[]): any;
+  export function deflate(buffer: any, callback: any): void;
   /** stdlib */
-  export function deflateRaw(...args: any[]): any;
+  export function deflateRaw(buffer: any, callback: any): void;
   /** stdlib */
   export function deflateRawSync(p0: string): any;
   /** stdlib */
   export function deflateSync(p0: string): string;
   /** stdlib */
-  export function gunzip(p0: string): any;
+  export function gunzip(buffer: any, callback: any): void;
   /** stdlib */
   export function gunzipSync(p0: string): string;
   /** stdlib */
-  export function gzip(p0: string): any;
+  export function gzip(buffer: any, callback: any): void;
   /** stdlib */
   export function gzipSync(p0: string): string;
   /** stdlib */
-  export function inflate(...args: any[]): any;
+  export function inflate(buffer: any, callback: any): void;
   /** stdlib */
-  export function inflateRaw(...args: any[]): any;
+  export function inflateRaw(buffer: any, callback: any): void;
   /** stdlib */
   export function inflateRawSync(p0: string): any;
   /** stdlib */
   export function inflateSync(p0: string): string;
   /** stdlib */
-  export function unzip(...args: any[]): any;
+  export function unzip(buffer: any, callback: any): void;
   /** stdlib */
   export function unzipSync(p0: string): any;
 }

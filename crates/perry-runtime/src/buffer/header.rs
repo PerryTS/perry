@@ -295,7 +295,53 @@ pub fn buffer_ab_alias(buf: usize) -> Option<usize> {
 /// alias on a fresh copy so chained `Buffer.from(Buffer.from(src))` keeps
 /// `===` identity with the original source.
 pub fn resolve_buffer_ab_alias(buf: usize) -> usize {
-    buffer_ab_alias(buf).unwrap_or(buf)
+    ensure_buffer_ab_alias(buf)
+}
+
+/// Return a stable ArrayBuffer identity for a Buffer's `.buffer` / `.parent`
+/// property. Perry stores Buffer bytes inline in BufferHeader allocations, so
+/// create a BufferHeader-backed ArrayBuffer object lazily and cache it.
+pub fn ensure_buffer_ab_alias(buf: usize) -> usize {
+    if buf < 0x1000 || !is_registered_buffer(buf) {
+        return buf;
+    }
+    if is_array_buffer(buf) || is_shared_array_buffer(buf) {
+        return buf;
+    }
+
+    if let Some(alias) = buffer_ab_alias(buf) {
+        if is_array_buffer(alias) || is_shared_array_buffer(alias) {
+            return alias;
+        }
+        if alias != buf {
+            let resolved = ensure_buffer_ab_alias(alias);
+            set_buffer_ab_alias(buf, resolved);
+            return resolved;
+        }
+    }
+
+    unsafe {
+        let src = buf as *const BufferHeader;
+        let len = (*src).length;
+        let alias = buffer_alloc(len);
+        (*alias).length = len;
+        if len > 0 {
+            std::ptr::copy_nonoverlapping(buffer_data(src), buffer_data_mut(alias), len as usize);
+        }
+        mark_as_array_buffer(alias as usize);
+        super::view::register(alias as usize, buf, 0, len);
+        set_buffer_ab_alias(buf, alias as usize);
+        alias as usize
+    }
+}
+
+pub fn buffer_backing_array_buffer(buf: usize) -> usize {
+    let backing = super::view::backing_of(buf);
+    ensure_buffer_ab_alias(backing)
+}
+
+pub fn buffer_byte_offset(buf: usize) -> u32 {
+    super::view::byte_offset_of(buf)
 }
 
 /// Allocate a buffer with the given capacity

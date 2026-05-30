@@ -390,12 +390,13 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for Response.json(value) / Response.redirect(url, status?) static factories
+            // Check for Response.json(value) / Response.redirect(url, status?) /
+            // Response.error() static factories.
             if obj_ident.sym.as_ref() == "Response" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
-                        "json" | "redirect" => {
+                        "json" | "redirect" | "error" => {
                             ctx.uses_fetch = true;
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "fetch".to_string(),
