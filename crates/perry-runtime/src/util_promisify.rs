@@ -88,6 +88,17 @@ fn is_callable_closure(value: f64) -> bool {
     crate::closure::is_closure_ptr(ptr)
 }
 
+fn validate_original_function(fn_value: f64) {
+    if is_callable_closure(fn_value) {
+        return;
+    }
+    let message = format!(
+        "The \"original\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(fn_value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
 fn custom_promisified_value(fn_value: f64) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let fn_handle = scope.root_nanbox_f64(fn_value);
@@ -137,19 +148,9 @@ fn register_thunks_once() {
 }
 
 /// `util.promisify(fn)` — returns a wrapper closure as a NaN-boxed f64.
-///
-/// If `fn` isn't pointer-shaped (not a closure / native callable), we fall
-/// back to returning `fn` unchanged. Node throws `TypeError [ERR_INVALID_ARG_TYPE]`
-/// in that case; we keep behavior conservative for now so callers that
-/// accidentally promisify a non-function still get a clear "value is not a
-/// function" error at the call site rather than crashing here.
 #[no_mangle]
 pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
-    let bits = fn_value.to_bits();
-    let tag = bits & TAG_MASK;
-    if tag != POINTER_TAG {
-        return fn_value;
-    }
+    validate_original_function(fn_value);
 
     if let Some(custom) = custom_promisified_value(fn_value) {
         return custom;
@@ -221,11 +222,7 @@ pub extern "C" fn js_util_deprecate(fn_value: f64, _msg: f64, _code: f64) -> f64
 /// `util.callbackify(fn)` — returns a wrapper closure as a NaN-boxed f64.
 #[no_mangle]
 pub extern "C" fn js_util_callbackify(fn_value: f64) -> f64 {
-    let bits = fn_value.to_bits();
-    let tag = bits & TAG_MASK;
-    if tag != POINTER_TAG {
-        return fn_value;
-    }
+    validate_original_function(fn_value);
 
     register_thunks_once();
 

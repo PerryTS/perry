@@ -627,7 +627,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // Root-callable `assert(x, msg)` / `assert.strict(x, msg)` —
         // HIR lowers these to method "default".
         ("assert", "default") | ("assert/strict", "default") => js_assert_ok(arg(0), arg(1)),
-        ("assert", "strict") => js_assert_ok(arg(0), arg(1)),
+        ("assert", "strict") | ("assert/strict", "strict") => js_assert_ok(arg(0), arg(1)),
         ("assert", "ok") | ("assert/strict", "ok") => js_assert_ok(arg(0), arg(1)),
         ("assert", "fail") | ("assert/strict", "fail") => js_assert_fail(arg(0)),
         ("assert", "equal") => js_assert_equal(arg(0), arg(1), arg(2)),
@@ -1270,6 +1270,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(JSValue::undefined().bits())
         }
         ("stream", "compose") => crate::node_stream::js_node_stream_compose_args(pack_args()),
+        ("stream", "duplexPair") => crate::node_stream::js_node_stream_duplex_pair(arg(0)),
         ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.

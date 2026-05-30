@@ -1182,10 +1182,14 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 }
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
-    mark_stream_ended(stream);
-    refresh_readable_aborted_flag(stream);
+    let pair_peer = get_hidden_value(stream, hidden_key(b"duplexPairPeer"));
+    if pair_peer.is_none() {
+        mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
+    }
     mark_writable_ended(stream);
-    if get_hidden_value(stream, hidden_readable_flag_key()).is_none()
+    if pair_peer.is_none()
+        && get_hidden_value(stream, hidden_readable_flag_key()).is_none()
         && !has_truthy_hidden(stream, hidden_end_emitted_key())
     {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
