@@ -14,8 +14,8 @@ use super::*;
 #[no_mangle]
 pub extern "C" fn js_text_encoder_encode(value: f64) -> i64 {
     use crate::buffer::js_buffer_from_string;
-    let str_ptr = crate::value::js_get_string_pointer_unified(value);
-    let buf = js_buffer_from_string(str_ptr as *const StringHeader, 0); // 0 = UTF-8
+    let str_ptr = crate::text::text_encoder_string_ptr(value);
+    let buf = js_buffer_from_string(str_ptr, 0); // 0 = UTF-8
     buf as i64
 }
 
