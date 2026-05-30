@@ -2037,6 +2037,7 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
     match (kind, name) {
         (1, "locked") => return js_readable_stream_locked(handle),
         (2, "locked") => return js_writable_stream_locked(handle),
+        (3, "closed") => return box_promise(js_reader_closed(handle)),
         _ => {}
     }
     // Callable members → bound-method closure so `typeof` reports
