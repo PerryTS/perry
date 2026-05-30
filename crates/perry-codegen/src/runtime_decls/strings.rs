@@ -587,7 +587,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_chdir", VOID, &[I64]);
     // #2013 — f64-taking variant that validates type before dispatch.
     module.declare_function("js_process_chdir_jsv", VOID, &[DOUBLE]);
-    module.declare_function("js_process_kill", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_process_kill", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_abort", VOID, &[]);
     module.declare_function("js_process_umask", DOUBLE, &[]);

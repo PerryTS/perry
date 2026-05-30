@@ -486,10 +486,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_initgroups(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
-        ("process", "kill") => {
-            crate::os::js_process_kill(arg(0), arg(1));
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        }
+        ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -975,6 +972,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
+        ("util", "convertProcessSignalToExitCode") => {
+            crate::os::js_util_convert_process_signal_to_exit_code(arg(0))
+        }
         // #2514: libuv-style errno → name/message/map helpers.
         ("util", "getSystemErrorName") => crate::util_syserr::js_util_get_system_error_name(arg(0)),
         ("util", "getSystemErrorMessage") => {

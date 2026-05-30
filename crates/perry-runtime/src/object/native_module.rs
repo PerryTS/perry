@@ -403,6 +403,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         ]),
         "util" => Some(&[
             b"callbackify",
+            b"convertProcessSignalToExitCode",
             b"debuglog",
             b"deprecate",
             b"format",
@@ -1435,6 +1436,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("buffer.Buffer", "copyBytesFrom")
             | ("buffer", "atob")
             | ("buffer", "btoa")
+            | ("util", "convertProcessSignalToExitCode")
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
