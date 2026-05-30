@@ -150,7 +150,7 @@ impl SH for Expr {
             Expr::ObjectGetOwnPropertyDescriptor(a, b) => { tag(h, 109); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::ObjectGetOwnPropertyDescriptors(e) => { tag(h, 11237); e.as_ref().hash(h); }
             Expr::ObjectGetOwnPropertyNames(e) => { tag(h, 110); e.as_ref().hash(h); }
-            Expr::ObjectCreate(e) => { tag(h, 111); e.as_ref().hash(h); }
+            Expr::ObjectCreate(e, props) => { tag(h, 111); e.as_ref().hash(h); if let Some(p) = props { tag(h, 1); p.as_ref().hash(h); } else { tag(h, 0); } }
             Expr::ObjectFreeze(e) => { tag(h, 112); e.as_ref().hash(h); }
             Expr::ObjectSeal(e) => { tag(h, 113); e.as_ref().hash(h); }
             Expr::ObjectPreventExtensions(e) => { tag(h, 114); e.as_ref().hash(h); }

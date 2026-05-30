@@ -137,7 +137,6 @@ where
         | Expr::FinalizationRegistryNew(v)
         | Expr::ObjectGetOwnPropertyNames(v)
         | Expr::ObjectGetOwnPropertyDescriptors(v)
-        | Expr::ObjectCreate(v)
         | Expr::ObjectFreeze(v)
         | Expr::ObjectSeal(v)
         | Expr::ObjectPreventExtensions(v)
@@ -312,6 +311,12 @@ where
         | Expr::ArrayToReversed { array: v }
         | Expr::TemplateRaw(v) => {
             f(v);
+        }
+        Expr::ObjectCreate(proto, props) => {
+            f(proto);
+            if let Some(props) = props {
+                f(props);
+            }
         }
         Expr::BufferConcatWithLength { list, total_length } => {
             f(list);

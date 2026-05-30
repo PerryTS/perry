@@ -1208,6 +1208,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_object_get_symbol_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);
+    // #2816: Object.create(proto[, propertiesObject]) — validates the
+    // prototype and applies the optional descriptor bag.
+    module.declare_function("js_object_create_with_props", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_freeze", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_seal", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_prevent_extensions", DOUBLE, &[DOUBLE]);

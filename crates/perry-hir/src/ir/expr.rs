@@ -596,7 +596,7 @@ pub enum Expr {
     ObjectGetOwnPropertyDescriptor(Box<Expr>, Box<Expr>), // Object.getOwnPropertyDescriptor(obj, key)
     ObjectGetOwnPropertyDescriptors(Box<Expr>), // Object.getOwnPropertyDescriptors(obj) -> { [k]: descriptor }
     ObjectGetOwnPropertyNames(Box<Expr>),       // Object.getOwnPropertyNames(obj) -> string[]
-    ObjectCreate(Box<Expr>),                    // Object.create(proto)
+    ObjectCreate(Box<Expr>, Option<Box<Expr>>), // Object.create(proto[, propertiesObject])
     ObjectFreeze(Box<Expr>),                    // Object.freeze(obj)
     ObjectSeal(Box<Expr>),                      // Object.seal(obj)
     ObjectPreventExtensions(Box<Expr>),         // Object.preventExtensions(obj)

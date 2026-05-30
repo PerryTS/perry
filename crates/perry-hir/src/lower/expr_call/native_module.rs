@@ -671,9 +671,10 @@ pub(super) fn try_native_module_methods(
                             ))));
                         }
                         "create" => {
-                            return Ok(Ok(Expr::ObjectCreate(Box::new(
-                                args.into_iter().next().unwrap_or(Expr::Undefined),
-                            ))));
+                            let mut it = args.into_iter();
+                            let proto = it.next().unwrap_or(Expr::Undefined);
+                            let props = it.next().map(Box::new);
+                            return Ok(Ok(Expr::ObjectCreate(Box::new(proto), props)));
                         }
                         "isFrozen" => {
                             return Ok(Ok(Expr::ObjectIsFrozen(Box::new(

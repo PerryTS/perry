@@ -15,6 +15,235 @@ fn throw_from_entries_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Throw a `TypeError` with the given UTF-8 message bytes. Used by the
+/// `Object.defineProperty` / `Object.create` descriptor + invariant validation
+/// paths (#2817 / #2843 / #2816).
+fn throw_object_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Throw `TypeError: <prefix><suffix>` where `suffix` is a runtime-built
+/// string (e.g. the offending descriptor value rendered with the same
+/// formatting Node uses in its messages). #2817.
+fn throw_object_type_error_with_suffix(prefix: &str, suffix: &str) -> ! {
+    let full = format!("{prefix}{suffix}");
+    let msg = crate::string::js_string_from_bytes(full.as_ptr(), full.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Render a value the way Node does inside its `Object.defineProperty`
+/// descriptor TypeError messages (e.g. `Property description must be an
+/// object: 1` / `... : undefined` / `Getter must be a function: 1`).
+/// Primitives render via their natural string form; objects render as
+/// `[object Object]` etc. — but in practice these error paths only fire on
+/// primitives, so a simple coercion suffices.
+unsafe fn describe_value_for_type_error(value: f64) -> String {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jv.is_null() {
+        return "null".to_string();
+    }
+    let s = crate::value::js_jsvalue_to_string(value);
+    if s.is_null() {
+        return String::new();
+    }
+    let len = (*s).byte_len as usize;
+    let data = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).unwrap_or("").to_string()
+}
+
+/// Is `value` a non-nullish object reference that `Object.defineProperty` /
+/// `Object.create` accepts as a descriptor / properties bag? (#2817)
+/// Functions/closures count as objects too.
+unsafe fn value_is_object_like(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        // Module-level raw-I64 object pointers (top16 == 0) — accept if it
+        // resolves to a real heap object.
+        let bits = value.to_bits();
+        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+            return is_valid_obj_ptr(bits as *const u8)
+                || crate::closure::is_closure_ptr(bits as usize);
+        }
+        return false;
+    }
+    let ptr = jv.as_pointer::<u8>() as usize;
+    if ptr < 0x10000 {
+        return false;
+    }
+    is_valid_obj_ptr(ptr as *const u8) || crate::closure::is_closure_ptr(ptr)
+}
+
+/// Is `value` callable (a closure / function) — used to validate `get`/`set`
+/// descriptor fields. Per spec, an *omitted* (undefined) accessor is allowed;
+/// only a present non-callable value throws. (#2817)
+unsafe fn value_is_callable(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>() as usize;
+        return ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr);
+    }
+    // Class refs (INT32-tagged, top16 == 0x7FFE) are callable constructors.
+    (value.to_bits() >> 48) == 0x7FFE
+}
+
+/// Validate a property descriptor object per ES `ToPropertyDescriptor`
+/// invariants that Node surfaces as `TypeError`s (#2817). Assumes
+/// `descriptor_value` is already known to be an object. Throws on:
+///   - mixing accessor (`get`/`set`) and data (`value`/`writable`) fields,
+///   - a present, non-callable `get`,
+///   - a present, non-callable `set`.
+unsafe fn validate_property_descriptor(descriptor_value: f64) {
+    let desc_ptr = extract_obj_ptr(descriptor_value);
+    if desc_ptr.is_null() {
+        return;
+    }
+    let desc = desc_ptr as *const ObjectHeader;
+
+    let has_field = |name: &[u8]| -> bool {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        own_key_present(desc_ptr, key)
+    };
+    let read = |name: &[u8]| -> crate::value::JSValue {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_get_field_by_name(desc, key)
+    };
+
+    let has_get = has_field(b"get");
+    let has_set = has_field(b"set");
+    let has_value = has_field(b"value");
+    let has_writable = has_field(b"writable");
+
+    if (has_get || has_set) && (has_value || has_writable) {
+        // Node renders the offending descriptor object after the message; for
+        // the plain-object descriptors that hit this path it prints `#<Object>`.
+        throw_object_type_error(
+            b"Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, #<Object>",
+        );
+    }
+
+    if has_get {
+        let g = read(b"get");
+        if !g.is_undefined() && !value_is_callable(f64::from_bits(g.bits())) {
+            let s = describe_value_for_type_error(f64::from_bits(g.bits()));
+            throw_object_type_error_with_suffix("Getter must be a function: ", &s);
+        }
+    }
+    if has_set {
+        let s_field = read(b"set");
+        if !s_field.is_undefined() && !value_is_callable(f64::from_bits(s_field.bits())) {
+            let s = describe_value_for_type_error(f64::from_bits(s_field.bits()));
+            throw_object_type_error_with_suffix("Setter must be a function: ", &s);
+        }
+    }
+}
+
+/// #2843: enforce frozen / sealed / non-extensible invariants for
+/// `Object.defineProperty`. `obj` is the resolved heap object, `key` the
+/// coerced key string. Throws the Node `TypeError` when the definition would
+/// violate an invariant; returns normally when the definition is permitted.
+///
+/// Rules (matching Node v25):
+///   - Adding a NEW key to a non-extensible object:
+///       `Cannot define property <k>, object is not extensible`
+///   - Redefining an EXISTING non-configurable key (frozen, or sealed when
+///     the descriptor changes more than a writable data value):
+///       `Cannot redefine property: <k>`
+///   - A sealed (but not frozen) object still allows rewriting an existing
+///     writable data property's value, so that case is permitted.
+unsafe fn enforce_define_property_invariants(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    key_name: &str,
+    descriptor_value: f64,
+) {
+    if obj.is_null() || (obj as usize) <= 0x10000 {
+        return;
+    }
+    let gc = gc_header_for(obj);
+    let flags = (*gc)._reserved;
+    let frozen = flags & crate::gc::OBJ_FLAG_FROZEN != 0;
+    let sealed = flags & crate::gc::OBJ_FLAG_SEALED != 0;
+    let no_extend = flags & crate::gc::OBJ_FLAG_NO_EXTEND != 0;
+    if !frozen && !sealed && !no_extend {
+        return;
+    }
+
+    let exists = own_key_present(obj, key);
+
+    if !exists {
+        // Adding a new property to a non-extensible object always throws.
+        if no_extend {
+            throw_object_type_error_with_suffix(
+                "Cannot define property ",
+                &format!("{key_name}, object is not extensible"),
+            );
+        }
+        return;
+    }
+
+    // Redefining an existing property. The property is non-configurable iff
+    // the object is frozen or sealed (both drop `configurable` on every key).
+    let attrs =
+        get_property_attrs(obj as usize, key_name).unwrap_or(PropertyAttrs::new(true, true, true));
+    if attrs.configurable() {
+        return; // still configurable — redefinition allowed
+    }
+
+    // Non-configurable existing property. Node permits exactly one mutation:
+    // changing the *value* of a still-writable data property (sealed-but-not-
+    // frozen objects keep `writable`). Any attempt to change configurability,
+    // enumerability, writability (to true), turn it into an accessor, or
+    // write to a non-writable property is rejected with "Cannot redefine".
+    let desc_ptr = extract_obj_ptr(descriptor_value);
+    let is_accessor_desc = if desc_ptr.is_null() {
+        false
+    } else {
+        let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+        let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
+        own_key_present(desc_ptr, get_key) || own_key_present(desc_ptr, set_key)
+    };
+
+    let read_desc_bool = |name: &[u8]| -> Option<bool> {
+        if desc_ptr.is_null() {
+            return None;
+        }
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        if !own_key_present(desc_ptr, key) {
+            return None;
+        }
+        let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, key);
+        Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+    };
+
+    let wants_configurable = read_desc_bool(b"configurable").unwrap_or(false);
+    let wants_writable = read_desc_bool(b"writable");
+    let wants_enumerable = read_desc_bool(b"enumerable");
+
+    // A bare value-only redefinition of a still-writable data property is the
+    // only allowed mutation on a non-configurable property.
+    let only_value_change = !is_accessor_desc
+        && !wants_configurable
+        && wants_enumerable
+            .map(|e| e == attrs.enumerable())
+            .unwrap_or(true)
+        && wants_writable
+            .map(|w| w == attrs.writable())
+            .unwrap_or(true)
+        && attrs.writable();
+    if only_value_change {
+        return;
+    }
+
+    throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
+}
+
 fn throw_from_entries_not_iterable() -> ! {
     throw_from_entries_type_error(b"undefined is not iterable")
 }
@@ -525,6 +754,23 @@ pub extern "C" fn js_object_define_property(
     descriptor_value: f64,
 ) -> f64 {
     unsafe {
+        // #2817: ES Object.defineProperty validation.
+        //   1. Target must be an object (or class-ref / function — all objects
+        //      in Node). Primitives / null / undefined throw.
+        //   2. Descriptor must be an object; otherwise
+        //      `Property description must be an object: <desc>`.
+        //   3. Accessor + data fields can't be mixed.
+        //   4. Present `get`/`set` must be callable.
+        let target_is_class_ref = super::class_ref_id(obj_value).is_some();
+        if !target_is_class_ref && !value_is_object_like(obj_value) {
+            throw_object_type_error(b"Object.defineProperty called on non-object");
+        }
+        if !value_is_object_like(descriptor_value) {
+            let desc = describe_value_for_type_error(descriptor_value);
+            throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
+        }
+        validate_property_descriptor(descriptor_value);
+
         // #2159: when the receiver is a class-ref (`Class.prototype` evaluates
         // back to the class itself in Perry — see `class_ref_id` /
         // `js_object_get_own_property_descriptor`'s class-ref arm), route the
@@ -591,7 +837,6 @@ pub extern "C" fn js_object_define_property(
         if key_str.is_null() {
             return obj_value;
         }
-        super::mark_object_dynamic_shape_unknown(obj);
         // Extract the key as a Rust string for the descriptor side-table lookup.
         let key_rust: Option<String> = {
             let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -599,6 +844,13 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
+        // #2843: enforce frozen / sealed / non-extensible invariants BEFORE any
+        // mutation, so a rejected definition leaves the object untouched and the
+        // thrown TypeError matches Node.
+        if let Some(ref k) = key_rust {
+            enforce_define_property_invariants(obj, key_str, k, descriptor_value);
+        }
+        super::mark_object_dynamic_shape_unknown(obj);
         // Extract descriptor object
         let desc_ptr = extract_obj_ptr(descriptor_value);
         if desc_ptr.is_null() {
@@ -1371,6 +1623,37 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
     }
 }
 
+/// Object.create(proto[, propertiesObject]) — create an object with the given
+/// prototype and (optionally) define properties from a descriptor bag.
+///
+/// `props_value` is the (NaN-boxed) properties object, or `undefined` when the
+/// caller passed only one argument. #2816: the prototype argument must be an
+/// object or `null`; primitives / `undefined` throw
+/// `TypeError: Object prototype may only be an Object or null`.
+#[no_mangle]
+pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64) -> f64 {
+    // #2816 prototype validation: only an object or `null` is permitted.
+    let proto_jv = crate::value::JSValue::from_bits(proto_value.to_bits());
+    let proto_ok = proto_jv.is_null()
+        || unsafe { value_is_object_like(proto_value) }
+        || super::class_ref_id(proto_value).is_some();
+    if !proto_ok {
+        throw_object_type_error(b"Object prototype may only be an Object or null");
+    }
+
+    let result = js_object_create(proto_value);
+
+    // #2816: apply the descriptor bag, if one was supplied.
+    let props_jv = crate::value::JSValue::from_bits(props_value.to_bits());
+    if !props_jv.is_undefined() {
+        return js_object_define_properties(result, props_value);
+    }
+    result
+}
+
+#[used]
+static KEEP_OBJECT_CREATE_WITH_PROPS: extern "C" fn(f64, f64) -> f64 = js_object_create_with_props;
+
 /// Object.create(proto) — create empty object. Perry ignores prototype; Object.create(null) returns {}.
 #[no_mangle]
 pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
@@ -1711,6 +1994,22 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 /// on that so `const x = Object.defineProperties(...)` still binds `x`.
 #[no_mangle]
 pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> f64 {
+    // #2817: target must be an object (or class-ref). Node throws
+    // `Object.defineProperties called on non-object` for primitives.
+    let target_is_class_ref = super::class_ref_id(target).is_some();
+    if !target_is_class_ref && !unsafe { value_is_object_like(target) } {
+        throw_object_type_error(b"Object.defineProperties called on non-object");
+    }
+    // #2817: the properties bag must be coercible to an object. Node throws
+    // `Cannot convert undefined or null to object` for null/undefined, and
+    // primitives are boxed (no own enumerable keys → no-op). Match the nullish
+    // case explicitly.
+    {
+        let jv = crate::value::JSValue::from_bits(descriptors.to_bits());
+        if jv.is_undefined() || jv.is_null() {
+            throw_object_type_error(b"Cannot convert undefined or null to object");
+        }
+    }
     let desc_obj = unsafe { extract_obj_ptr(descriptors) };
     if desc_obj.is_null() || !is_valid_obj_ptr(desc_obj as *const u8) {
         return target;
