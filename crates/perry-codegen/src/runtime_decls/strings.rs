@@ -1677,6 +1677,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_promise_any", I64, &[I64]);
     module.declare_function("js_promise_all_settled", I64, &[I64]);
     module.declare_function("js_promise_with_resolvers", I64, &[]);
+    module.declare_function("js_promise_try", I64, &[DOUBLE, I64]);
     module.declare_function("js_array_unshift_f64", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_entries", I64, &[I64]);
     module.declare_function("js_array_keys", I64, &[I64]);
