@@ -2235,6 +2235,12 @@ pub(crate) unsafe fn dispatch_stream_method(
             "cancel" => return Some(box_promise(js_readable_stream_cancel(handle, arg0))),
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0, arg1))),
+            "pipeThrough" => {
+                let transform = js_stream_unwrap_handle(arg0);
+                let writable = js_transform_stream_writable(transform);
+                let readable = js_transform_stream_readable(transform);
+                return Some(js_readable_stream_pipe_through(handle, writable, readable));
+            }
             // #1644: a readable handle is also its own controller. The
             // start/transform/flush callbacks receive it as `controller`, so
             // `controller.enqueue/close/error/terminate` dispatch here when the

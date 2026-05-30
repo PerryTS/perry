@@ -230,12 +230,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(asyncGen()) \u2014 iteration wrong or fails. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/web/double-pipe-through": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeThrough().pipeThrough() chain \u2014 second transform output wrong. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",
     "added": "2026-05-24",
@@ -271,12 +265,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose(src, t1, PassThrough, t2) \u2014 chain produces wrong output. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/transform-piped-twice": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: pipeThrough().pipeThrough() \u2014 second transform output wrong. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/compose/composite-end-event": {
     "issue": "1531",
