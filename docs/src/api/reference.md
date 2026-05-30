@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1819 entries across 89 modules.
+Total: 1865 entries across 90 modules.
 
 ## Modules
 
@@ -91,6 +91,7 @@ Total: 1819 entries across 89 modules.
 - [`util`](#util)
 - [`util/types`](#util-types)
 - [`uuid`](#uuid)
+- [`v8`](#v8)
 - [`validator`](#validator)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
@@ -2396,6 +2397,60 @@ Total: 1819 entries across 89 modules.
 - `v4` — module
 - `v7` — module
 - `validate` — module
+
+## `v8`
+
+### Classes
+
+- `DefaultDeserializer`
+- `DefaultSerializer`
+- `Deserializer`
+- `Serializer`
+
+### Methods
+
+- `_getDataCloneError` — instance *(class: `Serializer`)*
+- `_getDataCloneError` — instance *(class: `DefaultSerializer`)*
+- `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `Serializer`)*
+- `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `DefaultSerializer`)*
+- `cachedDataVersionTag` — module
+- `deserialize` — module
+- `getHeapCodeStatistics` — module
+- `getHeapSpaceStatistics` — module
+- `getHeapStatistics` — module
+- `getWireFormatVersion` — instance *(class: `Deserializer`)*
+- `getWireFormatVersion` — instance *(class: `DefaultDeserializer`)*
+- `readDouble` — instance *(class: `Deserializer`)*
+- `readDouble` — instance *(class: `DefaultDeserializer`)*
+- `readHeader` — instance *(class: `Deserializer`)*
+- `readHeader` — instance *(class: `DefaultDeserializer`)*
+- `readRawBytes` — instance *(class: `Deserializer`)*
+- `readRawBytes` — instance *(class: `DefaultDeserializer`)*
+- `readUint32` — instance *(class: `Deserializer`)*
+- `readUint32` — instance *(class: `DefaultDeserializer`)*
+- `readUint64` — instance *(class: `Deserializer`)*
+- `readUint64` — instance *(class: `DefaultDeserializer`)*
+- `readValue` — instance *(class: `Deserializer`)*
+- `readValue` — instance *(class: `DefaultDeserializer`)*
+- `releaseBuffer` — instance *(class: `Serializer`)*
+- `releaseBuffer` — instance *(class: `DefaultSerializer`)*
+- `serialize` — module
+- `transferArrayBuffer` — instance *(class: `Serializer`)*
+- `transferArrayBuffer` — instance *(class: `DefaultSerializer`)*
+- `transferArrayBuffer` — instance *(class: `Deserializer`)*
+- `transferArrayBuffer` — instance *(class: `DefaultDeserializer`)*
+- `writeDouble` — instance *(class: `Serializer`)*
+- `writeDouble` — instance *(class: `DefaultSerializer`)*
+- `writeHeader` — instance *(class: `Serializer`)*
+- `writeHeader` — instance *(class: `DefaultSerializer`)*
+- `writeRawBytes` — instance *(class: `Serializer`)*
+- `writeRawBytes` — instance *(class: `DefaultSerializer`)*
+- `writeUint32` — instance *(class: `Serializer`)*
+- `writeUint32` — instance *(class: `DefaultSerializer`)*
+- `writeUint64` — instance *(class: `Serializer`)*
+- `writeUint64` — instance *(class: `DefaultSerializer`)*
+- `writeValue` — instance *(class: `Serializer`)*
+- `writeValue` — instance *(class: `DefaultSerializer`)*
 
 ## `validator`
 
