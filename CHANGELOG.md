@@ -2,6 +2,31 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1039 — validate path and throw real errors from `fs.statfsSync` (#2921)
+
+`fs.statfsSync(path[, options])` returned a zero-filled `StatFs` object when the
+path could not be decoded, contained an interior NUL, or `statvfs` failed —
+letting callers proceed with fake filesystem statistics instead of seeing
+Node's `ERR_INVALID_ARG_TYPE` or `ENOENT`.
+
+`crates/perry-runtime/src/fs/fd_ops.rs::js_fs_statfs_sync_options` now:
+
+- calls `validate_path("path", path_value)` up front, so a non path-like
+  argument (number, `null`, object, boolean) throws
+  `TypeError [ERR_INVALID_ARG_TYPE]` with Node's exact message, and
+- throws the OS error via `build_fs_error_value(&err, "statfs", &path)` when
+  `statvfs` fails (`ENOENT`, …) or the path holds an interior NUL, instead of
+  swallowing it into default stats. The thrown `Error` carries `code`,
+  `syscall: "statfs"`, and `path`.
+
+The successful StatFs field construction and the bigint option behavior (#2561)
+are unchanged, and the callback `fs.statfs` path — which already has error-first
+handling — is untouched.
+
+New `test-parity/node-suite/fs/stats/statfs-sync-invalid.ts` is byte-identical
+to `node --experimental-strip-types`; the existing `statfs`, `statfs-bigint-options`,
+`stat-lstat-missing-errors`, and `fd-and-statfs` parity tests still pass.
+
 ## v0.5.1038 — validate `node:timers/promises` delay and options arguments (#3067)
 
 `node:timers/promises` helpers passed `delay` and `options` straight into the
