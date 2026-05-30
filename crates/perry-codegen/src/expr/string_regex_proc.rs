@@ -66,6 +66,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_string_from_code_point", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
+        // -------- Callable String.raw(callSite, ...substitutions) (#2789) --------
+        Expr::StringRaw {
+            call_site,
+            substitutions,
+        } => {
+            // callSite as a NaN-boxed value; substitutions collected into a
+            // NaN-boxed array. The runtime reads `callSite.raw` (array-like),
+            // interleaves the substitutions, and throws TypeError on nullish
+            // callSite / raw.
+            let cs = lower_expr(ctx, call_site)?;
+            let subs_arr = lower_array_literal(ctx, substitutions)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_string_raw", &[(DOUBLE, &cs), (DOUBLE, &subs_arr)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
         // -------- str.at(i) — returns single-char string or undefined --------
         Expr::StringAt { string, index } => {
             let s_box = lower_expr(ctx, string)?;

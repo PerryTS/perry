@@ -1349,6 +1349,13 @@ pub enum Expr {
     StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
     StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string
     StringFromCodePoint(Box<Expr>),    // String.fromCodePoint(code) -> string
+    StringRaw {
+        // Callable String.raw(callSite, ...substitutions) — the non-tagged
+        // form. `call_site` is the `{ raw: [...] }` (array-like) object;
+        // `substitutions` are the interpolated values. (#2789)
+        call_site: Box<Expr>,
+        substitutions: Vec<Expr>,
+    },
     StringAt {
         string: Box<Expr>,
         index: Box<Expr>,

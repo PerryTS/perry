@@ -858,6 +858,19 @@ pub(super) fn try_module_static_methods(
                                 return Ok(Ok(acc));
                             }
                         }
+                        // Callable String.raw(callSite, ...subs) — the
+                        // non-tagged form. The tagged ``String.raw`...` ``
+                        // form is handled at the TaggedTpl lowering site.
+                        // (#2789)
+                        "raw" => {
+                            let mut iter = args.into_iter();
+                            let call_site = iter.next().unwrap_or(Expr::Undefined);
+                            let substitutions: Vec<Expr> = iter.collect();
+                            return Ok(Ok(Expr::StringRaw {
+                                call_site: Box::new(call_site),
+                                substitutions,
+                            }));
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }

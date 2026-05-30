@@ -1225,6 +1225,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // (fromCharCode) / RangeError validation (fromCodePoint) — a prior fptosi
     // truncated fractional/non-finite inputs before they could be observed.
     module.declare_function("js_string_from_code_point", I64, &[DOUBLE]);
+    // Callable String.raw(callSite, substitutionsArray) -> string (#2789)
+    module.declare_function("js_string_raw", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_from_char_code", I64, &[DOUBLE]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
@@ -1235,7 +1237,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_string_locale_compare", DOUBLE, &[I64, I64]);
     module.declare_function("js_string_locale_compare_opts", DOUBLE, &[I64, I64, DOUBLE]);
-    module.declare_function("js_string_normalize", I64, &[I64, I64]);
+    module.declare_function("js_string_normalize", I64, &[I64, DOUBLE]);
     module.declare_function("js_string_pad_start", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_string_pad_end", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_string_is_well_formed", DOUBLE, &[I64]);
