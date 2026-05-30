@@ -59,12 +59,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .call(DOUBLE, "js_math_f16round", &[(DOUBLE, &v)]))
         }
 
-        // -------- new Map([[k,v], ...]) — alloc empty map, ignore source --------
+        // -------- new Map(init) — consume any iterable + validate (#2770) --------
+        // Pass the NaN-boxed init value so the runtime can classify it by tag
+        // (number/symbol/object/iterable) and throw Node's exact TypeErrors for
+        // non-iterables / malformed entries instead of mis-reading an
+        // ArrayHeader.
         Expr::MapNewFromArray(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            let handle = blk.call(I64, "js_map_from_array", &[(I64, &arr_handle)]);
+            let handle = blk.call(I64, "js_map_from_iterable", &[(DOUBLE, &arr_box)]);
             Ok(nanbox_pointer_inline(blk, &handle))
         }
 
@@ -81,20 +84,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_date_get_timezone_offset", &[(DOUBLE, &v)]))
         }
-        // -------- Date.UTC(year, month, day?, hour?, minute?, second?, ms?) --------
+        // -------- Date.UTC(year, month?, day?, hour?, minute?, second?, ms?) --------
+        // #2826: the runtime needs the actual argument count to apply
+        // Node-correct defaults (omitted month→0, day→1; argc==0→NaN; year
+        // 0..99→1900+year), so we pass a NaN-boxed args buffer + count rather
+        // than padding missing slots with 0.
         Expr::DateUtc(args) => {
-            // Lower up to 7 args; pad missing ones with 0.
-            let mut vals: Vec<String> = Vec::with_capacity(7);
-            for a in args.iter().take(7) {
+            let mut vals: Vec<String> = Vec::with_capacity(args.len());
+            for a in args.iter() {
                 vals.push(lower_expr(ctx, a)?);
             }
-            while vals.len() < 7 {
-                vals.push(double_literal(0.0));
-            }
             let blk = ctx.block();
-            let call_args: Vec<(crate::types::LlvmType, &str)> =
-                vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
-            Ok(blk.call(DOUBLE, "js_date_utc", &call_args))
+            let (args_ptr, argc) = if vals.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = vals.len();
+                let buf_reg = blk.next_reg();
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                for (i, val) in vals.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, val, &slot);
+                }
+                (buf_reg, format!("{}", n))
+            };
+            Ok(blk.call(DOUBLE, "js_date_utc", &[(PTR, &args_ptr), (I32, &argc)]))
         }
 
         // -------- Object.defineProperty --------

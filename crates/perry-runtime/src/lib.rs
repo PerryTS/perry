@@ -34,6 +34,7 @@ pub mod buffer;
 pub mod builtins;
 pub mod child_process;
 pub mod closure;
+pub mod collection_iter;
 pub mod color_parse;
 pub mod date;
 pub mod error;
@@ -146,6 +147,7 @@ pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
 pub mod util_syserr;
+pub mod util_usv;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
 pub mod watchos_game_loop;
 pub mod weakref;

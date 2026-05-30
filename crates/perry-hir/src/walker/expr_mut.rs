@@ -238,6 +238,8 @@ where
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)
         | Expr::ReflectGetPrototypeOf(v)
+        | Expr::ReflectIsExtensible(v)
+        | Expr::ReflectPreventExtensions(v)
         | Expr::DateGetTime(v)
         | Expr::DateToISOString(v)
         | Expr::DateGetFullYear(v)
@@ -631,6 +633,15 @@ where
         Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
             f(v);
         }
+        Expr::StringRaw {
+            call_site,
+            substitutions,
+        } => {
+            f(call_site);
+            for s in substitutions {
+                f(s);
+            }
+        }
         Expr::StringAt { string, index } | Expr::StringCodePointAt { string, index } => {
             f(string);
             f(index);
@@ -847,23 +858,25 @@ where
             }
         }
         Expr::BoxedPrimitiveNew { arg, .. } => f(arg),
-        Expr::DateSetUtcFullYear { date, value }
-        | Expr::DateSetUtcMonth { date, value }
-        | Expr::DateSetUtcDate { date, value }
-        | Expr::DateSetUtcHours { date, value }
-        | Expr::DateSetUtcMinutes { date, value }
-        | Expr::DateSetUtcSeconds { date, value }
-        | Expr::DateSetUtcMilliseconds { date, value }
-        | Expr::DateSetFullYear { date, value }
-        | Expr::DateSetMonth { date, value }
-        | Expr::DateSetDate { date, value }
-        | Expr::DateSetHours { date, value }
-        | Expr::DateSetMinutes { date, value }
-        | Expr::DateSetSeconds { date, value }
-        | Expr::DateSetMilliseconds { date, value }
-        | Expr::DateSetTime { date, value } => {
+        Expr::DateSetUtcFullYear { date, args }
+        | Expr::DateSetUtcMonth { date, args }
+        | Expr::DateSetUtcDate { date, args }
+        | Expr::DateSetUtcHours { date, args }
+        | Expr::DateSetUtcMinutes { date, args }
+        | Expr::DateSetUtcSeconds { date, args }
+        | Expr::DateSetUtcMilliseconds { date, args }
+        | Expr::DateSetFullYear { date, args }
+        | Expr::DateSetMonth { date, args }
+        | Expr::DateSetDate { date, args }
+        | Expr::DateSetHours { date, args }
+        | Expr::DateSetMinutes { date, args }
+        | Expr::DateSetSeconds { date, args }
+        | Expr::DateSetMilliseconds { date, args }
+        | Expr::DateSetTime { date, args } => {
             f(date);
-            f(value);
+            for a in args {
+                f(a);
+            }
         }
 
         // ─── Error constructors ───────────────────────────────────────────

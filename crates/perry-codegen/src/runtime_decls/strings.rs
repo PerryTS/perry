@@ -301,6 +301,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_set_from_array", I64, &[I64]);
     module.declare_function("js_set_from_iterable", I64, &[DOUBLE]);
     module.declare_function("js_map_from_array", I64, &[I64]);
+    module.declare_function("js_map_from_iterable", I64, &[DOUBLE]);
     module.declare_function("js_object_has_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_write_file_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function(
@@ -764,6 +765,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_flat_depth", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_flatMap", I64, &[I64, I64]);
     module.declare_function("js_array_sort_with_comparator", I64, &[I64, I64]);
+    // #2796: validate sort/toSorted comparator (function | undefined) before sorting.
+    module.declare_function("js_validate_array_comparator", I64, &[DOUBLE]);
     // ES2023 immutable array methods
     module.declare_function("js_array_to_reversed", I64, &[I64]);
     module.declare_function("js_array_to_sorted_default", I64, &[I64]);
@@ -1009,33 +1012,23 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_number_is_safe_integer", DOUBLE, &[DOUBLE]);
     // Date parsing / UTC constructors / UTC setters.
     module.declare_function("js_date_parse", DOUBLE, &[I64]);
-    module.declare_function(
-        "js_date_utc",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
+    // Date.UTC(args_ptr, argc) — buffer of NaN-boxed args + count (#2826).
+    module.declare_function("js_date_utc", DOUBLE, &[PTR, I32]);
     // `new Date(year, month, day?, hour?, min?, sec?, ms?)` (local time).
     module.declare_function(
         "js_date_new_local_components",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
-    module.declare_function("js_date_set_utc_full_year", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_month", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_date", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_hours", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_minutes", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_seconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_milliseconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    // Local-time setters (#1187).
-    module.declare_function("js_date_set_full_year", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_month", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_date", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_hours", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_minutes", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_seconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_milliseconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_time", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Unified Date setter entry point (#2851):
+    // js_date_apply_setter(date, is_utc, field, args_ptr, argc). Replaces the
+    // per-setter (date, value) helpers — `args` carries optional trailing
+    // components.
+    module.declare_function(
+        "js_date_apply_setter",
+        DOUBLE,
+        &[DOUBLE, I32, I32, PTR, I32],
+    );
     // Math extras (stubs in expr.rs had fallen through to no-op/passthrough).
     module.declare_function("js_math_clz32", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_cbrt", DOUBLE, &[DOUBLE]);
@@ -1235,6 +1228,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // (fromCharCode) / RangeError validation (fromCodePoint) — a prior fptosi
     // truncated fractional/non-finite inputs before they could be observed.
     module.declare_function("js_string_from_code_point", I64, &[DOUBLE]);
+    // Callable String.raw(callSite, substitutionsArray) -> string (#2789)
+    module.declare_function("js_string_raw", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_from_char_code", I64, &[DOUBLE]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
@@ -1245,7 +1240,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_string_locale_compare", DOUBLE, &[I64, I64]);
     module.declare_function("js_string_locale_compare_opts", DOUBLE, &[I64, I64, DOUBLE]);
-    module.declare_function("js_string_normalize", I64, &[I64, I64]);
+    module.declare_function("js_string_normalize", I64, &[I64, DOUBLE]);
     module.declare_function("js_string_pad_start", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_string_pad_end", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_string_is_well_formed", DOUBLE, &[I64]);
@@ -1720,6 +1715,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_promise_with_resolvers", I64, &[]);
     module.declare_function("js_promise_try", I64, &[DOUBLE, I64]);
     module.declare_function("js_array_unshift_f64", I64, &[I64, DOUBLE]);
+    // #2814: variadic unshift (insert N items at front, in order).
+    module.declare_function("js_array_unshift_variadic", I64, &[I64, PTR, I32]);
     module.declare_function("js_array_entries", I64, &[I64]);
     module.declare_function("js_array_keys", I64, &[I64]);
     module.declare_function("js_array_values", I64, &[I64]);

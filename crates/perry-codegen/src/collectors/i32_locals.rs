@@ -1102,6 +1102,8 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::ObjectIsFrozen(operand)
         | Expr::ObjectIsSealed(operand)
         | Expr::ObjectIsExtensible(operand)
+        | Expr::ReflectIsExtensible(operand)
+        | Expr::ReflectPreventExtensions(operand)
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
         | Expr::ArrayFrom(operand)

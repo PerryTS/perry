@@ -207,6 +207,8 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::ObjectIsFrozen(operand)
         | Expr::ObjectIsSealed(operand)
         | Expr::ObjectIsExtensible(operand)
+        | Expr::ReflectIsExtensible(operand)
+        | Expr::ReflectPreventExtensions(operand)
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
         | Expr::ArrayFrom(operand)

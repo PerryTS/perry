@@ -469,27 +469,26 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(blk, &result))
         }
         "normalize" => {
-            // 0 or 1 string arg. Empty arg → default ("NFC" handled by
-            // the runtime when form is null).
+            // 0 or 1 arg. The runtime applies ToString + form validation:
+            // omitted (undefined) → NFC default; explicit null/""/"BAD" →
+            // RangeError. Pass the raw NaN-boxed form value (#2782).
             if args.len() > 1 {
                 bail!(
                     "perry-codegen: String.normalize expects 0 or 1 args, got {}",
                     args.len()
                 );
             }
-            let form_handle = if args.is_empty() {
-                "0".to_string()
+            let form_box = if args.is_empty() {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             } else {
-                let form_box = lower_expr(ctx, &args[0])?;
-                let blk = ctx.block();
-                unbox_str_handle(blk, &form_box)
+                lower_expr(ctx, &args[0])?
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let result = blk.call(
                 I64,
                 "js_string_normalize",
-                &[(I64, &recv_handle), (I64, &form_handle)],
+                &[(I64, &recv_handle), (DOUBLE, &form_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
