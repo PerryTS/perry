@@ -618,7 +618,7 @@ pub(super) fn try_array_only_methods(
                         // Fall through to generic dispatch — could be a user
                         // object's `.join` method (drizzle's sql.join, etc.).
                     }
-                    "indexOf" if !args.is_empty() => {
+                    "indexOf" if args.len() == 1 || args.len() == 2 => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         if matches!(
                             &array_expr,
@@ -633,14 +633,17 @@ pub(super) fn try_array_only_methods(
                                 | Expr::ObjectValues(_)
                                 | Expr::PropertyGet { .. }
                         ) {
-                            let value_expr = args.into_iter().next().unwrap();
+                            let mut it = args.into_iter();
+                            let value_expr = it.next().unwrap();
+                            let from_index = it.next().map(Box::new);
                             return Ok(Ok(Expr::ArrayIndexOf {
                                 array: Box::new(array_expr),
                                 value: Box::new(value_expr),
+                                from_index,
                             }));
                         }
                     }
-                    "includes" if !args.is_empty() => {
+                    "includes" if args.len() == 1 || args.len() == 2 => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         // Don't treat error string properties as arrays
                         let is_error_string_prop = matches!(&array_expr,
@@ -662,10 +665,13 @@ pub(super) fn try_array_only_methods(
                                     | Expr::PropertyGet { .. }
                             )
                         {
-                            let value_expr = args.into_iter().next().unwrap();
+                            let mut it = args.into_iter();
+                            let value_expr = it.next().unwrap();
+                            let from_index = it.next().map(Box::new);
                             return Ok(Ok(Expr::ArrayIncludes {
                                 array: Box::new(array_expr),
                                 value: Box::new(value_expr),
+                                from_index,
                             }));
                         }
                     }

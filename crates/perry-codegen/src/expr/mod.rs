@@ -1784,6 +1784,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::FinalizationRegistryRegister { .. }
         | Expr::FinalizationRegistryUnregister { .. }
         | Expr::ErrorNewWithCause { .. }
+        | Expr::ErrorNewWithOptions { .. }
         | Expr::EnvGet(..)
         | Expr::EnvGetDynamic(..)
         | Expr::ProcessEnv => array_methods::lower(ctx, expr),
