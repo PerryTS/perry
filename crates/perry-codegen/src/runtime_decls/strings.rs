@@ -721,14 +721,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_new_from_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_new_from_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_indexOf_f64", I32, &[I64, DOUBLE]);
-    module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE]);
+    // #2804: indexOf/includes carry an optional fromIndex (value, fromIndex, has_from).
+    module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE, DOUBLE, I32]);
     module.declare_function(
         "js_array_last_index_of_jsvalue",
         I32,
         &[I64, DOUBLE, DOUBLE, I32],
     );
     module.declare_function("js_array_includes_f64", I32, &[I64, DOUBLE]);
-    module.declare_function("js_array_includes_jsvalue", I32, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_array_includes_jsvalue",
+        I32,
+        &[I64, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function("js_map_size", I32, &[I64]);
     module.declare_function("js_map_clear", VOID, &[I64]);
     module.declare_function("js_set_clear", VOID, &[I64]);

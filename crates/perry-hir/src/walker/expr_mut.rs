@@ -1359,11 +1359,17 @@ where
         | Expr::SetAdd { value, .. } => {
             f(value);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
-            f(array);
-            f(value);
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,

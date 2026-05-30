@@ -115,16 +115,32 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::ArrayIndexOf { array, value } => {
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".indexOf(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
-            Expr::ArrayIncludes { array, value } => {
+            Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".includes(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
             Expr::ArraySlice { array, start, end } => {

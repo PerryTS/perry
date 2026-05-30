@@ -368,9 +368,21 @@ fn update_call_sites_in_expr(
         | Expr::ArrayPushSpread { source: value, .. } => {
             update_call_sites_in_expr(value, ctx, lookup);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             update_call_sites_in_expr(array, ctx, lookup);
             update_call_sites_in_expr(value, ctx, lookup);
+            if let Some(fi) = from_index {
+                update_call_sites_in_expr(fi, ctx, lookup);
+            }
         }
         Expr::ArraySlice { array, start, end } => {
             update_call_sites_in_expr(array, ctx, lookup);

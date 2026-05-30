@@ -438,9 +438,16 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             array_id: *array_id,
             value: Box::new(substitute_expr(value, substitutions)),
         },
-        Expr::ArrayIndexOf { array, value } => Expr::ArrayIndexOf {
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        } => Expr::ArrayIndexOf {
             array: Box::new(substitute_expr(array, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
+            from_index: from_index
+                .as_ref()
+                .map(|fi| Box::new(substitute_expr(fi, substitutions))),
         },
         Expr::ArrayLastIndexOf {
             array,
@@ -453,9 +460,16 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|fi| Box::new(substitute_expr(fi, substitutions))),
         },
-        Expr::ArrayIncludes { array, value } => Expr::ArrayIncludes {
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => Expr::ArrayIncludes {
             array: Box::new(substitute_expr(array, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
+            from_index: from_index
+                .as_ref()
+                .map(|fi| Box::new(substitute_expr(fi, substitutions))),
         },
         Expr::ArraySlice { array, start, end } => Expr::ArraySlice {
             array: Box::new(substitute_expr(array, substitutions)),

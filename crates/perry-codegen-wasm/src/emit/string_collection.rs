@@ -674,9 +674,21 @@ impl WasmModuleEmitter {
                 }
                 self.intern_string(","); // default separator
             }
-            Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
                 self.collect_strings_in_expr(array);
                 self.collect_strings_in_expr(value);
+                if let Some(fi) = from_index {
+                    self.collect_strings_in_expr(fi);
+                }
             }
             Expr::ArrayMap { array, callback }
             | Expr::ArrayFilter { array, callback }

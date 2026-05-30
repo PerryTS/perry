@@ -594,11 +594,17 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(e, candidates, classes, escaped);
             }
         }
-        Expr::ArrayIncludes { array, value } | Expr::ArrayIndexOf { array, value } => {
-            check_escapes_in_expr(array, candidates, classes, escaped);
-            check_escapes_in_expr(value, candidates, classes, escaped);
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,

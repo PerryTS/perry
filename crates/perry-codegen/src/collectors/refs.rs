@@ -397,9 +397,16 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(e, out);
             }
         }
-        Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             walk(array, out);
             walk(value, out);
+            if let Some(fi) = from_index {
+                walk(fi, out);
+            }
         }
         Expr::Object(props) => {
             for (_, v) in props {
@@ -719,11 +726,12 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             out.insert(*array_id);
             walk(source, out);
         }
-        Expr::ArrayIndexOf { array, value } => {
-            walk(array, out);
-            walk(value, out);
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,

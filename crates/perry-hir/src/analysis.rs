@@ -482,7 +482,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::ArrayPop(_array_id) | Expr::ArrayShift(_array_id) => {
             // These modify the array but don't reallocate
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIndexOf { array, value, .. } | Expr::ArrayIncludes { array, value, .. } => {
             collect_assigned_locals_expr(array, assigned);
             collect_assigned_locals_expr(value, assigned);
         }
