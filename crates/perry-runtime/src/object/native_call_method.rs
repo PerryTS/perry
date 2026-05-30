@@ -747,7 +747,22 @@ pub unsafe extern "C" fn js_native_call_method(
                 // helper. Static call sites for typed string receivers keep
                 // their inline paths in `lower_string_method.rs` and don't
                 // come through this dispatcher.
-                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" | "concat" => {
+                "concat" => {
+                    let acc_handle = root_scope.root_string_ptr(receiver_string());
+                    for i in 0..args_len {
+                        let value = arg_at(i)
+                            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                        let result = crate::string::js_string_concat_value(
+                            acc_handle.get_raw_const_ptr::<crate::StringHeader>(),
+                            value,
+                        );
+                        acc_handle.set_raw_const_ptr(result as *const crate::StringHeader);
+                    }
+                    let result = acc_handle.get_raw_const_ptr::<crate::StringHeader>()
+                        as *mut crate::StringHeader;
+                    return f64::from_bits(JSValue::string_ptr(result).bits());
+                }
+                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" => {
                     let arg_str = |i: usize| -> *const crate::StringHeader {
                         if i < args_len && !args_ptr.is_null() {
                             let v = unsafe { *args_ptr.add(i) };
@@ -787,9 +802,6 @@ pub unsafe extern "C" fn js_native_call_method(
                             "includes" | "startsWith" | "endsWith" => {
                                 f64::from_bits(JSValue::bool(false).bits())
                             }
-                            "concat" => f64::from_bits(
-                                JSValue::string_ptr(s_ptr as *mut crate::StringHeader).bits(),
-                            ),
                             _ => f64::from_bits(JSValue::undefined().bits()),
                         };
                     }
@@ -822,10 +834,6 @@ pub unsafe extern "C" fn js_native_call_method(
                             let at = if args_len >= 2 { arg_i32(1) } else { len_i32 };
                             let b = crate::string::js_string_ends_with_at(s_ptr, needle, at);
                             f64::from_bits(JSValue::bool(b != 0).bits())
-                        }
-                        "concat" => {
-                            let r = crate::string::js_string_concat(s_ptr, needle);
-                            f64::from_bits(JSValue::string_ptr(r).bits())
                         }
                         _ => f64::from_bits(JSValue::undefined().bits()),
                     };
