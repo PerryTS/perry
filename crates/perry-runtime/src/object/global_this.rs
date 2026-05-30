@@ -1192,6 +1192,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("slice", 2),
                     ("split", 2),
                     ("startsWith", 1),
+                    ("substr", 2),
                     ("substring", 2),
                     ("toLocaleLowerCase", 0),
                     ("toLocaleUpperCase", 0),

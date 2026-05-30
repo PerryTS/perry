@@ -13,6 +13,7 @@ mod cmp;
 mod coding;
 mod copy_bytes;
 mod copy_write;
+mod dataview;
 mod encode;
 mod from;
 mod header;
@@ -63,6 +64,9 @@ pub use encode::{
 pub use access::{
     js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_set_from_value, js_buffer_slice,
 };
+
+// ---- Re-exports: DataView numeric accessors (#2878) ----
+pub use dataview::{js_data_view_get, js_data_view_set, DataViewKind};
 
 // ---- Re-exports: copy / write ----
 pub use copy_bytes::js_buffer_copy_bytes_from;
