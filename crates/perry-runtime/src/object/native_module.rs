@@ -392,6 +392,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isDeepStrictEqual",
             b"promisify",
             b"stripVTControlCharacters",
+            b"toUSVString",
             b"types",
             b"parseArgs",
             b"TextDecoder",
@@ -1281,6 +1282,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inherits")
             | ("util", "isDeepStrictEqual")
             | ("util", "stripVTControlCharacters")
+            | ("util", "toUSVString")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")
