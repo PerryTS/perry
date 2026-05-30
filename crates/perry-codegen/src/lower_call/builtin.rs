@@ -723,7 +723,7 @@ pub(super) fn lower_builtin_new(
         }
 
         "Request" => {
-            // new Request(url, init?) — init = { method?, body?, headers? }
+            // new Request(url, init?) — init = Fetch RequestInit subset.
             let url_ptr = if !args.is_empty() {
                 get_raw_string_ptr(ctx, &args[0])?
             } else {
@@ -733,6 +733,16 @@ pub(super) fn lower_builtin_new(
             let mut method_ptr = "0".to_string();
             let mut body_ptr = "0".to_string();
             let mut headers_handle = "0.0".to_string();
+            let mut referrer_ptr = "0".to_string();
+            let mut referrer_policy_ptr = "0".to_string();
+            let mut mode_ptr = "0".to_string();
+            let mut credentials_ptr = "0".to_string();
+            let mut cache_ptr = "0".to_string();
+            let mut redirect_ptr = "0".to_string();
+            let mut integrity_ptr = "0".to_string();
+            let mut keepalive = double_literal(f64::from_bits(crate::nanbox::TAG_FALSE));
+            let mut duplex_ptr = "0".to_string();
+            let mut signal = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
 
             if args.len() >= 2 {
                 if let Some(props) = extract_options_fields(ctx, &args[1]) {
@@ -750,6 +760,36 @@ pub(super) fn lower_builtin_new(
                                 } else {
                                     headers_handle = lower_expr(ctx, vexpr)?;
                                 }
+                            }
+                            "referrer" => {
+                                referrer_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "referrerPolicy" => {
+                                referrer_policy_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "mode" => {
+                                mode_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "credentials" => {
+                                credentials_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "cache" => {
+                                cache_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "redirect" => {
+                                redirect_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "integrity" => {
+                                integrity_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "keepalive" => {
+                                keepalive = lower_expr(ctx, vexpr)?;
+                            }
+                            "duplex" => {
+                                duplex_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                            }
+                            "signal" => {
+                                signal = lower_expr(ctx, vexpr)?;
                             }
                             _ => {
                                 let _ = lower_expr(ctx, vexpr)?;
@@ -769,6 +809,16 @@ pub(super) fn lower_builtin_new(
                     (I64, &method_ptr),
                     (I64, &body_ptr),
                     (DOUBLE, &headers_handle),
+                    (I64, &referrer_ptr),
+                    (I64, &referrer_policy_ptr),
+                    (I64, &mode_ptr),
+                    (I64, &credentials_ptr),
+                    (I64, &cache_ptr),
+                    (I64, &redirect_ptr),
+                    (I64, &integrity_ptr),
+                    (DOUBLE, &keepalive),
+                    (I64, &duplex_ptr),
+                    (DOUBLE, &signal),
                 ],
             );
             Ok(Some(handle))
