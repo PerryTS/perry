@@ -142,6 +142,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "PerformanceMark" => 0xFFFF0081u32,
                 "PerformanceMeasure" => 0xFFFF0082u32,
                 "Console" => 0xFFFF0083u32,
+                "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
+                "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
