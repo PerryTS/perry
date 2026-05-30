@@ -229,12 +229,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().call(DOUBLE, "llvm.log10.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathLog1p(operand) => {
-            // log(1 + x). LLVM has no log1p intrinsic that doesn't
-            // require linking libm, so emulate via log(1+x).
             let v = lower_expr(ctx, operand)?;
-            let blk = ctx.block();
-            let one_plus_v = blk.fadd(&v, "1.0");
-            Ok(blk.call(DOUBLE, "llvm.log.f64", &[(DOUBLE, &one_plus_v)]))
+            Ok(ctx.block().call(DOUBLE, "js_math_log1p", &[(DOUBLE, &v)]))
         }
         // Math.random — return 0.5 sentinel. Real impl needs a PRNG
         // we'd link in; sentinel keeps the compile-pass count up.
