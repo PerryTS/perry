@@ -448,7 +448,7 @@ pub(crate) fn report_dispatch_miss(tower: &str, recv: f64, name: &str, returning
 /// `js_new_function_construct` to dispatch `new <inst.constructor>(...)`
 /// shapes (date-fns `constructFrom`, lodash-style `Array` cloning, ...)
 /// to the right runtime factory.
-fn identify_global_builtin_constructor(func_value: f64) -> Option<&'static str> {
+pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'static str> {
     use crate::value::JSValue;
     let jv = JSValue::from_bits(func_value.to_bits());
     if !jv.is_pointer() {
@@ -860,6 +860,20 @@ pub unsafe extern "C" fn js_new_function_construct(
             "Object" => {
                 let obj = js_object_alloc(0, 0);
                 return crate::value::js_nanbox_pointer(obj as i64);
+            }
+            "EvalError" | "URIError" => {
+                let message = if args.is_empty() || args[0].to_bits() == crate::value::TAG_UNDEFINED
+                {
+                    crate::string::js_string_from_bytes(b"".as_ptr(), 0)
+                } else {
+                    crate::builtins::js_string_coerce(args[0])
+                };
+                let error = if name == "EvalError" {
+                    crate::error::js_evalerror_new(message)
+                } else {
+                    crate::error::js_urierror_new(message)
+                };
+                return crate::value::js_nanbox_pointer(error as i64);
             }
             "TextEncoderStream" | "TextDecoderStream" => {
                 return js_text_encoding_stream_new();
