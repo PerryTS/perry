@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::{js_string_from_bytes, js_string_materialize_to_heap, StringHeader};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -765,6 +765,28 @@ pub extern "C" fn js_path_to_namespaced_path(path_ptr: *const StringHeader) -> *
     }
 }
 
+fn string_value_to_namespaced_path(value: f64, win32: bool) -> f64 {
+    let path_ptr = js_string_materialize_to_heap(value);
+    if path_ptr.is_null() {
+        return value;
+    }
+
+    let Some(path) = (unsafe { string_from_header(path_ptr as *const StringHeader) }) else {
+        return value;
+    };
+    let result = if win32 {
+        win32_to_namespaced_path(&path)
+    } else {
+        path
+    };
+    f64::from_bits(crate::value::JSValue::string_ptr(string_to_js(&result)).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_path_to_namespaced_path_value(value: f64) -> f64 {
+    string_value_to_namespaced_path(value, false)
+}
+
 fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'a str>)> {
     let bytes = pattern.as_bytes();
     let mut depth = 0usize;
@@ -1290,6 +1312,11 @@ pub extern "C" fn js_path_win32_to_namespaced_path(
         let s = string_from_header(path_ptr).unwrap_or_default();
         string_to_js(&win32_to_namespaced_path(&s))
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_path_win32_to_namespaced_path_value(value: f64) -> f64 {
+    string_value_to_namespaced_path(value, true)
 }
 
 #[no_mangle]

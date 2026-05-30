@@ -465,9 +465,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PathToNamespacedPath(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
-            let result = blk.call(I64, "js_path_to_namespaced_path", &[(I64, &p_handle)]);
-            Ok(nanbox_string_inline(blk, &result))
+            Ok(blk.call(
+                DOUBLE,
+                "js_path_to_namespaced_path_value",
+                &[(DOUBLE, &p_box)],
+            ))
         }
         Expr::PathMatchesGlob(p, pat) => {
             let p_box = lower_expr(ctx, p)?;
