@@ -7,6 +7,7 @@ use super::*;
 
 // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
 
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
 /// type is a runtime value (function arg holding a class ref). Extracts
@@ -81,6 +82,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "EvalError" => crate::error::CLASS_ID_EVAL_ERROR,
             "URIError" => crate::error::CLASS_ID_URI_ERROR,
             "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
+            "Promise" => CLASS_ID_PROMISE,
             _ => 0,
         };
         if class_id != 0 {
@@ -316,6 +318,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             }
         }
         return false_val;
+    }
+    if class_id == CLASS_ID_PROMISE {
+        return if crate::promise::js_value_is_promise(value) != 0 {
+            true_val
+        } else {
+            false_val
+        };
     }
 
     // `Object` — ECMAScript spec: `x instanceof Object` is true for any
