@@ -36,7 +36,7 @@ mod field_get_set;
 mod field_set_by_name;
 mod global_this;
 mod groupby;
-mod has_own_helpers;
+pub(crate) mod has_own_helpers;
 mod instanceof;
 mod native_call_method;
 mod native_module;

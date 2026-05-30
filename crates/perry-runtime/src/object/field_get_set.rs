@@ -485,6 +485,10 @@ pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut Ar
 #[no_mangle]
 pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+    if jv.is_null() || jv.is_undefined() {
+        super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     if jv.is_any_string() {
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let len = match crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
@@ -535,6 +539,10 @@ fn for_each_string_char<F: FnMut(u32, f64)>(value: f64, mut emit: F) -> Option<u
 #[no_mangle]
 pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+    if jv.is_null() || jv.is_undefined() {
+        super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     if jv.is_any_string() {
         let arr = crate::array::js_array_alloc(1);
         let mut out = arr;
@@ -560,6 +568,10 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+    if jv.is_null() || jv.is_undefined() {
+        super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     if jv.is_any_string() {
         let outer = crate::array::js_array_alloc(1);
         let mut out = outer;

@@ -542,6 +542,67 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     }
 }
 
+/// `Object.prototype.propertyIsEnumerable.call(obj, key)` (#2891) — true iff
+/// `key` is an OWN property of `obj` whose descriptor is enumerable. Inherited
+/// and absent keys return false. Nullish receivers throw `TypeError` per
+/// ToObject. Mirrors the ordinary-method branch in `native_call_method.rs`
+/// (which handles `obj.propertyIsEnumerable(key)`); this entry point is what
+/// the syntactic `.call` shapes lower to.
+#[no_mangle]
+pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    unsafe {
+        let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
+        if obj_jv.is_null() || obj_jv.is_undefined() {
+            super::has_own_helpers::throw_to_object_nullish_type_error();
+        }
+
+        let key_str = crate::builtins::js_string_coerce(key_value);
+        if key_str.is_null() {
+            return f64::from_bits(TAG_FALSE);
+        }
+
+        // String primitives: index keys in range are enumerable own props;
+        // "length" is a non-enumerable own prop; everything else absent.
+        if obj_jv.is_any_string() {
+            let present =
+                super::has_own_helpers::string_primitive_own_key_present(obj_value, key_str);
+            if !present {
+                return f64::from_bits(TAG_FALSE);
+            }
+            let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key_str).byte_len as usize;
+            let is_length = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                .map(|s| s == "length")
+                .unwrap_or(false);
+            return f64::from_bits(if is_length { TAG_FALSE } else { TAG_TRUE });
+        }
+
+        let obj = extract_obj_ptr(obj_value);
+        if obj.is_null() || (obj as usize) < 0x10000 || !is_valid_obj_ptr(obj as *const u8) {
+            return f64::from_bits(TAG_FALSE);
+        }
+        if !own_key_present(obj, key_str) {
+            return f64::from_bits(TAG_FALSE);
+        }
+        let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key_str).byte_len as usize;
+        let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+            Ok(s) => s,
+            Err(_) => return f64::from_bits(TAG_FALSE),
+        };
+        let enumerable = super::get_property_attrs(obj as usize, key_name)
+            .map(|attrs| attrs.enumerable())
+            .unwrap_or(true);
+        f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE })
+    }
+}
+
+#[used]
+static KEEP_PROPERTY_IS_ENUMERABLE: extern "C" fn(f64, f64) -> f64 =
+    js_object_property_is_enumerable;
+
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.
 pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
     let jsval = crate::JSValue::from_bits(value.to_bits());
