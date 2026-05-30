@@ -188,12 +188,6 @@
     "category": "bug-open",
     "reason": "node:stream: stream.compose(single-transform) does not deliver data through. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/compose/from-async-iterable": {
-    "issue": "1539",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: stream.compose(asyncIterable) doesn't drive the source / forward data. Reopened #1539 for pipeline execution."
-  },
   "node-suite/stream/compose/single-sync-fn": {
     "issue": "1531",
     "added": "2026-05-23",
