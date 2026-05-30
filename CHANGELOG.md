@@ -2,6 +2,34 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1038 — validate `node:timers/promises` delay and options arguments (#3067)
+
+`node:timers/promises` helpers passed `delay` and `options` straight into the
+timer primitive. Node rejects a non-number `delay` and a non-object `options`
+with `TypeError [ERR_INVALID_ARG_TYPE]`; Perry silently accepted them, and
+`setImmediate` didn't even take an `options` argument.
+
+`crates/perry-runtime/src/node_submodules/timers.rs` gains two small validators:
+
+- `validate_delay` throws unless `delay` is `undefined` (Node defaults it) or a
+  number. `NaN` still passes — the warn/coerce path is tracked separately by
+  #2966.
+- `validate_options` throws unless `options` is `undefined` (treated as the
+  empty object) or a non-null, non-array object, mirroring Node's
+  `validateObject`. Array/`null` detection reuses the GC-header check that
+  `describe_received` already performs.
+
+Both are wired into `timers_promises_set_timeout`, `timers_promises_set_immediate`,
+and — by delegation — `timers_promises_scheduler_wait`. `setImmediate` now
+accepts an `options` argument: its `ExportThunk` arity is bumped from `Fn1` to
+`Fn2` in `ensure_export_singleton`, and the closure dispatch pads a missing
+options arg with `undefined`. Honoring the `signal`/`ref` fields of `options`
+remains tracked by #2603.
+
+New `test-parity/node-suite/timers/promises/delay-options-validation.ts` is
+byte-identical to `node --experimental-strip-types`; the rest of the
+`timers/promises` suite is unchanged (the validators no-op for valid inputs).
+
 ## v0.5.1037 — split `node_stream.rs` into topical sub-modules (#1987)
 
 `crates/perry-runtime/src/node_stream.rs` had grown to ~5,980 lines during
