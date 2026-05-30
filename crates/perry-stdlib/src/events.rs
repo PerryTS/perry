@@ -775,7 +775,7 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
 }
 
 /// EventEmitter.removeListener(eventName, listener)
-/// Remove the first matching listener for the event.
+/// Remove the most recently added matching listener for the event.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_remove_listener(
     handle: Handle,
@@ -790,8 +790,9 @@ pub unsafe extern "C" fn js_event_emitter_remove_listener(
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         let mut removed = false;
         if let Some(listeners) = emitter.events.get_mut(&event_name) {
-            // Node removes only the first matching listener, not all.
-            if let Some(pos) = listeners.iter().position(|l| l.callback == callback_ptr) {
+            // Node removes only one matching listener: the most recently added
+            // instance among duplicates.
+            if let Some(pos) = listeners.iter().rposition(|l| l.callback == callback_ptr) {
                 listeners.remove(pos);
                 removed = true;
             }
