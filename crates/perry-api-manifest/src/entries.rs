@@ -2811,6 +2811,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "parseEnv", false, None),
     // #2514: util.toUSVString(value) → string with lone surrogates replaced.
     method("util", "toUSVString", false, None),
+    // #2514: util.styleText(format, text[, options]) → ANSI-styled string.
+    method("util", "styleText", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
@@ -2903,6 +2905,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "parseArgs", false, None),
     method("sys", "stripVTControlCharacters", false, None),
     method("sys", "toUSVString", false, None),
+    method("sys", "styleText", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),

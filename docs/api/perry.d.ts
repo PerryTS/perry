@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1821 entries across 89 modules
+// Coverage: 1823 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2643,6 +2643,8 @@ declare module "sys" {
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
   /** stdlib */
+  export function styleText(...args: any[]): any;
+  /** stdlib */
   export function toUSVString(...args: any[]): any;
 }
 
@@ -2731,6 +2733,8 @@ declare module "util" {
   export function promisify(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
+  /** stdlib */
+  export function styleText(...args: any[]): any;
   /** stdlib */
   export function toUSVString(...args: any[]): any;
 }

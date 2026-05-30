@@ -1071,6 +1071,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #2514: util.styleText(format, text[, options]) → ANSI-styled string.
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "styleText",
+        class_filter: None,
+        runtime: "js_util_style_text",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "util",
         has_receiver: false,
