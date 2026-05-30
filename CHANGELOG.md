@@ -2,6 +2,18 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1041 — unblock main lint: rustfmt + allowlist oversized expr_member.rs
+
+#3161 (allowedNodeEnvironmentFlags) landed two `lint`-gate failures on main:
+its `process_allowed_node_flags_literal` in
+`crates/perry-hir/src/lower/expr_member.rs` had an unwrapped
+`.iter().map().collect()` that `cargo fmt --all -- --check` rejects, and the
+inlined flag list pushed the file to 2121 lines, past the 2000-line
+`scripts/check_file_size.sh` gate (the file was not allowlisted). Both were
+admin-merged without `lint` passing, so the gate failed on main and every PR
+rebased onto it. This reflows the literal and allowlists the file; a proper
+per-namespace split of the literal builders is tracked under #1435.
+
 ## v0.5.1040 — remove duplicate querystring symbol-error helper (main red fix)
 
 `crates/perry-stdlib/src/querystring.rs` defined `throw_symbol_to_string_type_error`
