@@ -113,6 +113,19 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
         return readable_iterator_done();
     };
     prepare_readable_for_iteration(stream);
+
+    if !readable_object_mode(stream) {
+        let value = read_stream_available_default(stream);
+        if value.to_bits() != TAG_NULL {
+            set_hidden_value(
+                iterator,
+                hidden_key(READABLE_ITERATOR_INDEX_KEY),
+                (iterator_local_index(iterator) + 1) as f64,
+            );
+            return resolved_promise(iterator_result(value, false));
+        }
+    }
+
     let arr = readable_chunks_array(stream);
     let index = stream_consume_index(stream);
     if !arr.is_null() && index < crate::array::js_array_length(arr) {

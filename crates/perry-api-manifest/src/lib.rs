@@ -313,6 +313,19 @@ mod tests {
     }
 
     #[test]
+    fn crypto_random_fill_is_manifest_method() {
+        let entry = module_has_symbol("node:crypto", "randomFill")
+            .expect("crypto.randomFill should be in the manifest");
+        assert!(matches!(
+            entry.kind,
+            ApiKind::Method {
+                has_receiver: false,
+                class_filter: None
+            }
+        ));
+    }
+
+    #[test]
     fn deprecated_constants_alias_has_manifest_entries() {
         for name in [
             "F_OK",

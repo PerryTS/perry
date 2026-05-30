@@ -272,12 +272,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() \u2014 Buffer chunks not preserved through pipeline (typed as string?). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/iter-yields-buffer-no-encoding": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: for-await on Readable without setEncoding \u2014 chunks are not Buffer instances. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/error-propagates-to-source": {
     "issue": "1531",
     "added": "2026-05-24",

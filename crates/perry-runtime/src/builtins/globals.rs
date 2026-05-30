@@ -58,24 +58,40 @@ fn percent_encode(input: &str, safe_chars: &[u8]) -> String {
     result
 }
 
-fn percent_decode(input: &str) -> String {
+fn percent_decode(input: &str, preserve_reserved: bool) -> Result<String, ()> {
     let bytes = input.as_bytes();
     let mut result = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(());
+            }
             let hi = hex_digit(bytes[i + 1]);
             let lo = hex_digit(bytes[i + 2]);
             if let (Some(h), Some(l)) = (hi, lo) {
-                result.push(h * 16 + l);
+                let decoded = h * 16 + l;
+                if preserve_reserved && URI_RESERVED.contains(&decoded) {
+                    result.extend_from_slice(&bytes[i..i + 3]);
+                } else {
+                    result.push(decoded);
+                }
                 i += 3;
                 continue;
             }
+            return Err(());
         }
         result.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&result).into_owned()
+    String::from_utf8(result).map_err(|_| ())
+}
+
+fn throw_uri_malformed() -> ! {
+    let message = b"URI malformed";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_urierror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn hex_digit(b: u8) -> Option<u8> {
@@ -117,7 +133,7 @@ pub extern "C" fn js_encode_uri(value: f64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_decode_uri(value: f64) -> i64 {
     let input = extract_str_from_nanbox(value);
-    let decoded = percent_decode(&input);
+    let decoded = percent_decode(&input, true).unwrap_or_else(|_| throw_uri_malformed());
     let ptr = js_string_from_bytes(decoded.as_ptr(), decoded.len() as u32);
     ptr as i64
 }
@@ -135,7 +151,7 @@ pub extern "C" fn js_encode_uri_component(value: f64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_decode_uri_component(value: f64) -> i64 {
     let input = extract_str_from_nanbox(value);
-    let decoded = percent_decode(&input);
+    let decoded = percent_decode(&input, false).unwrap_or_else(|_| throw_uri_malformed());
     let ptr = js_string_from_bytes(decoded.as_ptr(), decoded.len() as u32);
     ptr as i64
 }
