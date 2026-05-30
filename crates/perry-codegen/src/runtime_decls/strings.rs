@@ -437,6 +437,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_set_has", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_delete", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_size", I32, &[I64]);
+    // #2872: ES2024 Set composition methods.
+    module.declare_function("js_set_union", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_intersection", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_difference", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_symmetric_difference", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_subset_of", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_superset_of", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_disjoint_from", I32, &[I64, DOUBLE]);
     module.declare_function("js_string_to_lower_case", I64, &[I64]);
     module.declare_function("js_string_to_upper_case", I64, &[I64]);
     // Locale-aware casing + locales validation (#2781). The locales arg is a

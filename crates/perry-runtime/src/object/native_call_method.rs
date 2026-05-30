@@ -2230,6 +2230,36 @@ pub unsafe extern "C" fn js_native_call_method(
                         crate::set::js_set_foreach(set, args[0], this_arg);
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
+                    // #2872: ES2024 Set composition methods. union/intersection/
+                    // difference/symmetricDifference return a new Set; the
+                    // is* predicates return a boolean.
+                    "union" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_union(set, args[0]) as *mut u8).bits(),
+                    ),
+                    "intersection" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_intersection(set, args[0]) as *mut u8)
+                            .bits(),
+                    ),
+                    "difference" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_difference(set, args[0]) as *mut u8)
+                            .bits(),
+                    ),
+                    "symmetricDifference" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(
+                            crate::set::js_set_symmetric_difference(set, args[0]) as *mut u8
+                        )
+                        .bits(),
+                    ),
+                    "isSubsetOf" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_subset_of(set, args[0]) != 0).bits(),
+                    ),
+                    "isSupersetOf" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_superset_of(set, args[0]) != 0).bits(),
+                    ),
+                    "isDisjointFrom" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_disjoint_from(set, args[0]) != 0)
+                            .bits(),
+                    ),
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
                 };
             }

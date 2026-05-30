@@ -653,6 +653,44 @@ pub fn try_lower_property_get_method_call(
                 let result = blk.call(I64, runtime_fn, &[(I64, &s_handle)]);
                 return Ok(Some(crate::expr::nanbox_pointer_inline_pub(blk, &result)));
             }
+            // #2872: ES2024 Set composition methods. union/intersection/
+            // difference/symmetricDifference take a set-like `other` and
+            // return a NEW Set; isSubsetOf/isSupersetOf/isDisjointFrom return
+            // a boolean. The runtime fns receive the receiver as an I64 set
+            // handle and `other` as a NaN-boxed f64.
+            "union" | "intersection" | "difference" | "symmetricDifference" if args.len() == 1 => {
+                let s_box = lower_expr(ctx, object)?;
+                let other_box = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &s_box);
+                let runtime_fn = match property.as_str() {
+                    "union" => "js_set_union",
+                    "intersection" => "js_set_intersection",
+                    "difference" => "js_set_difference",
+                    "symmetricDifference" => "js_set_symmetric_difference",
+                    _ => unreachable!(),
+                };
+                let result = blk.call(I64, runtime_fn, &[(I64, &s_handle), (DOUBLE, &other_box)]);
+                return Ok(Some(crate::expr::nanbox_pointer_inline_pub(blk, &result)));
+            }
+            "isSubsetOf" | "isSupersetOf" | "isDisjointFrom" if args.len() == 1 => {
+                let s_box = lower_expr(ctx, object)?;
+                let other_box = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &s_box);
+                let runtime_fn = match property.as_str() {
+                    "isSubsetOf" => "js_set_is_subset_of",
+                    "isSupersetOf" => "js_set_is_superset_of",
+                    "isDisjointFrom" => "js_set_is_disjoint_from",
+                    _ => unreachable!(),
+                };
+                let i32_v = blk.call(
+                    crate::types::I32,
+                    runtime_fn,
+                    &[(I64, &s_handle), (DOUBLE, &other_box)],
+                );
+                return Ok(Some(crate::expr::i32_bool_to_nanbox(blk, &i32_v)));
+            }
             _ => {}
         }
     }

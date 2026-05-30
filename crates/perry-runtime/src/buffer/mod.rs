@@ -22,6 +22,7 @@ mod mutate;
 mod numeric;
 mod query;
 mod transcode;
+mod u8_codec;
 pub mod validate;
 mod view;
 
@@ -58,6 +59,12 @@ pub use query::{
 pub use encode::{
     buffer_to_array, js_buffer_length, js_buffer_print, js_buffer_to_string,
     js_buffer_to_string_range, js_value_to_string_with_encoding,
+};
+
+// ---- Re-exports: TC39 Uint8Array base64/hex codecs (#2901) ----
+pub use u8_codec::{
+    js_u8_from_base64, js_u8_from_hex, js_u8_set_from_base64, js_u8_set_from_hex, js_u8_to_base64,
+    js_u8_to_hex,
 };
 
 // ---- Re-exports: indexed access / slice / Uint8Array.set ----

@@ -2167,8 +2167,20 @@ pub extern "C" fn js_object_get_field_by_name(
                     b"multiline" => {
                         return JSValue::bool((*re).multiline);
                     }
-                    b"sticky" | b"unicode" | b"dotAll" | b"hasIndices" => {
-                        return JSValue::bool(false);
+                    // #2828: route the remaining observable flags to the
+                    // header fields populated by `js_regexp_new` instead of
+                    // unconditionally returning `false`.
+                    b"sticky" => {
+                        return JSValue::bool((*re).sticky);
+                    }
+                    b"unicode" => {
+                        return JSValue::bool((*re).unicode);
+                    }
+                    b"dotAll" => {
+                        return JSValue::bool((*re).dot_all);
+                    }
+                    b"hasIndices" => {
+                        return JSValue::bool((*re).has_indices);
                     }
                     _ => return JSValue::undefined(),
                 }
