@@ -1468,6 +1468,27 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
+    // #2901: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)`.
+    // Routed via the buffer module (Uint8Array ≡ Buffer in Perry); the
+    // runtime decodes strictly into a fresh BufferHeader.
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "fromBase64",
+        class_filter: None,
+        runtime: "js_u8_from_base64",
+        args: &[NA_STR, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
+        method: "fromHex",
+        class_filter: None,
+        runtime: "js_u8_from_hex",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
     NativeModSig {
         module: "buffer",
         has_receiver: false,
