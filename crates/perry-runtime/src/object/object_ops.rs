@@ -990,7 +990,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
 }
 
 /// Helper: does `key` appear in `obj.keys_array`?
-unsafe fn own_key_present(obj: *mut ObjectHeader, key: *const crate::StringHeader) -> bool {
+pub(crate) unsafe fn own_key_present(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) -> bool {
     if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return false;
     }

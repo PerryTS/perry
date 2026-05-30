@@ -1840,20 +1840,43 @@ pub unsafe extern "C" fn js_native_call_method(
         }
 
         // `obj.propertyIsEnumerable(key)` — same shape as
-        // `hasOwnProperty`. Spec says true for own enumerable
-        // properties (the typical case for object literals). Without
-        // walking the receiver's keys, we approximate as
-        // `truthy receiver → true` — matches Node for ramda's
-        // `keys.js` IIFE (`!{toString:null}.propertyIsEnumerable('toString')`
-        // expects `true`, so `hasEnumBug` resolves to `false`).
-        // Arguments-like receivers also return true here, which
-        // matches the legacy non-Safari behavior ramda's IIFE checks
-        // against.
+        // `hasOwnProperty`, but descriptor-aware for ordinary objects so
+        // non-enumerable properties installed by Error.captureStackTrace /
+        // Object.defineProperty report false.
         "propertyIsEnumerable" => {
             if jsval.is_undefined() || jsval.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
-            return f64::from_bits(JSValue::bool(true).bits());
+            if !jsval.is_pointer() {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            if key_str.is_null() {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            let obj_ptr = jsval.as_pointer::<ObjectHeader>();
+            if obj_ptr.is_null() || !is_valid_obj_ptr(obj_ptr as *const u8) {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key_str).byte_len as usize;
+            let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+            {
+                Ok(s) => s,
+                Err(_) => return f64::from_bits(JSValue::bool(false).bits()),
+            };
+            let enumerable = get_property_attrs(obj_ptr as usize, &key_name)
+                .map(|attrs| attrs.enumerable())
+                .unwrap_or(true);
+            return f64::from_bits(JSValue::bool(enumerable).bits());
         }
 
         // `prim.isPrototypeOf(v)` — true iff the receiver appears in `v`'s
