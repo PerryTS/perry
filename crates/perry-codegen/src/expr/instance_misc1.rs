@@ -102,6 +102,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "ReferenceError" => 0xFFFF0012u32,
                 "SyntaxError" => 0xFFFF0013u32,
                 "AggregateError" => 0xFFFF0014u32,
+                "EvalError" | "globalThis.EvalError" => 0xFFFF0015u32,
+                "URIError" | "globalThis.URIError" => 0xFFFF0016u32,
                 // Uint8Array / Buffer — runtime detects these via a
                 // thread-local buffer registry (see buffer.rs). The
                 // TextEncoder path registers its ArrayHeader result
@@ -667,7 +669,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let count_d = if let Some(d) = delete_count {
                 lower_expr(ctx, d)?
             } else {
-                "0.0".to_string()
+                "2147483647.0".to_string()
             };
 
             // Evaluate splice-insert items and collect their f64 values.

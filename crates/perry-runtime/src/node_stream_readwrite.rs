@@ -22,55 +22,6 @@ pub(super) fn mark_disturbed(stream: f64) {
     set_visible_readable_did_read(stream, true);
 }
 
-pub(super) fn push_json_number(buf: &mut String, value: f64) {
-    if value.is_nan() || value.is_infinite() {
-        buf.push_str("null");
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
-        let mut itoa_buf = itoa::Buffer::new();
-        buf.push_str(itoa_buf.format(value as i64));
-    } else {
-        let mut ryu_buf = ryu::Buffer::new();
-        buf.push_str(ryu_buf.format(value));
-    }
-}
-
-pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut String) -> bool {
-    if ptr.is_null() {
-        return false;
-    }
-    let obj = ptr as *const ObjectHeader;
-    let readable = own_field_by_key_bytes(obj, READABLE_FLAG_KEY).is_some();
-    let writable = own_field_by_key_bytes(obj, WRITABLE_FLAG_KEY).is_some();
-    if readable == writable {
-        return false;
-    }
-
-    buf.push_str(r#"{"_events":{},"#);
-    if readable {
-        let hwm =
-            own_field_by_key_bytes(obj, READABLE_HWM_KEY).unwrap_or_else(|| default_hwm(false));
-        let length = own_field_by_key_bytes(obj, READABLE_BUFFERED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_readableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","buffer":[],"bufferIndex":0,"length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","pipes":[],"awaitDrainWriters":null}}"#);
-    } else {
-        let hwm = own_field_by_key_bytes(obj, b"writableHighWaterMark")
-            .unwrap_or_else(|| default_hwm(false));
-        let length = 0.0;
-        let corked = own_field_by_key_bytes(obj, WRITABLE_CORKED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_writableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","corked":"#);
-        push_json_number(buf, corked);
-        buf.push_str(r#","writelen":0,"bufferedIndex":0,"pendingcb":0}}"#);
-    }
-    true
-}
-
 pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     if obj.is_null() {
         return None;
@@ -773,17 +724,16 @@ pub(super) fn emit_readable_end_once(stream: f64) {
         refresh_readable_aborted_flag(stream);
         let _ = emit_stream_event(stream, string_value(b"end"), &[]);
         end_pipe_destinations(stream);
-        // autoDestroy (default) tears the stream down after 'end'; the
-        // destroy microtask marks it closed and emits 'close'. Only when
-        // autoDestroy is off do we fall back to the readable-only direct
-        // close path (#2302): a Readable-only stream (no writable side)
-        // emits 'close' after 'end' so `readable.closed` flips to true once
-        // the data is fully consumed. A Duplex defers `close` until BOTH
-        // 'end' and 'finish' have fired (handled in the writable-side
-        // `ns_end1`). Routing both through one branch avoids a double
-        // 'close' emission. Refs node-suite/stream/readable/closed-flag.
+        // autoDestroy tears readable-only streams down after 'end'. Duplex
+        // streams defer `close` until both readable `end` and writable
+        // `finish` have fired; whichever side finishes second performs the
+        // close. Refs node-suite/stream/readable/closed-flag.
         if stream_auto_destroy_enabled(stream) {
-            destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+            let writable_pending = get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+                && !has_truthy_hidden(stream, hidden_finish_emitted_key());
+            if !writable_pending {
+                destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+            }
         } else if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
             mark_stream_closed(stream);
             let _ = emit_stream_event(stream, string_value(b"close"), &[]);
