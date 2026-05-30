@@ -604,6 +604,12 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(message, out);
             walk(cause, out);
         }
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            walk(message, out);
+            walk(options, out);
+        }
         Expr::DateNew(args) => {
             for a in args {
                 walk(a, out);

@@ -857,15 +857,28 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(message);
                 self.collect_strings_in_expr(cause);
             }
+            Expr::ErrorNewWithOptions {
+                message, options, ..
+            } => {
+                self.collect_strings_in_expr(message);
+                self.collect_strings_in_expr(options);
+            }
             Expr::TypeErrorNew(m)
             | Expr::RangeErrorNew(m)
             | Expr::ReferenceErrorNew(m)
             | Expr::SyntaxErrorNew(m) => {
                 self.collect_strings_in_expr(m);
             }
-            Expr::AggregateErrorNew { errors, message } => {
+            Expr::AggregateErrorNew {
+                errors,
+                message,
+                options,
+            } => {
                 self.collect_strings_in_expr(errors);
                 self.collect_strings_in_expr(message);
+                if let Some(o) = options {
+                    self.collect_strings_in_expr(o);
+                }
             }
             Expr::JsonParse(e) | Expr::JsonStringify(e) => {
                 self.collect_strings_in_expr(e);

@@ -237,6 +237,126 @@ pub extern "C" fn js_aggregateerror_new(
     }
 }
 
+const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
+
+/// #2836: extract the ES2022 `cause` option from a runtime options *value*
+/// and apply it to an already-allocated error. Node sets `.cause` whenever
+/// the options argument is an object that has a `cause` property (own or
+/// inherited); the value can be anything, including `undefined`. Perry reads
+/// the property via the generic dynamic index getter so it works for plain
+/// object literals AND options held in a variable / produced dynamically.
+///
+/// Non-object option values (`undefined`, a number, a string, …) leave the
+/// cause untouched — matching Node, which simply ignores them.
+unsafe fn apply_cause_from_options(error: *mut ErrorHeader, options: f64) {
+    let opts = crate::value::JSValue::from_bits(options.to_bits());
+    if !opts.is_pointer() {
+        return;
+    }
+    // Only honor a real `cause` slot. `js_dyn_index_get` returns
+    // TAG_UNDEFINED both for "no such key" and for `{ cause: undefined }`;
+    // either way Node would store `undefined`, but storing undefined is the
+    // already-initialized default, so a missing key is a harmless no-op.
+    let key = js_string_from_bytes(b"cause".as_ptr(), 5);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    let cause = crate::value::js_dyn_index_get(options, key_f64);
+    if cause.to_bits() != TAG_UNDEFINED_BITS {
+        error_set_cause(error, cause);
+    }
+}
+
+/// #2836: allocate an Error (or native subclass) carrying a `{ cause }`
+/// option read from an arbitrary runtime options value. `kind` selects the
+/// ERROR_KIND_* discriminant so `instanceof TypeError`/etc. keep working.
+#[no_mangle]
+pub extern "C" fn js_error_new_kind_with_options(
+    kind: u32,
+    message: *mut StringHeader,
+    options: f64,
+) -> *mut ErrorHeader {
+    let name: &[u8] = match kind {
+        ERROR_KIND_TYPE_ERROR => b"TypeError",
+        ERROR_KIND_RANGE_ERROR => b"RangeError",
+        ERROR_KIND_REFERENCE_ERROR => b"ReferenceError",
+        ERROR_KIND_SYNTAX_ERROR => b"SyntaxError",
+        ERROR_KIND_EVAL_ERROR => b"EvalError",
+        ERROR_KIND_URI_ERROR => b"URIError",
+        _ => b"Error",
+    };
+    unsafe {
+        let resolved_kind = if name == b"Error" {
+            ERROR_KIND_ERROR
+        } else {
+            kind
+        };
+        let ptr = alloc_error(resolved_kind, name, message);
+        apply_cause_from_options(ptr, options);
+        ptr
+    }
+}
+
+fn throw_not_iterable_type_error() -> ! {
+    let message = b"is not iterable";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// #2838/#2836: full `new AggregateError(errors, message?, options?)`
+/// constructor. Consumes the `errors` iterable synchronously (throwing
+/// `TypeError` when it is omitted or non-iterable), stores `.message`, and
+/// applies the `{ cause }` option from `options` if present.
+///
+/// `errors` and `options` arrive as raw NaN-boxed values (the iterable must
+/// not be pre-coerced to an array pointer — Sets / strings / generators must
+/// reach `materialize_iterable` intact).
+#[no_mangle]
+pub extern "C" fn js_aggregateerror_new_full(
+    errors: f64,
+    message: *mut StringHeader,
+    options: f64,
+) -> *mut ErrorHeader {
+    // #2838: reuse the spec-shaped iterable→array converter that backs the
+    // Promise combinators (`Promise.any`/`all`/…). It accepts arrays, strings,
+    // Set/Map, buffers, generators, and any object exposing `[Symbol.iterator]`
+    // or a bare `.next` field, and returns `Err(())` for non-iterables
+    // (`undefined`, numbers, plain objects) — exactly the AggregateError
+    // contract.
+    let arr = match crate::promise::combinators::combinator_iterable_to_array(errors) {
+        Ok(arr) => arr,
+        Err(()) => throw_not_iterable_type_error(),
+    };
+    unsafe {
+        let ptr = alloc_error(ERROR_KIND_AGGREGATE_ERROR, b"AggregateError", message);
+        error_set_errors(ptr, arr);
+        apply_cause_from_options(ptr, options);
+        ptr
+    }
+}
+
+/// #2904: `Error.isError(value)` — V8/Node duck-check that returns `true`
+/// only for genuine Error instances (any kind: base Error, TypeError, …,
+/// AggregateError, and AssertionError-style objects registered as extending
+/// Error). Plain objects, primitives, and null/undefined return `false`.
+#[no_mangle]
+pub extern "C" fn js_error_is_error(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    unsafe {
+        let ptr = crate::value::js_nanbox_get_pointer(value) as *const u8;
+        if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
+            return f64::from_bits(crate::value::TAG_FALSE);
+        }
+        let object_type = std::ptr::read(ptr as *const u32);
+        if object_type == OBJECT_TYPE_ERROR {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+    }
+    f64::from_bits(crate::value::TAG_FALSE)
+}
+
 /// Get the message property of an Error
 #[no_mangle]
 pub extern "C" fn js_error_get_message(error: *mut ErrorHeader) -> *mut StringHeader {
@@ -547,6 +667,26 @@ pub extern "C" fn js_throw_type_error_immutable_write(
 pub(crate) fn throw_immutable_write(kind: u32, key: &str) -> ! {
     js_throw_type_error_immutable_write(kind, key.as_ptr(), key.len())
 }
+
+// #2836/#2838/#2904: keep the codegen-emitted error FFIs alive through the
+// auto-optimize whole-program-bitcode link. These `#[no_mangle]` fns are
+// reachable only from generated `.o`; without `#[used]` anchors the
+// internalize+dead-strip pass drops them and the default `perry file.ts -o`
+// link fails (see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_ERROR_NEW_KIND_WITH_OPTIONS: extern "C" fn(
+    u32,
+    *mut StringHeader,
+    f64,
+) -> *mut ErrorHeader = js_error_new_kind_with_options;
+#[used]
+static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
+    f64,
+    *mut StringHeader,
+    f64,
+) -> *mut ErrorHeader = js_aggregateerror_new_full;
+#[used]
+static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
 
 #[cfg(test)]
 mod tostring_tests {

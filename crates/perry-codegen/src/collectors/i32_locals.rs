@@ -1392,6 +1392,12 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(message, out);
             walk(cause, out);
         }
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            walk(message, out);
+            walk(options, out);
+        }
         Expr::DateNew(args) => {
             for a in args {
                 walk(a, out);

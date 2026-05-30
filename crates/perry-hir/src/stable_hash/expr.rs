@@ -438,11 +438,12 @@ impl SH for Expr {
             Expr::ErrorNew(e) => { tag(h, 346); e.hash(h); }
             Expr::ErrorMessage(e) => { tag(h, 347); e.as_ref().hash(h); }
             Expr::ErrorNewWithCause { message, cause } => { tag(h, 348); message.as_ref().hash(h); cause.as_ref().hash(h); }
+            Expr::ErrorNewWithOptions { kind, message, options } => { tag(h, 12060); kind.hash(h); message.as_ref().hash(h); options.as_ref().hash(h); }
             Expr::TypeErrorNew(e) => { tag(h, 349); e.as_ref().hash(h); }
             Expr::RangeErrorNew(e) => { tag(h, 350); e.as_ref().hash(h); }
             Expr::ReferenceErrorNew(e) => { tag(h, 351); e.as_ref().hash(h); }
             Expr::SyntaxErrorNew(e) => { tag(h, 352); e.as_ref().hash(h); }
-            Expr::AggregateErrorNew { errors, message } => { tag(h, 353); errors.as_ref().hash(h); message.as_ref().hash(h); }
+            Expr::AggregateErrorNew { errors, message, options } => { tag(h, 353); errors.as_ref().hash(h); message.as_ref().hash(h); options.hash(h); }
             Expr::UrlNew { url, base } => { tag(h, 354); url.as_ref().hash(h); base.hash(h); }
             Expr::UrlGetHref(e) => { tag(h, 355); e.as_ref().hash(h); }
             Expr::UrlGetPathname(e) => { tag(h, 356); e.as_ref().hash(h); }

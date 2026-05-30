@@ -263,6 +263,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "ReferenceError"
                     && name != "EvalError"
                     && name != "URIError"
+                    && name != "AggregateError"
                     && name != "Promise"
                     && name != "Map"
                     && name != "Set"

@@ -867,9 +867,22 @@ where
             f(message);
             f(cause);
         }
-        Expr::AggregateErrorNew { errors, message } => {
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            f(message);
+            f(options);
+        }
+        Expr::AggregateErrorNew {
+            errors,
+            message,
+            options,
+        } => {
             f(errors);
             f(message);
+            if let Some(o) = options {
+                f(o);
+            }
         }
         Expr::UrlNew { url, base } => {
             f(url);

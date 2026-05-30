@@ -1549,6 +1549,17 @@ pub enum Expr {
         message: Box<Expr>,
         cause: Box<Expr>,
     },
+    /// #2836: `new <Error-kind>(message, options)` where `options` is an
+    /// arbitrary runtime value (variable, dynamic object, or literal) whose
+    /// `cause` property is applied at runtime. `kind` is an `ERROR_KIND_*`
+    /// discriminant so native subclasses (TypeError/RangeError/…) keep their
+    /// `error_kind`. Covers base `Error` plus the four native subclasses with
+    /// a non-literal-recognizable options argument.
+    ErrorNewWithOptions {
+        kind: u32,
+        message: Box<Expr>,
+        options: Box<Expr>,
+    },
     /// new TypeError(message)
     TypeErrorNew(Box<Expr>),
     /// new RangeError(message)
@@ -1557,10 +1568,16 @@ pub enum Expr {
     ReferenceErrorNew(Box<Expr>),
     /// new SyntaxError(message)
     SyntaxErrorNew(Box<Expr>),
-    /// new AggregateError(errors, message)
+    /// new AggregateError(errors, message?, options?)
+    ///
+    /// #2838: `errors` is passed through as a raw runtime value (NOT
+    /// pre-coerced to an array) so the runtime can consume Sets / strings /
+    /// generators / any iterable and throw `TypeError` on non-iterables.
+    /// #2836: `options` carries the optional `{ cause }` argument.
     AggregateErrorNew {
         errors: Box<Expr>,
         message: Box<Expr>,
+        options: Option<Box<Expr>>,
     },
 
     // URL operations

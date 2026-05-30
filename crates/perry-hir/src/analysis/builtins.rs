@@ -47,6 +47,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "ReferenceError"
             | "EvalError"
             | "URIError"
+            | "AggregateError"
             | "Symbol"
             | "Promise"
             | "Map"
