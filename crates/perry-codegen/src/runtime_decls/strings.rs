@@ -54,6 +54,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_index_of_from", I32, &[I64, I64, I32]);
     module.declare_function("js_string_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_string_substring", I64, &[I64, I32, I32]);
+    // Legacy substr(start, length); length sentinel i32::MIN = omitted (#2897).
+    module.declare_function("js_string_substr", I64, &[I64, I32, I32]);
     module.declare_function("js_string_split", I64, &[I64, I64]);
     module.declare_function("js_string_split_n", I64, &[I64, I64, I32]);
     module.declare_function("js_math_pow", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -437,6 +439,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_set_size", I32, &[I64]);
     module.declare_function("js_string_to_lower_case", I64, &[I64]);
     module.declare_function("js_string_to_upper_case", I64, &[I64]);
+    // Locale-aware casing + locales validation (#2781). The locales arg is a
+    // NaN-boxed JSValue (string / array / undefined).
+    module.declare_function("js_string_to_locale_lower_case", I64, &[I64, DOUBLE]);
+    module.declare_function("js_string_to_locale_upper_case", I64, &[I64, DOUBLE]);
+    module.declare_function("js_string_validate_locales", VOID, &[DOUBLE]);
     module.declare_function("js_string_trim", I64, &[I64]);
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
