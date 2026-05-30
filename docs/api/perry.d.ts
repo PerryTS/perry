@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1546 entries across 85 modules
+// Coverage: 1548 entries across 85 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -124,6 +124,8 @@ declare module "assert/strict" {
   /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
+  export const strict: any;
+  /** stdlib */
   export function deepEqual(...args: any[]): any;
   /** stdlib */
   export function deepStrictEqual(...args: any[]): any;
@@ -157,6 +159,8 @@ declare module "assert/strict" {
   export function partialDeepStrictEqual(...args: any[]): any;
   /** stdlib */
   export function rejects(...args: any[]): any;
+  /** stdlib */
+  export function strict(...args: any[]): any;
   /** stdlib */
   export function strictEqual(...args: any[]): any;
   /** stdlib */
