@@ -159,7 +159,14 @@ pub(super) fn try_url_date_weakref_instance(
                     | "toISOString"
                     | "valueOf"
             );
-            if ambiguous && !allow_ambiguous_date {
+            if method_name == "setTime"
+                && is_node_test_mock_timers_receiver(ctx, member.obj.as_ref())
+            {
+                // `node:test` exposes `mock.timers.setTime(ms)`. The broad
+                // Date setter fallback below also matches `.setTime(...)` on
+                // unknown receivers, so keep this known non-Date receiver on
+                // the generic method-call path.
+            } else if ambiguous && !allow_ambiguous_date {
                 // Receiver is statically a non-Date class (e.g. URL).
                 // Skip the Date arms below — fall through to generic.
             } else {
@@ -500,4 +507,17 @@ pub(super) fn try_url_date_weakref_instance(
         }
     }
     Ok(Err(args))
+}
+
+fn is_node_test_mock_timers_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Member(inner) = expr else {
+        return false;
+    };
+    if !matches!(&inner.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "timers") {
+        return false;
+    }
+    let ast::Expr::Ident(root) = inner.obj.as_ref() else {
+        return false;
+    };
+    ctx.lookup_imported_func(root.sym.as_ref()) == Some("mock")
 }

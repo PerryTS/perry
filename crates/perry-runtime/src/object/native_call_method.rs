@@ -1229,9 +1229,37 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 "replace" | "replaceAll" => {
                     // Two-arg shape: (pattern, replacement). pattern can be a
-                    // string OR a RegExp; replacement is a string. Function
-                    // replacements aren't supported here yet — they need
-                    // closure dispatch and aren't on hono's hot path.
+                    // string OR a RegExp; replacement is a string OR a function.
+                    // Function replacements over a RegExp pattern route to the
+                    // regex-fn helpers (#2867) so dynamically-dispatched
+                    // `str.replace(re, fn)` observes Node's callback argument
+                    // shape `(match, p1, ..., offset, string, groups?)`.
+                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
+                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
+                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
+                        if pat_jsv.is_pointer() && repl_jsv.is_pointer() {
+                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                            if crate::closure::is_closure_ptr(repl_raw) {
+                                let regex_ptr = pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
+                                if !regex_ptr.is_null() {
+                                    let r = if method_name == "replaceAll" {
+                                        crate::regex::js_string_replace_all_regex_fn(
+                                            receiver_string(),
+                                            regex_ptr,
+                                            repl_val,
+                                        )
+                                    } else {
+                                        crate::regex::js_string_replace_regex_fn(
+                                            receiver_string(),
+                                            regex_ptr,
+                                            repl_val,
+                                        )
+                                    };
+                                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                                }
+                            }
+                        }
+                    }
                     let pat_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
                     let repl_handle = root_string_arg_handle(&root_scope, &arg_handles, 1);
                     let pat_str = || {
@@ -2403,11 +2431,16 @@ pub unsafe extern "C" fn js_native_call_method(
 
     // Handle common method calls
     match method_name {
-        // Function.prototype.bind - returns the same function for native closures
-        // This is a simplification - real bind() creates a new function with bound 'this'
+        // Function.prototype.bind(thisArg, ...boundArgs) — create a distinct
+        // bound function with a fixed `this`, prepended partial args, and an
+        // adjusted `.name`/`.length` (#2840). For closure receivers route to
+        // the runtime bind helper; non-closure receivers fall back to the
+        // prior conservative behavior of returning the receiver unchanged.
         "bind" => {
-            // For native closures, we return the function as-is
-            // The 'this' binding is handled at the call site
+            let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if jsval.is_pointer() && crate::closure::is_closure_ptr(raw_ptr) {
+                return crate::closure::js_function_bind(object, args_ptr, args_len);
+            }
             return object;
         }
 

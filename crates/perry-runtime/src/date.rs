@@ -214,6 +214,9 @@ fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i6
 /// Get current timestamp in milliseconds (Date.now())
 #[no_mangle]
 pub extern "C" fn js_date_now() -> f64 {
+    if let Some(now) = crate::timer::js_mock_timers_date_now() {
+        return now;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as f64)
