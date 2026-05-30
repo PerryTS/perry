@@ -208,6 +208,7 @@ jobs:
               "perry-ui-gtk4",
               "perry-ui-android",
               "perry-ui-windows",
+              "perry-doc-fixture-my-bindings",
           }
           metadata = json.load(sys.stdin)
           workspace_members = set(metadata["workspace_members"])
