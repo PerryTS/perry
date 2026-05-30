@@ -54,6 +54,25 @@ pub(super) fn lower_builtin_new(
         return Ok(None);
     }
     match class_name {
+        "EvalError" | "URIError" => {
+            let msg_box = if let Some(message) = args.first() {
+                lower_expr(ctx, message)?
+            } else {
+                lower_expr(ctx, &Expr::String(String::new()))?
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let blk = ctx.block();
+            let msg_handle = unbox_to_i64(blk, &msg_box);
+            let runtime = if class_name == "EvalError" {
+                "js_evalerror_new"
+            } else {
+                "js_urierror_new"
+            };
+            let err_handle = blk.call(I64, runtime, &[(I64, &msg_handle)]);
+            Ok(Some(nanbox_pointer_inline(blk, &err_handle)))
+        }
         // `new RegExp(pattern)` / `new RegExp(pattern, flags)` — call
         // js_regexp_new directly so the resulting object is a real
         // RegExpHeader (registered in REGEX_POINTERS, .test/.exec/etc

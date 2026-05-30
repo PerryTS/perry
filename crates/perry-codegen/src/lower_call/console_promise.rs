@@ -552,6 +552,32 @@ pub fn try_lower_promise_static_call(
                     let handle = blk.call(I64, "js_promise_with_resolvers", &[]);
                     return Ok(Some(nanbox_pointer_inline(blk, &handle)));
                 }
+                "try" => {
+                    let callback = if args.is_empty() {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    } else {
+                        lower_expr(ctx, &args[0])?
+                    };
+                    let extra_count = args.len().saturating_sub(1);
+                    let mut current_arr =
+                        ctx.block()
+                            .call(I64, "js_array_alloc", &[(I32, &extra_count.to_string())]);
+                    for arg in args.iter().skip(1) {
+                        let value = lower_expr(ctx, arg)?;
+                        current_arr = ctx.block().call(
+                            I64,
+                            "js_array_push_f64",
+                            &[(I64, &current_arr), (DOUBLE, &value)],
+                        );
+                    }
+                    let blk = ctx.block();
+                    let handle = blk.call(
+                        I64,
+                        "js_promise_try",
+                        &[(DOUBLE, &callback), (I64, &current_arr)],
+                    );
+                    return Ok(Some(nanbox_pointer_inline(blk, &handle)));
+                }
                 _ => {}
             }
         }

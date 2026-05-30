@@ -412,6 +412,16 @@ extern "C" fn object_prototype_to_string_thunk(
     f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
 }
 
+extern "C" fn object_prototype_is_prototype_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    f64::from_bits(
+        JSValue::bool(unsafe { super::js_object_is_prototype_of_value(this_value, value) }).bits(),
+    )
+}
+
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
@@ -680,7 +690,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if name == "String" {
             crate::closure::js_register_closure_arity(func_ptr, 1);
         }
-        if name == "File" {
+        if matches!(name, "File" | "EvalError" | "URIError") {
             super::native_module::set_bound_native_closure_name(closure_ptr, name);
         }
         if name == "Error" {
@@ -978,7 +988,21 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 object_prototype_to_string_thunk as *const u8,
                 0,
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("hasOwnProperty", 1),
+                    ("propertyIsEnumerable", 1),
+                    ("toLocaleString", 0),
+                    ("valueOf", 0),
+                ],
+            );
         }
         "Function" => {
             install_noop_proto_methods(

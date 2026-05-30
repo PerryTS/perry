@@ -503,6 +503,9 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
     let methods = duplex_methods();
     let obj = build_object(&methods, DUPLEX_SHAPE_ID + methods.len() as u32);
     let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    if let Some(read) = read_callback_from_options(opts) {
+        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, duplex));
+    }
     if let Some(write) = write_callback_from_options(opts) {
         js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
         set_hidden_value(

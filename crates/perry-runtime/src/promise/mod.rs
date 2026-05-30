@@ -37,7 +37,7 @@ pub use async_step::{
 pub use combinators::{
     js_assimilate_thenable, js_await_any_promise, js_is_promise, js_promise_all,
     js_promise_all_settled, js_promise_any, js_promise_new_with_executor, js_promise_race,
-    js_promise_rejected, js_promise_schedule_resolve, js_value_is_promise,
+    js_promise_rejected, js_promise_schedule_resolve, js_promise_try, js_value_is_promise,
 };
 pub use microtasks::js_promise_run_microtasks;
 pub use native_async::{

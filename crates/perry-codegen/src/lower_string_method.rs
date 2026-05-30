@@ -262,10 +262,15 @@ pub(crate) fn lower_string_method(
             let needle_handle = unbox_str_handle(blk, &needle_box);
             if needle_is_regex && repl_is_function {
                 // repl_box is a NaN-boxed closure pointer (double).
-                // js_string_replace_regex_fn takes the callback as f64.
+                // The regex callback helpers take the callback as f64.
+                let runtime_fn = if property == "replaceAll" {
+                    "js_string_replace_all_regex_fn"
+                } else {
+                    "js_string_replace_regex_fn"
+                };
                 let result = blk.call(
                     I64,
-                    "js_string_replace_regex_fn",
+                    runtime_fn,
                     &[
                         (I64, &recv_handle),
                         (I64, &needle_handle),
@@ -277,7 +282,13 @@ pub(crate) fn lower_string_method(
             // Issue #214: SSO-safe unbox of replacement string.
             let repl_handle = unbox_str_handle(blk, &repl_box);
             let runtime_fn = if needle_is_regex {
-                if repl_has_named {
+                if property == "replaceAll" {
+                    if repl_has_named {
+                        "js_string_replace_all_regex_named"
+                    } else {
+                        "js_string_replace_all_regex"
+                    }
+                } else if repl_has_named {
                     "js_string_replace_regex_named"
                 } else {
                     "js_string_replace_regex"
