@@ -2,6 +2,30 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1042 — validate AsyncLocalStorage run/exit callbacks (#3092)
+
+`AsyncLocalStorage#run(store, callback, ...)` and `#exit(callback, ...)` lowered
+the callback to a raw pointer and treated a null pointer as a no-op, so a
+non-callable callback returned `undefined` instead of throwing. Node rejects
+every non-callable callback with a `TypeError` (through its function-apply path).
+
+- `crates/perry-codegen/src/lower_call/native_table/async_decimal.rs` and the
+  matching `runtime_decls/stdlib_ffi.rs` declaration now pass the `run`/`exit`
+  callback as a full NaN-boxed value (`NA_F64`/`DOUBLE`) rather than a raw
+  pointer, so the runtime can inspect its type.
+- `crates/perry-stdlib/src/async_local_storage.rs` adds `validate_callback`: a
+  callable closure (POINTER_TAG + `is_closure_ptr`, the SSO-safe order) is
+  invoked; anything else throws a `TypeError`. Validation runs before the async
+  context is mutated, so an invalid callback never leaves a pushed/cleared store
+  behind. `enterWith(store)` stays permissive.
+
+Rest-argument forwarding to the callback is not part of this change.
+
+New `test-parity/node-suite/async_hooks/als-run-exit-callback-validation.ts` is
+byte-identical to `node --experimental-strip-types`: every non-callable callback
+throws `TypeError` for both `run` and `exit`, and the valid path preserves store
+visibility.
+
 ## v0.5.1041 — unblock main lint: rustfmt + allowlist oversized expr_member.rs
 
 #3161 (allowedNodeEnvironmentFlags) landed two `lint`-gate failures on main:
