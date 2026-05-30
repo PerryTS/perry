@@ -277,6 +277,22 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     if jsval.is_undefined() || jsval.is_null() {
         throw_object_to_locale_string_nullish_receiver();
     }
+    // #2808: numbers use `Number.prototype.toLocaleString` (thousands
+    // separators), so a number element / receiver formats as `1,000.5` rather
+    // than the bare `toString` form. Locale/option-aware grouping is not yet
+    // modeled — the default-locale grouping matches Node's en-US output for
+    // the common integer/decimal cases.
+    if jsval.is_number() {
+        let s = crate::date::js_number_to_locale_string(jsval.as_number());
+        return f64::from_bits(JSValue::string_ptr(s).bits());
+    }
+    // #2808: a Date value uses `Date.prototype.toLocaleString` (date+time
+    // rendering) rather than `[object Date]`.
+    if crate::date::is_date_value(receiver) {
+        let ts = crate::date::date_cell_timestamp(receiver);
+        let s = crate::date::js_date_to_locale_string(ts);
+        return f64::from_bits(JSValue::string_ptr(s).bits());
+    }
     if !jsval.is_pointer() {
         return js_native_call_method(
             receiver,

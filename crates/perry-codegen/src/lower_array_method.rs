@@ -808,7 +808,20 @@ pub(crate) fn lower_array_method(
         // `.next().value` was then `undefined` (same class of bug as #800's
         // `lastIndexOf`). Route through the runtime's generic dispatch so the
         // `ARRAY_ITERATOR_CLASS_ID` check reaches `dispatch_array_iterator_method`.
-        "next" | "return" | "throw" => {
+        // #2808: `Array.prototype.toLocaleString` has no static HIR fold, so a
+        // typed / `as any` array receiver reaches this codegen path. The old
+        // catch-all returned the receiver unchanged (so `JSON.stringify` saw
+        // the array, not the joined locale string). Route through the runtime
+        // dispatch tower, which walks elements and calls each element's own
+        // `toLocaleString(locales, options)`.
+        //
+        // #2803 defensive: `toReversed` / `toSorted` / `toSpliced` normally fold
+        // to dedicated `Expr::ArrayTo*` nodes upstream, but if that fold ever
+        // bails for an `any`-typed receiver they would otherwise hit the
+        // receiver-returning catch-all below. Dispatching them dynamically here
+        // keeps the immutable-copy semantics (the runtime arms added in #2803).
+        "next" | "return" | "throw" | "toLocaleString" | "toReversed" | "toSorted"
+        | "toSpliced" => {
             let mut lowered_args = Vec::with_capacity(args.len());
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
