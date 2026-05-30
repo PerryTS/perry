@@ -19,6 +19,10 @@ default = ["full"]
 full = ["dep:hostname", "dep:dirs"]
 # When perry-stdlib is the consumer, exclude no-op stubs to avoid duplicate symbols
 stdlib = []
+# Extension-crate test binaries that link the real perry-ext-ws symbols still
+# need runtime-link for perry-ffi helpers, but must not also export runtime-only
+# js_ws_* stubs.
+external-ws-symbols = []
 # Enable geisterhand in-process fuzzer (callback registry + dispatch queue)
 geisterhand = []
 # iOS/tvOS game loop: provides main() that spawns user code on game thread + UIApplicationMain
