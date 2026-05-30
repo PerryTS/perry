@@ -22,17 +22,12 @@ pub extern "C" fn js_parse_int(str_ptr: *const StringHeader, radix: f64) -> f64 
         let bytes = std::slice::from_raw_parts(data, len);
 
         if let Ok(s) = std::str::from_utf8(bytes) {
-            let trimmed = s.trim();
+            let trimmed = s.trim_start();
             if trimmed.is_empty() {
                 return f64::NAN;
             }
 
-            // Determine radix
-            let radix = if radix.is_nan() || radix == 0.0 {
-                10
-            } else {
-                radix as u32
-            };
+            let radix = parse_int_to_int32(js_number_coerce(radix));
 
             // Handle sign
             let (is_negative, trimmed) = if trimmed.starts_with('-') {
@@ -43,35 +38,71 @@ pub extern "C" fn js_parse_int(str_ptr: *const StringHeader, radix: f64) -> f64 
                 (false, trimmed)
             };
 
-            // Handle hex prefix (only if radix is 16 or auto)
-            let (actual_radix, trimmed) = if (radix == 16 || radix == 10)
-                && (trimmed.starts_with("0x") || trimmed.starts_with("0X"))
-            {
-                (16, &trimmed[2..])
+            let (actual_radix, trimmed) = if radix == 0 {
+                if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+                    (16_u32, &trimmed[2..])
+                } else {
+                    (10_u32, trimmed)
+                }
             } else {
-                (radix, trimmed)
+                if !(2..=36).contains(&radix) {
+                    return f64::NAN;
+                }
+                let actual_radix = radix as u32;
+                if actual_radix == 16 && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
+                    (16_u32, &trimmed[2..])
+                } else {
+                    (actual_radix, trimmed)
+                }
             };
 
-            // Parse characters until we hit a non-digit
-            let valid_chars: String = trimmed
-                .chars()
-                .take_while(|c| c.is_digit(actual_radix))
-                .collect();
+            let mut value = 0.0;
+            let mut saw_digit = false;
+            for &byte in trimmed.as_bytes() {
+                let Some(digit) = parse_int_digit(byte) else {
+                    break;
+                };
+                if digit >= actual_radix {
+                    break;
+                }
+                saw_digit = true;
+                value = value * actual_radix as f64 + digit as f64;
+            }
 
-            if valid_chars.is_empty() {
+            if !saw_digit {
                 return f64::NAN;
             }
 
-            match i64::from_str_radix(&valid_chars, actual_radix) {
-                Ok(n) => {
-                    let result = if is_negative { -n } else { n };
-                    result as f64
-                }
-                Err(_) => f64::NAN,
+            if is_negative {
+                -value
+            } else {
+                value
             }
         } else {
             f64::NAN
         }
+    }
+}
+
+fn parse_int_to_int32(number: f64) -> i32 {
+    if !number.is_finite() || number == 0.0 {
+        return 0;
+    }
+    let two32 = 4_294_967_296.0;
+    let int = number.trunc().rem_euclid(two32);
+    if int >= 2_147_483_648.0 {
+        (int - two32) as i32
+    } else {
+        int as i32
+    }
+}
+
+fn parse_int_digit(byte: u8) -> Option<u32> {
+    match byte {
+        b'0'..=b'9' => Some((byte - b'0') as u32),
+        b'a'..=b'z' => Some((byte - b'a') as u32 + 10),
+        b'A'..=b'Z' => Some((byte - b'A') as u32 + 10),
+        _ => None,
     }
 }
 
