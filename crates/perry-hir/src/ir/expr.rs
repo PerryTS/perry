@@ -613,6 +613,8 @@ pub enum Expr {
     SymbolFor(Box<Expr>),         // Symbol.for(key) -> registered symbol
     SymbolKeyFor(Box<Expr>),      // Symbol.keyFor(sym) -> key | undefined
     SymbolDescription(Box<Expr>), // sym.description
+    /// RegExp.escape(str) -> escaped string (TC39 proposal, Node 24+)
+    RegExpEscape(Box<Expr>),
     SymbolToString(Box<Expr>),    // sym.toString()
 
     // URL operations
@@ -1819,6 +1821,13 @@ pub enum Expr {
     /// Walks `items` and groups each element by the string key returned
     /// from `keyFn(item, index)`. Lowered through `js_object_group_by`.
     ObjectGroupBy {
+        items: Box<Expr>,
+        key_fn: Box<Expr>,
+    },
+    /// Map.groupBy(items, keyFn) -> Map<key, items[]>
+    /// Like ObjectGroupBy but the result is a `Map` and callback keys are
+    /// used directly (no string coercion). Lowered through `js_map_group_by`.
+    MapGroupBy {
         items: Box<Expr>,
         key_fn: Box<Expr>,
     },

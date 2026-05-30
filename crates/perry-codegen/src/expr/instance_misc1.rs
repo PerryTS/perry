@@ -748,17 +748,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Object.groupBy(items, keyFn) --------
-        // Routes through `js_object_group_by(items_value, callback_ptr)`.
-        // The callback is a closure pointer (i64).
+        // Routes through `js_object_group_by(items_value, callback)`.
+        // Both args are NaN-boxed f64; the runtime validates iterability and
+        // callback callability (TypeError on failure) per Node semantics.
         Expr::ObjectGroupBy { items, key_fn } => {
             let items_v = lower_expr(ctx, items)?;
             let cb_v = lower_expr(ctx, key_fn)?;
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_v);
             Ok(blk.call(
                 DOUBLE,
                 "js_object_group_by",
-                &[(DOUBLE, &items_v), (I64, &cb_handle)],
+                &[(DOUBLE, &items_v), (DOUBLE, &cb_v)],
+            ))
+        }
+
+        // -------- Map.groupBy(items, keyFn) --------
+        // Routes through `js_map_group_by(items_value, callback)` — returns a
+        // Map keyed by callback results without string coercion.
+        Expr::MapGroupBy { items, key_fn } => {
+            let items_v = lower_expr(ctx, items)?;
+            let cb_v = lower_expr(ctx, key_fn)?;
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_map_group_by",
+                &[(DOUBLE, &items_v), (DOUBLE, &cb_v)],
             ))
         }
 

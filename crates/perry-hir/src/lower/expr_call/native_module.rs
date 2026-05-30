@@ -860,6 +860,33 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
+            // Check for RegExp static methods: RegExp.escape (#2899)
+            if obj_name == "RegExp" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "escape" {
+                        let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::RegExpEscape(Box::new(arg))));
+                    }
+                }
+            }
+
+            // Check for Map static methods: Map.groupBy
+            if obj_name == "Map" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if method_name == "groupBy" && args.len() >= 2 {
+                        let mut iter = args.into_iter();
+                        let items = iter.next().unwrap();
+                        let key_fn = iter.next().unwrap();
+                        let key_fn = ctx.maybe_wrap_builtin_callback(key_fn, &call.args[1]);
+                        return Ok(Ok(Expr::MapGroupBy {
+                            items: Box::new(items),
+                            key_fn: Box::new(key_fn),
+                        }));
+                    }
+                }
+            }
+
             if obj_name == "Reflect" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();

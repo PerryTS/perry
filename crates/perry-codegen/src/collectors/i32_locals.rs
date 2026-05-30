@@ -1410,7 +1410,7 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(a, out);
             }
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             walk(items, out);
             walk(key_fn, out);
         }

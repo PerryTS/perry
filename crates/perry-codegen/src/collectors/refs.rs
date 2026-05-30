@@ -622,7 +622,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(a, out);
             }
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             walk(items, out);
             walk(key_fn, out);
         }

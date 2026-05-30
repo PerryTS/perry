@@ -468,6 +468,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_symbol_key_for", &[(DOUBLE, &s_box)]))
         }
+        // RegExp.escape(str) — runtime returns a NaN-boxed string f64.
+        Expr::RegExpEscape(arg) => {
+            let a_box = lower_expr(ctx, arg)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_regexp_escape", &[(DOUBLE, &a_box)]))
+        }
         Expr::SymbolDescription(sym) => {
             let s_box = lower_expr(ctx, sym)?;
             Ok(ctx
