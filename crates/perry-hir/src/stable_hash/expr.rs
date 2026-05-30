@@ -207,6 +207,7 @@ impl SH for Expr {
             Expr::MathCbrt(e) => { tag(h, 163); e.as_ref().hash(h); }
             Expr::MathHypot(es) => { tag(h, 164); es.hash(h); }
             Expr::MathFround(e) => { tag(h, 165); e.as_ref().hash(h); }
+            Expr::MathF16round(e) => { tag(h, 12041); e.as_ref().hash(h); }
             Expr::MathClz32(e) => { tag(h, 166); e.as_ref().hash(h); }
             Expr::MathExpm1(e) => { tag(h, 167); e.as_ref().hash(h); }
             Expr::MathLog1p(e) => { tag(h, 168); e.as_ref().hash(h); }

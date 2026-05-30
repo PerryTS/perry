@@ -324,13 +324,13 @@ pub extern "C" fn js_fs_opendir_callback(path_value: f64, arg1: f64, arg2: f64) 
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let cb = last_callback(&[arg1, arg2]);
-    unsafe {
-        if let Some(err_val) = fs_callback_read_error(path_value, "opendir") {
-            call_cb_err2(cb, err_val);
+    let dir = match js_fs_opendir_value(path_value) {
+        Ok(dir) => dir,
+        Err(err) => {
+            unsafe { call_cb_err2(cb, err) };
             return f64::from_bits(TAG_UNDEFINED);
         }
-    }
-    let dir = js_fs_opendir_sync(path_value);
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), dir);
     }

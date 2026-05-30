@@ -408,10 +408,10 @@ fn resolve_max_keys(options: f64) -> Option<usize> {
     } else {
         return Some(1000);
     };
-    if n <= 0.0 || !n.is_finite() {
+    if n <= 0.0 || !n.is_finite() || n.fract() != 0.0 {
         None
     } else {
-        Some(n.floor() as usize)
+        Some(n as usize)
     }
 }
 

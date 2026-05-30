@@ -48,7 +48,7 @@ fn is_error_value(value: f64) -> bool {
     }
 }
 
-fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
+fn regexp_ptr(pattern: f64) -> Option<*const crate::regex::RegExpHeader> {
     let jv = crate::value::JSValue::from_bits(pattern.to_bits());
     if !jv.is_pointer() {
         return None;
@@ -57,10 +57,49 @@ fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     if !crate::regex::is_regex_pointer(ptr) {
         return None;
     }
+    Some(ptr as *const crate::regex::RegExpHeader)
+}
+
+fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
+    let re = regexp_ptr(pattern)?;
     let input_string = value_to_string(input);
     let input_ptr =
         crate::string::js_string_from_bytes(input_string.as_ptr(), input_string.len() as u32);
-    Some(crate::regex::js_regexp_test(ptr as *const crate::regex::RegExpHeader, input_ptr) != 0)
+    Some(crate::regex::js_regexp_test(re, input_ptr) != 0)
+}
+
+fn regex_test_string(re: *const crate::regex::RegExpHeader, input: f64) -> bool {
+    let input_ptr =
+        crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
+    !input_ptr.is_null() && crate::regex::js_regexp_test(re, input_ptr) != 0
+}
+
+fn validate_regexp_argument(regexp: f64) -> *const crate::regex::RegExpHeader {
+    if let Some(re) = regexp_ptr(regexp) {
+        return re;
+    }
+    let message = format!(
+        "The \"regexp\" argument must be an instance of RegExp. Received {}",
+        crate::fs::validate::describe_received(regexp)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn validate_assert_match_string(actual: f64, expected: f64, message: f64, operator: &str) {
+    if crate::value::JSValue::from_bits(actual.to_bits()).is_any_string() {
+        return;
+    }
+    let fallback = format!(
+        "The \"string\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(actual)
+    );
+    throw_assertion(
+        assertion_message(message, &fallback),
+        actual,
+        expected,
+        operator,
+        is_null_or_undefined(message),
+    )
 }
 
 fn read_property(value: f64, key: &str) -> f64 {
@@ -737,7 +776,9 @@ pub extern "C" fn js_assert_not_deep_equal(actual: f64, expected: f64, message: 
 
 #[no_mangle]
 pub extern "C" fn js_assert_match(actual: f64, expected: f64, message: f64) -> f64 {
-    if regex_test_value(expected, actual).unwrap_or(false) {
+    let re = validate_regexp_argument(expected);
+    validate_assert_match_string(actual, expected, message, "match");
+    if regex_test_string(re, actual) {
         return undefined_f64();
     }
     throw_assertion(
@@ -751,7 +792,9 @@ pub extern "C" fn js_assert_match(actual: f64, expected: f64, message: f64) -> f
 
 #[no_mangle]
 pub extern "C" fn js_assert_does_not_match(actual: f64, expected: f64, message: f64) -> f64 {
-    if !regex_test_value(expected, actual).unwrap_or(false) {
+    let re = validate_regexp_argument(expected);
+    validate_assert_match_string(actual, expected, message, "doesNotMatch");
+    if !regex_test_string(re, actual) {
         return undefined_f64();
     }
     throw_assertion(

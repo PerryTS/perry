@@ -194,6 +194,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
             bits as usize
         }
     };
+    let optional_ptr_addr = |v: f64| -> usize {
+        let value = JSValue::from_bits(v.to_bits());
+        if value.is_undefined() || value.is_null() {
+            0
+        } else {
+            ptr_addr(v)
+        }
+    };
     let arg_event_ptr = |n: usize| -> *const crate::StringHeader {
         crate::value::js_get_string_pointer_unified(arg(n)) as *const crate::StringHeader
     };
@@ -844,6 +852,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
+        ("path", "toNamespacedPath") => {
+            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
+        }
+        ("path", "_makeLong") => {
+            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
+        }
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -872,6 +886,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path.win32", "toNamespacedPath") => str_to_f64(
             crate::path::js_path_win32_to_namespaced_path(arg_str_ptr(0)),
         ),
+        ("path.win32", "_makeLong") => str_to_f64(crate::path::js_path_win32_to_namespaced_path(
+            arg_str_ptr(0),
+        )),
         ("path.win32", "isAbsolute") => bool_to_f64(crate::path::js_path_win32_is_absolute(
             require_path_str_ptr(0),
         )),
@@ -901,6 +918,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
             require_path_str_ptr(1),
         )),
         ("path.posix", "toNamespacedPath") => {
+            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
+        }
+        ("path.posix", "_makeLong") => {
             str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
         }
         ("path.posix", "isAbsolute") => {
@@ -1293,20 +1313,20 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // undefined inside the impls).
         ("child_process", "spawn") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
-            let args_p = ptr_addr(arg(1)) as i64;
-            let opts_p = ptr_addr(arg(2)) as i64;
+            let args_p = optional_ptr_addr(arg(1)) as i64;
+            let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::reactor::js_child_process_spawn_streams(cmd, args_p, opts_p)
         }
         ("child_process", "spawnSync") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0));
-            let args_p = ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
-            let opts_p = ptr_addr(arg(2)) as *const ObjectHeader;
+            let args_p = optional_ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
+            let opts_p = optional_ptr_addr(arg(2)) as *const ObjectHeader;
             let result = crate::child_process::js_child_process_spawn_sync(cmd, args_p, opts_p);
             ptr_to_f64(result as *const u8)
         }
         ("child_process", "execSync") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0));
-            let opts_p = ptr_addr(arg(1)) as *const ObjectHeader;
+            let opts_p = optional_ptr_addr(arg(1)) as *const ObjectHeader;
             crate::child_process::js_child_process_exec_sync(cmd, opts_p)
         }
         ("child_process", "exec") => {
@@ -1323,8 +1343,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("child_process", "fork") => {
             let module = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
-            let args_p = ptr_addr(arg(1)) as i64;
-            let opts_p = ptr_addr(arg(2)) as i64;
+            let args_p = optional_ptr_addr(arg(1)) as i64;
+            let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
         }
 

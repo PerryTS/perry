@@ -1760,6 +1760,16 @@ unsafe fn build_fs_error_value(err: &std::io::Error, syscall: &'static str, path
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 
+unsafe fn build_fs_error_value_no_path(err: &std::io::Error, syscall: &'static str) -> f64 {
+    let code = io_error_code(err);
+    let msg = format!("{}: {}, {}", code, err, syscall);
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
+    crate::value::js_nanbox_pointer(err_ptr as i64)
+}
+
 /// Probe a path for read access and produce a NaN-boxed Error if the
 /// underlying syscall would fail. Returns `None` on success.
 unsafe fn fs_callback_read_error(path_value: f64, syscall: &'static str) -> Option<f64> {

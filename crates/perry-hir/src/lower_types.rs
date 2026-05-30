@@ -807,7 +807,9 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             "floor" | "ceil" | "round" | "abs" | "sqrt" | "pow" | "min" | "max"
                             | "random" | "log" | "log2" | "log10" | "sin" | "cos" | "tan"
                             | "asin" | "acos" | "atan" | "atan2" | "exp" | "sign" | "trunc"
-                            | "cbrt" | "hypot" | "fround" | "clz32" | "imul" => Type::Number,
+                            | "cbrt" | "hypot" | "fround" | "f16round" | "clz32" | "imul" => {
+                                Type::Number
+                            }
                             _ => Type::Any,
                         };
                     }

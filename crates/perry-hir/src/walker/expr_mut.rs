@@ -177,6 +177,7 @@ where
         | Expr::MathAtan(v)
         | Expr::MathCbrt(v)
         | Expr::MathFround(v)
+        | Expr::MathF16round(v)
         | Expr::MathExpm1(v)
         | Expr::MathSinh(v)
         | Expr::MathCosh(v)

@@ -57,16 +57,20 @@ pub extern "C" fn js_buffer_is_encoding(value: f64) -> i32 {
     }
 }
 
-fn native_buffer_from_value(value: f64) -> Option<*const BufferHeader> {
+fn raw_addr_from_value(value: f64) -> usize {
     let bits = value.to_bits();
     let jsval = crate::JSValue::from_bits(bits);
-    let raw_ptr = if jsval.is_pointer() || jsval.is_string() {
+    if jsval.is_pointer() || jsval.is_string() {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
     } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
         bits as usize
     } else {
         0
-    };
+    }
+}
+
+fn native_buffer_from_value(value: f64) -> Option<*const BufferHeader> {
+    let raw_ptr = raw_addr_from_value(value);
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
         Some(raw_ptr as *const BufferHeader)
     } else {
@@ -88,31 +92,48 @@ pub extern "C" fn js_native_buffer_byte_len(value: f64) -> usize {
         .unwrap_or(0)
 }
 
-fn value_bytes(value: f64) -> Option<&'static [u8]> {
+fn describe_binary_input(value: f64) -> String {
+    let addr = raw_addr_from_value(value);
+    if addr != 0 && is_data_view(addr) {
+        return "an instance of DataView".to_string();
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn throw_invalid_binary_input(value: f64) -> ! {
+    let msg = format!(
+        "The \"input\" argument must be an instance of ArrayBuffer, Buffer, or TypedArray. Received {}",
+        describe_binary_input(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&msg, "ERR_INVALID_ARG_TYPE")
+}
+
+fn value_bytes(value: f64) -> &'static [u8] {
+    let addr = raw_addr_from_value(value);
+    if addr != 0 && is_data_view(addr) {
+        throw_invalid_binary_input(value);
+    }
     if let Some(buf) = native_buffer_from_value(value) {
+        return unsafe { std::slice::from_raw_parts(buffer_data(buf), (*buf).length as usize) };
+    }
+    if addr != 0 && crate::typedarray::lookup_typed_array_kind(addr).is_some() {
         return unsafe {
-            Some(std::slice::from_raw_parts(
-                buffer_data(buf),
-                (*buf).length as usize,
-            ))
+            crate::typedarray::typed_array_bytes(addr as *const crate::typedarray::TypedArrayHeader)
+                .unwrap_or_else(|| throw_invalid_binary_input(value))
         };
     }
-    None
+    throw_invalid_binary_input(value)
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_is_ascii(value: f64) -> f64 {
-    let ok = value_bytes(value)
-        .map(|bytes| bytes.iter().all(|b| *b <= 0x7f))
-        .unwrap_or(false);
+    let ok = value_bytes(value).iter().all(|b| *b <= 0x7f);
     f64::from_bits(crate::JSValue::bool(ok).bits())
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_is_utf8(value: f64) -> f64 {
-    let ok = value_bytes(value)
-        .map(|bytes| std::str::from_utf8(bytes).is_ok())
-        .unwrap_or(false);
+    let ok = std::str::from_utf8(value_bytes(value)).is_ok();
     f64::from_bits(crate::JSValue::bool(ok).bits())
 }
 

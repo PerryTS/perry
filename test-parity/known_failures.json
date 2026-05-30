@@ -146,12 +146,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncIterable) \u2192 data event chain doesn't deliver. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/events/readable-event": {
-    "issue": "1532",
-    "added": "2026-05-23",
-    "category": "bug-open",
-    "reason": "node:stream: `readable` event (paused-mode trigger) doesn't fire. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/wrap-old-stream": {
     "issue": "1532",
     "added": "2026-05-23",
@@ -224,12 +218,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(infiniteGen).take(N) \u2014 take helper does not abort upstream early; iteration hangs or returns wrong items. Flips to PASS when #1558 lands."
   },
-  "node-suite/stream/web/desired-size-backpressure": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: writer.desiredSize w/ CountQueuingStrategy \u2014 fails to compile (CountQueuingStrategy constructor not on globalThis). Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/compose/error-mid-chain": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -260,23 +248,11 @@
     "category": "bug-open",
     "reason": "node:stream: compose() \u2014 Buffer chunks not preserved through pipeline (typed as string?). Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/readable/iter-yields-buffer-no-encoding": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: for-await on Readable without setEncoding \u2014 chunks are not Buffer instances. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/error-propagates-to-source": {
     "issue": "1531",
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: compose() error does not destroy source. Flips to PASS when #1531 lands."
-  },
-  "node-suite/stream/web/desired-size-restores-after-drain": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: writer.desiredSize does not restore to HWM after write resolves. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/abort-during-pipeto": {
     "issue": "1545",
@@ -307,18 +283,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) \u2014 types lost or wrong. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-array-of-promises": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from([P1, P2, P3]) \u2014 does not await each Promise. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-rejected-promise-in-array": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(array with one Promise.reject) \u2014 error not emitted at the right point. Flips to PASS when #1532 lands."
   },
   "node-suite/stream/web/double-pipe-through": {
     "issue": "1545",

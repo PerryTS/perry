@@ -699,6 +699,7 @@ pub enum Expr {
     MathCbrt(Box<Expr>),             // Math.cbrt(x) -> number
     MathHypot(Vec<Expr>),            // Math.hypot(...values) -> number
     MathFround(Box<Expr>),           // Math.fround(x) -> number
+    MathF16round(Box<Expr>),         // Math.f16round(x) -> number
     MathClz32(Box<Expr>),            // Math.clz32(x) -> number
     MathExpm1(Box<Expr>),            // Math.expm1(x) -> number
     MathLog1p(Box<Expr>),            // Math.log1p(x) -> number
