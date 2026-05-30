@@ -239,6 +239,7 @@ pub(crate) fn is_known_math_static_method(name: &str) -> bool {
             | "expm1"
             | "floor"
             | "fround"
+            | "f16round"
             | "hypot"
             | "imul"
             | "log"

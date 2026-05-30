@@ -898,6 +898,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);
     module.declare_function("js_referenceerror_new", I64, &[I64]);
+    module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_evalerror_new", I64, &[I64]);
     module.declare_function("js_urierror_new", I64, &[I64]);
     // WeakMap / WeakSet / WeakRef / FinalizationRegistry — called
@@ -1025,6 +1027,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_clz32", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_cbrt", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_fround", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_f16round", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_sinh", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_cosh", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_tanh", DOUBLE, &[DOUBLE]);
@@ -1874,6 +1877,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_text_encoding_stream_new", DOUBLE, &[]);
     // #1545: node:stream/web QueuingStrategy constructors — take the options
     // object, return a `{ highWaterMark, size }` object.
+    module.declare_function("js_streams_strategy_high_water_mark", DOUBLE, &[DOUBLE]);
     module.declare_function("js_count_queuing_strategy_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_byte_length_queuing_strategy_new", DOUBLE, &[DOUBLE]);
     // Issue #562: stream subclassing (`class X extends WritableStream` etc.).

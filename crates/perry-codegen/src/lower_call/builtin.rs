@@ -869,6 +869,13 @@ pub(super) fn lower_builtin_new(
                             hwm = lower_expr(ctx, vexpr)?;
                         }
                     }
+                } else {
+                    let strategy = lower_expr(ctx, &args[1])?;
+                    hwm = ctx.block().call(
+                        DOUBLE,
+                        "js_streams_strategy_high_water_mark",
+                        &[(DOUBLE, &strategy)],
+                    );
                 }
             }
             let h = ctx.block().call(

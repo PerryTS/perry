@@ -228,6 +228,13 @@ extern "C" fn global_this_btoa_thunk(
     crate::value::js_nanbox_string(encoded as i64)
 }
 
+extern "C" fn math_f16round_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::math::js_math_f16round(value)
+}
+
 extern "C" fn global_this_error_capture_stack_trace_thunk(
     _closure: *const crate::closure::ClosureHeader,
     target: f64,
@@ -809,6 +816,9 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             let ns_obj = js_object_alloc(0, 0);
             if ns_obj.is_null() {
                 continue;
+            }
+            if name == "Math" {
+                install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };

@@ -1145,6 +1145,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::MathLog10(operand)
         | Expr::MathLog1p(operand)
         | Expr::MathClz32(operand)
+        | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand) => {
             walk(operand, out);

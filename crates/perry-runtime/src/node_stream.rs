@@ -33,6 +33,7 @@ use crate::value::JSValue;
 use std::os::raw::c_int;
 
 mod async_iterator;
+mod readable_from_promises;
 
 #[path = "node_stream_event_emitter.rs"]
 mod event_emitter;
