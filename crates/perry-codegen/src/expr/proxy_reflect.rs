@@ -199,9 +199,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::ReflectGetPrototypeOf(target) => {
-            // Pragmatic: the test only checks `=== Dog.prototype`, which
-            // the compiler folds to a compile-time bool. Return target.
-            lower_expr(ctx, target)
+            // #2757: return the actual [[Prototype]] (shared with
+            // Object.getPrototypeOf), not the target object itself. The
+            // `=== Class.prototype` comparison is still folded to a constant
+            // bool at lowering time (lower_expr.rs); this path handles every
+            // other (value-returning) use.
+            let t = lower_expr(ctx, target)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_reflect_get_prototype_of", &[(DOUBLE, &t)]))
+        }
+        Expr::ReflectIsExtensible(target) => {
+            // #2762: Reflect-specific — boolean result + TypeError on
+            // non-object, distinct from Object.isExtensible.
+            let t = lower_expr(ctx, target)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_reflect_is_extensible", &[(DOUBLE, &t)]))
+        }
+        Expr::ReflectPreventExtensions(target) => {
+            // #2762: Reflect-specific — boolean result + TypeError on
+            // non-object, distinct from Object.preventExtensions (which
+            // returns the object).
+            let t = lower_expr(ctx, target)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_reflect_prevent_extensions", &[(DOUBLE, &t)]))
         }
         Expr::ReflectDefineMetadata {
             key,

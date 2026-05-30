@@ -1545,6 +1545,16 @@ impl JsEmitter {
                 self.emit_expr(target);
                 self.output.push(')');
             }
+            Expr::ReflectIsExtensible(target) => {
+                self.output.push_str("Reflect.isExtensible(");
+                self.emit_expr(target);
+                self.output.push(')');
+            }
+            Expr::ReflectPreventExtensions(target) => {
+                self.output.push_str("Reflect.preventExtensions(");
+                self.emit_expr(target);
+                self.output.push(')');
+            }
             // Fallback for HIR variants the JS emitter doesn't model directly
             // (e.g. TypedArrayNew). Emit `undefined` so the emitted JS still
             // parses; these paths are unused for the LLVM-backend sweeps.
