@@ -1012,6 +1012,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result_i64 = blk.call(I64, "js_json_parse", &[(I64, &s_handle)]);
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }
+        // -------- JSON.rawJSON / JSON.isRawJSON (#2900) --------
+        // Both runtime helpers take and return a NaN-boxed f64, so the text /
+        // value operand passes straight through.
+        Expr::JsonRawJson(text) => {
+            let s_box = lower_expr(ctx, text)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_json_raw_json", &[(DOUBLE, &s_box)]))
+        }
+        Expr::JsonIsRawJson(value) => {
+            let v_box = lower_expr(ctx, value)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_json_is_raw_json", &[(DOUBLE, &v_box)]))
+        }
         // Issue #179 typed-parse, Step 1b: when `<T>` is
         // `Array<Object{fields}>`, emit a packed-keys rodata constant
         // and route through `js_json_parse_typed_array`. Any other

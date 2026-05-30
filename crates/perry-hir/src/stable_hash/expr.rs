@@ -183,6 +183,8 @@ impl SH for Expr {
             Expr::JsonStringify(e) => { tag(h, 138); e.as_ref().hash(h); }
             Expr::JsonStringifyPretty { value, replacer, space, } => { tag(h, 139); value.as_ref().hash(h); replacer.hash(h); space.as_ref().hash(h); }
             Expr::JsonStringifyFull(a, b, c) => { tag(h, 140); a.as_ref().hash(h); b.as_ref().hash(h); c.as_ref().hash(h); }
+            Expr::JsonRawJson(e) => { tag(h, 12130); e.as_ref().hash(h); }
+            Expr::JsonIsRawJson(e) => { tag(h, 12131); e.as_ref().hash(h); }
             Expr::MathFloor(e) => { tag(h, 141); e.as_ref().hash(h); }
             Expr::MathCeil(e) => { tag(h, 142); e.as_ref().hash(h); }
             Expr::MathRound(e) => { tag(h, 143); e.as_ref().hash(h); }

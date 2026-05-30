@@ -517,6 +517,15 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             }
             return;
         }
+        // #2900: a `JSON.rawJSON(text)` wrapper emits its stored text verbatim
+        // (no quoting, no re-escaping) — at the root, as an object field, or as
+        // an array element. Detect via the reserved class id before the
+        // generic object path so the wrapper's `rawJSON` own property is never
+        // serialized as `{"rawJSON":...}`.
+        if let Some(raw) = super::raw_json_text_bytes(ptr) {
+            buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
+            return;
+        }
         if type_hint == TYPE_OBJECT {
             stringify_object(ptr, buf);
             return;
@@ -718,6 +727,12 @@ pub(crate) unsafe fn stringify_value_depth(
             } else {
                 buf.push_str("null");
             }
+            return;
+        }
+        // #2900: raw-JSON wrapper — emit stored text verbatim. See the matching
+        // branch in `stringify_value`.
+        if let Some(raw) = super::raw_json_text_bytes(ptr) {
+            buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
             return;
         }
         if type_hint == TYPE_OBJECT {
