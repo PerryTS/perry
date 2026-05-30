@@ -216,6 +216,8 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
 /// contain spaces.
 #[no_mangle]
 pub extern "C" fn js_util_deprecate(fn_value: f64, _msg: f64, _code: f64) -> f64 {
+    validate_original_function(fn_value);
+
     fn_value
 }
 
