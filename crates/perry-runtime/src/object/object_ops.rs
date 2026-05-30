@@ -343,70 +343,7 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
     }
 }
 
-fn throw_to_object_nullish_type_error() -> ! {
-    let message = "Cannot convert undefined or null to object";
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
-unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
-    if key.is_null() {
-        return None;
-    }
-    let len = (*key).byte_len as usize;
-    let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
-    std::str::from_utf8(bytes).ok()
-}
-
-unsafe fn string_primitive_own_key_present(value: f64, key: *const crate::StringHeader) -> bool {
-    let Some(key_name) = string_header_as_str(key) else {
-        return false;
-    };
-    if key_name == "length" {
-        return true;
-    }
-    let Some(index) = super::canonical_array_index(key_name) else {
-        return false;
-    };
-    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let Some((ptr, blen)) = crate::string::str_bytes_from_jsvalue(value, &mut scratch) else {
-        return false;
-    };
-    if ptr.is_null() {
-        return false;
-    }
-    index < crate::string::compute_utf16_len(ptr, blen)
-}
-
-unsafe fn array_own_key_present(
-    arr: *const crate::array::ArrayHeader,
-    key: *const crate::StringHeader,
-) -> bool {
-    let Some(key_name) = string_header_as_str(key) else {
-        return false;
-    };
-    if key_name == "length" {
-        return true;
-    }
-    let Some(index) = super::canonical_array_index(key_name) else {
-        return false;
-    };
-    let length = (*arr).length;
-    if index >= length {
-        return false;
-    }
-    let elements =
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
-    std::ptr::read(elements.add(index as usize)) != crate::value::TAG_HOLE
-}
-
 /// Object.hasOwn(obj, key) - check if obj has its own property `key`.
-/// Returns NaN-boxed boolean. Applies ToObject nullish errors and primitive
-/// string own `length`/index semantics, then checks object `keys_array`
-/// membership (not "value != undefined") so own properties with undefined
-/// values still report true.
 #[no_mangle]
 pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -414,19 +351,12 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     unsafe {
         let obj_js = crate::JSValue::from_bits(obj_value.to_bits());
         if obj_js.is_undefined() || obj_js.is_null() {
-            throw_to_object_nullish_type_error();
+            super::has_own_helpers::throw_to_object_nullish_type_error();
         }
 
         // Symbol-keyed lookup: route through SYMBOL_PROPERTIES side table.
-        // drizzle's `is(value, type)` checks `entityKind` which is a Symbol;
-        // string-coercion would yield null and the check would always fail.
-        // Refs #420.
         if crate::symbol::js_is_symbol(key_value) != 0 {
-            // ClassRef receivers are NaN-boxed as INT32_TAG (top16 = 0x7FFE)
-            // with the class_id in the low 32 bits. Consult the
-            // class-static-symbol side table populated by
-            // `js_class_register_static_symbol`. Refs #420 (drizzle's
-            // `Object.prototype.hasOwnProperty.call(Table, entityKind)`).
+            // ClassRef receivers carry class_id in the low 32 bits.
             let bits = obj_value.to_bits();
             if (bits >> 48) == 0x7FFE {
                 let class_id = (bits & 0xFFFF_FFFF) as u32;
@@ -444,7 +374,8 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         }
 
         if obj_js.is_any_string() {
-            let present = string_primitive_own_key_present(obj_value, key_str);
+            let present =
+                super::has_own_helpers::string_primitive_own_key_present(obj_value, key_str);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
@@ -457,8 +388,10 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                let present =
-                    array_own_key_present(obj as *const crate::array::ArrayHeader, key_str);
+                let present = super::has_own_helpers::array_own_key_present(
+                    obj as *const crate::array::ArrayHeader,
+                    key_str,
+                );
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
         }
