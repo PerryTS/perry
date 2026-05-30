@@ -823,6 +823,12 @@ pub unsafe extern "C" fn js_new_function_construct(
             std::slice::from_raw_parts(args_ptr, args_len)
         };
         match name {
+            "Symbol" => {
+                return crate::error::js_throw_symbol_constructor_type_error();
+            }
+            "BigInt" => {
+                return crate::error::js_throw_bigint_constructor_type_error();
+            }
             "Date" => {
                 if args.is_empty() {
                     return crate::date::js_date_new();
