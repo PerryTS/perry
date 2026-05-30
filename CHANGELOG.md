@@ -2,6 +2,25 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1044 — fix(fs): deliver EBADF to callback for bad fd in close/fsync/fdatasync/fchmod (#3332)
+
+The callback forms of `fs.close`, `fs.fsync`, `fs.fdatasync`, and `fs.fchmod`
+previously routed through the sync helpers (which *throw* `EBADF` on a bad
+descriptor) and then unconditionally invoked the success callback. Node delivers
+the filesystem error to the callback's first argument for these async forms
+rather than throwing synchronously.
+
+Added `fs::validate::fd_open_callback_error(value, syscall)` — it still validates
+the fd *type* synchronously (matching Node's `validateInt32` on a non-numeric
+fd) but returns the `EBADF` error value for a valid-typed-but-unregistered
+descriptor instead of throwing. The four callback wrappers in
+`crates/perry-runtime/src/fs/callbacks.rs` now deliver that error via
+`call_cb_err1(...)` and only run the underlying sync op when the fd is open.
+
+New fixture `test-parity/node-suite/fs/callbacks/fd-callback-errors.ts` proves
+byte-identical `close/fsync/fdatasync/fchmod EBADF <syscall>` output against
+Node v25.
+
 ## v0.5.1043 — fix(runtime): restore the default auto-optimize compile (keepalive anchors)
 
 The default `perry file.ts -o out` flow (auto-optimize on) was broken on `main`:
