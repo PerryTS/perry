@@ -6,6 +6,9 @@
 //! runtime dispatch by checking the handle type in the registry.
 
 use super::handle::*;
+use perry_runtime::StringHeader;
+
+type EventEmitterOn = unsafe extern "C" fn(i64, *const StringHeader, i64) -> i64;
 
 /// Dispatch a method call on a handle-based object.
 /// Called from perry-runtime's js_native_call_method when it detects a handle
@@ -1938,24 +1941,19 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             f: unsafe extern "C" fn(i64, *const u8, usize, f64),
         );
         fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+        fn js_register_event_emitter_on(f: EventEmitterOn);
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
-        // `crate::events` only exists with the `bundled-events` feature; when
-        // it's compiled out there are no EventEmitter handles to recognize.
-        #[cfg(feature = "bundled-events")]
-        {
-            crate::events::is_event_emitter_handle(handle)
-        }
-        #[cfg(not(feature = "bundled-events"))]
-        {
-            let _ = handle;
-            false
-        }
+        crate::events::is_event_emitter_handle(handle)
     }
+    #[cfg(feature = "bundled-events")]
     js_register_event_emitter_handle_probe(event_emitter_probe);
+    #[cfg(feature = "bundled-events")]
+    js_register_event_emitter_on(crate::events::js_event_emitter_on);
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);

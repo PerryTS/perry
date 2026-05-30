@@ -161,6 +161,79 @@ extern "C" fn ns_chain3(closure: *const ClosureHeader, _a: f64, _b: f64, _c: f64
     this_value(closure)
 }
 
+fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHeader) {
+    let handle = raw_ptr_from_value(old_stream) as i64;
+    if handle == 0 {
+        return;
+    }
+    let Some(probe) = crate::object::event_emitter_handle_probe() else {
+        return;
+    };
+    if unsafe { !probe(handle) } {
+        return;
+    }
+    let Some(on) = crate::object::event_emitter_on() else {
+        return;
+    };
+    let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
+    unsafe { on(handle, event, listener as i64) };
+}
+
+extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let _ = push_chunk(stream, chunk);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap_end(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let _ = push_chunk(stream, f64::from_bits(TAG_NULL));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap_error(closure: *const ClosureHeader, err: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    destroy_stream(stream, err);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap_close(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_wrap1(closure: *const ClosureHeader, old_stream: f64) -> f64 {
+    let stream = this_value(closure);
+    let data = js_closure_alloc(ns_wrap_data as *const u8, 1);
+    let end = js_closure_alloc(ns_wrap_end as *const u8, 1);
+    let error = js_closure_alloc(ns_wrap_error as *const u8, 1);
+    let close = js_closure_alloc(ns_wrap_close as *const u8, 1);
+    js_closure_set_capture_ptr(data, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(end, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(error, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(close, 0, stream.to_bits() as i64);
+
+    call_old_stream_on(old_stream, b"data", data);
+    call_old_stream_on(old_stream, b"end", end);
+    call_old_stream_on(old_stream, b"error", error);
+    call_old_stream_on(old_stream, b"close", close);
+    call_old_stream_on(old_stream, b"destroy", close);
+    stream
+}
+
 extern "C" fn ns_readable_from_drain(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
