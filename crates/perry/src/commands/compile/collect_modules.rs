@@ -136,7 +136,6 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         // fast-path (gated in compile.rs). (#1213)
         "timers" => Some("timers"),
         "timers/promises" => Some("timers_promises"),
-        "trace_events" => Some("trace_events"),
         "fs/promises" => Some("fs_promises"),
         "readline/promises" => Some("readline_promises"),
         "stream/promises" => Some("stream_promises"),
@@ -161,6 +160,7 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         // `asJsonChan.hasSubscribers === false` and take the fast path
         // without ever entering the tracing-instrumentation branch.
         "diagnostics_channel" => Some("diagnostics_channel"),
+        "trace_events" => Some("trace_events"),
         // #1671: hono JSX runtime/streaming helpers. Perry renders JSX with the
         // built-in `js_jsx` runtime, so these submodules have no compiled-source
         // backing — they expose function singletons (jsx/jsxs/Fragment/JSXNode,

@@ -402,6 +402,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"decode",
         ]),
         "util" => Some(&[
+            b"aborted",
             b"callbackify",
             b"convertProcessSignalToExitCode",
             b"debuglog",
@@ -423,6 +424,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"parseArgs",
             b"TextDecoder",
             b"TextEncoder",
+            b"transferableAbortController",
+            b"transferableAbortSignal",
         ]),
         "net" => Some(&[
             b"_createServerHandle",
@@ -1413,11 +1416,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
+            | ("util", "aborted")
             | ("util", "debuglog")
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
             | ("util", "getSystemErrorMap")
             | ("util", "parseEnv")
+            | ("util", "transferableAbortController")
+            | ("util", "transferableAbortSignal")
             | ("util", "isArray")
             | ("util", "promisify")
             | ("util", "callbackify")

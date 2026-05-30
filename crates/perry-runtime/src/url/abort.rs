@@ -9,9 +9,13 @@ use super::*;
 /// AbortController object structure (matches ObjectHeader layout)
 /// Field 0: signal (object-ptr NaN-boxed)
 /// Field 1: aborted flag (NaN-boxed bool)
-const ABORT_CONTROLLER_FIELD_COUNT: u32 = 2;
+/// Field 2: abort method (closure)
+pub(crate) const ABORT_CONTROLLER_CLASS_ID: u32 = 0xFFFF_2401;
+pub(crate) const ABORT_SIGNAL_CLASS_ID: u32 = 0xFFFF_2402;
+const ABORT_CONTROLLER_FIELD_COUNT: u32 = 3;
 const ABORT_SIGNAL_FIELD: u32 = 0;
 const ABORT_ABORTED_FIELD: u32 = 1;
+const ABORT_METHOD_FIELD: u32 = 2;
 
 // AbortSignal object layout (all fields NaN-boxed):
 //   field 0: aborted (bool)
@@ -44,7 +48,7 @@ fn unbox_pointer_ac(v: f64) -> *mut ObjectHeader {
 }
 
 fn alloc_abort_signal() -> *mut ObjectHeader {
-    let signal = js_object_alloc(0, ABORT_SIGNAL_FIELD_COUNT);
+    let signal = js_object_alloc(ABORT_SIGNAL_CLASS_ID, ABORT_SIGNAL_FIELD_COUNT);
     let mut signal_keys = js_array_alloc(ABORT_SIGNAL_FIELD_COUNT);
     signal_keys = js_array_push_f64(signal_keys, create_string_f64("aborted"));
     signal_keys = js_array_push_f64(signal_keys, create_string_f64("reason"));
@@ -56,11 +60,31 @@ fn alloc_abort_signal() -> *mut ObjectHeader {
     signal
 }
 
+extern "C" fn abort_controller_abort_method(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let controller_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let controller_value = f64::from_bits(controller_bits);
+    let controller = crate::value::js_nanbox_get_pointer(controller_value) as *mut ObjectHeader;
+    js_abort_controller_abort_reason(controller, reason);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn abort_controller_abort_value(controller: *mut ObjectHeader) -> f64 {
+    let func = abort_controller_abort_method as *const u8;
+    crate::closure::js_register_closure_arity(func, 1);
+    let closure = crate::closure::js_closure_alloc(func, 1);
+    let controller_value = crate::value::js_nanbox_pointer(controller as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, controller_value.to_bits() as i64);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
 /// Create a new AbortController
 #[no_mangle]
 pub extern "C" fn js_abort_controller_new() -> *mut ObjectHeader {
     // Allocate the AbortController object
-    let controller = js_object_alloc(0, ABORT_CONTROLLER_FIELD_COUNT);
+    let controller = js_object_alloc(ABORT_CONTROLLER_CLASS_ID, ABORT_CONTROLLER_FIELD_COUNT);
 
     let signal = alloc_abort_signal();
 
@@ -68,6 +92,7 @@ pub extern "C" fn js_abort_controller_new() -> *mut ObjectHeader {
     let mut keys = js_array_alloc(ABORT_CONTROLLER_FIELD_COUNT);
     keys = js_array_push_f64(keys, create_string_f64("signal"));
     keys = js_array_push_f64(keys, create_string_f64("aborted"));
+    keys = js_array_push_f64(keys, create_string_f64("abort"));
     js_object_set_keys(controller, keys);
 
     // Store signal in controller (NaN-boxed with POINTER_TAG)
@@ -76,6 +101,11 @@ pub extern "C" fn js_abort_controller_new() -> *mut ObjectHeader {
         controller,
         ABORT_ABORTED_FIELD,
         f64::from_bits(TAG_FALSE_AC),
+    );
+    js_object_set_field_f64(
+        controller,
+        ABORT_METHOD_FIELD,
+        abort_controller_abort_value(controller),
     );
 
     controller
@@ -141,6 +171,23 @@ fn abort_signal_is_aborted(signal: *mut ObjectHeader) -> bool {
 #[no_mangle]
 pub extern "C" fn js_abort_signal_is_aborted(signal: *mut ObjectHeader) -> i32 {
     i32::from(abort_signal_is_aborted(signal))
+}
+
+pub(crate) fn abort_signal_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr = jsval.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    let is_signal = unsafe { (*ptr).class_id == ABORT_SIGNAL_CLASS_ID };
+    is_signal.then_some(ptr)
+}
+
+pub(crate) fn is_abort_signal_value(value: f64) -> bool {
+    abort_signal_ptr_from_value(value).is_some()
 }
 
 /// Construct a Node-compatible AbortError value.
