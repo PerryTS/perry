@@ -101,6 +101,27 @@ pub fn scan_small_int_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
     });
 }
 
+fn is_undefined_arg(value: f64) -> bool {
+    value.to_bits() == crate::value::TAG_UNDEFINED
+}
+
+fn to_integer_or_infinity(value: f64) -> f64 {
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_nan() || number == 0.0 {
+        0.0
+    } else if number.is_infinite() {
+        number
+    } else {
+        number.trunc()
+    }
+}
+
+fn throw_number_format_range_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 #[cfg(test)]
 pub(crate) fn test_seed_small_int_cache_root(index: usize, string_ptr: usize) {
     let idx = index % SMALL_INT_CACHE_SIZE;
@@ -151,13 +172,21 @@ pub(crate) fn test_clear_small_int_cache_root(index: usize) {
 /// overflow becomes a real risk.
 #[no_mangle]
 pub extern "C" fn js_number_to_fixed(value: f64, decimals: f64) -> *mut StringHeader {
-    let dp = decimals as usize;
+    let dp_number = to_integer_or_infinity(decimals);
+    if !(0.0..=100.0).contains(&dp_number) {
+        throw_number_format_range_error("toFixed() digits argument must be between 0 and 100");
+    }
+    let dp = dp_number as usize;
+
+    if value.is_nan() || value.is_infinite() {
+        return js_number_to_string(value);
+    }
 
     // ECMA-262 §21.1.3.3 step 9: if |x| >= 10^21, the result is ToString(x)
     // (which switches to exponential form), NOT a zero-padded fixed string.
     // `format!("{:.prec$}", 1e21)` would emit "1000000000000000000000.00";
     // Node emits "1e+21".
-    if !value.is_nan() && !value.is_infinite() && value.abs() >= 1e21 {
+    if value.abs() >= 1e21 {
         return js_number_to_string(value);
     }
 
@@ -165,7 +194,7 @@ pub extern "C" fn js_number_to_fixed(value: f64, decimals: f64) -> *mut StringHe
     // Conditions: finite, magnitude < 1e15 (so value * 10^dp fits safely
     // in i64), dp <= 6 (limits 10^dp to 1_000_000 — `value * 10^dp` then
     // stays under 1e21, well inside i64's ~9.2e18 range).
-    if !value.is_nan() && !value.is_infinite() && value.abs() < 1e15 && dp <= 6 {
+    if value.abs() < 1e15 && dp <= 6 {
         if let Some(n) = fmt_fixed_int(value, dp) {
             return n;
         }
@@ -292,7 +321,9 @@ fn fmt_fixed_int(value: f64, dp: usize) -> Option<*mut StringHeader> {
 /// JS spec: total significant digits, switches to exponential for very small/large.
 #[no_mangle]
 pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut StringHeader {
-    let s = if value.is_nan() {
+    let s = if is_undefined_arg(precision) {
+        format_number_for_js(value)
+    } else if value.is_nan() {
         "NaN".to_string()
     } else if value.is_infinite() {
         if value > 0.0 {
@@ -301,11 +332,12 @@ pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut Str
             "-Infinity".to_string()
         }
     } else {
-        let p = precision as usize;
-        if p == 0 {
-            // toPrecision() with no arg is same as toString
-            format_number_for_js(value)
-        } else if value == 0.0 {
+        let p_number = to_integer_or_infinity(precision);
+        if p_number < 1.0 || p_number > 100.0 {
+            throw_number_format_range_error("toPrecision() argument must be between 1 and 100");
+        }
+        let p = p_number as usize;
+        if value == 0.0 {
             // 0.toPrecision(3) = "0.00"
             if p == 1 {
                 "0".to_string()
@@ -345,8 +377,14 @@ pub extern "C" fn js_number_to_exponential(value: f64, decimals: f64) -> *mut St
         } else {
             "-Infinity".to_string()
         }
+    } else if is_undefined_arg(decimals) {
+        fix_exponent_format(&format!("{:e}", value))
     } else {
-        let dp = decimals as usize;
+        let dp_number = to_integer_or_infinity(decimals);
+        if !(0.0..=100.0).contains(&dp_number) {
+            throw_number_format_range_error("toExponential() argument must be between 0 and 100");
+        }
+        let dp = dp_number as usize;
         // Rust's `{:e}` produces e.g. "1.23e4"; JS expects "1.23e+4"
         let formatted = format!("{:.*e}", dp, value);
         fix_exponent_format(&formatted)

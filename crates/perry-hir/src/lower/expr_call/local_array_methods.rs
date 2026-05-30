@@ -254,18 +254,21 @@ pub(super) fn try_local_array_methods(
                             }
                             "splice" => {
                                 // arr.splice(start, deleteCount?, ...items) - returns deleted elements
-                                if !args.is_empty() {
-                                    let mut args_iter = args.into_iter();
-                                    let start = args_iter.next().unwrap();
-                                    let delete_count = args_iter.next();
-                                    let items: Vec<Expr> = args_iter.collect();
-                                    return Ok(Ok(Expr::ArraySplice {
-                                        array_id,
-                                        start: Box::new(start),
-                                        delete_count: delete_count.map(Box::new),
-                                        items,
-                                    }));
-                                }
+                                let has_start = !args.is_empty();
+                                let mut args_iter = args.into_iter();
+                                let start = args_iter.next().unwrap_or(Expr::Number(0.0));
+                                let delete_count = if has_start {
+                                    args_iter.next().map(Box::new)
+                                } else {
+                                    Some(Box::new(Expr::Number(0.0)))
+                                };
+                                let items: Vec<Expr> = args_iter.collect();
+                                return Ok(Ok(Expr::ArraySplice {
+                                    array_id,
+                                    start: Box::new(start),
+                                    delete_count,
+                                    items,
+                                }));
                             }
                             "forEach" => {
                                 // Check if the receiver is a Map or Set - if so, don't use ArrayForEach.
