@@ -153,13 +153,71 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
     f64::from_bits(JSValue::undefined().bits())
 }
 
-/// Constant-time equality for equal-length byte inputs.
+/// Classify a NaN-boxed value as a Node `BufferSource` (ArrayBuffer /
+/// SharedArrayBuffer / Buffer / TypedArray / DataView) and return its raw
+/// bytes. Strings, numbers, and any other value are rejected with a
+/// `TypeError [ERR_INVALID_ARG_TYPE]` carrying Node's exact `timingSafeEqual`
+/// message (`#3065`). All of these shapes share the length-prefixed
+/// `BufferHeader` storage except genuine typed-array views, which carry a
+/// byte offset/length and must go through `typed_array_bytes`.
+unsafe fn timing_safe_buffer_source(value: f64, arg_name: &str) -> Vec<u8> {
+    // Strip a NaN-box if present, otherwise read the raw pointer bits. This
+    // mirrors the runtime's own `jsvalue_addr`/`jsvalue_typed_array_kind`
+    // helpers: typed-array views are not always POINTER_TAG-boxed, so an
+    // `is_pointer()` gate would miss `new Uint16Array(...)`. Genuine numbers /
+    // strings / null land on an address that is in none of the registries and
+    // fall through to the TypeError below.
+    let bits = value.to_bits();
+    let addr = if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    };
+    if addr >= 0x1000 {
+        // Real TypedArray views (Uint16Array, Int32Array, …) carry a byte
+        // offset/length, so route them through `typed_array_bytes`.
+        if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+            let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
+            if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {
+                return bytes.to_vec();
+            }
+        }
+        // Buffer / Uint8Array-backed buffer / ArrayBuffer / SharedArrayBuffer /
+        // DataView all share the length-prefixed `BufferHeader` storage.
+        if perry_runtime::buffer::is_registered_buffer(addr)
+            || perry_runtime::buffer::is_uint8array_buffer(addr)
+            || perry_runtime::buffer::is_any_array_buffer(addr)
+            || perry_runtime::buffer::is_data_view(addr)
+        {
+            let buf = addr as *const perry_runtime::buffer::BufferHeader;
+            let len = (*buf).length as usize;
+            let data =
+                (buf as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+            return std::slice::from_raw_parts(data, len).to_vec();
+        }
+    }
+    let message = format!(
+        "The \"{}\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+        arg_name
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// Constant-time equality for equal-length byte inputs. Args arrive as the full
+/// NaN-boxed bits (`f64`) so the helper can type-discriminate BufferSource
+/// inputs the way Node does (`#3065`): non-BufferSource values throw
+/// `ERR_INVALID_ARG_TYPE`, and a byte-length mismatch throws
+/// `RangeError [ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH]` rather than returning
+/// `false`.
 #[no_mangle]
-pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_ptr: i64, b_ptr: i64) -> f64 {
-    let a = bytes_from_ptr(a_ptr);
-    let b = bytes_from_ptr(b_ptr);
+pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_bits: i64, b_bits: i64) -> f64 {
+    let a = timing_safe_buffer_source(f64::from_bits(a_bits as u64), "buf1");
+    let b = timing_safe_buffer_source(f64::from_bits(b_bits as u64), "buf2");
     if a.len() != b.len() {
-        return f64::from_bits(JSValue::bool(false).bits());
+        perry_runtime::fs::validate::throw_range_error_named(
+            "Input buffers must have the same byte length",
+            "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH",
+        );
     }
     let mut diff = 0u8;
     for (x, y) in a.iter().zip(b.iter()) {

@@ -1006,15 +1006,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if args.len() < 2 {
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            // Pass the full NaN-boxed bits (raw bitcast, NOT the masked
+            // pointer) so the runtime helper can type-discriminate BufferSource
+            // inputs and throw Node's ERR_INVALID_ARG_TYPE for strings/numbers
+            // (#3065). A plain `(DOUBLE, box)` pass mis-coerces non-f64 lowered
+            // values, so bitcast each box to its i64 bit pattern first.
             let a_box = lower_expr(ctx, &args[0])?;
             let b_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &a_box);
-            let b_handle = unbox_to_i64(blk, &b_box);
+            let a_bits = blk.bitcast_double_to_i64(&a_box);
+            let b_bits = blk.bitcast_double_to_i64(&b_box);
             Ok(blk.call(
                 DOUBLE,
                 "js_crypto_timing_safe_equal",
-                &[(I64, &a_handle), (I64, &b_handle)],
+                &[(I64, &a_bits), (I64, &b_bits)],
             ))
         }
 

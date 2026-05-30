@@ -1349,8 +1349,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
-    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args are unboxed
-    // to raw i64 pointers (Buffer / TypedArray / string).
+    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args are the full
+    // NaN-boxed bits (raw bitcast) so the runtime can type-discriminate
+    // BufferSource inputs and throw Node's ERR_INVALID_ARG_TYPE / length
+    // errors (#3065).
     module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[I64, I64]);
     // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
     module.declare_function("js_crypto_get_hashes", I64, &[]);
