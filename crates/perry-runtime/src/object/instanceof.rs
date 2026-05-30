@@ -107,7 +107,74 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     if synthetic_cid != 0 {
         return js_instanceof(value, synthetic_cid);
     }
-    f64::from_bits(TAG_FALSE)
+    // #2909: nothing recognized the RHS as a constructor/class. Per the
+    // ECMAScript `InstanceofOperator`, the right operand must be an object
+    // (and ultimately callable / have a `Symbol.hasInstance`); a primitive
+    // or non-callable RHS is a `TypeError`, not a silent `false`. Match
+    // Node's two distinct messages:
+    //   - primitive RHS (number/string/bool/null/undefined/bigint/symbol):
+    //       "Right-hand side of 'instanceof' is not an object"
+    //   - object-but-non-callable RHS ({}, [], Map, …):
+    //       "Right-hand side of 'instanceof' is not callable"
+    // (Callable RHS values never reach here — they resolve to a synthetic
+    // class id above — so we don't need to model the arrow-`.prototype`
+    // case at this site.)
+    throw_invalid_instanceof_rhs(type_ref)
+}
+
+#[cold]
+fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
+    if rhs_is_object_value(type_ref) {
+        throw_type_error(b"Right-hand side of 'instanceof' is not callable");
+    }
+    throw_type_error(b"Right-hand side of 'instanceof' is not an object");
+}
+
+/// Whether `value` is a (non-callable) object for the purposes of the
+/// `instanceof` RHS check: any heap pointer (plain object, array, Map, Set,
+/// Date, RegExp, Buffer/typed-array, etc.). Primitives — including `null`,
+/// `undefined`, numbers, strings, booleans, bigints — are not objects.
+fn rhs_is_object_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    let jsval = crate::JSValue::from_bits(bits);
+    if jsval.is_null()
+        || jsval.is_undefined()
+        || jsval.is_bool()
+        || jsval.is_any_string()
+        || jsval.is_int32()
+        || jsval.is_bigint()
+    {
+        return false;
+    }
+    if jsval.is_pointer() {
+        let ptr = (bits & crate::value::POINTER_MASK) as usize;
+        // Symbols are primitives; small registry handles aren't real objects
+        // here either, but they're still object-typed in JS (`typeof` is
+        // "object"), so a "not callable" message is the right one for them.
+        if ptr >= 0x100000 && crate::symbol::is_registered_symbol(ptr) {
+            return false;
+        }
+        return true;
+    }
+    // Raw bitcast pointers (typed arrays / buffers / arrays) — these are
+    // objects too.
+    let top16 = bits >> 48;
+    if top16 == 0 && bits >= 0x1000 {
+        let addr = bits as usize;
+        return crate::buffer::is_registered_buffer(addr)
+            || crate::set::is_registered_set(addr)
+            || crate::map::is_registered_map(addr)
+            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            || addr >= crate::gc::GC_HEADER_SIZE;
+    }
+    false
+}
+
+#[cold]
+fn throw_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn is_event_emitter_instance_value(value: f64) -> bool {

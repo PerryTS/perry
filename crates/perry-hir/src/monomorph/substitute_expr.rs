@@ -665,6 +665,12 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::JsonStringify(expr) => {
             Expr::JsonStringify(Box::new(substitute_expr(expr, substitutions)))
         }
+        Expr::JsonRawJson(expr) => {
+            Expr::JsonRawJson(Box::new(substitute_expr(expr, substitutions)))
+        }
+        Expr::JsonIsRawJson(expr) => {
+            Expr::JsonIsRawJson(Box::new(substitute_expr(expr, substitutions)))
+        }
 
         // Math operations
         Expr::MathFloor(expr) => Expr::MathFloor(Box::new(substitute_expr(expr, substitutions))),

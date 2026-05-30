@@ -160,6 +160,8 @@ where
         | Expr::RegExpLastIndex(v)
         | Expr::JsonParse(v)
         | Expr::JsonStringify(v)
+        | Expr::JsonRawJson(v)
+        | Expr::JsonIsRawJson(v)
         | Expr::JsonParseTyped { text: v, .. }
         | Expr::MathFloor(v)
         | Expr::MathCeil(v)
