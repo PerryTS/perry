@@ -62,6 +62,12 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:http` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
+  "test_parity_http2": {
+    "issue": "793",
+    "added": "2026-05-15",
+    "category": "module-inventory",
+    "reason": "Node.js module inventory \u2014 `node:http2` surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+  },
   "test_parity_https": {
     "issue": "793",
     "added": "2026-05-15",
@@ -73,6 +79,12 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:module` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+  },
+  "test_parity_net": {
+    "issue": "793",
+    "added": "2026-05-15",
+    "category": "module-inventory",
+    "reason": "Node.js module inventory \u2014 `node:net` socket-layer surface not implemented (Server/Socket classes, BlockList, SocketAddress). Classification helpers landed via #811. Tracker for surface coverage; flips to PASS as each API lands."
   },
   "test_parity_readline": {
     "issue": "793",
@@ -115,6 +127,12 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
+  },
+  "test_parity_worker_threads": {
+    "issue": "793",
+    "added": "2026-05-15",
+    "category": "module-inventory",
+    "reason": "Node.js module inventory \u2014 `node:worker_threads` surface not implemented (perry/thread provides a Perry-native alternative). Tracker for surface coverage; flips to PASS as each API lands."
   },
   "test_parity_zlib": {
     "issue": "793",
