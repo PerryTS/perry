@@ -2581,6 +2581,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "fs.constants" => fs_const(property),
         "buffer" => match property {
             "Buffer" => Some(buffer_constructor_value()),
+            "Blob" => Some(js_get_global_this_builtin_value(b"Blob".as_ptr(), 4)),
             "File" => Some(js_get_global_this_builtin_value(b"File".as_ptr(), 4)),
             "constants" => Some(create_sub_namespace("buffer.constants")),
             // Match Node's common 64-bit max Buffer length value. Perry won't

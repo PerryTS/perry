@@ -890,7 +890,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                    if resolved == "File" {
+                    if matches!(resolved.as_str(), "Blob" | "File") {
                         ctx.uses_fetch = true;
                         return Ok(Expr::New {
                             class_name: resolved,
@@ -1031,7 +1031,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
-                if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "File" {
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && matches!(property.as_str(), "Blob" | "File")
+                {
+                    ctx.uses_fetch = true;
+                    return Ok(Expr::New {
+                        class_name: property.clone(),
+                        args,
+                        type_args: Vec::new(),
+                    });
+                }
+                if matches!(object.as_ref(), Expr::NativeModuleRef(module)
+                    if module == "buffer" || module == "node:buffer")
+                    && matches!(property.as_str(), "Blob" | "File")
+                {
                     ctx.uses_fetch = true;
                     return Ok(Expr::New {
                         class_name: property.clone(),
