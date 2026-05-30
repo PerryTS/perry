@@ -36,11 +36,18 @@ pub extern "C" fn js_string_raw(call_site: f64, substitutions: f64) -> *mut Stri
         return js_string_from_bytes("".as_ptr(), 0);
     }
 
+    // Use the polymorphic numeric-index getter so both real arrays and
+    // array-like plain objects (`{ 0: "a", 1: "b", length: 2 }`) read
+    // correctly — a plain object's "0"/"1" are string-named fields, which
+    // `js_object_get_index_polymorphic` handles by stringifying the index.
+    let raw_handle = raw.to_bits() as i64;
+    let subs_handle = substitutions.to_bits() as i64;
+
     let mut result = String::new();
     let mut i: u64 = 0;
     loop {
         // ToString(raw[i])
-        let seg = crate::value::js_dyn_index_get(raw, i as f64);
+        let seg = crate::object::js_object_get_index_polymorphic(raw_handle, i as f64);
         let seg_ptr = crate::value::js_jsvalue_to_string(seg);
         if is_valid_string_ptr(seg_ptr) {
             result.push_str(string_as_str(seg_ptr));
@@ -51,7 +58,7 @@ pub extern "C" fn js_string_raw(call_site: f64, substitutions: f64) -> *mut Stri
         // ToString(substitutions[i]) interleaved between segments. Missing
         // substitutions are simply absent (ToString skipped) — matching the
         // spec's `if nextIndex < numberOfSubstitutions` guard.
-        let sub = crate::value::js_dyn_index_get(substitutions, i as f64);
+        let sub = crate::object::js_object_get_index_polymorphic(subs_handle, i as f64);
         let sub_jsval = crate::value::JSValue::from_bits(sub.to_bits());
         if !sub_jsval.is_undefined() {
             let sub_ptr = crate::value::js_jsvalue_to_string(sub);

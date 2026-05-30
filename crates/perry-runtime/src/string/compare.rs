@@ -389,7 +389,10 @@ pub extern "C" fn js_string_ends_with_at(
 /// `"NFKD"` — anything else (including explicit `null` → `"null"`, the empty
 /// string, or `"BAD"`) throws a `RangeError`. (#2782)
 #[no_mangle]
-pub extern "C" fn js_string_normalize(s: *const StringHeader, form_value: f64) -> *mut StringHeader {
+pub extern "C" fn js_string_normalize(
+    s: *const StringHeader,
+    form_value: f64,
+) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(std::ptr::null(), 0);
     }

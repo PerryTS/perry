@@ -625,6 +625,15 @@ where
         Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
             f(v);
         }
+        Expr::StringRaw {
+            call_site,
+            substitutions,
+        } => {
+            f(call_site);
+            for s in substitutions {
+                f(s);
+            }
+        }
         Expr::StringAt { string, index } | Expr::StringCodePointAt { string, index } => {
             f(string);
             f(index);
