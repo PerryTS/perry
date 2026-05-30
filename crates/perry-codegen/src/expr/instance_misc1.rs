@@ -667,7 +667,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let count_d = if let Some(d) = delete_count {
                 lower_expr(ctx, d)?
             } else {
-                "0.0".to_string()
+                "2147483647.0".to_string()
             };
 
             // Evaluate splice-insert items and collect their f64 values.

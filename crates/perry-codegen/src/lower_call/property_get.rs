@@ -66,26 +66,32 @@ pub fn try_lower_property_get_method_call(
     // Receiver is any number-typed value; we don't gate on
     // is_numeric_expr because tests often call it on Any locals.
     if property == "toFixed"
-        && args.len() == 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_native_module_dynamic_index(object)
     {
         let v = lower_expr(ctx, object)?;
-        let dec = lower_expr(ctx, &args[0])?;
+        let dec = if let Some(arg) = args.first() {
+            lower_expr(ctx, arg)?
+        } else {
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
         let blk = ctx.block();
         let handle = blk.call(I64, "js_number_to_fixed", &[(DOUBLE, &v), (DOUBLE, &dec)]);
         return Ok(Some(nanbox_string_inline(blk, &handle)));
     }
     // Number.prototype.toPrecision(digits)
     if property == "toPrecision"
-        && args.len() == 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_native_module_dynamic_index(object)
     {
         let v = lower_expr(ctx, object)?;
-        let prec = lower_expr(ctx, &args[0])?;
+        let prec = if let Some(arg) = args.first() {
+            lower_expr(ctx, arg)?
+        } else {
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
         let blk = ctx.block();
         let handle = blk.call(
             I64,
@@ -96,16 +102,15 @@ pub fn try_lower_property_get_method_call(
     }
     // Number.prototype.toExponential(decimals)
     if property == "toExponential"
-        && args.len() <= 1
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_native_module_dynamic_index(object)
     {
         let v = lower_expr(ctx, object)?;
-        let dec = if args.is_empty() {
-            "0.0".to_string()
+        let dec = if let Some(arg) = args.first() {
+            lower_expr(ctx, arg)?
         } else {
-            lower_expr(ctx, &args[0])?
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
         };
         let blk = ctx.block();
         let handle = blk.call(

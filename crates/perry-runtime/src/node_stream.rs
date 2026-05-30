@@ -1589,6 +1589,10 @@ pub use pipeline::*;
 mod readwrite;
 pub use readwrite::*;
 
+#[path = "node_stream_json.rs"]
+mod json_stream;
+pub use json_stream::*;
+
 #[path = "node_stream_constructors.rs"]
 mod constructors;
 pub use constructors::*;

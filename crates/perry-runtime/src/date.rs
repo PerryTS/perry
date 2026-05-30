@@ -831,14 +831,19 @@ fn rebuild_with(
     second: Option<u32>,
     millisecond: Option<i64>,
 ) -> f64 {
-    // A NaN time value coerces to 0 via `as i64`, matching the prior
-    // value-type behavior (e.g. `setUTCFullYear` reviving an Invalid Date
-    // from the epoch per ECMA-262 §21.4.4.40's "if t is NaN, set t to +0").
     let timestamp = date_cell_timestamp(date);
-    let ts_ms = timestamp as i64;
-    let secs = ts_ms.div_euclid(1000);
-    let cur_ms = ts_ms.rem_euclid(1000);
-    let (cy, cm, cd, ch, cmi, cs) = timestamp_to_components(secs);
+    let (cy, cm, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
+        if year.is_none() {
+            return date_cell_store(date, timestamp);
+        }
+        (1970, 1, 1, 0, 0, 0, 0)
+    } else {
+        let ts_ms = timestamp as i64;
+        let secs = ts_ms.div_euclid(1000);
+        let cur_ms = ts_ms.rem_euclid(1000);
+        let (cy, cm, cd, ch, cmi, cs) = timestamp_to_components(secs);
+        (cy, cm, cd, ch, cmi, cs, cur_ms)
+    };
     let new_secs = components_to_timestamp(
         year.unwrap_or(cy),
         month.unwrap_or(cm),
@@ -957,8 +962,9 @@ pub extern "C" fn js_date_set_utc_milliseconds(timestamp: f64, value: f64) -> f6
 // round-trip through `timestamp_to_local_components`. The local-clock
 // components get reassembled with the requested component swapped, then we
 // subtract the tz offset at that instant to land back at a true UTC epoch.
-// Mirrors the conversion in `js_date_new_local_components`. NaN passes
-// through untouched so an Invalid Date stays an Invalid Date.
+// Mirrors the conversion in `js_date_new_local_components`. Only
+// `setFullYear` revives an Invalid Date; other component setters leave it
+// invalid.
 
 fn rebuild_local_with(
     date: f64,
@@ -971,14 +977,18 @@ fn rebuild_local_with(
     millisecond: Option<i64>,
 ) -> f64 {
     let timestamp = date_cell_timestamp(date);
-    if timestamp.is_nan() {
-        // Setting a component on an Invalid Date leaves it invalid.
-        return date_cell_store(date, timestamp);
-    }
-    let ts_ms = timestamp as i64;
-    let secs = ts_ms.div_euclid(1000);
-    let cur_ms = ts_ms.rem_euclid(1000);
-    let (cy, cm, cd, ch, cmi, cs, _) = timestamp_to_local_components(secs);
+    let (cy, cm, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
+        if year.is_none() {
+            return date_cell_store(date, timestamp);
+        }
+        (1970, 1, 1, 0, 0, 0, 0)
+    } else {
+        let ts_ms = timestamp as i64;
+        let secs = ts_ms.div_euclid(1000);
+        let cur_ms = ts_ms.rem_euclid(1000);
+        let (cy, cm, cd, ch, cmi, cs, _) = timestamp_to_local_components(secs);
+        (cy, cm, cd, ch, cmi, cs, cur_ms)
+    };
     let new_year = year.unwrap_or(cy);
     let new_month = month.unwrap_or(cm);
     let new_day = day.unwrap_or(cd);
@@ -1395,5 +1405,30 @@ mod tests {
         // Test 2024-01-15 12:30:45 UTC (timestamp: 1705321845)
         let (y, m, d, h, min, s) = timestamp_to_components(1705321845);
         assert_eq!((y, m, d, h, min, s), (2024, 1, 15, 12, 30, 45));
+    }
+
+    #[test]
+    fn test_full_year_setters_revive_invalid_date_only() {
+        let local = date_invalid();
+        let local_result = js_date_set_full_year(local, 2020.0);
+        assert!(!local_result.is_nan());
+        assert!(!date_cell_timestamp(local).is_nan());
+        assert_eq!(js_date_get_full_year(local), 2020.0);
+        assert_eq!(js_date_get_month(local), 0.0);
+        assert_eq!(js_date_get_date(local), 1.0);
+        assert_eq!(js_date_get_hours(local), 0.0);
+
+        let utc = date_invalid();
+        let utc_result = js_date_set_utc_full_year(utc, 2020.0);
+        assert_eq!(utc_result, 1_577_836_800_000.0);
+        assert_eq!(date_cell_timestamp(utc), 1_577_836_800_000.0);
+
+        let local_month = date_invalid();
+        assert!(js_date_set_month(local_month, 0.0).is_nan());
+        assert!(date_cell_timestamp(local_month).is_nan());
+
+        let utc_month = date_invalid();
+        assert!(js_date_set_utc_month(utc_month, 0.0).is_nan());
+        assert!(date_cell_timestamp(utc_month).is_nan());
     }
 }
