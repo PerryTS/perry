@@ -238,9 +238,9 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// the original value, and the elements were never cleared.
 ///
 /// `new_length` arrives as f64 from the codegen (assignment value is a
-/// JSValue). Truncates to u32 with NaN/negative/non-integer clamped to 0
-/// (the spec throws RangeError; we clamp for now since Perry's exception
-/// surface is incomplete in places — issue worth a follow-up).
+/// JSValue). The JS ArraySetLength path coerces it with `Number(...)`, then
+/// rejects NaN, negative, fractional, infinite, and >uint32 lengths with
+/// `RangeError: Invalid array length`.
 #[no_mangle]
 pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     let arr = clean_arr_ptr_mut(arr);
@@ -249,11 +249,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
-    let n: u32 = if new_length.is_nan() || new_length < 0.0 || new_length > u32::MAX as f64 {
-        0
-    } else {
-        new_length as u32
-    };
+    let n = array_length_from_property_value_or_throw(new_length);
     unsafe {
         let cur = (*arr).length;
         if n < cur {

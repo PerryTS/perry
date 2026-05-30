@@ -354,4 +354,65 @@ mod tests {
             assert_eq!(sys_entry.returns, util_entry.returns, "{}", util_entry.name);
         }
     }
+
+    #[test]
+    fn path_submodule_manifests_mirror_path() {
+        let path_entries: Vec<&ApiEntry> =
+            API_MANIFEST.iter().filter(|e| e.module == "path").collect();
+
+        for module in ["path/posix", "path/win32"] {
+            assert!(is_known_module(module));
+            assert!(is_known_module(&format!("node:{module}")));
+            assert!(module_has_any_entries(module));
+
+            for name in ["join", "basename", "sep", "delimiter", "posix", "win32"] {
+                assert!(
+                    module_has_symbol(module, name).is_some(),
+                    "{module} missing representative path export: {name}"
+                );
+            }
+
+            let submodule_entries: Vec<&ApiEntry> =
+                API_MANIFEST.iter().filter(|e| e.module == module).collect();
+            assert_eq!(
+                submodule_entries.len(),
+                path_entries.len(),
+                "{module} should mirror the public path module manifest surface"
+            );
+
+            for path_entry in &path_entries {
+                let submodule_entry = submodule_entries
+                    .iter()
+                    .copied()
+                    .find(|e| e.name == path_entry.name && e.kind == path_entry.kind)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{module} missing path alias entry {}::{:?}",
+                            path_entry.name, path_entry.kind
+                        )
+                    });
+                assert_eq!(
+                    submodule_entry.source, path_entry.source,
+                    "{module}::{}",
+                    path_entry.name
+                );
+                assert_eq!(
+                    submodule_entry.stub, path_entry.stub,
+                    "{module}::{}",
+                    path_entry.name
+                );
+                assert_eq!(
+                    submodule_entry.params.len(),
+                    path_entry.params.len(),
+                    "{module}::{}",
+                    path_entry.name
+                );
+                assert_eq!(
+                    submodule_entry.returns, path_entry.returns,
+                    "{module}::{}",
+                    path_entry.name
+                );
+            }
+        }
+    }
 }
