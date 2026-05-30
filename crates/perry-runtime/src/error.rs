@@ -24,6 +24,8 @@ pub const ERROR_KIND_RANGE_ERROR: u32 = 2;
 pub const ERROR_KIND_REFERENCE_ERROR: u32 = 3;
 pub const ERROR_KIND_SYNTAX_ERROR: u32 = 4;
 pub const ERROR_KIND_AGGREGATE_ERROR: u32 = 5;
+pub const ERROR_KIND_EVAL_ERROR: u32 = 6;
+pub const ERROR_KIND_URI_ERROR: u32 = 7;
 
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
 pub const CLASS_ID_ERROR: u32 = 0xFFFF0001;
@@ -32,6 +34,8 @@ pub const CLASS_ID_RANGE_ERROR: u32 = 0xFFFF0011;
 pub const CLASS_ID_REFERENCE_ERROR: u32 = 0xFFFF0012;
 pub const CLASS_ID_SYNTAX_ERROR: u32 = 0xFFFF0013;
 pub const CLASS_ID_AGGREGATE_ERROR: u32 = 0xFFFF0014;
+pub const CLASS_ID_EVAL_ERROR: u32 = 0xFFFF0015;
+pub const CLASS_ID_URI_ERROR: u32 = 0xFFFF0016;
 /// AssertionError is a plain ObjectHeader (so it can carry the extra
 /// `actual` / `expected` / `operator` / `code` / `generatedMessage`
 /// fields Node attaches), but it is registered via
@@ -206,6 +210,18 @@ pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut Erro
 #[no_mangle]
 pub extern "C" fn js_syntaxerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
     unsafe { alloc_error(ERROR_KIND_SYNTAX_ERROR, b"SyntaxError", message) }
+}
+
+/// Create a new EvalError with a message
+#[no_mangle]
+pub extern "C" fn js_evalerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_EVAL_ERROR, b"EvalError", message) }
+}
+
+/// Create a new URIError with a message
+#[no_mangle]
+pub extern "C" fn js_urierror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    unsafe { alloc_error(ERROR_KIND_URI_ERROR, b"URIError", message) }
 }
 
 /// Create a new AggregateError with an errors array and a message
@@ -542,5 +558,22 @@ mod tostring_tests {
         let e = js_error_new_with_name_message(b"TypeError", s(b"bad"));
         let out = unsafe { read_string_header_owned(js_error_to_string(e)) };
         assert_eq!(out, "TypeError: bad");
+    }
+
+    #[test]
+    fn eval_and_uri_errors_have_distinct_kinds_and_names() {
+        let eval = js_evalerror_new(s(b"eval"));
+        assert_eq!(js_error_get_kind(eval), ERROR_KIND_EVAL_ERROR);
+        assert_eq!(
+            unsafe { read_string_header_owned(js_error_get_name(eval)) },
+            "EvalError"
+        );
+
+        let uri = js_urierror_new(s(b"uri"));
+        assert_eq!(js_error_get_kind(uri), ERROR_KIND_URI_ERROR);
+        assert_eq!(
+            unsafe { read_string_header_owned(js_error_get_name(uri)) },
+            "URIError"
+        );
     }
 }
