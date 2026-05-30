@@ -2902,6 +2902,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "isDeepStrictEqual", false, None),
     method("sys", "parseArgs", false, None),
     method("sys", "stripVTControlCharacters", false, None),
+    method("sys", "toUSVString", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),
