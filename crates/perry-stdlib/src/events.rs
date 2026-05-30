@@ -615,6 +615,32 @@ unsafe fn first_arg_or_undefined(args_ptr: *const ArrayHeader) -> f64 {
     }
 }
 
+unsafe fn collect_emit_args(args_ptr: *const ArrayHeader) -> Vec<f64> {
+    if args_ptr.is_null() {
+        return Vec::new();
+    }
+
+    let len = js_array_length(args_ptr) as usize;
+    let mut args = Vec::with_capacity(len);
+    for index in 0..len {
+        args.push(perry_runtime::array::js_array_get_f64(
+            args_ptr,
+            index as u32,
+        ));
+    }
+    args
+}
+
+unsafe fn call_emitter_listener(handle: Handle, callback: i64, args: &[f64]) -> f64 {
+    let receiver = js_nanbox_pointer(handle);
+    let callback_value = js_nanbox_pointer(callback);
+    let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
+    let result =
+        perry_runtime::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
+    perry_runtime::object::js_implicit_this_set(previous_this);
+    result
+}
+
 const TAG_UNDEFINED_F64_BITS: u64 = 0x7FFC_0000_0000_0001;
 
 extern "C" fn events_capture_rejection_handler(closure: *const ClosureHeader, reason: f64) -> f64 {
@@ -683,6 +709,7 @@ pub unsafe extern "C" fn js_event_emitter_emit(
         }
 
         let first_arg = first_arg_or_undefined(args_ptr);
+        let emitted_args = collect_emit_args(args_ptr);
         if event_name == "error" {
             dispatch_error_monitor(emitter, Some(first_arg));
             let has_error_once = emitter
@@ -702,8 +729,7 @@ pub unsafe extern "C" fn js_event_emitter_emit(
         let capture_rejections = emitter.capture_rejections && event_name != "error";
         for l in snapshot {
             if l.callback != 0 {
-                let closure_ptr = l.callback as *const ClosureHeader;
-                let result = js_closure_call1(closure_ptr, first_arg);
+                let result = call_emitter_listener(handle, l.callback, &emitted_args);
                 if capture_rejections {
                     capture_listener_rejection(handle, result);
                 }
@@ -742,6 +768,7 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
         }
 
         let empty_args = js_array_alloc(0);
+        let emitted_args: &[f64] = &[];
         if event_name == "error" {
             dispatch_error_monitor(emitter, None);
             let has_error_once = emitter
@@ -762,8 +789,7 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
         let capture_rejections = emitter.capture_rejections && event_name != "error";
         for l in snapshot {
             if l.callback != 0 {
-                let closure_ptr = l.callback as *const ClosureHeader;
-                let result = js_closure_call0(closure_ptr);
+                let result = call_emitter_listener(handle, l.callback, emitted_args);
                 if capture_rejections {
                     capture_listener_rejection(handle, result);
                 }
