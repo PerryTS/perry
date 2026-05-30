@@ -993,7 +993,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // Phase H crypto: `crypto.timingSafeEqual(a, b)` — constant-time
-        // compare of two byte sequences. Returns a NaN-boxed boolean.
+        // compare of two BufferSource values. Returns a NaN-boxed boolean.
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
@@ -1009,12 +1009,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let a_box = lower_expr(ctx, &args[0])?;
             let b_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &a_box);
-            let b_handle = unbox_to_i64(blk, &b_box);
             Ok(blk.call(
                 DOUBLE,
                 "js_crypto_timing_safe_equal",
-                &[(I64, &a_handle), (I64, &b_handle)],
+                &[(DOUBLE, &a_box), (DOUBLE, &b_box)],
             ))
         }
 

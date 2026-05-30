@@ -80,6 +80,48 @@ pub(super) unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
     std::slice::from_raw_parts(data, len).to_vec()
 }
 
+fn raw_addr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_pointer() || jsval.is_string() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+        bits as usize
+    } else {
+        0
+    }
+}
+
+fn throw_invalid_buffer_source_arg(arg_name: &str) -> ! {
+    let msg = format!(
+        "The \"{}\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+        arg_name
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&msg, "ERR_INVALID_ARG_TYPE")
+}
+
+pub(super) unsafe fn bytes_from_buffer_source_arg(value: f64, arg_name: &str) -> Vec<u8> {
+    if JSValue::from_bits(value.to_bits()).is_any_string() {
+        throw_invalid_buffer_source_arg(arg_name);
+    }
+    let addr = raw_addr_from_value(value);
+    if addr == 0 {
+        throw_invalid_buffer_source_arg(arg_name);
+    }
+    if perry_runtime::buffer::is_registered_buffer(addr) {
+        let buf = addr as *const perry_runtime::buffer::BufferHeader;
+        let data = perry_runtime::buffer::buffer_data(buf);
+        return std::slice::from_raw_parts(data, (*buf).length as usize).to_vec();
+    }
+    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
+        return perry_runtime::typedarray::typed_array_bytes(ta)
+            .unwrap_or_else(|| throw_invalid_buffer_source_arg(arg_name))
+            .to_vec();
+    }
+    throw_invalid_buffer_source_arg(arg_name);
+}
+
 /// Allocate a new Buffer, copy `bytes` into it, return the registered pointer.
 pub(super) unsafe fn alloc_buffer_from_slice(
     bytes: &[u8],

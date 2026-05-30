@@ -155,11 +155,14 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
 
 /// Constant-time equality for equal-length byte inputs.
 #[no_mangle]
-pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_ptr: i64, b_ptr: i64) -> f64 {
-    let a = bytes_from_ptr(a_ptr);
-    let b = bytes_from_ptr(b_ptr);
+pub unsafe extern "C" fn js_crypto_timing_safe_equal(a_value: f64, b_value: f64) -> f64 {
+    let a = bytes_from_buffer_source_arg(a_value, "buf1");
+    let b = bytes_from_buffer_source_arg(b_value, "buf2");
     if a.len() != b.len() {
-        return f64::from_bits(JSValue::bool(false).bits());
+        perry_runtime::fs::validate::throw_range_error_named(
+            "Input buffers must have the same byte length",
+            "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH",
+        );
     }
     let mut diff = 0u8;
     for (x, y) in a.iter().zip(b.iter()) {

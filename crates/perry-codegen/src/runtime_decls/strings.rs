@@ -1349,9 +1349,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
-    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args are unboxed
-    // to raw i64 pointers (Buffer / TypedArray / string).
-    module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[I64, I64]);
+    // crypto.timingSafeEqual(a, b) -> boolean (NaN-boxed). Args stay boxed so
+    // stdlib can validate BufferSource inputs and preserve Node error shapes.
+    module.declare_function("js_crypto_timing_safe_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     // crypto.getHashes() / getCiphers() -> string[]; returns *mut ArrayHeader.
     module.declare_function("js_crypto_get_hashes", I64, &[]);
     module.declare_function("js_crypto_get_ciphers", I64, &[]);
