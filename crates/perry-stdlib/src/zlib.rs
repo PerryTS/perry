@@ -74,14 +74,88 @@ unsafe fn bytes_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
     Some(std::slice::from_raw_parts(data_ptr, len).to_vec())
 }
 
+fn raw_addr_from_value(value: f64) -> usize {
+    let bits = value.to_bits();
+    let js_value = JSValue::from_bits(bits);
+    if js_value.is_pointer() || js_value.is_string() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+        bits as usize
+    } else {
+        0
+    }
+}
+
+fn throw_invalid_data_arg(value: f64, arg_name: &str, accepted: &str) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be of type string or an instance of {}. Received {}",
+        arg_name,
+        accepted,
+        perry_runtime::fs::validate::describe_received(value)
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+unsafe fn bytes_from_js_data(
+    value: f64,
+    allow_array_buffer: bool,
+    arg_name: &str,
+    accepted: &str,
+) -> Vec<u8> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_any_string() {
+        let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
+        if ptr.is_null() {
+            throw_invalid_data_arg(value, arg_name, accepted);
+        }
+        let len = (*ptr).byte_len as usize;
+        let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        return std::slice::from_raw_parts(data_ptr, len).to_vec();
+    }
+
+    let raw = raw_addr_from_value(value);
+    if raw >= 0x1000 {
+        if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
+            let ta = raw as *const perry_runtime::typedarray::TypedArrayHeader;
+            if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {
+                return bytes.to_vec();
+            }
+        }
+        if is_registered_buffer(raw) {
+            if !allow_array_buffer
+                && perry_runtime::buffer::is_any_array_buffer(raw)
+                && !perry_runtime::buffer::is_data_view(raw)
+            {
+                throw_invalid_data_arg(value, arg_name, accepted);
+            }
+            let buf = raw as *const BufferHeader;
+            let len = (*buf).length as usize;
+            let data_ptr = buffer_data(buf);
+            return std::slice::from_raw_parts(data_ptr, len).to_vec();
+        }
+    }
+
+    throw_invalid_data_arg(value, arg_name, accepted);
+}
+
+unsafe fn codec_bytes(value: f64) -> Vec<u8> {
+    bytes_from_js_data(
+        value,
+        true,
+        "buffer",
+        "Buffer, TypedArray, DataView, or ArrayBuffer",
+    )
+}
+
+unsafe fn crc32_bytes(value: f64) -> Vec<u8> {
+    bytes_from_js_data(value, false, "data", "Buffer, TypedArray, or DataView")
+}
+
 /// Gzip compress data synchronously
 /// zlib.gzipSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gzip_sync(data_ptr: *const StringHeader) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_gzip_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
 
     let mut encoder = GzEncoder::new(&data[..], Compression::default());
     let mut compressed = Vec::new();
@@ -95,11 +169,8 @@ pub unsafe extern "C" fn js_zlib_gzip_sync(data_ptr: *const StringHeader) -> *mu
 /// Gunzip decompress data synchronously
 /// zlib.gunzipSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gunzip_sync(data_ptr: *const StringHeader) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_gunzip_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
 
     // `MultiGzDecoder` walks every concatenated gzip member, matching Node's
     // semantics where `gunzipSync(concat(gzip(a), gzip(b)))` returns `a + b`
@@ -116,11 +187,8 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_ptr: *const StringHeader) -> *
 /// Deflate compress data synchronously
 /// zlib.deflateSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate_sync(data_ptr: *const StringHeader) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_deflate_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
 
     // Node's `deflateSync` produces the zlib format (RFC 1950), not raw
     // deflate — `deflateRawSync` is the raw form. Use ZlibEncoder so the
@@ -138,11 +206,8 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_ptr: *const StringHeader) -> 
 /// Inflate decompress data synchronously
 /// zlib.inflateSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_sync(data_ptr: *const StringHeader) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_inflate_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
 
     let mut decoder = ZlibDecoder::new(&data[..]);
     let mut decompressed = Vec::new();
@@ -156,13 +221,8 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_ptr: *const StringHeader) -> 
 /// Raw deflate compress synchronously (no zlib header, no adler32).
 /// zlib.deflateRawSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate_raw_sync(
-    data_ptr: *const StringHeader,
-) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_deflate_raw_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
     let mut encoder = DeflateEncoder::new(&data[..], Compression::default());
     let mut compressed = Vec::new();
     match encoder.read_to_end(&mut compressed) {
@@ -174,13 +234,8 @@ pub unsafe extern "C" fn js_zlib_deflate_raw_sync(
 /// Raw deflate decompress synchronously.
 /// zlib.inflateRawSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_raw_sync(
-    data_ptr: *const StringHeader,
-) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_inflate_raw_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
     let mut decoder = DeflateDecoder::new(&data[..]);
     let mut decompressed = Vec::new();
     match decoder.read_to_end(&mut decompressed) {
@@ -194,11 +249,8 @@ pub unsafe extern "C" fn js_zlib_inflate_raw_sync(
 /// deflate.
 /// zlib.unzipSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_unzip_sync(data_ptr: *const StringHeader) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_unzip_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
     let mut out = Vec::new();
     let ok = if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
         // Multi-member gzip support per RFC 1952 §2.2.
@@ -217,11 +269,8 @@ pub unsafe extern "C" fn js_zlib_unzip_sync(data_ptr: *const StringHeader) -> *m
 /// `seed = 0` (or absent) produces the canonical one-shot CRC32.
 /// zlib.crc32(data, seed?) -> number
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_crc32(data_ptr: *const StringHeader, seed: f64) -> f64 {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return 0.0,
-    };
+pub unsafe extern "C" fn js_zlib_crc32(data_value: f64, seed: f64) -> f64 {
+    let data = crc32_bytes(data_value);
     // Reflected IEEE polynomial 0xEDB88320 — same as zlib's. Built once on
     // first call. Sync::Once is enough here: every thread sees the populated
     // table after the first init.
@@ -336,32 +385,17 @@ fn brotli_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 
 /// `zlib.brotliCompressSync(data)` -> Buffer
 ///
-/// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(
-    data_ptr: *const StringHeader,
-) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
     let out = brotli_compress_bytes(&data);
     buffer_from_slice(&out)
 }
 
 /// `zlib.brotliDecompressSync(data)` -> Buffer
-///
-/// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(
-    data_ptr: *const StringHeader,
-) -> *mut BufferHeader {
-    let data = match bytes_from_header(data_ptr) {
-        Some(d) => d,
-        None => return std::ptr::null_mut(),
-    };
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_value: f64) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
     match brotli_decompress_bytes(&data) {
         Ok(out) => buffer_from_slice(&out),
         Err(e) => throw_zlib_error(&format!("brotli: {}", e)),
@@ -1218,8 +1252,8 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
             undefined
         }
     };
-    // NaN-box-aware string pointer extraction. Mirrors what the codegen's
-    // NA_STR arg coercion does for direct calls.
+    // NaN-box-aware string pointer extraction. Mirrors the codegen's NA_STR
+    // arg coercion for async codecs, which still use the older pointer ABI.
     let as_str_ptr =
         |v: f64| -> *const StringHeader { js_get_string_pointer_unified(v) as *const StringHeader };
     // Helper: pointer return → POINTER_TAG NaN-box (matches NR_PTR).
@@ -1231,23 +1265,19 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
         }
     };
     match name {
-        // Sync codecs — all take 1 string/buffer arg, return Buffer pointer.
-        "gzipSync" => ptr_to_f64(js_zlib_gzip_sync(as_str_ptr(arg(0))) as *const u8),
-        "gunzipSync" => ptr_to_f64(js_zlib_gunzip_sync(as_str_ptr(arg(0))) as *const u8),
-        "deflateSync" => ptr_to_f64(js_zlib_deflate_sync(as_str_ptr(arg(0))) as *const u8),
-        "inflateSync" => ptr_to_f64(js_zlib_inflate_sync(as_str_ptr(arg(0))) as *const u8),
-        "deflateRawSync" => ptr_to_f64(js_zlib_deflate_raw_sync(as_str_ptr(arg(0))) as *const u8),
-        "inflateRawSync" => ptr_to_f64(js_zlib_inflate_raw_sync(as_str_ptr(arg(0))) as *const u8),
-        "unzipSync" => ptr_to_f64(js_zlib_unzip_sync(as_str_ptr(arg(0))) as *const u8),
-        "brotliCompressSync" => {
-            ptr_to_f64(js_zlib_brotli_compress_sync(as_str_ptr(arg(0))) as *const u8)
-        }
-        "brotliDecompressSync" => {
-            ptr_to_f64(js_zlib_brotli_decompress_sync(as_str_ptr(arg(0))) as *const u8)
-        }
+        // Sync codecs — all take 1 string/buffer-like JS value, return Buffer pointer.
+        "gzipSync" => ptr_to_f64(js_zlib_gzip_sync(arg(0)) as *const u8),
+        "gunzipSync" => ptr_to_f64(js_zlib_gunzip_sync(arg(0)) as *const u8),
+        "deflateSync" => ptr_to_f64(js_zlib_deflate_sync(arg(0)) as *const u8),
+        "inflateSync" => ptr_to_f64(js_zlib_inflate_sync(arg(0)) as *const u8),
+        "deflateRawSync" => ptr_to_f64(js_zlib_deflate_raw_sync(arg(0)) as *const u8),
+        "inflateRawSync" => ptr_to_f64(js_zlib_inflate_raw_sync(arg(0)) as *const u8),
+        "unzipSync" => ptr_to_f64(js_zlib_unzip_sync(arg(0)) as *const u8),
+        "brotliCompressSync" => ptr_to_f64(js_zlib_brotli_compress_sync(arg(0)) as *const u8),
+        "brotliDecompressSync" => ptr_to_f64(js_zlib_brotli_decompress_sync(arg(0)) as *const u8),
         "crc32" => {
             let seed = if args_len >= 2 { arg(1) } else { 0.0 };
-            js_zlib_crc32(as_str_ptr(arg(0)), seed)
+            js_zlib_crc32(arg(0), seed)
         }
         // Async codecs return a Promise pointer (NR_PTR).
         "gzip" => ptr_to_f64(js_zlib_gzip(as_str_ptr(arg(0))) as *const u8),

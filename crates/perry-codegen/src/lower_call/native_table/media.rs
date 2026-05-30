@@ -274,7 +274,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gzipSync",
         class_filter: None,
         runtime: "js_zlib_gzip_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -283,7 +283,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gunzipSync",
         class_filter: None,
         runtime: "js_zlib_gunzip_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -292,7 +292,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "deflateSync",
         class_filter: None,
         runtime: "js_zlib_deflate_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -301,7 +301,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "inflateSync",
         class_filter: None,
         runtime: "js_zlib_inflate_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -330,7 +330,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "deflateRawSync",
         class_filter: None,
         runtime: "js_zlib_deflate_raw_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -339,7 +339,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "inflateRawSync",
         class_filter: None,
         runtime: "js_zlib_inflate_raw_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -348,7 +348,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "unzipSync",
         class_filter: None,
         runtime: "js_zlib_unzip_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -357,7 +357,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "crc32",
         class_filter: None,
         runtime: "js_zlib_crc32",
-        args: &[NA_STR, NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     // `zlib.brotli{Compress,Decompress}Sync(data)` — one-shot Brotli via the
@@ -368,7 +368,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliCompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_compress_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -377,7 +377,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliDecompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_decompress_sync",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
