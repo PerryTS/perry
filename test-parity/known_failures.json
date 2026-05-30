@@ -242,12 +242,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() async-gen handler throw \u2014 composite does not emit 'error'. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/compose/buffer-preserves": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose() \u2014 Buffer chunks not preserved through pipeline (typed as string?). Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/error-propagates-to-source": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -271,12 +265,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: ReadableStream.from(asyncGen()) \u2014 iteration wrong or fails. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/readable/compose-with-passthrough": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: compose(src, PassThrough) \u2014 data not preserved through PT in composite. Flips to PASS when #1531 lands."
   },
   "node-suite/stream/web/double-pipe-through": {
     "issue": "1545",

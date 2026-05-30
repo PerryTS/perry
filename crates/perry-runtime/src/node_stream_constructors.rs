@@ -937,6 +937,11 @@ pub extern "C" fn js_node_stream_compose_args(args: *const crate::array::ArrayHe
     if args.len() == 1 {
         return node_stream_duplex_from_source_chunks(args[0]);
     }
+    if args.len() == 2 {
+        if let Some(readable) = compose_readable_snapshot(args[0], args[1]) {
+            return node_stream_duplex_from_source_chunks(readable);
+        }
+    }
     js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
 }
 

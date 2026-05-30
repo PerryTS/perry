@@ -601,6 +601,34 @@ fn transform_pipe_chain_applies_callback_output() {
 }
 
 #[test]
+fn compose_source_transform_applies_stage_snapshot() {
+    TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| matches.borrow_mut().clear());
+
+    let mut chunks = crate::array::js_array_alloc(1);
+    chunks = crate::array::js_array_push_f64(chunks, string_value("ab"));
+    let src = js_node_stream_readable_from(box_pointer(chunks as *const u8));
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    let transform_cb = js_closure_alloc(transform_upper_callback as *const u8, 0);
+    crate::closure::js_register_closure_arity(transform_upper_callback as *const u8, 3);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"transform"),
+        box_pointer(transform_cb as *const u8),
+    );
+    let upper = js_node_stream_transform_new(box_pointer(opts as *const u8));
+
+    let mut args = crate::array::js_array_alloc(2);
+    args = crate::array::js_array_push_f64(args, src);
+    args = crate::array::js_array_push_f64(args, upper);
+    let composed = js_node_stream_compose_args(args);
+
+    assert_eq!(js_node_stream_collect_bytes(composed), b"AB".to_vec());
+    TRANSFORM_THIS_HAS_STREAM_STATE
+        .with(|matches| assert_eq!(matches.borrow().as_slice(), &[true]));
+}
+
+#[test]
 fn transform_flush_callback_pushes_tail_before_finish() {
     READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
     TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| matches.borrow_mut().clear());
