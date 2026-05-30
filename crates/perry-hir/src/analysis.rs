@@ -1056,7 +1056,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::ObjectKeys(obj) | Expr::ObjectValues(obj) | Expr::ObjectEntries(obj) => {
             collect_assigned_locals_expr(obj, assigned);
         }
-        Expr::ObjectGroupBy { items, key_fn } => {
+        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             collect_assigned_locals_expr(items, assigned);
             collect_assigned_locals_expr(key_fn, assigned);
         }

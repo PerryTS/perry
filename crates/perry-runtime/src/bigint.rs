@@ -15,6 +15,58 @@ const BIGINT_BITS: usize = BIGINT_LIMBS * 64;
 const ZERO_LIMBS: [u64; BIGINT_LIMBS] = [0; BIGINT_LIMBS];
 const DIVISION_BY_ZERO_MESSAGE: &[u8] = b"Division by zero";
 
+/// Throw a `TypeError` with the given message (matches Node's BigInt coercion
+/// and operator errors). Never returns.
+#[cold]
+fn throw_bigint_type_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Throw a `RangeError` with the given message. Never returns.
+#[cold]
+fn throw_bigint_range_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Throw a `SyntaxError` with the given message. Never returns.
+#[cold]
+fn throw_bigint_syntax_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_syntaxerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Build a 1024-bit two's-complement limb array from a finite-integer f64.
+/// Node converts any finite integer Number to a BigInt of the same value,
+/// not just those that fit in i64. Caller must have already verified the
+/// value is finite and has no fractional part.
+fn limbs_from_integer_f64(value: f64) -> [u64; BIGINT_LIMBS] {
+    if value == 0.0 {
+        return ZERO_LIMBS;
+    }
+    let negative = value < 0.0;
+    let mut mag = value.abs();
+    // Decompose the magnitude into base-2^64 limbs, low limb first.
+    let mut limbs = ZERO_LIMBS;
+    let two_pow_64 = 18446744073709551616.0f64; // 2^64
+    let mut i = 0;
+    while mag >= 1.0 && i < BIGINT_LIMBS {
+        let limb = mag % two_pow_64;
+        limbs[i] = limb as u64;
+        mag = (mag / two_pow_64).floor();
+        i += 1;
+    }
+    if negative {
+        negate_limbs(&limbs)
+    } else {
+        limbs
+    }
+}
+
 /// Decode a 1024-bit two's-complement value into a host i64 if it fits.
 /// Layout: positive small → all upper limbs zero AND limb[0] high bit clear;
 /// negative small → all upper limbs `u64::MAX` AND limb[0] high bit set.
@@ -152,8 +204,19 @@ pub extern "C" fn js_bigint_from_i64(value: i64) -> *mut BigIntHeader {
     bigint_alloc_with_limbs(limbs)
 }
 
-/// Create a BigInt from an f64 value (BigInt() coercion)
-/// Converts f64 to i64 then to BigInt. Handles NaN-boxed values too.
+/// Create a BigInt from a JS value (the `BigInt(value)` coercion).
+///
+/// Matches Node/ECMAScript `ToBigInt` semantics (#2754, #2907):
+///   - `undefined` / `null`  → `TypeError`
+///   - `true` / `false`      → `1n` / `0n`
+///   - existing BigInt       → pass-through
+///   - Number (incl. int32)  → must be a finite integer, else `RangeError`;
+///                             the full integer value is preserved (not
+///                             truncated/saturated to i64)
+///   - string                → parsed; invalid syntax → `SyntaxError`
+///
+/// The argument arrives NaN-boxed, so a real Number is a plain f64 while
+/// booleans/null/undefined/strings/bigints carry Perry tag bits.
 #[no_mangle]
 pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
     use crate::value::JSValue;
@@ -162,6 +225,11 @@ pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
     // If already a BigInt (NaN-boxed), just return the pointer
     if jsval.is_bigint() {
         return jsval.as_bigint_ptr() as *mut BigIntHeader;
+    }
+
+    // Boolean: BigInt(true) === 1n, BigInt(false) === 0n.
+    if jsval.is_bool() {
+        return js_bigint_from_i64(if jsval.as_bool() { 1 } else { 0 });
     }
 
     // If it's an INT32 (NaN-boxed i32), extract and convert
@@ -187,98 +255,133 @@ pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
                 return result;
             }
         }
+        // Empty / unmaterializable string → 0n, matching `BigInt("")`.
         return js_bigint_from_i64(0);
     }
 
-    // If it's undefined or null, return 0 (JavaScript throws TypeError, but we're lenient)
-    if jsval.is_undefined() || jsval.is_null() {
-        return js_bigint_from_i64(0);
+    // undefined / null are not convertible — Node throws a TypeError.
+    if jsval.is_undefined() {
+        throw_bigint_type_error("Cannot convert undefined to a BigInt");
+    }
+    if jsval.is_null() {
+        throw_bigint_type_error("Cannot convert null to a BigInt");
     }
 
-    // Convert f64 to BigInt
-    let int_value = value as i64;
-    js_bigint_from_i64(int_value)
+    // Remaining case: a real Number. Node only converts finite integers;
+    // NaN, ±Infinity, and any value with a fractional part throw RangeError.
+    if !value.is_finite() || value.fract() != 0.0 {
+        let label = if value.is_nan() {
+            "NaN".to_string()
+        } else if value.is_infinite() {
+            if value > 0.0 {
+                "Infinity".to_string()
+            } else {
+                "-Infinity".to_string()
+            }
+        } else {
+            // Only finite non-integers reach here (e.g. 1.5). ECMAScript
+            // NumberToString switches to scientific notation outside
+            // [1e-6, 1e21); for the common fractional inputs Rust's `{}`
+            // already matches Node.
+            let abs = value.abs();
+            if !(1e-6..1e21).contains(&abs) {
+                format!("{:e}", value)
+            } else {
+                format!("{}", value)
+            }
+        };
+        throw_bigint_range_error(&format!(
+            "The number {label} cannot be converted to a BigInt because it is not an integer"
+        ));
+    }
+    bigint_alloc_with_limbs(limbs_from_integer_f64(value))
 }
 
-/// Create a BigInt from a string (decimal or hex with 0x prefix)
+/// Create a BigInt from a string (the `BigInt("…")` coercion path).
+///
+/// Matches ECMAScript `StringToBigInt` (#2907): leading/trailing whitespace
+/// is trimmed; an empty (or all-whitespace) string is `0n`; a decimal string
+/// may carry an optional `+`/`-` sign; the radix prefixes `0x`/`0X`, `0o`/`0O`,
+/// `0b`/`0B` are accepted (without a sign). Any other content — stray
+/// characters, a lone sign, a sign on a prefixed literal — throws a
+/// `SyntaxError` instead of silently dropping the invalid characters.
 #[no_mangle]
 pub extern "C" fn js_bigint_from_string(data: *const u8, len: u32) -> *mut BigIntHeader {
     unsafe {
         let bytes = std::slice::from_raw_parts(data, len as usize);
-        let s = std::str::from_utf8_unchecked(bytes);
-
-        // Fast path: decimal string that fits in i64. Postgres `int8`
-        // results, Node `Date.now()` timestamps, app IDs — the common
-        // BigInt input in real code is well under 2^63. For those we
-        // skip the per-digit 16-limb multiply (~300 u128 muls for a
-        // 20-char input) and let Rust's native str→i64 handle parsing
-        // in a single pass.
-        //
-        // `i64::from_str` returns Err on overflow / non-digit, and we
-        // fall through to the general path so hex, floats-of-ints, and
-        // arbitrary-precision still work exactly as before.
-        if !s.starts_with("0x") && !s.starts_with("0X") {
-            if let Ok(v) = s.parse::<i64>() {
-                return js_bigint_from_i64(v);
-            }
+        let raw = std::str::from_utf8_unchecked(bytes);
+        match parse_bigint_string(raw) {
+            Ok(limbs) => bigint_alloc_with_limbs(limbs),
+            Err(()) => throw_bigint_syntax_error(&format!("Cannot convert {raw} to a BigInt")),
         }
-
-        // Handle negative prefix
-        let (is_negative, s) = if s.starts_with('-') {
-            (true, &s[1..])
-        } else {
-            (false, s)
-        };
-
-        // Parse the string
-        let (is_hex, s) = if s.starts_with("0x") || s.starts_with("0X") {
-            (true, &s[2..])
-        } else {
-            (false, s)
-        };
-
-        let mut limbs = ZERO_LIMBS;
-
-        if is_hex {
-            // Parse hex string
-            let mut chars = s.chars().rev();
-            for limb in limbs.iter_mut() {
-                let mut value = 0u64;
-                for i in 0..16 {
-                    if let Some(c) = chars.next() {
-                        let digit = match c {
-                            '0'..='9' => c as u64 - '0' as u64,
-                            'a'..='f' => c as u64 - 'a' as u64 + 10,
-                            'A'..='F' => c as u64 - 'A' as u64 + 10,
-                            _ => continue,
-                        };
-                        value |= digit << (i * 4);
-                    } else {
-                        break;
-                    }
-                }
-                *limb = value;
-            }
-        } else {
-            // Parse decimal string using long multiplication
-            for c in s.chars() {
-                if let Some(digit) = c.to_digit(10) {
-                    // Multiply by 10 and add digit
-                    let mut carry = digit as u64;
-                    for limb in limbs.iter_mut() {
-                        let product = (*limb as u128) * 10 + carry as u128;
-                        *limb = product as u64;
-                        carry = (product >> 64) as u64;
-                    }
-                }
-            }
-        }
-
-        if is_negative && !limbs.iter().all(|&l| l == 0) {
-            limbs = negate_limbs(&limbs);
-        }
-        bigint_alloc_with_limbs(limbs)
     }
+}
+
+/// Parse a string per ECMAScript `StringToBigInt`. Returns the limb array on
+/// success, or `Err(())` for invalid BigInt syntax. The original (untrimmed)
+/// string is used by the caller to build Node's error message.
+fn parse_bigint_string(raw: &str) -> Result<[u64; BIGINT_LIMBS], ()> {
+    // ECMAScript trims StrWhiteSpace from both ends; the empty string is 0n.
+    let s = raw.trim();
+    if s.is_empty() {
+        return Ok(ZERO_LIMBS);
+    }
+
+    // Radix-prefixed forms do not allow a leading sign.
+    let lower_prefix = s.as_bytes().get(0..2).map(|p| {
+        let mut buf = [p[0], p[1]];
+        buf.make_ascii_lowercase();
+        buf
+    });
+    if let Some([b'0', tag]) = lower_prefix {
+        let radix = match tag {
+            b'x' => Some(16u32),
+            b'o' => Some(8u32),
+            b'b' => Some(2u32),
+            _ => None,
+        };
+        if let Some(radix) = radix {
+            let digits = &s[2..];
+            if digits.is_empty() {
+                return Err(());
+            }
+            return parse_radix_digits(digits, radix, false);
+        }
+    }
+
+    // Optional sign, then decimal digits only.
+    let (is_negative, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    if digits.is_empty() {
+        return Err(());
+    }
+    parse_radix_digits(digits, 10, is_negative)
+}
+
+/// Parse `digits` in the given radix (2/8/10/16), rejecting any out-of-range
+/// character. Applies two's-complement negation when `is_negative`.
+fn parse_radix_digits(
+    digits: &str,
+    radix: u32,
+    is_negative: bool,
+) -> Result<[u64; BIGINT_LIMBS], ()> {
+    let mut limbs = ZERO_LIMBS;
+    let radix_u128 = radix as u128;
+    for c in digits.chars() {
+        let digit = c.to_digit(radix).ok_or(())?;
+        let mut carry = digit as u64;
+        for limb in limbs.iter_mut() {
+            let product = (*limb as u128) * radix_u128 + carry as u128;
+            *limb = product as u64;
+            carry = (product >> 64) as u64;
+        }
+    }
+    if is_negative && !limbs.iter().all(|&l| l == 0) {
+        limbs = negate_limbs(&limbs);
+    }
+    Ok(limbs)
 }
 
 /// Create a BigInt from a string with a given radix (for BN.js compatibility)
@@ -735,6 +838,12 @@ pub extern "C" fn js_bigint_pow(
 ) -> *mut BigIntHeader {
     let a_limbs = bigint_limbs_or_zero(a);
     let b_limbs = bigint_limbs_or_zero(b);
+
+    // ECMaScript: a negative BigInt exponent is a RangeError.
+    if is_negative(&b_limbs) {
+        throw_bigint_range_error("Exponent must be positive");
+    }
+
     // Get exponent as u64 (only lower 64 bits)
     let exp = b_limbs[0];
 
@@ -776,32 +885,19 @@ fn mul_limbs(a: &[u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) -> [u64; BIGINT_L
     result
 }
 
-/// Left shift BigInt by b bits (a << b)
-/// Note: b is interpreted as a u64 (only lower 64 bits are used)
-#[no_mangle]
-pub extern "C" fn js_bigint_shl(
-    a: *const BigIntHeader,
-    b: *const BigIntHeader,
-) -> *mut BigIntHeader {
-    let a_limbs = bigint_limbs_or_zero(a);
-    let b_limbs = bigint_limbs_or_zero(b);
-    let shift = b_limbs[0] as usize;
+/// Left-shift a limb array by `shift` bits (magnitude only).
+fn shl_limbs(a_limbs: &[u64; BIGINT_LIMBS], shift: usize) -> [u64; BIGINT_LIMBS] {
     if shift >= BIGINT_BITS {
-        return bigint_alloc_with_limbs(ZERO_LIMBS);
+        return ZERO_LIMBS;
     }
     let mut result = ZERO_LIMBS;
-
-    // Calculate full limb shifts and bit shifts within a limb
     let limb_shift = shift / 64;
     let bit_shift = (shift % 64) as u32;
-
     if bit_shift == 0 {
-        // Simple case: only limb-aligned shift
         for i in limb_shift..BIGINT_LIMBS {
             result[i] = a_limbs[i - limb_shift];
         }
     } else {
-        // General case: shift across limb boundaries
         for i in limb_shift..BIGINT_LIMBS {
             let src_idx = i - limb_shift;
             result[i] = a_limbs[src_idx] << bit_shift;
@@ -810,12 +906,79 @@ pub extern "C" fn js_bigint_shl(
             }
         }
     }
+    result
+}
 
+/// Arithmetic right-shift a limb array by `shift` bits (sign-extending).
+fn shr_limbs(a_limbs: &[u64; BIGINT_LIMBS], shift: usize) -> [u64; BIGINT_LIMBS] {
+    let neg = is_negative(a_limbs);
+    let fill: u64 = if neg { !0u64 } else { 0u64 };
+    if shift >= BIGINT_BITS {
+        return [fill; BIGINT_LIMBS];
+    }
+    let mut result = [fill; BIGINT_LIMBS];
+    let limb_shift = shift / 64;
+    let bit_shift = (shift % 64) as u32;
+    if bit_shift == 0 {
+        for i in 0..(BIGINT_LIMBS - limb_shift) {
+            result[i] = a_limbs[i + limb_shift];
+        }
+    } else {
+        for i in 0..(BIGINT_LIMBS - limb_shift) {
+            let src_idx = i + limb_shift;
+            result[i] = a_limbs[src_idx] >> bit_shift;
+            if src_idx + 1 < BIGINT_LIMBS {
+                result[i] |= a_limbs[src_idx + 1] << (64 - bit_shift);
+            } else {
+                result[i] |= fill << (64 - bit_shift);
+            }
+        }
+    }
+    result
+}
+
+/// Interpret a two's-complement shift count as a signed magnitude. Returns
+/// `(magnitude, count_is_negative)`. Counts beyond `BIGINT_BITS` saturate.
+fn shift_count(b_limbs: &[u64; BIGINT_LIMBS]) -> (usize, bool) {
+    if is_negative(b_limbs) {
+        let mag = negate_limbs(b_limbs);
+        // Only the low limb matters for any realistic shift; if any upper
+        // limb is set the count is enormous → saturate past BIGINT_BITS.
+        if mag[1..].iter().any(|&l| l != 0) {
+            (BIGINT_BITS, true)
+        } else {
+            (mag[0] as usize, true)
+        }
+    } else {
+        if b_limbs[1..].iter().any(|&l| l != 0) {
+            (BIGINT_BITS, false)
+        } else {
+            (b_limbs[0] as usize, false)
+        }
+    }
+}
+
+/// Left shift BigInt by b bits (a << b). A negative shift count reverses
+/// direction (`a << -n` === `a >> n`), matching ECMAScript.
+#[no_mangle]
+pub extern "C" fn js_bigint_shl(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
+    let a_limbs = bigint_limbs_or_zero(a);
+    let b_limbs = bigint_limbs_or_zero(b);
+    let (shift, negative) = shift_count(&b_limbs);
+    let result = if negative {
+        shr_limbs(&a_limbs, shift)
+    } else {
+        shl_limbs(&a_limbs, shift)
+    };
     bigint_alloc_with_limbs(result)
 }
 
-/// Right shift BigInt by b bits (a >> b)
-/// Note: b is interpreted as a u64 (only lower 64 bits are used)
+/// Right shift BigInt by b bits (a >> b), arithmetic / sign-extending. A
+/// negative shift count reverses direction (`a >> -n` === `a << n`), matching
+/// ECMAScript.
 #[no_mangle]
 pub extern "C" fn js_bigint_shr(
     a: *const BigIntHeader,
@@ -823,41 +986,12 @@ pub extern "C" fn js_bigint_shr(
 ) -> *mut BigIntHeader {
     let a_limbs = bigint_limbs_or_zero(a);
     let b_limbs = bigint_limbs_or_zero(b);
-    let neg = is_negative(&a_limbs);
-    // Fill value for sign extension: 0xFF..FF for negative, 0x00..00 for positive
-    let fill: u64 = if neg { !0u64 } else { 0u64 };
-
-    let shift = b_limbs[0] as usize;
-    if shift >= BIGINT_BITS {
-        // Arithmetic: negative → all 1s (-1), positive → all 0s (0)
-        return bigint_alloc_with_limbs([fill; BIGINT_LIMBS]);
-    }
-
-    let mut result = [fill; BIGINT_LIMBS];
-
-    // Calculate full limb shifts and bit shifts within a limb
-    let limb_shift = shift / 64;
-    let bit_shift = (shift % 64) as u32;
-
-    if bit_shift == 0 {
-        // Simple case: only limb-aligned shift
-        for i in 0..(BIGINT_LIMBS - limb_shift) {
-            result[i] = a_limbs[i + limb_shift];
-        }
+    let (shift, negative) = shift_count(&b_limbs);
+    let result = if negative {
+        shl_limbs(&a_limbs, shift)
     } else {
-        // General case: shift across limb boundaries
-        for i in 0..(BIGINT_LIMBS - limb_shift) {
-            let src_idx = i + limb_shift;
-            result[i] = a_limbs[src_idx] >> bit_shift;
-            if src_idx + 1 < BIGINT_LIMBS {
-                result[i] |= a_limbs[src_idx + 1] << (64 - bit_shift);
-            } else {
-                // Top limb: sign-extend the vacated bits
-                result[i] |= fill << (64 - bit_shift);
-            }
-        }
-    }
-
+        shr_limbs(&a_limbs, shift)
+    };
     bigint_alloc_with_limbs(result)
 }
 
@@ -1418,6 +1552,90 @@ mod tests {
         assert_eq!(d(-7, 2), -3);
         assert_eq!(d(7, -2), -3);
         assert_eq!(d(-7, -2), 3);
+    }
+
+    // -- #2754 / #2907: BigInt() coercion semantics --
+
+    #[test]
+    fn coerce_boolean_inputs() {
+        use crate::value::JSValue;
+        let t = js_bigint_from_f64(f64::from_bits(JSValue::bool(true).bits()));
+        assert_eq!(read_as_i64(t), 1);
+        let f = js_bigint_from_f64(f64::from_bits(JSValue::bool(false).bits()));
+        assert_eq!(read_as_i64(f), 0);
+    }
+
+    #[test]
+    fn coerce_finite_integer_number() {
+        // Plain f64 (real Number) integer → exact BigInt.
+        let b = js_bigint_from_f64(42.0);
+        assert_eq!(read_as_i64(b), 42);
+        let b = js_bigint_from_f64(-7.0);
+        assert_eq!(read_as_i64(b), -7);
+    }
+
+    #[test]
+    fn coerce_large_integer_number_preserved() {
+        // 2^60 fits in f64 exactly and exceeds nothing; verify the full
+        // value is preserved (not saturated/truncated).
+        let v = (1u64 << 60) as f64;
+        let b = js_bigint_from_f64(v);
+        assert_eq!(read_as_i64(b), 1i64 << 60);
+    }
+
+    // -- #2907: string parsing validation --
+
+    fn parse(s: &str) -> Result<i64, ()> {
+        parse_bigint_string(s).map(|limbs| fits_in_i64(&limbs).expect("fits"))
+    }
+
+    #[test]
+    fn parse_radix_prefixes_and_whitespace() {
+        assert_eq!(parse("0x10"), Ok(16));
+        assert_eq!(parse("0o17"), Ok(15));
+        assert_eq!(parse("0b101"), Ok(5));
+        assert_eq!(parse("  42  "), Ok(42));
+        assert_eq!(parse(""), Ok(0));
+        assert_eq!(parse("  "), Ok(0));
+        assert_eq!(parse("+5"), Ok(5));
+        assert_eq!(parse("-5"), Ok(-5));
+    }
+
+    #[test]
+    fn parse_invalid_strings_reject() {
+        assert_eq!(parse("bad"), Err(()));
+        assert_eq!(parse("12abc34"), Err(()));
+        assert_eq!(parse("0x"), Err(()));
+        assert_eq!(parse("0xG"), Err(()));
+        assert_eq!(parse("1_000"), Err(()));
+        assert_eq!(parse("+"), Err(()));
+    }
+
+    // -- #2908: shift direction-reversing + pow --
+
+    #[test]
+    fn shift_negative_count_reverses_direction() {
+        // 1n << -1n === 1n >> 1n === 0n
+        let one = js_bigint_from_i64(1);
+        let neg_one = js_bigint_from_i64(-1);
+        assert_eq!(read_as_i64(js_bigint_shl(one, neg_one)), 0);
+        // 8n >> -1n === 8n << 1n === 16n
+        let eight = js_bigint_from_i64(8);
+        assert_eq!(read_as_i64(js_bigint_shr(eight, neg_one)), 16);
+        // Sanity: positive counts still work.
+        let four = js_bigint_from_i64(4);
+        assert_eq!(read_as_i64(js_bigint_shl(one, four)), 16);
+        let two = js_bigint_from_i64(2);
+        assert_eq!(read_as_i64(js_bigint_shr(eight, two)), 2);
+    }
+
+    #[test]
+    fn pow_non_negative() {
+        let two = js_bigint_from_i64(2);
+        let three = js_bigint_from_i64(3);
+        assert_eq!(read_as_i64(js_bigint_pow(two, three)), 8);
+        let zero = js_bigint_from_i64(0);
+        assert_eq!(read_as_i64(js_bigint_pow(two, zero)), 1);
     }
 
     #[test]

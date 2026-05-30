@@ -150,7 +150,7 @@ impl SH for Expr {
             Expr::ObjectGetOwnPropertyDescriptor(a, b) => { tag(h, 109); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::ObjectGetOwnPropertyDescriptors(e) => { tag(h, 11237); e.as_ref().hash(h); }
             Expr::ObjectGetOwnPropertyNames(e) => { tag(h, 110); e.as_ref().hash(h); }
-            Expr::ObjectCreate(e) => { tag(h, 111); e.as_ref().hash(h); }
+            Expr::ObjectCreate(e, props) => { tag(h, 111); e.as_ref().hash(h); if let Some(p) = props { tag(h, 1); p.as_ref().hash(h); } else { tag(h, 0); } }
             Expr::ObjectFreeze(e) => { tag(h, 112); e.as_ref().hash(h); }
             Expr::ObjectSeal(e) => { tag(h, 113); e.as_ref().hash(h); }
             Expr::ObjectPreventExtensions(e) => { tag(h, 114); e.as_ref().hash(h); }
@@ -163,6 +163,7 @@ impl SH for Expr {
             Expr::ObjectGetOwnPropertySymbols(e) => { tag(h, 119); e.as_ref().hash(h); }
             Expr::SymbolNew(e) => { tag(h, 120); e.hash(h); }
             Expr::SymbolFor(e) => { tag(h, 121); e.as_ref().hash(h); }
+            Expr::RegExpEscape(e) => { tag(h, 12043); e.as_ref().hash(h); }
             Expr::SymbolKeyFor(e) => { tag(h, 122); e.as_ref().hash(h); }
             Expr::SymbolDescription(e) => { tag(h, 123); e.as_ref().hash(h); }
             Expr::SymbolToString(e) => { tag(h, 124); e.as_ref().hash(h); }
@@ -496,6 +497,7 @@ impl SH for Expr {
             Expr::ObjectValues(e) => { tag(h, 392); e.as_ref().hash(h); }
             Expr::ObjectEntries(e) => { tag(h, 393); e.as_ref().hash(h); }
             Expr::ObjectGroupBy { items, key_fn } => { tag(h, 394); items.as_ref().hash(h); key_fn.as_ref().hash(h); }
+            Expr::MapGroupBy { items, key_fn } => { tag(h, 12044); items.as_ref().hash(h); key_fn.as_ref().hash(h); }
             Expr::ObjectRest { object, exclude_keys, } => { tag(h, 395); object.as_ref().hash(h); exclude_keys.hash(h); }
             Expr::ArrayIsArray(e) => { tag(h, 396); e.as_ref().hash(h); }
             Expr::ArrayFrom(e) => { tag(h, 397); e.as_ref().hash(h); }
