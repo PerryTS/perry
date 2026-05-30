@@ -563,6 +563,9 @@ pub(crate) fn lower_module_decl(
                                                         ("async_hooks", "createHook") => {
                                                             Some("AsyncHook")
                                                         }
+                                                        ("dns" | "dns/promises", "Resolver") => {
+                                                            Some("Resolver")
+                                                        }
                                                         _ => None,
                                                     };
                                                     if let Some(class_name) = class_name {
@@ -639,6 +642,9 @@ pub(crate) fn lower_module_decl(
                                                 }
                                                 ("async_hooks", Some("createHook")) => {
                                                     Some("AsyncHook")
+                                                }
+                                                ("dns" | "dns/promises", Some("Resolver")) => {
+                                                    Some("Resolver")
                                                 }
                                                 _ => None,
                                             });
@@ -758,7 +764,7 @@ pub(crate) fn lower_module_decl(
                                                 (
                                                     "async_hooks",
                                                     "AsyncLocalStorage" | "AsyncResource"
-                                                )
+                                                ) | ("dns" | "dns/promises", "Resolver")
                                             );
                                             if is_known_native_class {
                                                 ctx.register_native_instance(

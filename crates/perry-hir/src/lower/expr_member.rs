@@ -931,6 +931,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "dns" | "dns/promises")
+                    && class_name == "Resolver"
+                    && is_dns_resolver_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1730,6 +1739,13 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "removeAllListeners"
             | "setMaxListeners"
             | "getMaxListeners"
+    )
+}
+
+fn is_dns_resolver_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "cancel" | "getServers" | "setServers" | "setLocalAddress"
     )
 }
 
