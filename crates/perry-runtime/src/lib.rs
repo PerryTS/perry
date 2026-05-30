@@ -36,6 +36,7 @@ pub mod child_process;
 pub mod closure;
 pub mod color_parse;
 pub mod date;
+pub mod dgram;
 pub mod error;
 pub mod event_pump;
 pub mod event_target;

@@ -80,7 +80,7 @@ thread_local! {
     /// #503: when true, HIR lowering refuses compile-time `obj[expr]()` /
     /// `obj[expr]` on known stdlib namespace receivers (`process`, `fs`,
     /// `crypto`, `child_process`, `net`, `os`, `path`, `http`, `https`,
-    /// `http2`, `stream`, `url`, `util`, `events`, `dns`, `tls`,
+    /// `http2`, `stream`, `url`, `util`, `events`, `dgram`, `dns`, `tls`,
     /// `querystring`, `zlib`, `async_hooks`, `readline`, `string_decoder`,
     /// `tty`, `worker_threads`) unless the index is a string literal or
     /// compile-time-foldable string. (`buffer` is intentionally excluded —

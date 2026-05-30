@@ -886,6 +886,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         ("stream/promises", "pipeline")
             | ("stream/promises", "finished")
             | ("module", "isBuiltin")
+            | ("dgram", "createSocket")
+            | ("dgram", "Socket")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
