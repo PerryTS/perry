@@ -1016,14 +1016,42 @@ pub extern "C" fn js_response_body(handle: f64) -> f64 {
 /// # Safety
 /// `value` is a NaN-boxed JsValue.
 #[no_mangle]
-pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
+pub unsafe extern "C" fn js_response_static_json(
+    value: f64,
+    init_status: f64,
+    init_status_text_ptr: *const StringHeader,
+    headers_handle: f64,
+) -> f64 {
     let v = JsValue::from_bits(value.to_bits());
     let body = perry_ffi::json_stringify(v).unwrap_or_default();
-    let mut headers = HeadersStore::default();
-    headers.set("content-type", "application/json");
+    // #2638: honor `init.status` / `init.statusText` / `init.headers`.
+    let status = if init_status.is_nan() || init_status == 0.0 {
+        200
+    } else {
+        init_status as u16
+    };
+    // Node's `Response.json` leaves statusText "" when not provided — it does
+    // not fall back to the status reason phrase.
+    let status_text = read_str(init_status_text_ptr).unwrap_or_default();
+    // Start from any user-provided headers, then add the default content-type
+    // only if the init headers didn't already set one.
+    let headers_id = handle_id(headers_handle);
+    let mut headers = if headers_id != 0 {
+        HEADERS_HANDLES
+            .lock()
+            .unwrap()
+            .get(&headers_id)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        HeadersStore::default()
+    };
+    if !headers.has("content-type") {
+        headers.set("content-type", "application/json");
+    }
     store_response(FetchResponse {
-        status: 200,
-        status_text: "OK".to_string(),
+        status,
+        status_text,
         headers,
         body: body.into_bytes(),
     }) as f64
@@ -1381,7 +1409,10 @@ mod tests {
     #[test]
     fn response_static_json() {
         let v = JsValue::from_string_ptr(alloc_string("hello").as_raw());
-        let resp = unsafe { js_response_static_json(f64::from_bits(v.bits())) };
+        // No init: status defaults to 200, no statusText, no headers.
+        let resp = unsafe {
+            js_response_static_json(f64::from_bits(v.bits()), 0.0, std::ptr::null(), 0.0)
+        };
         assert!(resp > 0.0);
         let status = js_fetch_response_status(resp);
         assert_eq!(status, 200.0);

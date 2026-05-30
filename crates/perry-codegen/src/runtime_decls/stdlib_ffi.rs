@@ -560,6 +560,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         VOID,
         &[I64, DOUBLE, DOUBLE],
     );
+    // `String(value)` coercion (throws TypeError for Symbols) for WHATWG URL
+    // arguments — #3054/#3055. Returns a `*mut StringHeader` (I64).
+    module.declare_function("js_url_coerce_string", I64, &[DOUBLE]);
     module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);

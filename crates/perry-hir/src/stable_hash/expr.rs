@@ -238,6 +238,7 @@ impl SH for Expr {
             Expr::AsyncStepChain { value, step_closure, } => { tag(h, 192); value.as_ref().hash(h); step_closure.as_ref().hash(h); }
             Expr::CryptoRandomBytes(e) => { tag(h, 193); e.as_ref().hash(h); }
             Expr::CryptoRandomUUID => tag(h, 194),
+            Expr::CryptoRandomUUIDv7 => tag(h, 12042),
             Expr::CryptoSha256(e) => { tag(h, 195); e.as_ref().hash(h); }
             Expr::CryptoMd5(e) => { tag(h, 196); e.as_ref().hash(h); }
             Expr::WebCryptoDigest { algo, data } => { tag(h, 197); algo.as_ref().hash(h); data.as_ref().hash(h); }

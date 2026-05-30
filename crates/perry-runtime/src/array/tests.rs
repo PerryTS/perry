@@ -941,6 +941,26 @@ fn test_array_splice_delete_to_end() {
 }
 
 #[test]
+fn test_array_splice_delete_count_coerces_js_values() {
+    assert_eq!(
+        js_array_splice_delete_count(f64::from_bits(crate::value::TAG_UNDEFINED)),
+        0
+    );
+    assert_eq!(
+        js_array_splice_delete_count(f64::from_bits(crate::value::TAG_NULL)),
+        0
+    );
+    assert_eq!(
+        js_array_splice_delete_count(crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(b"2.8".as_ptr(), 3) as i64,
+        )),
+        2
+    );
+    assert_eq!(js_array_splice_delete_count(f64::INFINITY), i32::MAX);
+    assert_eq!(js_array_splice_delete_count(f64::NAN), 0);
+}
+
+#[test]
 fn test_array_splice_negative_start() {
     // [1,2,3,4].splice(-2, 1) -> deleted=[3], arr=[1,2,4]
     let arr = js_array_alloc(8);

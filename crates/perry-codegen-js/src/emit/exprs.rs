@@ -900,6 +900,9 @@ impl JsEmitter {
             Expr::CryptoRandomUUID => {
                 self.output.push_str("crypto.randomUUID()");
             }
+            Expr::CryptoRandomUUIDv7 => {
+                self.output.push_str("crypto.randomUUIDv7()");
+            }
             Expr::CryptoSha256(data) => {
                 // Use SubtleCrypto (async in browser, but we emit it inline)
                 self.output.push_str("(await (async () => { const d = new TextEncoder().encode(");
