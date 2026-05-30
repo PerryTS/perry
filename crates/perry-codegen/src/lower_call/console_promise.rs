@@ -529,19 +529,26 @@ pub fn try_lower_promise_static_call(
                     return Ok(Some(nanbox_pointer_inline(blk, &handle)));
                 }
                 "all" | "race" | "allSettled" | "any" => {
-                    if args.is_empty() {
-                        return Ok(Some(double_literal(0.0)));
-                    }
-                    let arr_box = lower_expr(ctx, &args[0])?;
-                    let blk = ctx.block();
-                    let arr_handle = unbox_to_i64(blk, &arr_box);
-                    let runtime_fn = match property.as_str() {
-                        "all" => "js_promise_all",
-                        "race" => "js_promise_race",
-                        "any" => "js_promise_any",
-                        _ => "js_promise_all_settled",
+                    // Issue #2822: the combinators accept any iterable and must
+                    // reject with `TypeError` for non-iterable / omitted input
+                    // (`undefined` is not iterable). Pass the boxed argument
+                    // value to the `*_iterable` runtime entry points, which
+                    // coerce iterables to an array and produce the rejected
+                    // Promise otherwise. A missing argument lowers to
+                    // `undefined` so the runtime rejects it just like Node.
+                    let value = if args.is_empty() {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    } else {
+                        lower_expr(ctx, &args[0])?
                     };
-                    let handle = blk.call(I64, runtime_fn, &[(I64, &arr_handle)]);
+                    let runtime_fn = match property.as_str() {
+                        "all" => "js_promise_all_iterable",
+                        "race" => "js_promise_race_iterable",
+                        "any" => "js_promise_any_iterable",
+                        _ => "js_promise_all_settled_iterable",
+                    };
+                    let blk = ctx.block();
+                    let handle = blk.call(I64, runtime_fn, &[(DOUBLE, &value)]);
                     return Ok(Some(nanbox_pointer_inline(blk, &handle)));
                 }
                 "withResolvers" => {

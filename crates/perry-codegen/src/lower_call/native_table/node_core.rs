@@ -11,6 +11,15 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "SourceMap",
+        class_filter: None,
+        runtime: "js_module_source_map_new",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node TTY ==========
     NativeModSig {
         module: "tty",
