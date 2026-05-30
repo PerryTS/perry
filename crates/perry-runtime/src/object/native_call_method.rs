@@ -1294,19 +1294,12 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     "join" => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let sep_ptr = if args_len >= 1 && !args_ptr.is_null() {
-                            let bits = (*args_ptr).to_bits();
-                            let tag = bits >> 48;
-                            if tag == 0x7FFF || tag == 0x7FFE {
-                                // STRING_TAG or SHORT_STRING tag
-                                (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader
-                            } else {
-                                std::ptr::null()
-                            }
+                        let separator = if args_len >= 1 && !args_ptr.is_null() {
+                            *args_ptr
                         } else {
-                            std::ptr::null()
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
                         };
-                        let s = crate::array::js_array_join(arr, sep_ptr);
+                        let s = crate::array::js_array_join_value(arr, separator);
                         return f64::from_bits(JSValue::string_ptr(s).bits());
                     }
                     // #321: a value-level `arr[Symbol.iterator]()` resolves to

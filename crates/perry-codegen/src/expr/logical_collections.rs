@@ -20,7 +20,7 @@ use crate::lower_string_method::{
     lower_string_concat_chain, lower_string_self_append,
 };
 #[allow(unused_imports)]
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -164,28 +164,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- arr.join(separator?) -> string --------
-        // The runtime takes a separator StringHeader (nullable). We
-        // intern "," as the default when no separator is given so the
-        // runtime side never sees a null pointer.
+        // The runtime wrapper applies Array.join separator semantics:
+        // omitted/undefined means comma; every other value is ToString.
         Expr::ArrayJoin { array, separator } => {
             let arr_box = lower_expr(ctx, array)?;
             let sep_box = if let Some(sep_expr) = separator {
                 lower_expr(ctx, sep_expr)?
             } else {
-                let key_idx = ctx.strings.intern(",");
-                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                ctx.block().load(DOUBLE, &handle_global)
+                double_literal(f64::from_bits(TAG_UNDEFINED))
             };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            // SSO-safe separator unbox: `js_array_join` reads `byte_len`
-            // from the StringHeader, which segfaults on SSO inline bits.
-            // Same #214 bug class.
-            let sep_handle = unbox_str_handle(blk, &sep_box);
             let result = blk.call(
                 I64,
-                "js_array_join",
-                &[(I64, &arr_handle), (I64, &sep_handle)],
+                "js_array_join_value",
+                &[(I64, &arr_handle), (DOUBLE, &sep_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
