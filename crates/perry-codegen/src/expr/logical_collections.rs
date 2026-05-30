@@ -526,6 +526,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Refs #590.
         Expr::ObjectAssign { target, sources } => {
             let target_box = lower_expr(ctx, target)?;
+            let mut acc = ctx.block().call(
+                DOUBLE,
+                "js_object_assign_validate_target",
+                &[(DOUBLE, &target_box)],
+            );
             // Stash target in a temp slot if there are multiple sources, so
             // each helper call uses the same SSA value (defensive: helper
             // returns target_f64 unchanged, but the chain is clearer when we
@@ -534,9 +539,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // return target itself (matching `Object.assign(t)` which is a
             // valid no-op-and-return-target form).
             if sources.is_empty() {
-                return Ok(target_box);
+                return Ok(acc);
             }
-            let mut acc = target_box;
             for src in sources {
                 let src_box = lower_expr(ctx, src)?;
                 acc = ctx.block().call(

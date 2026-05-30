@@ -1202,6 +1202,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Object.assign(target, source): mutate target with source's own
     // string-keyed AND symbol-keyed enumerable properties; returns target.
     // Refs #590.
+    module.declare_function("js_object_assign_validate_target", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_assign_one", DOUBLE, &[DOUBLE, DOUBLE]);
     // String extras (already in string.rs; expr.rs was stubbing or missing dispatch).
     module.declare_function("js_string_at", DOUBLE, &[I64, I32]);
