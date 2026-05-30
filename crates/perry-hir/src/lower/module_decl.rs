@@ -758,6 +758,12 @@ pub(crate) fn lower_module_decl(
                                                 (
                                                     "async_hooks",
                                                     "AsyncLocalStorage" | "AsyncResource"
+                                                ) | (
+                                                    "v8",
+                                                    "Serializer"
+                                                        | "Deserializer"
+                                                        | "DefaultSerializer"
+                                                        | "DefaultDeserializer",
                                                 )
                                             );
                                             if is_known_native_class {

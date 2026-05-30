@@ -7,7 +7,7 @@ pub mod reactor;
 // `process.send`/`process.on('message')`).
 pub mod fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
-mod v8_serde;
+pub(crate) mod v8_serde;
 
 use std::collections::HashMap;
 use std::fs::File;

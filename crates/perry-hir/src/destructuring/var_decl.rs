@@ -281,6 +281,13 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         // dispatch correctly.
                                         | ("http", "Agent")
                                         | ("https", "Agent")
+                                        | (
+                                            "v8",
+                                            "Serializer"
+                                                | "Deserializer"
+                                                | "DefaultSerializer"
+                                                | "DefaultDeserializer",
+                                        )
                                 );
                                 if is_known_native_class {
                                     let (mod_for_class, cls_for_class) = if class_name == "Agent" {
