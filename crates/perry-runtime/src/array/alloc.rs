@@ -3,6 +3,28 @@ use super::*;
 use crate::arena::arena_alloc_gc;
 use std::ptr;
 
+#[cold]
+fn throw_invalid_array_length() -> ! {
+    let bytes = b"Invalid array length";
+    let msg = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+pub(crate) fn array_length_from_number_or_throw(number: f64) -> u32 {
+    if number.is_finite() && number >= 0.0 && number <= u32::MAX as f64 && number.trunc() == number
+    {
+        number as u32
+    } else {
+        throw_invalid_array_length()
+    }
+}
+
+pub(crate) fn array_length_from_property_value_or_throw(value: f64) -> u32 {
+    let number = crate::builtins::js_number_coerce(value);
+    array_length_from_number_or_throw(number)
+}
+
 /// Allocate a new array with the given initial capacity
 #[no_mangle]
 pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
@@ -68,6 +90,28 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
     }
 
     ptr
+}
+
+/// Runtime path for `Array(value)` / `new Array(value)`.
+///
+/// A single Number argument is interpreted as an array length and must be a
+/// finite uint32. Any other single argument is stored as element 0.
+#[no_mangle]
+pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
+    if let Some(number) = value_bits_to_number(value.to_bits()) {
+        let length = array_length_from_number_or_throw(number);
+        return js_array_alloc_with_length(length);
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let arr = js_array_alloc(1);
+    unsafe {
+        (*arr).length = 1;
+        let value = value_handle.get_nanbox_f64();
+        note_array_slot(arr, 0, value.to_bits());
+    }
+    arr
 }
 
 /// Allocate a new array with `length == capacity == capacity` in the

@@ -423,7 +423,11 @@ fn is_path_root(ctx: &LoweringContext, root_name: &str) -> bool {
 /// `"posix"`. Shared by the direct member form and the aliased-local form
 /// (`const w = path.win32; w.<method>(...)`, #1750). Returns `Err(args)` when
 /// no method matches so the caller can fall through to generic lowering.
-fn dispatch_path_subnamespace(sub: &str, method: &str, args: Vec<Expr>) -> Result<Expr, Vec<Expr>> {
+pub(super) fn dispatch_path_subnamespace(
+    sub: &str,
+    method: &str,
+    args: Vec<Expr>,
+) -> Result<Expr, Vec<Expr>> {
     // path.<sub>.join(...)
     if method == "join" {
         if args.is_empty() {

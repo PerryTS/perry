@@ -172,6 +172,22 @@ fn js_string_from_str(s: &str) -> *mut StringHeader {
     crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
+fn throw_replace_all_non_global_regex() -> ! {
+    let message = b"String.prototype.replaceAll called with a non-global RegExp argument";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[inline]
+fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
+    unsafe {
+        if !(*re).global {
+            throw_replace_all_non_global_regex();
+        }
+    }
+}
+
 /// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
 /// Handles JS-specific escape sequences not supported by the Rust regex crate.
 /// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
@@ -756,6 +772,26 @@ pub extern "C" fn js_string_replace_regex(
 
         js_string_from_str(&result)
     }
+}
+
+/// string.replaceAll(regex, replacement) -> string
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_regex(
+    s: *const StringHeader,
+    re: *const RegExpHeader,
+    replacement: *const StringHeader,
+) -> *mut StringHeader {
+    if !is_valid_ptr(s) {
+        return js_string_from_str("");
+    }
+
+    let str_data = string_as_str(s);
+    if !is_valid_regex_ptr(re) {
+        return js_string_from_str(str_data);
+    }
+
+    ensure_replace_all_regex_global(re);
+    js_string_replace_regex(s, re, replacement)
 }
 
 /// Replace with a simple string pattern (not regex)
@@ -1360,6 +1396,26 @@ pub extern "C" fn js_string_replace_regex_fn(
     }
 }
 
+/// string.replaceAll(regex, replacerFn) -> string
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_regex_fn(
+    s: *const StringHeader,
+    re: *const RegExpHeader,
+    callback: f64,
+) -> *mut StringHeader {
+    if !is_valid_ptr(s) {
+        return js_string_from_str("");
+    }
+
+    let str_data = string_as_str(s);
+    if !is_valid_regex_ptr(re) {
+        return js_string_from_str(str_data);
+    }
+
+    ensure_replace_all_regex_global(re);
+    js_string_replace_regex_fn(s, re, callback)
+}
+
 /// string.replace(regex, replacement) with named group references ($<name>)
 /// Handles $<name> replacement patterns for named capture groups
 #[no_mangle]
@@ -1430,6 +1486,26 @@ pub extern "C" fn js_string_replace_regex_named(
         result.push_str(&str_data[last_end..]);
         js_string_from_str(&result)
     }
+}
+
+/// string.replaceAll(regex, replacement) with named group references ($<name>)
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_regex_named(
+    s: *const StringHeader,
+    re: *const RegExpHeader,
+    replacement: *const StringHeader,
+) -> *mut StringHeader {
+    if !is_valid_ptr(s) {
+        return js_string_from_str("");
+    }
+
+    let str_data = string_as_str(s);
+    if !is_valid_regex_ptr(re) {
+        return js_string_from_str(str_data);
+    }
+
+    ensure_replace_all_regex_global(re);
+    js_string_replace_regex_named(s, re, replacement)
 }
 
 #[cfg(test)]

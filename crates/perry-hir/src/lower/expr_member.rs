@@ -445,7 +445,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
 
     // Check if this is Symbol.<well-known> — Symbol.toPrimitive,
     // Symbol.hasInstance, Symbol.toStringTag, Symbol.match, Symbol.iterator,
-    // Symbol.asyncIterator, Symbol.dispose, Symbol.asyncDispose.
+    // Symbol.asyncIterator, Symbol.dispose, Symbol.asyncDispose, and the
+    // remaining standard protocol constants.
     // Lowered to `SymbolFor(String("@@__perry_wk_<name>"))` which the
     // runtime's `js_symbol_for` sniffs via prefix and resolves from
     // the well-known cache (not the registry). Gives each well-known
@@ -459,7 +460,14 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "toPrimitive"
                         | "hasInstance"
                         | "toStringTag"
+                        | "species"
                         | "match"
+                        | "matchAll"
+                        | "replace"
+                        | "search"
+                        | "split"
+                        | "isConcatSpreadable"
+                        | "unscopables"
                         | "iterator"
                         | "asyncIterator"
                         | "dispose"

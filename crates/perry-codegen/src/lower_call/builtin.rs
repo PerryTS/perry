@@ -54,6 +54,25 @@ pub(super) fn lower_builtin_new(
         return Ok(None);
     }
     match class_name {
+        "EvalError" | "URIError" => {
+            let msg_box = if let Some(message) = args.first() {
+                lower_expr(ctx, message)?
+            } else {
+                lower_expr(ctx, &Expr::String(String::new()))?
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let blk = ctx.block();
+            let msg_handle = unbox_to_i64(blk, &msg_box);
+            let runtime = if class_name == "EvalError" {
+                "js_evalerror_new"
+            } else {
+                "js_urierror_new"
+            };
+            let err_handle = blk.call(I64, runtime, &[(I64, &msg_handle)]);
+            Ok(Some(nanbox_pointer_inline(blk, &err_handle)))
+        }
         // `new RegExp(pattern)` / `new RegExp(pattern, flags)` — call
         // js_regexp_new directly so the resulting object is a real
         // RegExpHeader (registered in REGEX_POINTERS, .test/.exec/etc
@@ -467,19 +486,17 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Array" => {
-            // `new Array()` → empty array, `new Array(n)` → length-n array
-            // (slots NaN-boxed `undefined`, see issue #323), `new Array(a, b, c)` → 3-element array
-            // [a, b, c]. We handle the no-arg and single-numeric-arg cases
-            // here. Multi-arg / non-numeric single arg falls back to the
-            // generic Expr::New path.
+            // `new Array()` → empty array, `new Array(n)` → length-n sparse
+            // array after runtime validation, and `new Array(value)` with a
+            // non-number argument → one-element array. Multi-arg calls fall
+            // back to the generic Expr::New path.
             let blk = ctx.block();
             let handle = if args.is_empty() {
                 blk.call(I64, "js_array_create", &[])
             } else if args.len() == 1 {
-                let cap = lower_expr(ctx, &args[0])?;
+                let value = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                let cap_i32 = blk.fptosi(DOUBLE, &cap, I32);
-                blk.call(I64, "js_array_alloc_with_length", &[(I32, &cap_i32)])
+                blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)])
             } else {
                 return Ok(None);
             };
