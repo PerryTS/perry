@@ -295,6 +295,7 @@ pub unsafe extern "C" fn js_ws_connect(
                             msg_result = read.next() => {
                                 match msg_result {
                                     Some(Ok(Message::Text(text))) => {
+                                        let text = text.to_string();
                                         let has_listeners = WS_CLIENT_LISTENERS.lock().unwrap()
                                             .get(&ws_id_io)
                                             .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
@@ -347,7 +348,7 @@ pub unsafe extern "C" fn js_ws_connect(
                                 match cmd {
                                     Some(WsCommand::Send(msg)) => {
                                         ws_file_log(&format!("[WS-io] sending len={}", msg.len()));
-                                        if let Err(e) = write.send(Message::Text(msg)).await {
+                                        if let Err(e) = write.send(Message::Text(msg.into())).await {
                                             ws_file_log(&format!("[WS-io] send ERR: {}", e));
                                             break;
                                         }
@@ -476,6 +477,7 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                             msg_result = read.next() => {
                                 match msg_result {
                                     Some(Ok(Message::Text(text))) => {
+                                        let text = text.to_string();
                                         let has_listeners = WS_CLIENT_LISTENERS.lock().unwrap()
                                             .get(&ws_id_io)
                                             .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
@@ -526,7 +528,7 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                             cmd = rx.recv() => {
                                 match cmd {
                                     Some(WsCommand::Send(msg)) => {
-                                        if write.send(Message::Text(msg)).await.is_err() {
+                                        if write.send(Message::Text(msg.into())).await.is_err() {
                                             break;
                                         }
                                     }
@@ -985,6 +987,7 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                 msg_result = read.next() => {
                                                     match msg_result {
                                                         Some(Ok(Message::Text(text))) => {
+                                                            let text = text.to_string();
                                                             ws_file_log(&format!("[WS-srv-io] id={} recv len={}", ws_id_io, text.len()));
                                                             push_ws_event(
                                                                 PendingWsEvent::Message(ws_id_io, text)
@@ -1033,7 +1036,7 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                     match cmd {
                                                         Some(WsCommand::Send(msg)) => {
                                                             ws_file_log(&format!("[WS-srv-io] id={} sending len={}", ws_id_io, msg.len()));
-                                                            match write.send(Message::Text(msg)).await {
+                                                            match write.send(Message::Text(msg.into())).await {
                                                                 Ok(_) => {
                                                                     ws_file_log(&format!("[WS-srv-io] id={} send OK", ws_id_io));
                                                                 }
