@@ -659,12 +659,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:util
 
-**Gap APIs: 96** · Already covered: 9
+**Gap APIs: 94** · Already covered: 11
 
 #### Missing from Perry
 
-- `util.debuglog(section[, callback])`
-- `util.debug(section)`
 - `util.formatWithOptions(inspectOptions, format[, ...args])`
 - `util.getCallSites([frameCount][, options])`
 - `util.getSystemErrorName(err)`
