@@ -719,6 +719,17 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
+pub(super) fn schedule_writable_finish_then_transform_end(stream: f64, callback: Option<f64>) {
+    schedule_writable_finish(stream, callback);
+    if is_transform_stream(stream)
+        && !has_truthy_hidden(stream, hidden_writable_final_pending_key())
+        && (has_truthy_hidden(stream, hidden_finish_scheduled_key())
+            || has_truthy_hidden(stream, hidden_finish_emitted_key()))
+    {
+        schedule_readable_end(stream);
+    }
+}
+
 pub(super) fn set_pending_writable_finish_callback(stream: f64, callback: Option<f64>) {
     let value = callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
     set_hidden_value(stream, hidden_writable_pending_finish_callback_key(), value);
@@ -743,7 +754,7 @@ pub(super) fn schedule_pending_writable_finish_if_ready(stream: f64) {
         return;
     }
     let callback = take_pending_writable_finish_callback(stream);
-    schedule_writable_finish(stream, callback);
+    schedule_writable_finish_then_transform_end(stream, callback);
 }
 
 pub(super) fn emit_readable_end_once(stream: f64) {
