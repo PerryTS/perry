@@ -13,6 +13,7 @@ pub const BIGINT_LIMBS: usize = 16;
 const BIGINT_BITS: usize = BIGINT_LIMBS * 64;
 
 const ZERO_LIMBS: [u64; BIGINT_LIMBS] = [0; BIGINT_LIMBS];
+const DIVISION_BY_ZERO_MESSAGE: &[u8] = b"Division by zero";
 
 /// Decode a 1024-bit two's-complement value into a host i64 if it fits.
 /// Layout: positive small → all upper limbs zero AND limb[0] high bit clear;
@@ -122,6 +123,16 @@ pub fn clean_bigint_ptr(p: *const BigIntHeader) -> *const BigIntHeader {
 #[inline(always)]
 pub fn clean_bigint_ptr_mut(p: *mut BigIntHeader) -> *mut BigIntHeader {
     clean_bigint_ptr(p as *const BigIntHeader) as *mut BigIntHeader
+}
+
+#[cold]
+fn throw_bigint_division_by_zero() -> ! {
+    let msg = crate::string::js_string_from_bytes(
+        DIVISION_BY_ZERO_MESSAGE.as_ptr(),
+        DIVISION_BY_ZERO_MESSAGE.len() as u32,
+    );
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 /// Create a BigInt from a u64 value
@@ -623,9 +634,8 @@ pub extern "C" fn js_bigint_div(
     let a_limbs = bigint_limbs_or_zero(a);
     let b_limbs = bigint_limbs_or_zero(b);
 
-    // Division by zero: return 0 instead of panicking (panic can't unwind in extern "C")
     if b_limbs == ZERO_LIMBS {
-        return bigint_alloc_with_limbs(ZERO_LIMBS);
+        throw_bigint_division_by_zero();
     }
 
     // Fast path: both fit in i64. Rust's `/` on i64 truncates toward
@@ -674,9 +684,8 @@ pub extern "C" fn js_bigint_mod(
     let a_limbs = bigint_limbs_or_zero(a);
     let b_limbs = bigint_limbs_or_zero(b);
 
-    // Division by zero: return 0 instead of panicking (panic can't unwind in extern "C")
     if b_limbs == ZERO_LIMBS {
-        return bigint_alloc_with_limbs(ZERO_LIMBS);
+        throw_bigint_division_by_zero();
     }
 
     // Fast path: both fit in i64. JavaScript's `%` returns the sign of

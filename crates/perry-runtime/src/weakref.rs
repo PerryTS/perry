@@ -17,7 +17,7 @@ use crate::array::{
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field, ObjectHeader,
 };
-use crate::value::{js_nanbox_get_pointer, JSValue};
+use crate::value::{js_nanbox_get_pointer, JSValue, POINTER_MASK};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -89,12 +89,54 @@ pub(crate) fn weak_collection_entries(obj: *const ObjectHeader) -> Vec<(f64, f64
     }
 }
 
+fn weakref_type_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    let err_val = JSValue::pointer(err as *const u8);
+    crate::exception::js_throw(f64::from_bits(err_val.bits()))
+}
+
+fn is_valid_weak_target(value: f64) -> bool {
+    if crate::value::is_js_handle(value) {
+        return true;
+    }
+
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+
+    let ptr = (jv.bits() & POINTER_MASK) as usize;
+    ptr != 0 && !crate::symbol::is_global_registered_symbol(ptr)
+}
+
+fn is_undefined_value(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_undefined()
+}
+
+fn is_callable_value(value: f64) -> bool {
+    if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
+        return true;
+    }
+
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+
+    crate::closure::is_closure_ptr((jv.bits() & POINTER_MASK) as usize)
+}
+
 /// Allocate a `WeakRef` wrapper object that strongly holds the target value
 /// in a single sentinel-named field. #1766: the field name uses a `__perry_`
 /// prefix so user code reading `(wr as any).target` returns `undefined` like
 /// Node, instead of leaking the internal storage slot.
 #[no_mangle]
 pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
+    if !is_valid_weak_target(target) {
+        weakref_type_error("WeakRef: invalid target");
+    }
+
     let packed = b"__perry_wr_target\0";
     let obj = js_object_alloc_with_shape(WEAKREF_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     js_object_set_field(obj, 0, JSValue::from_bits(target.to_bits()));
@@ -128,6 +170,10 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
 /// 2-element `[token, held]` array used by `unregister(token)` to find matches.
 #[no_mangle]
 pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
+    if !is_callable_value(callback) {
+        weakref_type_error("FinalizationRegistry: cleanup must be callable");
+    }
+
     // #1766: sentinel-name internal slots so `(fr as any).callback` /
     // `.entries` return `undefined` like Node.
     let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
@@ -147,7 +193,19 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
 /// provided, we still record an `[undefined, held]` pair so the registration count
 /// is correct (but it can never be unregistered).
 #[no_mangle]
-pub extern "C" fn js_finreg_register(registry: f64, _target: f64, held: f64, token: f64) -> f64 {
+pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, token: f64) -> f64 {
+    if !is_valid_weak_target(target) {
+        weakref_type_error("FinalizationRegistry.prototype.register: invalid target");
+    }
+    if target.to_bits() == held.to_bits() {
+        weakref_type_error(
+            "FinalizationRegistry.prototype.register: target and holdings must not be same",
+        );
+    }
+    if !is_undefined_value(token) && !is_valid_weak_target(token) {
+        weakref_type_error("Invalid unregisterToken");
+    }
+
     let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -173,6 +231,10 @@ pub extern "C" fn js_finreg_register(registry: f64, _target: f64, held: f64, tok
 /// references — both sides are stored as POINTER_TAG-tagged f64 values.
 #[no_mangle]
 pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
+    if !is_valid_weak_target(token) {
+        weakref_type_error("Invalid unregisterToken");
+    }
+
     let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_FALSE);
@@ -536,7 +598,9 @@ mod tests {
             Some("WeakSet { <items unknown> }")
         );
         // WeakRef / FinalizationRegistry have no items placeholder.
-        let wr = js_weakref_new(f64::from_bits(TAG_UNDEFINED));
+        let target = crate::object::js_object_alloc(0, 0);
+        let target_val = f64::from_bits(JSValue::pointer(target as *const u8).bits());
+        let wr = js_weakref_new(target_val);
         assert_eq!(weak_wrapper_inspect_label(wr), Some("WeakRef {}"));
     }
 }

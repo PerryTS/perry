@@ -182,6 +182,60 @@ pub(crate) unsafe fn js_string_key_bytes<'a>(
     None
 }
 
+/// Validate and coerce the search string for String.prototype.includes,
+/// startsWith, and endsWith.
+///
+/// The ECMAScript path is IsRegExp(searchString) before ToString(searchString):
+/// a real RegExp or an object with truthy Symbol.match must throw, while
+/// Symbol.match === false/null explicitly opts out and then stringifies.
+#[no_mangle]
+pub extern "C" fn js_string_search_value_to_string(
+    value: f64,
+    method_id: i32,
+) -> *mut StringHeader {
+    if string_search_is_regexp(value) {
+        throw_regexp_search_type_error(method_id);
+    }
+    crate::value::js_jsvalue_to_string(value)
+}
+
+fn string_search_is_regexp(value: f64) -> bool {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+
+    let raw_ptr = jsval.as_pointer::<u8>() as usize;
+    if raw_ptr < 0x10000 || crate::symbol::is_registered_symbol(raw_ptr) {
+        return false;
+    }
+
+    let match_sym = crate::symbol::well_known_symbol("match");
+    if !match_sym.is_null() {
+        let match_sym_f64 =
+            f64::from_bits(crate::value::JSValue::pointer(match_sym as *const u8).bits());
+        let matcher = unsafe { crate::symbol::js_object_get_symbol_property(value, match_sym_f64) };
+        if matcher.to_bits() != crate::value::TAG_UNDEFINED {
+            return crate::value::js_is_truthy(matcher) != 0;
+        }
+    }
+
+    crate::regex::is_regex_pointer(jsval.as_pointer::<u8>())
+}
+
+fn throw_regexp_search_type_error(method_id: i32) -> ! {
+    let method = match method_id {
+        1 => "startsWith",
+        2 => "endsWith",
+        _ => "includes",
+    };
+    let message =
+        format!("First argument to String.prototype.{method} must not be a regular expression");
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Check if a string starts with a prefix
 #[no_mangle]
 pub extern "C" fn js_string_starts_with(

@@ -19,7 +19,22 @@ use crate::lower_types::extract_ts_type_with_ctx;
 
 use super::{lower_expr, LoweringContext};
 
+fn peel_new_callee(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        match expr {
+            ast::Expr::Paren(paren) => expr = paren.expr.as_ref(),
+            ast::Expr::TsAs(ts_as) => expr = ts_as.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(ts_ta) => expr = ts_ta.expr.as_ref(),
+            ast::Expr::TsNonNull(ts_non_null) => expr = ts_non_null.expr.as_ref(),
+            ast::Expr::TsConstAssertion(ts_const) => expr = ts_const.expr.as_ref(),
+            _ => return expr,
+        }
+    }
+}
+
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
+    let callee_expr = peel_new_callee(new_expr.callee.as_ref());
+
     // Issue #422: `new net.Socket()` over a `net` module alias. The
     // generic Member-callee path below would lower this to
     // `Expr::NewDynamic`, whose codegen fallback returns an empty
@@ -30,7 +45,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // pointing at `js_net_socket_alloc`, and the let-stmt machinery in
     // `lower.rs` registers the result as a `("net", "Socket")` native
     // instance so subsequent method calls dispatch correctly.
-    if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
+    if let ast::Expr::Member(member) = callee_expr {
         if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
             (member.obj.as_ref(), &member.prop)
         {
@@ -220,7 +235,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     }
 
     // Try to extract class name from callee
-    match new_expr.callee.as_ref() {
+    match callee_expr {
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
 
@@ -679,10 +694,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                let target = args
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow!("WeakRef constructor requires 1 argument"))?;
+                let target = args.into_iter().next().unwrap_or(Expr::Undefined);
                 return Ok(Expr::WeakRefNew(Box::new(target)));
             }
 
@@ -700,9 +712,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                let cb = args.into_iter().next().ok_or_else(|| {
-                    anyhow!("FinalizationRegistry constructor requires a callback argument")
-                })?;
+                let cb = args.into_iter().next().unwrap_or(Expr::Undefined);
                 return Ok(Expr::FinalizationRegistryNew(Box::new(cb)));
             }
             // Handle TextEncoder constructor
@@ -873,7 +883,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         // Non-identifier callee (e.g., new (condition ? A : B)() or new someVar())
         _ => {
             // Check for class expressions: new (class extends X { ... })()
-            let class_expr_opt = match new_expr.callee.as_ref() {
+            let class_expr_opt = match callee_expr {
                 ast::Expr::Class(ce) => Some(ce),
                 ast::Expr::Paren(paren) => match paren.expr.as_ref() {
                     ast::Expr::Class(ce) => Some(ce),
@@ -912,7 +922,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            let callee = Box::new(lower_expr(ctx, &new_expr.callee)?);
+            let callee = Box::new(lower_expr(ctx, callee_expr)?);
             let args = new_expr
                 .args
                 .as_ref()

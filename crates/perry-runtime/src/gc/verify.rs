@@ -171,7 +171,7 @@ pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
     sticky
 }
 
-pub(super) unsafe fn remember_retained_old_to_young_slots(
+unsafe fn remember_retained_old_to_young_slots(
     sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
     require_marked: bool,
@@ -192,22 +192,103 @@ pub(super) unsafe fn remember_retained_old_to_young_slots(
     });
 }
 
-pub(super) fn rebuild_live_old_to_young_remembered_set(
+pub(super) struct OldToYoungRememberedRebuildState {
     require_marked: bool,
-) -> StickyRememberedSet {
-    let mut sticky = StickyRememberedSet::default();
-    crate::arena::old_arena_walk_objects(|hp| unsafe {
-        remember_retained_old_to_young_slots(&mut sticky, hp as *mut GcHeader, require_marked);
-    });
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &header in s.objects.iter() {
+    sticky: StickyRememberedSet,
+    arena_cursor: Option<crate::arena::ArenaObjectCursor>,
+    arena_done: bool,
+    malloc_index: usize,
+    done: bool,
+}
+
+impl OldToYoungRememberedRebuildState {
+    pub(super) fn new(require_marked: bool) -> Self {
+        Self {
+            require_marked,
+            sticky: StickyRememberedSet::default(),
+            arena_cursor: Some(crate::arena::ArenaObjectCursor::new(
+                crate::arena::ArenaWalkOrder::BlockIndex,
+            )),
+            arena_done: false,
+            malloc_index: 0,
+            done: false,
+        }
+    }
+
+    pub(super) fn step(&mut self, budget: usize) -> bool {
+        if self.done {
+            return true;
+        }
+
+        let mut remaining = budget;
+        while remaining > 0 && !self.arena_done {
+            let next = self
+                .arena_cursor
+                .as_mut()
+                .and_then(crate::arena::ArenaObjectCursor::next);
+            let Some((header_ptr, _block_idx)) = next else {
+                self.arena_done = true;
+                self.arena_cursor = None;
+                break;
+            };
+            remaining -= 1;
+            let header = header_ptr as *mut GcHeader;
             unsafe {
-                remember_retained_old_to_young_slots(&mut sticky, header, require_marked);
+                remember_retained_old_to_young_slots(&mut self.sticky, header, self.require_marked);
             }
         }
-    });
-    sticky
+
+        while remaining > 0 && self.arena_done {
+            let maybe_header = MALLOC_STATE.with(|s| {
+                let s = s.borrow();
+                s.objects.get(self.malloc_index).copied()
+            });
+            let Some(header) = maybe_header else {
+                self.done = true;
+                return true;
+            };
+            self.malloc_index += 1;
+            remaining -= 1;
+            unsafe {
+                remember_retained_old_to_young_slots(&mut self.sticky, header, self.require_marked);
+            }
+        }
+
+        if self.arena_done {
+            let malloc_len = MALLOC_STATE.with(|s| s.borrow().objects.len());
+            if self.malloc_index >= malloc_len {
+                self.done = true;
+            }
+        }
+
+        self.done
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn finish_unbounded(mut self) -> StickyRememberedSet {
+        while !self.step(usize::MAX) {}
+        self.sticky
+    }
+
+    pub(super) fn finish(self) -> StickyRememberedSet {
+        debug_assert!(self.done);
+        self.sticky
+    }
+}
+
+#[allow(dead_code)]
+fn rebuild_retained_old_to_young_remembered_set(require_marked: bool) -> StickyRememberedSet {
+    OldToYoungRememberedRebuildState::new(require_marked).finish_unbounded()
+}
+
+#[allow(dead_code)]
+pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet {
+    rebuild_retained_old_to_young_remembered_set(true)
+}
+
+#[allow(dead_code)]
+pub(super) fn rebuild_minor_old_to_young_remembered_set() -> StickyRememberedSet {
+    rebuild_retained_old_to_young_remembered_set(false)
 }
 
 #[inline]

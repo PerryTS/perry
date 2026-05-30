@@ -6,6 +6,8 @@ pub(super) const MIN_CANDIDATE_RATIO_PCT: u64 = 25;
 pub(super) const RSS_PRESSURE_BYTES: u64 = 192 * 1024 * 1024;
 pub(super) const RSS_HARD_PRESSURE_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) const MAX_PREVIOUS_PAUSE_US: u64 = 20_000;
+pub(super) const EVACUATION_POLICY_DISABLED_REASON: &str = "disabled";
+pub(super) const EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON: &str = "low_pause_non_moving";
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct EvacuationPolicySnapshot {
@@ -187,6 +189,7 @@ pub(super) fn evacuation_policy_initial_decision(
     pre_evac_pause_us: u64,
     allowed: bool,
     force: bool,
+    disabled_reason: &'static str,
     old_to_young_tracking_complete: bool,
     old_page_selected_pages: usize,
 ) -> EvacuationPolicyDecision {
@@ -201,7 +204,7 @@ pub(super) fn evacuation_policy_initial_decision(
         return EvacuationPolicyDecision {
             allowed,
             force,
-            reason: "disabled",
+            reason: disabled_reason,
             snapshot,
             ..EvacuationPolicyDecision::default()
         };
@@ -371,7 +374,9 @@ pub(super) fn evacuation_policy_final_decision(
     decision.snapshot = snapshot;
     decision.enabled = false;
     if !decision.allowed {
-        decision.reason = "disabled";
+        if decision.reason == "not_evaluated" {
+            decision.reason = EVACUATION_POLICY_DISABLED_REASON;
+        }
         return decision;
     }
     if !decision.considered {
@@ -494,63 +499,147 @@ pub(super) fn sweep() -> u64 {
 }
 
 pub(super) fn sweep_malloc_objects() -> u64 {
-    let mut freed_bytes: u64 = 0;
-
-    // The malloc header registry is maintained only after activation. When
-    // inactive, sweep remains a pure `objects` compaction. Once active, remove
-    // freed headers inline so copied-minor can use the registry later without
-    // rebuilding it.
-    MALLOC_STATE.with(|s| {
-        let mut s = s.borrow_mut();
-        let mut i = 0;
-        let registry_available = s.malloc_registry_available();
-        while i < s.objects.len() {
-            let header = s.objects[i];
-            unsafe {
-                if (*header).gc_flags & GC_FLAG_PINNED != 0 {
-                    // Pinned objects are always kept alive — clear mark bit inline
-                    (*header).gc_flags &= !GC_FLAG_MARKED;
-                    i += 1;
-                    continue;
-                }
-                if (*header).gc_flags & GC_FLAG_MARKED == 0 {
-                    // Unmarked: free it
-                    let total_size = (*header).size as usize;
-                    let obj_type = (*header).obj_type;
-                    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-                    freed_bytes += total_size as u64;
-                    layout_clear_for_ptr(user_ptr as usize);
-                    gc_type_finalize_unmarked_payload(obj_type, user_ptr);
-
-                    let layout = Layout::from_size_align(total_size, 8).unwrap();
-                    dealloc(header as *mut u8, layout);
-                    s.record_malloc_free(obj_type, total_size as u64);
-                    s.objects.swap_remove(i);
-                    if registry_available {
-                        s.set.remove(&(header as usize));
-                    }
-                    // Don't increment i — swap_remove moved last element here
-                } else {
-                    // Surviving object — clear mark bit inline to avoid separate heap walk
-                    (*header).gc_flags &= !GC_FLAG_MARKED;
-                    i += 1;
-                }
-            }
-        }
-    });
-
-    freed_bytes
+    let mut state = MallocSweepCycleState::new(true);
+    state.finish_unbounded()
 }
 
 pub(super) fn clear_malloc_mark_bits() {
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &header in s.objects.iter() {
-            unsafe {
-                (*header).gc_flags &= !GC_FLAG_MARKED;
+    let mut state = MallocSweepCycleState::new(false);
+    state.finish_unbounded();
+}
+
+struct MallocSweepCycleState {
+    sweep_malloc: bool,
+    headers: Vec<*mut GcHeader>,
+    positions: crate::fast_hash::PtrHashMap<usize, usize>,
+    cursor: usize,
+    freed_bytes: u64,
+}
+
+impl MallocSweepCycleState {
+    fn new(sweep_malloc: bool) -> Self {
+        let headers = malloc_sweep_snapshot_headers();
+        let mut positions = crate::fast_hash::PtrHashMap::with_capacity_and_hasher(
+            headers.len(),
+            crate::fast_hash::PtrHasher,
+        );
+        for (idx, &header) in headers.iter().enumerate() {
+            positions.insert(header as usize, idx);
+        }
+        Self {
+            sweep_malloc,
+            headers,
+            positions,
+            cursor: 0,
+            freed_bytes: 0,
+        }
+    }
+
+    fn step(&mut self, budget: usize) -> bool {
+        let mut remaining = budget;
+        while remaining > 0 && self.cursor < self.headers.len() {
+            let header = self.headers[self.cursor];
+            self.cursor += 1;
+            remaining -= 1;
+            let Some(header) = self.revalidate_tracked_header(header) else {
+                continue;
+            };
+            if self.sweep_malloc {
+                self.process_sweep_header(header);
+            } else {
+                unsafe {
+                    (*header).gc_flags &= !GC_FLAG_MARKED;
+                }
             }
         }
-    });
+        let done = self.cursor >= self.headers.len();
+        if done {
+            malloc_sweep_clear_snapshot_tracking();
+        }
+        done
+    }
+
+    fn finish_unbounded(&mut self) -> u64 {
+        while !self.step(usize::MAX) {}
+        self.freed_bytes
+    }
+
+    fn revalidate_tracked_header(
+        &mut self,
+        snapshot_header: *mut GcHeader,
+    ) -> Option<*mut GcHeader> {
+        let snapshot_key = snapshot_header as usize;
+        let expected_idx = match self.positions.get(&snapshot_key).copied() {
+            Some(idx) => idx,
+            None => return None,
+        };
+        let Some((current_header, current_idx)) =
+            malloc_sweep_revalidate_header(snapshot_header, expected_idx)
+        else {
+            self.positions.remove(&snapshot_key);
+            return None;
+        };
+
+        if current_header != snapshot_header {
+            self.positions.remove(&snapshot_key);
+            self.positions.insert(current_header as usize, current_idx);
+        } else if current_idx != expected_idx {
+            self.positions.insert(snapshot_key, current_idx);
+        }
+        Some(current_header)
+    }
+
+    fn process_sweep_header(&mut self, header: *mut GcHeader) {
+        unsafe {
+            if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+                (*header).gc_flags &= !GC_FLAG_MARKED;
+                return;
+            }
+            if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+                (*header).gc_flags &= !GC_FLAG_MARKED;
+                return;
+            }
+
+            let total_size = (*header).size as usize;
+            let obj_type = (*header).obj_type;
+            let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+            self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
+            layout_clear_for_ptr(user_ptr as usize);
+            gc_type_finalize_unmarked_payload(obj_type, user_ptr);
+            let layout = Layout::from_size_align(total_size, 8).unwrap();
+            dealloc(header as *mut u8, layout);
+            self.remove_tracked_header(header, obj_type, total_size as u64);
+        }
+    }
+
+    fn remove_tracked_header(&mut self, header: *mut GcHeader, obj_type: u8, bytes: u64) {
+        let Some(mut idx) = self.positions.remove(&(header as usize)) else {
+            return;
+        };
+        MALLOC_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            if idx >= s.objects.len() || s.objects[idx] != header {
+                let Some(found) = s.objects.iter().position(|&candidate| candidate == header)
+                else {
+                    return;
+                };
+                idx = found;
+            }
+
+            let registry_available = s.malloc_registry_available();
+            s.objects.swap_remove(idx);
+            if idx < s.objects.len() {
+                let moved = s.objects[idx];
+                if self.positions.contains_key(&(moved as usize)) {
+                    self.positions.insert(moved as usize, idx);
+                }
+            }
+            if registry_available {
+                s.set.remove(&(header as usize));
+            }
+            s.record_malloc_free(obj_type, bytes);
+        });
+    }
 }
 
 /// Sweep variant that folds the minor-GC age-bump pass into the same arena walk.
@@ -567,10 +656,12 @@ pub(super) fn clear_malloc_mark_bits() {
 /// general-arena (nursery) objects age — longlived and old-gen are skipped, as
 /// in the original standalone age-bump pass (which used `pointer_in_old_gen`
 /// for the same gate).
+#[allow(dead_code)]
 pub(super) fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
     sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, None, true)
 }
 
+#[allow(dead_code)]
 pub(super) fn sweep_with_age_bump_and_malloc(
     do_age_bump: bool,
     sweep_malloc: bool,
@@ -597,6 +688,7 @@ pub(super) unsafe fn invalidate_dead_old_arena_header(header: *mut GcHeader, tot
     (*header)._reserved = 0;
 }
 
+#[allow(dead_code)]
 pub(super) fn sweep_with_age_bump_and_old_reclaim(
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
@@ -604,6 +696,7 @@ pub(super) fn sweep_with_age_bump_and_old_reclaim(
     sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, reclaim_dead_old_blocks, None, true)
 }
 
+#[allow(dead_code)]
 pub(super) fn sweep_with_age_bump_and_targeted_old_reclaim_and_malloc(
     do_age_bump: bool,
     selected_old_blocks: &crate::fast_hash::PtrHashSet<usize>,
@@ -617,7 +710,24 @@ pub(super) fn sweep_with_age_bump_and_targeted_old_reclaim_and_malloc(
     )
 }
 
+#[allow(dead_code)]
 fn sweep_with_age_bump_and_old_reclaim_targets(
+    do_age_bump: bool,
+    reclaim_dead_old_blocks: bool,
+    targeted_old_blocks: Option<&crate::fast_hash::PtrHashSet<usize>>,
+    sweep_malloc: bool,
+) -> SweepTraceStats {
+    let mut state = IncrementalSweepState::new(
+        do_age_bump,
+        reclaim_dead_old_blocks,
+        targeted_old_blocks.cloned(),
+        sweep_malloc,
+    );
+    state.finish_unbounded()
+}
+
+#[allow(dead_code)]
+fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
     targeted_old_blocks: Option<&crate::fast_hash::PtrHashSet<usize>>,
@@ -927,6 +1037,390 @@ fn sweep_with_age_bump_and_old_reclaim_targets(
         deallocated_bytes: reset.deallocated_bytes,
         retained_forwarded_stub_objects,
         retained_forwarded_stub_bytes,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SweepCycleSubphase {
+    Malloc,
+    ArenaObjects,
+    BlockCleanup,
+    Done,
+}
+
+pub(super) struct IncrementalSweepState {
+    subphase: SweepCycleSubphase,
+    malloc: MallocSweepCycleState,
+    arena: ArenaSweepObjectsState,
+    cleanup: Option<ArenaSweepCleanupState>,
+    reclaim_dead_old_blocks: bool,
+    targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
+    stats: SweepTraceStats,
+}
+
+impl IncrementalSweepState {
+    pub(super) fn new(
+        do_age_bump: bool,
+        reclaim_dead_old_blocks: bool,
+        targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
+        sweep_malloc: bool,
+    ) -> Self {
+        Self {
+            subphase: SweepCycleSubphase::Malloc,
+            malloc: MallocSweepCycleState::new(sweep_malloc),
+            arena: ArenaSweepObjectsState::new(do_age_bump, reclaim_dead_old_blocks),
+            cleanup: None,
+            reclaim_dead_old_blocks,
+            targeted_old_blocks,
+            stats: SweepTraceStats::default(),
+        }
+    }
+
+    pub(super) fn step(&mut self, budget: usize) -> bool {
+        match self.subphase {
+            SweepCycleSubphase::Malloc => {
+                if self.malloc.step(budget) {
+                    self.subphase = SweepCycleSubphase::ArenaObjects;
+                }
+                false
+            }
+            SweepCycleSubphase::ArenaObjects => {
+                if self.arena.step(budget) {
+                    self.arena.maybe_print_diag();
+                    self.cleanup = Some(ArenaSweepCleanupState::new(
+                        self.arena.block_has_live(),
+                        self.arena.block_snapshots(),
+                        self.reclaim_dead_old_blocks,
+                        self.targeted_old_blocks.as_ref(),
+                    ));
+                    self.subphase = SweepCycleSubphase::BlockCleanup;
+                }
+                false
+            }
+            SweepCycleSubphase::BlockCleanup => {
+                let cleanup = self.cleanup.as_mut().expect("sweep cleanup state exists");
+                if cleanup.step(budget) {
+                    let reset = cleanup.stats();
+                    let freed_bytes = self
+                        .malloc
+                        .freed_bytes
+                        .saturating_add(self.arena.freed_bytes);
+                    self.stats = SweepTraceStats {
+                        dead_bytes: freed_bytes,
+                        freed_bytes,
+                        reusable_bytes: reset.reusable_bytes,
+                        returned_bytes: reset.deallocated_bytes,
+                        reset_blocks: reset.reset_blocks,
+                        deallocated_blocks: reset.deallocated_blocks,
+                        deallocated_bytes: reset.deallocated_bytes,
+                        retained_forwarded_stub_objects: self.arena.retained_forwarded_stub_objects,
+                        retained_forwarded_stub_bytes: self.arena.retained_forwarded_stub_bytes,
+                    };
+                    self.subphase = SweepCycleSubphase::Done;
+                    return true;
+                }
+                false
+            }
+            SweepCycleSubphase::Done => true,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn finish_unbounded(&mut self) -> SweepTraceStats {
+        while !self.step(usize::MAX) {}
+        self.stats()
+    }
+
+    pub(super) fn stats(&self) -> SweepTraceStats {
+        self.stats
+    }
+}
+
+struct ArenaSweepObjectsState {
+    cursor: crate::arena::ArenaObjectCursor,
+    block_snapshots: Vec<crate::arena::ArenaBlockSnapshot>,
+    block_has_live: Vec<bool>,
+    resettable_general_n: usize,
+    old_block_start: usize,
+    overflow_active: bool,
+    do_age_bump: bool,
+    reclaim_dead_old_blocks: bool,
+    freed_bytes: u64,
+    retained_forwarded_stub_objects: usize,
+    retained_forwarded_stub_bytes: usize,
+}
+
+impl ArenaSweepObjectsState {
+    fn new(do_age_bump: bool, reclaim_dead_old_blocks: bool) -> Self {
+        let n_blocks = crate::arena::arena_block_count();
+        let block_snapshots = crate::arena::arena_block_snapshots();
+        crate::arena::old_pages_reset_sweep_accounting();
+        Self {
+            cursor: crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::BlockIndex),
+            block_snapshots,
+            block_has_live: vec![false; n_blocks],
+            resettable_general_n: crate::arena::general_block_count(),
+            old_block_start: crate::arena::longlived_end(),
+            overflow_active: !crate::object::overflow_fields_is_empty(),
+            do_age_bump,
+            reclaim_dead_old_blocks,
+            freed_bytes: 0,
+            retained_forwarded_stub_objects: 0,
+            retained_forwarded_stub_bytes: 0,
+        }
+    }
+
+    fn step(&mut self, budget: usize) -> bool {
+        let mut remaining = budget;
+        while remaining > 0 {
+            let Some((header_ptr, block_idx)) = self.cursor.next() else {
+                return true;
+            };
+            remaining -= 1;
+            self.process_object(header_ptr as *mut GcHeader, block_idx);
+        }
+        false
+    }
+
+    fn block_has_live(&self) -> &[bool] {
+        &self.block_has_live
+    }
+
+    fn block_snapshots(&self) -> &[crate::arena::ArenaBlockSnapshot] {
+        &self.block_snapshots
+    }
+
+    fn maybe_print_diag(&self) {
+        if std::env::var_os("PERRY_GC_DIAG").is_none() {
+            return;
+        }
+        let live_general = (0..self.resettable_general_n)
+            .filter(|&i| self.block_has_live[i])
+            .count();
+        let live_ll = (self.resettable_general_n..self.block_has_live.len())
+            .filter(|&i| self.block_has_live[i])
+            .count();
+        eprintln!(
+            "[gc] blocks: general={} ({} live), longlived={} ({} live), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
+            self.resettable_general_n,
+            live_general,
+            self.block_has_live.len() - self.resettable_general_n,
+            live_ll,
+            self.freed_bytes,
+            self.retained_forwarded_stub_bytes,
+            self.retained_forwarded_stub_objects,
+        );
+    }
+
+    fn process_object(&mut self, header: *mut GcHeader, block_idx: usize) {
+        unsafe {
+            let age_bump_this = self.do_age_bump && block_idx < self.resettable_general_n;
+            let flags = (*header).gc_flags;
+            if flags == 0 {
+                self.reclaim_dead_object(header, block_idx);
+                return;
+            }
+            if flags & GC_FLAG_PINNED != 0 {
+                self.keep_live_object(header, block_idx, flags, age_bump_this, true);
+                return;
+            }
+            if flags & GC_FLAG_FORWARDED != 0 {
+                self.process_forwarded_object(header, block_idx, flags);
+                return;
+            }
+            if flags & GC_FLAG_MARKED == 0 {
+                self.reclaim_dead_object(header, block_idx);
+            } else {
+                self.keep_live_object(header, block_idx, flags, age_bump_this, false);
+            }
+        }
+    }
+}
+
+impl ArenaSweepObjectsState {
+    unsafe fn keep_live_object(
+        &mut self,
+        header: *mut GcHeader,
+        block_idx: usize,
+        flags: u8,
+        age_bump_this: bool,
+        pinned: bool,
+    ) {
+        if block_idx >= self.old_block_start {
+            crate::arena::old_page_account_swept_object(
+                header as usize,
+                (*header).size as usize,
+                true,
+                pinned,
+            );
+        }
+        if block_idx < self.block_has_live.len() {
+            self.block_has_live[block_idx] = true;
+        }
+        if age_bump_this && flags & GC_FLAG_TENURED == 0 {
+            if flags & GC_FLAG_HAS_SURVIVED != 0 {
+                (*header).gc_flags =
+                    (flags | GC_FLAG_TENURED) & !GC_FLAG_HAS_SURVIVED & !GC_FLAG_MARKED;
+            } else {
+                (*header).gc_flags = (flags | GC_FLAG_HAS_SURVIVED) & !GC_FLAG_MARKED;
+            }
+        } else {
+            (*header).gc_flags = flags & !GC_FLAG_MARKED;
+        }
+    }
+
+    unsafe fn process_forwarded_object(
+        &mut self,
+        header: *mut GcHeader,
+        block_idx: usize,
+        flags: u8,
+    ) {
+        let retain_stub = flags & GC_FLAG_MARKED != 0
+            || (block_idx < self.resettable_general_n
+                && crate::arena::general_block_in_recent_window(block_idx));
+        if retain_stub {
+            self.keep_live_object(header, block_idx, flags, false, false);
+            if block_idx < self.resettable_general_n {
+                self.retained_forwarded_stub_objects =
+                    self.retained_forwarded_stub_objects.saturating_add(1);
+                self.retained_forwarded_stub_bytes = self
+                    .retained_forwarded_stub_bytes
+                    .saturating_add((*header).size as usize);
+            }
+            return;
+        }
+
+        let total_size = (*header).size as usize;
+        let dead_old = block_idx >= self.old_block_start;
+        if dead_old {
+            crate::arena::old_page_account_swept_object(header as usize, total_size, false, false);
+        }
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
+        layout_clear_for_ptr(user_ptr as usize);
+        if self.overflow_active {
+            gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
+        }
+        if self.reclaim_dead_old_blocks && dead_old {
+            invalidate_dead_old_arena_header(header, total_size);
+        } else {
+            (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
+        }
+    }
+
+    unsafe fn reclaim_dead_object(&mut self, header: *mut GcHeader, block_idx: usize) {
+        let total_size = (*header).size as usize;
+        let dead_old = block_idx >= self.old_block_start;
+        if dead_old {
+            crate::arena::old_page_account_swept_object(header as usize, total_size, false, false);
+        }
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
+        finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
+        if self.reclaim_dead_old_blocks && dead_old {
+            invalidate_dead_old_arena_header(header, total_size);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArenaSweepCleanupSubphase {
+    General,
+    Survivor,
+    Old,
+    Done,
+}
+
+struct ArenaSweepCleanupState {
+    subphase: ArenaSweepCleanupSubphase,
+    general: crate::arena::ArenaResetEmptyBlocksState,
+    survivor: Option<crate::arena::SurvivorArenaReclaimDeadBlocksState>,
+    old: Option<crate::arena::OldArenaReclaimDeadBlocksState>,
+    stats: crate::arena::ArenaResetStats,
+}
+
+impl ArenaSweepCleanupState {
+    fn new(
+        block_has_live: &[bool],
+        block_snapshots: &[crate::arena::ArenaBlockSnapshot],
+        reclaim_dead_old_blocks: bool,
+        targeted_old_blocks: Option<&crate::fast_hash::PtrHashSet<usize>>,
+    ) -> Self {
+        let survivor = reclaim_dead_old_blocks.then(|| {
+            crate::arena::SurvivorArenaReclaimDeadBlocksState::new(block_has_live, block_snapshots)
+        });
+        let old = if reclaim_dead_old_blocks {
+            Some(crate::arena::OldArenaReclaimDeadBlocksState::new_full(
+                block_has_live,
+                block_snapshots,
+            ))
+        } else {
+            targeted_old_blocks.map(|selected| {
+                crate::arena::OldArenaReclaimDeadBlocksState::new_selected(
+                    block_has_live,
+                    block_snapshots,
+                    selected,
+                )
+            })
+        };
+        Self {
+            subphase: ArenaSweepCleanupSubphase::General,
+            general: crate::arena::ArenaResetEmptyBlocksState::new(block_has_live, block_snapshots),
+            survivor,
+            old,
+            stats: crate::arena::ArenaResetStats::default(),
+        }
+    }
+
+    fn step(&mut self, budget: usize) -> bool {
+        match self.subphase {
+            ArenaSweepCleanupSubphase::General => {
+                if self.general.step(budget) {
+                    self.stats = add_reset_stats(self.stats, self.general.stats());
+                    self.subphase = ArenaSweepCleanupSubphase::Survivor;
+                }
+                false
+            }
+            ArenaSweepCleanupSubphase::Survivor => {
+                if let Some(survivor) = self.survivor.as_mut() {
+                    if !survivor.step(budget) {
+                        return false;
+                    }
+                    self.stats = add_reset_stats(self.stats, survivor.stats());
+                }
+                self.subphase = ArenaSweepCleanupSubphase::Old;
+                false
+            }
+            ArenaSweepCleanupSubphase::Old => {
+                if let Some(old) = self.old.as_mut() {
+                    if !old.step(budget) {
+                        return false;
+                    }
+                    self.stats = add_reset_stats(self.stats, old.stats());
+                }
+                self.subphase = ArenaSweepCleanupSubphase::Done;
+                true
+            }
+            ArenaSweepCleanupSubphase::Done => true,
+        }
+    }
+
+    fn stats(&self) -> crate::arena::ArenaResetStats {
+        self.stats
+    }
+}
+
+fn add_reset_stats(
+    lhs: crate::arena::ArenaResetStats,
+    rhs: crate::arena::ArenaResetStats,
+) -> crate::arena::ArenaResetStats {
+    crate::arena::ArenaResetStats {
+        reset_blocks: lhs.reset_blocks.saturating_add(rhs.reset_blocks),
+        reusable_bytes: lhs.reusable_bytes.saturating_add(rhs.reusable_bytes),
+        deallocated_blocks: lhs
+            .deallocated_blocks
+            .saturating_add(rhs.deallocated_blocks),
+        deallocated_bytes: lhs.deallocated_bytes.saturating_add(rhs.deallocated_bytes),
     }
 }
 

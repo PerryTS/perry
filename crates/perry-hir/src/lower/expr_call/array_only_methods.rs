@@ -719,7 +719,7 @@ pub(super) fn try_array_only_methods(
                         }
                         // Fall through to general method-call dispatch
                     }
-                    "push" if !args.is_empty() => {
+                    "push" => {
                         // Generic expr.push(value) or expr.push(...spread)
                         // GUARD: Skip if the receiver is a user-defined class instance
                         // (e.g. Stack<T>.push()), or an object type literal (e.g.
@@ -748,7 +748,7 @@ pub(super) fn try_array_only_methods(
                         };
                         if !is_user_class_receiver {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            if !call.args.is_empty() && call.args[0].spread.is_some() {
+                            if call.args.first().is_some_and(|arg| arg.spread.is_some()) {
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: "array".to_string(),
                                     method: "push_spread".to_string(),

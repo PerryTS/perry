@@ -90,7 +90,7 @@ fn record_registered_symbol_description(sym_ptr: usize, description: &str) {
 }
 
 // Pre-allocated well-known symbols (Symbol.toPrimitive, Symbol.hasInstance,
-// Symbol.toStringTag, Symbol.iterator, Symbol.asyncIterator). Allocated once
+// Symbol.match, Symbol.toStringTag, Symbol.iterator, Symbol.asyncIterator). Allocated once
 // on first access and cached forever. These are distinct from the
 // `Symbol.for(key)` registry — `Symbol.keyFor(wk)` must return undefined
 // for spec compliance, so they live in their own map keyed by the
@@ -178,6 +178,19 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     }
     let guard = SYMBOL_POINTERS.lock().unwrap();
     guard.as_ref().is_some_and(|s| s.contains(&ptr))
+}
+
+/// True for symbols created through `Symbol.for(...)`. These are known symbols
+/// too, but WeakRef / FinalizationRegistry must reject them while accepting
+/// fresh and well-known symbols.
+pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
+    if !is_registered_symbol(ptr) {
+        return false;
+    }
+    unsafe {
+        let sym = ptr as *const SymbolHeader;
+        !sym.is_null() && (*sym).magic == SYMBOL_MAGIC && (*sym).registered != 0
+    }
 }
 
 // Side-table for symbol-keyed properties on objects. The object pointer is
@@ -1236,7 +1249,13 @@ mod wellknown_desc_tests {
     fn well_known_symbols_use_qualified_description() {
         // Spec: `Symbol.iterator.description === "Symbol.iterator"` (qualified),
         // which is also what `console.log` / `String(sym)` report.
-        for short in ["iterator", "asyncIterator", "hasInstance", "toPrimitive"] {
+        for short in [
+            "iterator",
+            "asyncIterator",
+            "hasInstance",
+            "match",
+            "toPrimitive",
+        ] {
             let ptr = well_known_symbol(short) as usize;
             let desc = registered_symbol_description(ptr);
             assert_eq!(

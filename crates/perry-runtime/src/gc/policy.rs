@@ -1071,12 +1071,14 @@ fn gc_budgeted_start_blocked() -> bool {
     GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
         || gc_blocked_by_unsafe_zone()
         || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+        || registered_root_scanners_block_budgeted_gc()
 }
 
 fn gc_budgeted_resume_blocked() -> bool {
     GC_FLAGS.with(|f| f.get()) & GC_FLAG_SUPPRESSED != 0
         || gc_blocked_by_unsafe_zone()
         || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+        || registered_root_scanners_block_budgeted_gc()
 }
 
 pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
@@ -1152,7 +1154,18 @@ fn gc_start_budgeted_minor_fallback_cycle(
     rebaseline: BudgetedGcRebaseline,
     progress_kind: GcProgressKind,
 ) -> BudgetedGcCycle {
-    let trigger = GcTriggerSnapshot::capture(trigger_kind);
+    gc_start_budgeted_minor_fallback_cycle_with_snapshot(
+        GcTriggerSnapshot::capture(trigger_kind),
+        rebaseline,
+        progress_kind,
+    )
+}
+
+fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
+    trigger: GcTriggerSnapshot,
+    rebaseline: BudgetedGcRebaseline,
+    progress_kind: GcProgressKind,
+) -> BudgetedGcCycle {
     let prev_in_alloc = GC_FLAGS.with(|f| {
         let prev = f.get();
         f.set(prev | GC_FLAG_IN_ALLOC);
@@ -1167,8 +1180,14 @@ fn gc_start_budgeted_minor_fallback_cycle(
     clear_mark_seeds();
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
-    let evacuation_policy_allowed = gen_gc_evacuate_enabled();
-    let force_evacuation = gc_force_evacuate_enabled();
+    let low_pause_non_moving = progress_kind.is_budgeted();
+    let evacuation_policy_allowed = !low_pause_non_moving && gen_gc_evacuate_enabled();
+    let force_evacuation = !low_pause_non_moving && gc_force_evacuate_enabled();
+    let evacuation_policy_disabled_reason = if low_pause_non_moving {
+        EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON
+    } else {
+        EVACUATION_POLICY_DISABLED_REASON
+    };
     let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {
@@ -1180,20 +1199,41 @@ fn gc_start_budgeted_minor_fallback_cycle(
         trigger,
         trace,
         start,
+        progress_kind,
         prev_in_alloc,
         previous_pause_us,
         current_rss_bytes,
         evacuation_policy_allowed,
         force_evacuation,
+        evacuation_policy_disabled_reason,
         old_page_selection,
         old_page_source_blocks,
     );
     BudgetedGcCycle {
         collection_kind: state.collection_kind(),
         state,
-        trigger_kind,
+        trigger_kind: trigger.kind,
         rebaseline,
     }
+}
+
+#[cfg(test)]
+pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
+    trigger_kind: GcTriggerKind,
+    progress_kind: GcProgressKind,
+) -> GcCycleState {
+    let trigger = GcTriggerSnapshot {
+        kind: trigger_kind,
+        steps_before: Some(GcStepSnapshot::current()),
+    };
+    let cycle = gc_start_budgeted_minor_fallback_cycle_with_snapshot(
+        trigger,
+        BudgetedGcRebaseline::ArenaBytes {
+            pre_in_use: crate::arena::arena_in_use_bytes(),
+        },
+        progress_kind,
+    );
+    cycle.state
 }
 
 fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option<BudgetedGcCycle> {

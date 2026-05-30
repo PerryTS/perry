@@ -902,6 +902,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[DOUBLE, DOUBLE],
     );
     module.declare_function("js_node_stream_duplex_new", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_duplex_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_node_stream_transform_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);

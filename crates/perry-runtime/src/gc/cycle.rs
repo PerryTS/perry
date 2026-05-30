@@ -1,3 +1,4 @@
+use super::barrier::{ConservativePinClearState, RememberedSetClearState};
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,7 +46,10 @@ impl GcCyclePhase {
     pub(super) const fn mutator_assist_honors_budget(self) -> bool {
         matches!(
             self,
-            Self::BuildValidPointerSet | Self::MarkPropagation | Self::BlockPersistence
+            Self::BuildValidPointerSet
+                | Self::RootScan
+                | Self::MarkPropagation
+                | Self::BlockPersistence
         )
     }
 }
@@ -289,6 +293,389 @@ impl BlockPersistCycleState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RootScanSubphase {
+    ConservativeStack,
+    MutableSlots,
+    MutableRegisteredScanners,
+    LegacyRegisteredScanners,
+    RememberedSet,
+    Done,
+}
+
+struct MutableRegisteredRootScanState {
+    scanners: Vec<MutableRootScannerEntry>,
+    scanner_states: Vec<Option<Box<dyn std::any::Any>>>,
+    ffi_scanners: Vec<PerryFfiMutableRootScanner>,
+    ffi_named_scanners: Vec<(PerryFfiNamedMutableRootScanner, usize)>,
+    scanner_cursor: usize,
+    ffi_cursor: usize,
+    ffi_named_cursor: usize,
+    recorded_counts: bool,
+}
+
+impl MutableRegisteredRootScanState {
+    fn new() -> Self {
+        let scanners = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanner_states = scanners
+            .iter()
+            .map(|entry| entry.budgeted_state_factory.map(|factory| factory()))
+            .collect();
+        Self {
+            scanners,
+            scanner_states,
+            ffi_scanners: FFI_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone()),
+            ffi_named_scanners: FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone()),
+            scanner_cursor: 0,
+            ffi_cursor: 0,
+            ffi_named_cursor: 0,
+            recorded_counts: false,
+        }
+    }
+
+    fn step(
+        &mut self,
+        valid_ptrs: &ValidPointerSet,
+        mut root_sources: Option<&mut RootSourcesTraceStats>,
+        budget: usize,
+        allow_synchronous_scanners: bool,
+    ) -> bool {
+        if !self.recorded_counts {
+            if let Some(sources) = &mut root_sources {
+                sources.runtime_handles.record_registered_scanners(
+                    self.scanners
+                        .iter()
+                        .filter(|entry| entry.source == MutableRootScannerSource::RuntimeHandles)
+                        .count(),
+                );
+                sources.runtime_mutable_scanners.record_registered_scanners(
+                    self.scanners
+                        .iter()
+                        .filter(|entry| {
+                            entry.source == MutableRootScannerSource::RuntimeMutableScanner
+                        })
+                        .count(),
+                );
+                sources.ffi_mutable_scanners.record_registered_scanners(
+                    self.ffi_scanners.len() + self.ffi_named_scanners.len(),
+                );
+            }
+            self.recorded_counts = true;
+        }
+
+        let mut remaining = budget;
+        let mut visitor = RuntimeRootVisitor::for_mark(valid_ptrs);
+        while self.scanner_cursor < self.scanners.len() {
+            if remaining == 0 {
+                return false;
+            }
+            let entry = self.scanners[self.scanner_cursor];
+            let stats = match &mut root_sources {
+                Some(sources) => match entry.source {
+                    MutableRootScannerSource::RuntimeHandles => {
+                        Some(&mut sources.runtime_handles as *mut RootSourceSlotTraceStats)
+                    }
+                    MutableRootScannerSource::RuntimeMutableScanner => {
+                        Some(&mut sources.runtime_mutable_scanners as *mut RootSourceSlotTraceStats)
+                    }
+                },
+                None => None,
+            };
+            let previous = visitor.set_root_source_stats(stats);
+            let done = if let Some(scanner) = entry.budgeted_scanner {
+                let state = self.scanner_states[self.scanner_cursor]
+                    .as_deref_mut()
+                    .expect("budgeted scanner state exists");
+                let before = remaining;
+                let done = scanner(&mut visitor, state, &mut remaining);
+                if done && remaining == before && remaining != usize::MAX {
+                    remaining -= 1;
+                }
+                done
+            } else {
+                if !allow_synchronous_scanners {
+                    return false;
+                }
+                remaining -= 1;
+                (entry.scanner)(&mut visitor);
+                true
+            };
+            visitor.set_root_source_stats(previous);
+            if !done {
+                return false;
+            }
+            self.scanner_cursor += 1;
+        }
+
+        if !allow_synchronous_scanners
+            && (self.ffi_cursor < self.ffi_scanners.len()
+                || self.ffi_named_cursor < self.ffi_named_scanners.len())
+        {
+            return false;
+        }
+
+        while remaining > 0 && self.ffi_cursor < self.ffi_scanners.len() {
+            let scanner = self.ffi_scanners[self.ffi_cursor];
+            self.ffi_cursor += 1;
+            remaining -= 1;
+            let stats = match &mut root_sources {
+                Some(sources) => {
+                    Some(&mut sources.ffi_mutable_scanners as *mut RootSourceSlotTraceStats)
+                }
+                None => None,
+            };
+            let previous = visitor.set_root_source_stats(stats);
+            let ctx = &mut visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
+            scanner(perry_ffi_visit_mutable_root_slot, ctx);
+            visitor.set_root_source_stats(previous);
+        }
+
+        while remaining > 0 && self.ffi_named_cursor < self.ffi_named_scanners.len() {
+            let (scanner, scanner_id) = self.ffi_named_scanners[self.ffi_named_cursor];
+            self.ffi_named_cursor += 1;
+            remaining -= 1;
+            let stats = match &mut root_sources {
+                Some(sources) => {
+                    Some(&mut sources.ffi_mutable_scanners as *mut RootSourceSlotTraceStats)
+                }
+                None => None,
+            };
+            let previous = visitor.set_root_source_stats(stats);
+            let ctx = &mut visitor as *mut RuntimeRootVisitor<'_> as *mut c_void;
+            scanner(scanner_id, perry_ffi_visit_mutable_root_slot, ctx);
+            visitor.set_root_source_stats(previous);
+        }
+
+        self.scanner_cursor >= self.scanners.len()
+            && self.ffi_cursor >= self.ffi_scanners.len()
+            && self.ffi_named_cursor >= self.ffi_named_scanners.len()
+    }
+}
+
+struct LegacyRegisteredRootScanState {
+    scanners: Vec<fn(&mut dyn FnMut(f64))>,
+    ffi_scanners: Vec<PerryFfiRootScanner>,
+    scanner_cursor: usize,
+    ffi_cursor: usize,
+    stats: LegacyRootTraceStats,
+}
+
+impl LegacyRegisteredRootScanState {
+    fn new() -> Self {
+        let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let stats = LegacyRootTraceStats {
+            registered_rust_scanners: scanners.len(),
+            registered_ffi_scanners: ffi_scanners.len(),
+            ..LegacyRootTraceStats::default()
+        };
+        Self {
+            scanners,
+            ffi_scanners,
+            scanner_cursor: 0,
+            ffi_cursor: 0,
+            stats,
+        }
+    }
+
+    fn step(
+        &mut self,
+        valid_ptrs: &ValidPointerSet,
+        pin_discoveries: bool,
+        budget: usize,
+        allow_synchronous_scanners: bool,
+    ) -> bool {
+        if !allow_synchronous_scanners
+            && (self.scanner_cursor < self.scanners.len()
+                || self.ffi_cursor < self.ffi_scanners.len())
+        {
+            return false;
+        }
+        let mut remaining = budget;
+        while remaining > 0 && self.scanner_cursor < self.scanners.len() {
+            let scanner = self.scanners[self.scanner_cursor];
+            self.scanner_cursor += 1;
+            remaining -= 1;
+            scanner(&mut |value: f64| {
+                record_copy_only_scanner_mark_emission(
+                    value.to_bits(),
+                    valid_ptrs,
+                    &mut self.stats,
+                );
+                if let Some(bytes) =
+                    mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, pin_discoveries)
+                {
+                    self.stats.pinned_roots += 1;
+                    self.stats.pinned_bytes += bytes;
+                }
+            });
+        }
+
+        while remaining > 0 && self.ffi_cursor < self.ffi_scanners.len() {
+            let scanner = self.ffi_scanners[self.ffi_cursor];
+            self.ffi_cursor += 1;
+            remaining -= 1;
+            let mut ctx = RegisteredRootMarkContext {
+                valid_ptrs: valid_ptrs as *const ValidPointerSet,
+                pin_discoveries,
+                legacy_stats: &mut self.stats as *mut LegacyRootTraceStats,
+            };
+            let ctx = &mut ctx as *mut RegisteredRootMarkContext as *mut c_void;
+            scanner(perry_ffi_mark_root, ctx);
+        }
+
+        self.scanner_cursor >= self.scanners.len() && self.ffi_cursor >= self.ffi_scanners.len()
+    }
+
+    fn stats(&self) -> LegacyRootTraceStats {
+        self.stats
+    }
+}
+
+struct RootScanCycleState {
+    subphase: RootScanSubphase,
+    mutable_slot_cursor: MutableRootSlotScanCursor,
+    mutable_registered: Option<MutableRegisteredRootScanState>,
+    legacy_registered: Option<LegacyRegisteredRootScanState>,
+    remembered_set: Option<RememberedSetRootMarkState>,
+}
+
+impl RootScanCycleState {
+    fn new() -> Self {
+        Self {
+            subphase: RootScanSubphase::ConservativeStack,
+            mutable_slot_cursor: MutableRootSlotScanCursor::default(),
+            mutable_registered: None,
+            legacy_registered: None,
+            remembered_set: None,
+        }
+    }
+
+    fn trace_phase_name(&self) -> &'static str {
+        match self.subphase {
+            RootScanSubphase::RememberedSet => "remembered_set_marking",
+            _ => "root_marking",
+        }
+    }
+
+    fn step_current_subphase(
+        &mut self,
+        valid_ptrs: &ValidPointerSet,
+        trace: &mut Option<GcCycleTrace>,
+        consider_evacuation: bool,
+        budget: usize,
+        allow_synchronous_scanners: bool,
+    ) -> bool {
+        match self.subphase {
+            RootScanSubphase::ConservativeStack => {
+                if budget == 0 {
+                    return false;
+                }
+                let conservative_scan_decision = conservative_stack_scan_decision();
+                let conservative_root_stats =
+                    mark_stack_roots_for_decision(valid_ptrs, conservative_scan_decision);
+                let conservative_pin_stats = if consider_evacuation
+                    && matches!(
+                        conservative_scan_decision,
+                        ConservativeStackScanDecision::Scan
+                    ) {
+                    pin_currently_marked_as_conservative()
+                } else {
+                    ConservativePinTraceStats::default()
+                };
+                if let Some(trace) = trace.as_mut() {
+                    trace.conservative_root_count = conservative_root_stats.root_count;
+                    trace.conservative_pinned = conservative_pin_stats.pinned_roots;
+                    trace.conservative_pinned_bytes = conservative_pin_stats.pinned_bytes;
+                    trace.root_sources.native_stack_fallback.decision = conservative_scan_decision;
+                    trace.root_sources.native_stack_fallback.scanned = matches!(
+                        conservative_scan_decision,
+                        ConservativeStackScanDecision::Scan
+                    );
+                    trace.root_sources.native_stack_fallback.roots_found =
+                        conservative_root_stats.root_count;
+                    trace.root_sources.native_stack_fallback.pinned_roots =
+                        conservative_pin_stats.pinned_roots;
+                    trace.root_sources.native_stack_fallback.pinned_bytes =
+                        conservative_pin_stats.pinned_bytes;
+                }
+                self.subphase = RootScanSubphase::MutableSlots;
+                false
+            }
+            RootScanSubphase::MutableSlots => {
+                let done = match trace.as_mut() {
+                    Some(trace) => mark_mutable_root_slots_step(
+                        valid_ptrs,
+                        Some(&mut trace.shadow_roots),
+                        Some(&mut trace.root_sources),
+                        &mut self.mutable_slot_cursor,
+                        budget,
+                    ),
+                    None => mark_mutable_root_slots_step(
+                        valid_ptrs,
+                        None,
+                        None,
+                        &mut self.mutable_slot_cursor,
+                        budget,
+                    ),
+                };
+                if done {
+                    self.subphase = RootScanSubphase::MutableRegisteredScanners;
+                }
+                false
+            }
+            RootScanSubphase::MutableRegisteredScanners => {
+                let state = self
+                    .mutable_registered
+                    .get_or_insert_with(MutableRegisteredRootScanState::new);
+                let done = match trace.as_mut() {
+                    Some(trace) => state.step(
+                        valid_ptrs,
+                        Some(&mut trace.root_sources),
+                        budget,
+                        allow_synchronous_scanners,
+                    ),
+                    None => state.step(valid_ptrs, None, budget, allow_synchronous_scanners),
+                };
+                if done {
+                    self.subphase = RootScanSubphase::LegacyRegisteredScanners;
+                }
+                false
+            }
+            RootScanSubphase::LegacyRegisteredScanners => {
+                let state = self
+                    .legacy_registered
+                    .get_or_insert_with(LegacyRegisteredRootScanState::new);
+                if state.step(
+                    valid_ptrs,
+                    consider_evacuation,
+                    budget,
+                    allow_synchronous_scanners,
+                ) {
+                    if let Some(trace) = trace.as_mut() {
+                        trace.legacy_copy_only_scanner_pinned = state.stats();
+                    }
+                    self.subphase = RootScanSubphase::RememberedSet;
+                }
+                false
+            }
+            RootScanSubphase::RememberedSet => {
+                let state = self
+                    .remembered_set
+                    .get_or_insert_with(RememberedSetRootMarkState::new);
+                if state.step(valid_ptrs, budget) {
+                    if let Some(trace) = trace.as_mut() {
+                        trace.remembered_set = state.stats();
+                    }
+                    self.subphase = RootScanSubphase::Done;
+                }
+                false
+            }
+            RootScanSubphase::Done => true,
+        }
+    }
+}
+
 struct MinorCycleContext {
     prev_in_alloc: u8,
     previous_pause_us: u64,
@@ -296,6 +683,7 @@ struct MinorCycleContext {
     malloc_sweep_due: bool,
     evacuation_policy_allowed: bool,
     force_evacuation: bool,
+    evacuation_policy_disabled_reason: &'static str,
     old_page_selection: OldPageDefragSelection,
     old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
     evacuation_policy: EvacuationPolicyDecision,
@@ -303,18 +691,139 @@ struct MinorCycleContext {
     evacuation_sticky: StickyRememberedSet,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReclaimSubphase {
+    RememberedSet,
+    ConservativePins,
+    MallocTrim,
+    Publish,
+    Done,
+}
+
+struct ReclaimCycleState {
+    subphase: ReclaimSubphase,
+    remembered_set_clear: Option<RememberedSetClearState>,
+    conservative_pin_clear: Option<ConservativePinClearState>,
+}
+
+impl ReclaimCycleState {
+    fn new() -> Self {
+        Self {
+            subphase: ReclaimSubphase::RememberedSet,
+            remembered_set_clear: None,
+            conservative_pin_clear: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MallocTrimOutcome {
+    status: AllocatorMaintenanceStatus,
+    reason: AllocatorMaintenanceReason,
+    elapsed_us: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MALLOC_TRIM_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_test_malloc_trim_call_count() {
+    TEST_MALLOC_TRIM_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn test_malloc_trim_call_count() -> usize {
+    TEST_MALLOC_TRIM_CALLS.with(Cell::get)
+}
+
+#[cfg(all(test, target_env = "gnu"))]
+fn record_test_malloc_trim_call() {
+    TEST_MALLOC_TRIM_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+}
+
+fn run_malloc_trim(progress_kind: GcProgressKind) -> MallocTrimOutcome {
+    if progress_kind.is_budgeted() {
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Skipped,
+            reason: AllocatorMaintenanceReason::OrdinaryBudgeted,
+            elapsed_us: 0,
+        };
+    }
+
+    #[cfg(target_env = "gnu")]
+    {
+        #[cfg(test)]
+        record_test_malloc_trim_call();
+
+        let start = Instant::now();
+        unsafe {
+            libc::malloc_trim(0);
+        }
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Executed,
+            reason: AllocatorMaintenanceReason::ExplicitOrEmergency,
+            elapsed_us: start.elapsed().as_micros() as u64,
+        };
+    }
+
+    #[cfg(not(target_env = "gnu"))]
+    {
+        MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Unsupported,
+            reason: AllocatorMaintenanceReason::NotSupported,
+            elapsed_us: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AtomicFinalizeSubphase {
+    MinorPrelude,
+    BarrierSeedDrain,
+    RememberedSetRebuild,
+    DisableBarrier,
+    Done,
+}
+
+struct AtomicFinalizeCycleState {
+    subphase: AtomicFinalizeSubphase,
+    barrier_drain: Option<TraceWorklistCycleState>,
+    remembered_rebuild: Option<OldToYoungRememberedRebuildState>,
+}
+
+impl AtomicFinalizeCycleState {
+    fn new(collection_kind: GcCollectionKind) -> Self {
+        let subphase = match collection_kind {
+            GcCollectionKind::Minor => AtomicFinalizeSubphase::MinorPrelude,
+            GcCollectionKind::Full => AtomicFinalizeSubphase::BarrierSeedDrain,
+        };
+        Self {
+            subphase,
+            barrier_drain: None,
+            remembered_rebuild: None,
+        }
+    }
+}
+
 pub(super) struct GcCycleState {
     collection_kind: GcCollectionKind,
+    progress_kind: GcProgressKind,
     phase: GcCyclePhase,
     trace: Option<GcCycleTrace>,
     active_elapsed: Duration,
     active_step_start: Option<Instant>,
     valid_builder: Option<ValidPointerSetBuilder>,
     valid_ptrs: Option<ValidPointerSet>,
+    root_scan: Option<RootScanCycleState>,
     trace_worklist: Option<TraceWorklistCycleState>,
     block_persist: Option<BlockPersistCycleState>,
+    atomic_finalize: Option<AtomicFinalizeCycleState>,
     minor: Option<MinorCycleContext>,
     live_old_to_young_sticky: Option<StickyRememberedSet>,
+    sweep_state: Option<IncrementalSweepState>,
+    reclaim_state: Option<ReclaimCycleState>,
     sweep: Option<SweepTraceStats>,
     freed_bytes: u64,
     outcome: Option<GcCollectOutcome>,
@@ -328,16 +837,21 @@ impl GcCycleState {
         clear_mark_seeds();
         Self {
             collection_kind: GcCollectionKind::Full,
+            progress_kind: trigger.kind.progress_kind(GcCollectionKind::Full),
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
             active_elapsed: start.elapsed(),
             active_step_start: None,
             valid_builder: None,
             valid_ptrs: None,
+            root_scan: None,
             trace_worklist: None,
             block_persist: None,
+            atomic_finalize: None,
             minor: None,
             live_old_to_young_sticky: None,
+            sweep_state: None,
+            reclaim_state: None,
             sweep: None,
             freed_bytes: 0,
             outcome: None,
@@ -348,25 +862,30 @@ impl GcCycleState {
         trigger: GcTriggerSnapshot,
         trace: Option<GcCycleTrace>,
         start: Instant,
+        progress_kind: GcProgressKind,
         prev_in_alloc: u8,
         previous_pause_us: u64,
         current_rss_bytes: u64,
         evacuation_policy_allowed: bool,
         force_evacuation: bool,
+        evacuation_policy_disabled_reason: &'static str,
         old_page_selection: OldPageDefragSelection,
         old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
     ) -> Self {
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
         Self {
             collection_kind: GcCollectionKind::Minor,
+            progress_kind,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
             active_elapsed: start.elapsed(),
             active_step_start: None,
             valid_builder: None,
             valid_ptrs: None,
+            root_scan: None,
             trace_worklist: None,
             block_persist: None,
+            atomic_finalize: None,
             minor: Some(MinorCycleContext {
                 prev_in_alloc,
                 previous_pause_us,
@@ -374,6 +893,7 @@ impl GcCycleState {
                 malloc_sweep_due,
                 evacuation_policy_allowed,
                 force_evacuation,
+                evacuation_policy_disabled_reason,
                 old_page_selection,
                 old_page_source_blocks,
                 evacuation_policy: EvacuationPolicyDecision::default(),
@@ -381,6 +901,8 @@ impl GcCycleState {
                 evacuation_sticky: StickyRememberedSet::default(),
             }),
             live_old_to_young_sticky: None,
+            sweep_state: None,
+            reclaim_state: None,
             sweep: None,
             freed_bytes: 0,
             outcome: None,
@@ -396,6 +918,7 @@ impl GcCycleState {
     }
 
     pub(super) fn set_progress_kind(&mut self, progress_kind: GcProgressKind) {
+        self.progress_kind = progress_kind;
         if let Some(trace) = self.trace.as_mut() {
             trace.progress_kind = progress_kind;
         }
@@ -415,12 +938,12 @@ impl GcCycleState {
         self.active_step_start = Some(step_start);
         match self.phase {
             GcCyclePhase::BuildValidPointerSet => self.step_build_valid_pointer_set(budget),
-            GcCyclePhase::RootScan => self.step_root_scan(),
+            GcCyclePhase::RootScan => self.step_root_scan(budget),
             GcCyclePhase::MarkPropagation => self.step_mark_propagation(budget),
             GcCyclePhase::BlockPersistence => self.step_block_persistence(budget),
-            GcCyclePhase::AtomicFinalize => self.step_atomic_finalize(),
-            GcCyclePhase::Sweep => self.step_sweep(),
-            GcCyclePhase::Reclaim => self.step_reclaim(),
+            GcCyclePhase::AtomicFinalize => self.step_atomic_finalize(budget),
+            GcCyclePhase::Sweep => self.step_sweep(budget),
+            GcCyclePhase::Reclaim => self.step_reclaim(budget),
             GcCyclePhase::Complete => {}
         }
         self.active_step_start = None;
@@ -512,6 +1035,7 @@ impl GcCycleState {
                 active_elapsed_us,
                 minor.evacuation_policy_allowed,
                 minor.force_evacuation,
+                minor.evacuation_policy_disabled_reason,
                 old_to_young_tracking_complete(),
                 minor.old_page_selection.selected_pages,
             );
@@ -523,70 +1047,43 @@ impl GcCycleState {
         self.phase = GcCyclePhase::RootScan;
     }
 
-    fn step_root_scan(&mut self) {
+    fn step_root_scan(&mut self, budget: GcWorkBudget) {
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-        let phase_start = trace_phase_start(&self.trace);
-        let conservative_scan_decision = conservative_stack_scan_decision();
-        let conservative_root_stats =
-            mark_stack_roots_for_decision(valid_ptrs, conservative_scan_decision);
-
         let consider_evacuation = self
             .minor
             .as_ref()
             .is_some_and(|minor| minor.evacuation_policy.considered);
-        let conservative_pin_stats = if consider_evacuation
-            && matches!(
-                conservative_scan_decision,
-                ConservativeStackScanDecision::Scan
-            ) {
-            pin_currently_marked_as_conservative()
-        } else {
-            ConservativePinTraceStats::default()
-        };
 
-        match self.trace.as_mut() {
-            Some(trace) => mark_mutable_root_slots(
-                valid_ptrs,
-                Some(&mut trace.shadow_roots),
-                Some(&mut trace.root_sources),
-            ),
-            None => mark_mutable_root_slots(valid_ptrs, None, None),
+        self.root_scan.get_or_insert_with(RootScanCycleState::new);
+        let allow_synchronous_scanners = !self.progress_kind.is_budgeted();
+        loop {
+            let phase_name = self
+                .root_scan
+                .as_ref()
+                .expect("root scan state exists")
+                .trace_phase_name();
+            let phase_start = trace_phase_start(&self.trace);
+            let done = self
+                .root_scan
+                .as_mut()
+                .expect("root scan state exists")
+                .step_current_subphase(
+                    valid_ptrs,
+                    &mut self.trace,
+                    consider_evacuation,
+                    budget.work_units,
+                    allow_synchronous_scanners,
+                );
+            trace_phase_record(&mut self.trace, phase_name, phase_start);
+            if done {
+                self.root_scan = None;
+                self.phase = GcCyclePhase::MarkPropagation;
+                break;
+            }
+            if budget.work_units != usize::MAX {
+                break;
+            }
         }
-        match self.trace.as_mut() {
-            Some(trace) => mark_mutable_registered_roots_with_sources(
-                valid_ptrs,
-                Some(&mut trace.root_sources),
-            ),
-            None => mark_mutable_registered_roots(valid_ptrs),
-        }
-        let legacy_root_stats = mark_registered_roots(valid_ptrs, consider_evacuation);
-        if let Some(trace) = self.trace.as_mut() {
-            trace.conservative_root_count = conservative_root_stats.root_count;
-            trace.conservative_pinned = conservative_pin_stats.pinned_roots;
-            trace.conservative_pinned_bytes = conservative_pin_stats.pinned_bytes;
-            trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
-            trace.root_sources.native_stack_fallback.decision = conservative_scan_decision;
-            trace.root_sources.native_stack_fallback.scanned = matches!(
-                conservative_scan_decision,
-                ConservativeStackScanDecision::Scan
-            );
-            trace.root_sources.native_stack_fallback.roots_found =
-                conservative_root_stats.root_count;
-            trace.root_sources.native_stack_fallback.pinned_roots =
-                conservative_pin_stats.pinned_roots;
-            trace.root_sources.native_stack_fallback.pinned_bytes =
-                conservative_pin_stats.pinned_bytes;
-        }
-        trace_phase_record(&mut self.trace, "root_marking", phase_start);
-
-        let phase_start = trace_phase_start(&self.trace);
-        let remembered_set = mark_remembered_set_roots(valid_ptrs);
-        trace_phase_record(&mut self.trace, "remembered_set_marking", phase_start);
-        if let Some(trace) = self.trace.as_mut() {
-            trace.remembered_set = remembered_set;
-        }
-
-        self.phase = GcCyclePhase::MarkPropagation;
     }
 
     fn step_mark_propagation(&mut self, budget: GcWorkBudget) {
@@ -628,19 +1125,108 @@ impl GcCycleState {
         self.phase = GcCyclePhase::AtomicFinalize;
     }
 
-    fn step_atomic_finalize(&mut self) {
-        if self.minor.is_some() {
-            self.atomic_finalize_minor();
-        } else {
-            let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-            drain_incremental_mark_barrier_seeds(valid_ptrs);
-            self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set(true));
-            incremental_mark_barrier_disable();
+    fn step_atomic_finalize(&mut self, budget: GcWorkBudget) {
+        self.atomic_finalize
+            .get_or_insert_with(|| AtomicFinalizeCycleState::new(self.collection_kind));
+        loop {
+            let phase_start = trace_phase_start(&self.trace);
+            self.step_atomic_finalize_current_subphase(budget.work_units);
+            trace_phase_record(&mut self.trace, "atomic_finalize", phase_start);
+            if self.phase != GcCyclePhase::AtomicFinalize || budget.work_units != usize::MAX {
+                break;
+            }
         }
-        self.phase = GcCyclePhase::Sweep;
     }
 
-    fn atomic_finalize_minor(&mut self) {
+    fn step_atomic_finalize_current_subphase(&mut self, budget: usize) {
+        let subphase = self
+            .atomic_finalize
+            .as_ref()
+            .expect("atomic finalize state exists")
+            .subphase;
+        match subphase {
+            AtomicFinalizeSubphase::MinorPrelude => {
+                if budget == 0 {
+                    return;
+                }
+                self.atomic_finalize_minor_prelude();
+                self.atomic_finalize
+                    .as_mut()
+                    .expect("atomic finalize state exists")
+                    .subphase = AtomicFinalizeSubphase::RememberedSetRebuild;
+            }
+            AtomicFinalizeSubphase::BarrierSeedDrain => {
+                let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+                let done = {
+                    let state = self
+                        .atomic_finalize
+                        .as_mut()
+                        .expect("atomic finalize state exists");
+                    let drain = state
+                        .barrier_drain
+                        .get_or_insert_with(|| TraceWorklistCycleState::new(false));
+                    drain.step(valid_ptrs, budget)
+                };
+                if done {
+                    let state = self
+                        .atomic_finalize
+                        .as_mut()
+                        .expect("atomic finalize state exists");
+                    state.barrier_drain = None;
+                    state.subphase = AtomicFinalizeSubphase::RememberedSetRebuild;
+                }
+            }
+            AtomicFinalizeSubphase::RememberedSetRebuild => {
+                let require_marked = self.minor.is_none();
+                let done = {
+                    let state = self
+                        .atomic_finalize
+                        .as_mut()
+                        .expect("atomic finalize state exists");
+                    let rebuild = state.remembered_rebuild.get_or_insert_with(|| {
+                        OldToYoungRememberedRebuildState::new(require_marked)
+                    });
+                    rebuild.step(budget)
+                };
+                if done {
+                    let rebuild = self
+                        .atomic_finalize
+                        .as_mut()
+                        .expect("atomic finalize state exists")
+                        .remembered_rebuild
+                        .take()
+                        .expect("remembered rebuild state exists");
+                    self.live_old_to_young_sticky = Some(rebuild.finish());
+                    if self.minor.is_some() {
+                        self.atomic_finalize = None;
+                        self.phase = GcCyclePhase::Sweep;
+                    } else {
+                        self.atomic_finalize
+                            .as_mut()
+                            .expect("atomic finalize state exists")
+                            .subphase = AtomicFinalizeSubphase::DisableBarrier;
+                    }
+                }
+            }
+            AtomicFinalizeSubphase::DisableBarrier => {
+                if budget == 0 {
+                    return;
+                }
+                incremental_mark_barrier_disable();
+                if let Some(state) = self.atomic_finalize.as_mut() {
+                    state.subphase = AtomicFinalizeSubphase::Done;
+                }
+                self.atomic_finalize = None;
+                self.phase = GcCyclePhase::Sweep;
+            }
+            AtomicFinalizeSubphase::Done => {
+                self.atomic_finalize = None;
+                self.phase = GcCyclePhase::Sweep;
+            }
+        }
+    }
+
+    fn atomic_finalize_minor_prelude(&mut self) {
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
         if gc_verify_evacuation_enabled() {
             let phase_start = trace_phase_start(&self.trace);
@@ -652,6 +1238,7 @@ impl GcCycleState {
         }
 
         let active_elapsed_us = self.active_elapsed_us();
+        let progress_kind = self.progress_kind;
         let minor = self.minor.as_mut().expect("minor context exists");
         if minor.evacuation_policy.considered {
             let snapshot = evacuation_policy_snapshot_after_mark(
@@ -668,6 +1255,10 @@ impl GcCycleState {
         if let Some(trace) = self.trace.as_mut() {
             trace.evacuation_policy = minor.evacuation_policy;
         }
+        assert!(
+            !progress_kind.is_budgeted() || !minor.evacuation_policy.enabled,
+            "budgeted low-pause minor GC must remain non-moving"
+        );
 
         let mut evacuation = EvacuationTraceStats::default();
         let mut evacuation_sticky = StickyRememberedSet::default();
@@ -729,25 +1320,37 @@ impl GcCycleState {
 
         minor.evacuation = evacuation;
         minor.evacuation_sticky = evacuation_sticky;
-        self.live_old_to_young_sticky = Some(rebuild_live_old_to_young_remembered_set(false));
     }
 
-    fn step_sweep(&mut self) {
+    fn step_sweep(&mut self, budget: GcWorkBudget) {
         let phase_start = trace_phase_start(&self.trace);
-        let sweep = if let Some(minor) = self.minor.as_ref() {
-            if minor.evacuation.old_page_moved_bytes > 0 {
-                sweep_with_age_bump_and_targeted_old_reclaim_and_malloc(
-                    true,
-                    &minor.old_page_source_blocks.block_indices,
-                    minor.malloc_sweep_due,
-                )
-            } else {
-                sweep_with_age_bump_and_malloc(true, minor.malloc_sweep_due)
-            }
-        } else {
-            sweep_with_age_bump_and_old_reclaim(false, true)
-        };
+        if self.sweep_state.is_none() {
+            let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
+                if let Some(minor) = self.minor.as_ref() {
+                    let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)
+                        .then(|| minor.old_page_source_blocks.block_indices.clone());
+                    (true, false, targeted_old_blocks, minor.malloc_sweep_due)
+                } else {
+                    (false, true, None, true)
+                };
+            self.sweep_state = Some(IncrementalSweepState::new(
+                do_age_bump,
+                reclaim_dead_old_blocks,
+                targeted_old_blocks,
+                sweep_malloc,
+            ));
+        }
+        let done = self
+            .sweep_state
+            .as_mut()
+            .expect("sweep state exists")
+            .step(budget.work_units);
         trace_phase_record(&mut self.trace, "sweep", phase_start);
+        if !done {
+            return;
+        }
+
+        let sweep = self.sweep_state.take().expect("sweep state exists").stats();
         self.freed_bytes = sweep.freed_bytes;
 
         if let Some(minor) = self.minor.as_mut() {
@@ -767,36 +1370,117 @@ impl GcCycleState {
         self.phase = GcCyclePhase::Reclaim;
     }
 
-    fn step_reclaim(&mut self) {
-        let reclaim_start = trace_phase_start(&self.trace);
-
-        let phase_start = trace_phase_start(&self.trace);
-        remembered_set_clear();
-        if let Some(minor) = self.minor.as_ref() {
-            minor.evacuation_sticky.restore();
-        }
-        if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
-            sticky.restore();
-        }
-        trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start);
-
-        if self.minor.is_some() {
-            let phase_start = trace_phase_start(&self.trace);
-            CONS_PINNED.with(|s| s.borrow_mut().clear());
-            trace_phase_record(&mut self.trace, "conservative_pin_clear", phase_start);
-        }
-
-        #[cfg(target_env = "gnu")]
-        {
-            let phase_start = trace_phase_start(&self.trace);
-            unsafe {
-                libc::malloc_trim(0);
+    fn step_reclaim(&mut self, budget: GcWorkBudget) {
+        self.reclaim_state
+            .get_or_insert_with(ReclaimCycleState::new);
+        let mut remaining = budget.work_units;
+        while remaining > 0 {
+            let subphase = self
+                .reclaim_state
+                .as_ref()
+                .expect("reclaim state exists")
+                .subphase;
+            match subphase {
+                ReclaimSubphase::RememberedSet => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    let phase_start = trace_phase_start(&self.trace);
+                    let clear = {
+                        let reclaim_state =
+                            self.reclaim_state.as_mut().expect("reclaim state exists");
+                        reclaim_state
+                            .remembered_set_clear
+                            .get_or_insert_with(RememberedSetClearState::new)
+                            .step_counted(remaining)
+                    };
+                    remaining = remaining.saturating_sub(clear.work_units);
+                    trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start);
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    if clear.done {
+                        if let Some(minor) = self.minor.as_ref() {
+                            minor.evacuation_sticky.restore();
+                        }
+                        if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
+                            sticky.restore();
+                        }
+                        let reclaim_state =
+                            self.reclaim_state.as_mut().expect("reclaim state exists");
+                        reclaim_state.remembered_set_clear = None;
+                        reclaim_state.subphase = ReclaimSubphase::ConservativePins;
+                    } else {
+                        break;
+                    }
+                }
+                ReclaimSubphase::ConservativePins => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    let phase_start = trace_phase_start(&self.trace);
+                    let done = if self.minor.is_some() {
+                        let clear = {
+                            let reclaim_state =
+                                self.reclaim_state.as_mut().expect("reclaim state exists");
+                            reclaim_state
+                                .conservative_pin_clear
+                                .get_or_insert_with(ConservativePinClearState::new)
+                                .step_counted(remaining)
+                        };
+                        remaining = remaining.saturating_sub(clear.work_units);
+                        clear.done
+                    } else {
+                        true
+                    };
+                    trace_phase_record(&mut self.trace, "conservative_pin_clear", phase_start);
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    if done {
+                        let reclaim_state =
+                            self.reclaim_state.as_mut().expect("reclaim state exists");
+                        reclaim_state.conservative_pin_clear = None;
+                        reclaim_state.subphase = ReclaimSubphase::MallocTrim;
+                    } else {
+                        break;
+                    }
+                }
+                ReclaimSubphase::MallocTrim => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    let trim = run_malloc_trim(self.progress_kind);
+                    if let Some(trace) = self.trace.as_mut() {
+                        if trim.status == AllocatorMaintenanceStatus::Executed {
+                            trace.record_phase(
+                                "malloc_trim",
+                                Duration::from_micros(trim.elapsed_us),
+                            );
+                        }
+                        trace.record_malloc_trim_maintenance(
+                            trim.status,
+                            trim.reason,
+                            trim.elapsed_us,
+                        );
+                    }
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    self.reclaim_state
+                        .as_mut()
+                        .expect("reclaim state exists")
+                        .subphase = ReclaimSubphase::Publish;
+                    remaining -= 1;
+                }
+                ReclaimSubphase::Publish => {
+                    let reclaim_start = trace_phase_start(&self.trace);
+                    self.publish_reclaim_outcome();
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    self.reclaim_state
+                        .as_mut()
+                        .expect("reclaim state exists")
+                        .subphase = ReclaimSubphase::Done;
+                    self.phase = GcCyclePhase::Complete;
+                    break;
+                }
+                ReclaimSubphase::Done => {
+                    self.phase = GcCyclePhase::Complete;
+                    break;
+                }
             }
-            trace_phase_record(&mut self.trace, "malloc_trim", phase_start);
         }
+    }
 
-        trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
-
+    fn publish_reclaim_outcome(&mut self) {
         let elapsed_us = self.active_elapsed_us();
         GC_STATS.with(|stats| {
             let mut stats = stats.borrow_mut();
@@ -827,7 +1511,6 @@ impl GcCycleState {
             malloc_swept,
             trace: self.trace.take(),
         });
-        self.phase = GcCyclePhase::Complete;
     }
 }
 

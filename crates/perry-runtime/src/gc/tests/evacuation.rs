@@ -277,8 +277,17 @@ fn test_evacuation_policy() {
     assert!(force.enabled);
     assert_eq!(force.reason, "force");
 
-    let low_pressure =
-        evacuation_policy_initial_decision(0, RSS_PRESSURE_BYTES - 1, 0, 0, true, false, true, 0);
+    let low_pressure = evacuation_policy_initial_decision(
+        0,
+        RSS_PRESSURE_BYTES - 1,
+        0,
+        0,
+        true,
+        false,
+        EVACUATION_POLICY_DISABLED_REASON,
+        true,
+        0,
+    );
     assert!(!low_pressure.considered);
     assert!(!low_pressure.enabled);
     assert_eq!(low_pressure.reason, "low_pressure");
@@ -290,6 +299,7 @@ fn test_evacuation_policy() {
         0,
         true,
         false,
+        EVACUATION_POLICY_DISABLED_REASON,
         false,
         0,
     );
@@ -297,8 +307,17 @@ fn test_evacuation_policy() {
     assert!(!pressure_barriers_inactive.enabled);
     assert_eq!(pressure_barriers_inactive.reason, "barriers_inactive");
 
-    let force_barriers_inactive =
-        evacuation_policy_initial_decision(0, 0, 0, 0, true, true, false, 1);
+    let force_barriers_inactive = evacuation_policy_initial_decision(
+        0,
+        0,
+        0,
+        0,
+        true,
+        true,
+        EVACUATION_POLICY_DISABLED_REASON,
+        false,
+        1,
+    );
     assert!(force_barriers_inactive.force);
     assert!(!force_barriers_inactive.considered);
     assert!(!force_barriers_inactive.enabled);
@@ -311,6 +330,7 @@ fn test_evacuation_policy() {
         0,
         false,
         true,
+        EVACUATION_POLICY_DISABLED_REASON,
         false,
         0,
     );

@@ -49,7 +49,8 @@ pub use self::is_array::js_array_is_array;
 pub use self::iter_methods::{
     js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
     js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach,
-    js_array_join, js_array_map, js_array_map_discard, js_array_reduce, js_array_some,
+    js_array_join, js_array_join_value, js_array_map, js_array_map_discard, js_array_reduce,
+    js_array_some,
 };
 pub use self::iter_object::{
     array_entries_iter, array_keys_iter, array_values_iter, dispatch_array_iterator_method,
@@ -61,7 +62,7 @@ pub use self::iterator::{js_for_of_to_array, js_iterator_to_array};
 // protocol instead of being appended as a single chunk.
 pub(crate) use self::iterator::{
     async_iterator_to_array_for_flat_map, call_symbol_async_iterator_for_flat_map,
-    has_iterator_next,
+    has_iterator_next, sync_iterator_to_array_if_not_async,
 };
 pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
@@ -78,7 +79,7 @@ pub use self::search::{
     js_array_indexOf_jsvalue, js_array_last_index_of_jsvalue,
 };
 pub use self::sort::{js_array_sort_default, js_array_sort_with_comparator};
-pub use self::splice_slice::{js_array_slice, js_array_splice};
+pub use self::splice_slice::{js_array_slice, js_array_slice_values, js_array_splice};
 
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::header::{
