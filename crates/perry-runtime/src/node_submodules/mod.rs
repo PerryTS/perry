@@ -690,8 +690,8 @@ fn ensure_export_singleton(
     }
     let thunk_ptr = export.thunk.as_ptr();
     let allocated = js_closure_alloc(thunk_ptr, 0);
-    if submod.key == "stream_promises" && export.name == "pipeline" {
-        crate::closure::js_register_closure_rest(thunk_ptr, 2);
+    if let Some(fixed_arity) = export_rest_fixed_arity(submod.key, export.name) {
+        crate::closure::js_register_closure_rest(thunk_ptr, fixed_arity);
     } else {
         // Arity is encoded in the ExportThunk variant, so the closure dispatch
         // pads missing args with undefined for variadic-friendly thunks. This
@@ -720,6 +720,15 @@ fn ensure_export_singleton(
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated
+}
+
+fn export_rest_fixed_arity(submod_key: &str, export_name: &str) -> Option<u32> {
+    match (submod_key, export_name) {
+        ("stream_promises", "pipeline") => Some(2),
+        ("timers", "setTimeout" | "setInterval") => Some(2),
+        ("timers", "setImmediate") => Some(1),
+        _ => None,
+    }
 }
 
 pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {

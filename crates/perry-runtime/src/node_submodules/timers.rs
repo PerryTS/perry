@@ -233,36 +233,66 @@ pub(crate) extern "C" fn timers_promises_set_interval(
 fn callback_arg_to_i64(v: f64) -> i64 {
     (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
 }
+
+fn rest_array_values(rest: f64) -> Vec<f64> {
+    let value = JSValue::from_bits(rest.to_bits());
+    if !value.is_pointer() {
+        return Vec::new();
+    }
+
+    let arr = value.as_pointer::<crate::array::ArrayHeader>();
+    let len = crate::array::js_array_length(arr);
+    let mut values = Vec::with_capacity(len as usize);
+    for index in 0..len {
+        values.push(crate::array::js_array_get_f64(arr, index));
+    }
+    values
+}
+
 pub(crate) extern "C" fn timers_ns_set_timeout(
     _c: *const ClosureHeader,
     cb: f64,
     ms: f64,
-    arg0: f64,
+    rest: f64,
 ) -> f64 {
-    let args = [arg0];
+    let args = rest_array_values(rest);
     crate::value::js_nanbox_pointer(unsafe {
-        crate::timer::js_set_timeout_callback_args(callback_arg_to_i64(cb), ms, args.as_ptr(), 1)
+        crate::timer::js_set_timeout_callback_args(
+            callback_arg_to_i64(cb),
+            ms,
+            args.as_ptr(),
+            args.len() as i32,
+        )
     })
 }
 pub(crate) extern "C" fn timers_ns_set_interval(
     _c: *const ClosureHeader,
     cb: f64,
     ms: f64,
-    arg0: f64,
+    rest: f64,
 ) -> f64 {
-    let args = [arg0];
+    let args = rest_array_values(rest);
     crate::value::js_nanbox_pointer(unsafe {
-        crate::timer::js_set_interval_callback_args(callback_arg_to_i64(cb), ms, args.as_ptr(), 1)
+        crate::timer::js_set_interval_callback_args(
+            callback_arg_to_i64(cb),
+            ms,
+            args.as_ptr(),
+            args.len() as i32,
+        )
     })
 }
 pub(crate) extern "C" fn timers_ns_set_immediate(
     _c: *const ClosureHeader,
     cb: f64,
-    arg0: f64,
+    rest: f64,
 ) -> f64 {
-    let args = [arg0];
+    let args = rest_array_values(rest);
     crate::value::js_nanbox_pointer(unsafe {
-        crate::timer::js_set_immediate_callback_args(callback_arg_to_i64(cb), args.as_ptr(), 1)
+        crate::timer::js_set_immediate_callback_args(
+            callback_arg_to_i64(cb),
+            args.as_ptr(),
+            args.len() as i32,
+        )
     })
 }
 pub(crate) extern "C" fn timers_ns_clear_timeout(_c: *const ClosureHeader, arg: f64) -> f64 {
