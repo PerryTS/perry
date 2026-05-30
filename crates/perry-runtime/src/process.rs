@@ -1244,59 +1244,85 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
 /// `process.env.X = v` now persisting via std::env (#1344), eager loading
 /// is meaningful.
 #[no_mangle]
-pub extern "C" fn js_process_load_env_file(path_ptr: *const StringHeader) {
-    let target = unsafe {
-        if path_ptr.is_null() {
-            ".env".to_string()
-        } else {
-            let len = (*path_ptr).byte_len as usize;
-            let data = (path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            match std::str::from_utf8(bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => return,
-            }
-        }
-    };
+pub extern "C" fn js_process_load_env_file(path_value: f64) {
+    let target = load_env_file_path(path_value);
     let contents = match std::fs::read_to_string(&target) {
         Ok(s) => s,
         Err(err) => unsafe {
             throw_load_env_file_open_error(&err, &target);
         },
     };
-    for line in contents.lines() {
-        let trimmed = line.trim_start();
-        // Comments and blank lines.
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let Some((raw_key, raw_value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        let key = raw_key.trim();
+    for (key, value) in crate::util_parse_env::parse_env(&contents) {
+        let key = truncate_at_null(&key);
         if key.is_empty() {
             continue;
         }
-        // Strip a matched surrounding quote pair on the trimmed value;
-        // otherwise keep the trimmed text verbatim (so unquoted spaces
-        // around `=` are dropped but inner `=` survives — see Node's
-        // built-in `.env` parser).
-        let value_trimmed = raw_value.trim();
-        let value = strip_matched_quotes(value_trimmed);
+        let value = truncate_at_null(&value);
         std::env::set_var(key, value);
     }
 }
 
-fn strip_matched_quotes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' || first == b'\'') && first == last {
-            return &s[1..s.len() - 1];
+fn load_env_file_path(path_value: f64) -> String {
+    let jv = JSValue::from_bits(path_value.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return ".env".to_string();
+    }
+    if let Some(path) = string_path_from_value(path_value) {
+        return path;
+    }
+    if crate::buffer::js_buffer_is_buffer(path_value.to_bits() as i64) == 1 {
+        let buf = (path_value.to_bits() & crate::value::POINTER_MASK)
+            as *const crate::buffer::BufferHeader;
+        if !buf.is_null() {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(crate::buffer::buffer_data(buf), (*buf).length as usize)
+            };
+            return String::from_utf8_lossy(bytes).into_owned();
         }
     }
-    s
+    if jv.is_pointer() {
+        let obj = jv.as_pointer::<crate::object::ObjectHeader>();
+        if !obj.is_null() {
+            let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+                obj,
+                crate::url::parse::URL_PROTOCOL,
+            ));
+            if !protocol.is_empty() {
+                if protocol == "file:" {
+                    let pathname =
+                        crate::url::get_string_content(crate::object::js_object_get_field_f64(
+                            obj,
+                            crate::url::parse::URL_PATHNAME,
+                        ));
+                    return crate::url::search_params::url_decode(&pathname);
+                }
+                crate::fs::validate::throw_type_error_with_code(
+                    "The URL must be of scheme file",
+                    "ERR_INVALID_URL_SCHEME",
+                );
+            }
+        }
+    }
+    crate::fs::validate::throw_invalid_path_arg("path", path_value)
+}
+
+fn string_path_from_value(value: f64) -> Option<String> {
+    let ptr = crate::string::js_string_materialize_to_heap(value);
+    if ptr.is_null() {
+        return None;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
+    }
+}
+
+fn truncate_at_null(value: &str) -> &str {
+    value
+        .find('\0')
+        .map(|index| &value[..index])
+        .unwrap_or(value)
 }
 
 unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> ! {

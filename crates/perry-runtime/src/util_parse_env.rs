@@ -1,26 +1,26 @@
 //! `util.parseEnv(content)` (#2514) — parse `.env`-format text into a plain
 //! object. Mirrors Node's built-in parser: skip blank / `#`-comment lines,
-//! strip an optional `export ` prefix, split on the first `=`, trim key+value;
-//! quoted values (`"`, `'`, backtick) keep their inner content (double-quoted
-//! values process `\n`/`\t`/`\r`/`\\`/`\"` escapes and treat `#` literally),
-//! unquoted values drop an inline `# comment`. Last duplicate key wins.
+//! strip an optional `export` prefix, split on the first `=`, trim key+value;
+//! quoted values (`"`, `'`, backtick) keep their inner content and can span
+//! lines, while unquoted values drop inline `#` comments. Last duplicate key
+//! wins.
 
 use crate::url::{create_string_f64, get_string_content};
 
-/// Parse `.env` text → ordered `(key, value)` pairs (insertion order, last
-/// duplicate's value, first occurrence's position).
-fn parse_env(content: &str) -> Vec<(String, String)> {
+/// Parse `.env` text → ordered `(key, value)` pairs. Node returns object keys
+/// in byte-lexicographic order, with the last duplicate value winning.
+pub(crate) fn parse_env(content: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    for raw_line in content.lines() {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut index = 0;
+    while index < lines.len() {
+        let raw_line = lines[index];
+        index += 1;
         let line = raw_line.trim_start();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        // Optional `export ` prefix (Node strips it).
-        let line = match line.strip_prefix("export ") {
-            Some(rest) => rest.trim_start(),
-            None => line,
-        };
+        let line = strip_export_prefix(line);
         let Some((raw_key, raw_value)) = line.split_once('=') else {
             continue;
         };
@@ -28,7 +28,7 @@ fn parse_env(content: &str) -> Vec<(String, String)> {
         if key.is_empty() {
             continue;
         }
-        let value = parse_value(raw_value.trim());
+        let value = parse_value(raw_value, &lines, &mut index);
         if let Some(slot) = out.iter_mut().find(|(k, _)| k == key) {
             slot.1 = value; // last duplicate wins
         } else {
@@ -42,35 +42,71 @@ fn parse_env(content: &str) -> Vec<(String, String)> {
     out
 }
 
-fn parse_value(v: &str) -> String {
-    let chars: Vec<char> = v.chars().collect();
-    if let Some(&first) = chars.first() {
-        if first == '"' || first == '\'' || first == '`' {
-            if let Some(end_rel) = chars[1..].iter().position(|&c| c == first) {
-                let inner: String = chars[1..1 + end_rel].iter().collect();
-                return if first == '"' {
-                    unescape_double(&inner)
-                } else {
-                    inner
-                };
-            }
-            // No closing quote — fall through to the unquoted handling.
-        }
+fn strip_export_prefix(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("export") else {
+        return line;
+    };
+    if rest
+        .chars()
+        .next()
+        .map(|c| c == ' ' || c == '\t')
+        .unwrap_or(false)
+    {
+        rest.trim_start()
+    } else {
+        line
     }
-    strip_inline_comment(v).trim_end().to_string()
 }
 
-/// Drop an inline `# comment` — a `#` at the start or preceded by whitespace.
-fn strip_inline_comment(v: &str) -> &str {
-    let b = v.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'#' && (i == 0 || b[i - 1] == b' ' || b[i - 1] == b'\t') {
-            return &v[..i];
+fn parse_value(raw: &str, lines: &[&str], index: &mut usize) -> String {
+    let value = raw.trim_start();
+    if let Some(quote) = value
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '"' | '\'' | '`'))
+    {
+        let saved_index = *index;
+        if let Some(inner) = parse_quoted_value(&value[quote.len_utf8()..], quote, lines, index) {
+            return if quote == '"' {
+                unescape_double(&inner)
+            } else {
+                inner
+            };
         }
-        i += 1;
+        *index = saved_index;
     }
-    v
+    strip_inline_comment(value).trim_end().to_string()
+}
+
+fn parse_quoted_value(
+    first_fragment: &str,
+    quote: char,
+    lines: &[&str],
+    index: &mut usize,
+) -> Option<String> {
+    if let Some(end) = first_fragment.find(quote) {
+        return Some(first_fragment[..end].to_string());
+    }
+
+    let mut out = first_fragment.to_string();
+    while *index < lines.len() {
+        let line = lines[*index];
+        *index += 1;
+        out.push('\n');
+        if let Some(end) = line.find(quote) {
+            out.push_str(&line[..end]);
+            return Some(out);
+        }
+        out.push_str(line);
+    }
+
+    None
+}
+
+/// Drop an inline `#` comment. Node's parser starts a comment at the first
+/// unquoted `#`, even without preceding whitespace.
+fn strip_inline_comment(v: &str) -> &str {
+    v.split_once('#').map(|(head, _)| head).unwrap_or(v)
 }
 
 /// Process backslash escapes inside a double-quoted value.
@@ -133,6 +169,18 @@ mod tests {
             parse_env("A=\"l1\\nl2\""),
             vec![("A".into(), "l1\nl2".into())]
         );
+        assert_eq!(
+            parse_env("A=\"l1\nl2\""),
+            vec![("A".into(), "l1\nl2".into())]
+        );
+        assert_eq!(parse_env("A='l1\nl2'"), vec![("A".into(), "l1\nl2".into())]);
+        assert_eq!(parse_env("A=`l1\nl2`"), vec![("A".into(), "l1\nl2".into())]);
+        assert_eq!(
+            parse_env("A=\"x\nB=2"),
+            vec![("A".into(), "\"x".into()), ("B".into(), "2".into())]
+        );
+        assert_eq!(parse_env("A=b#c"), vec![("A".into(), "b".into())]);
+        assert_eq!(parse_env("export   A=b"), vec![("A".into(), "b".into())]);
         assert_eq!(parse_env("JUSTKEY\nA=1"), vec![("A".into(), "1".into())]);
         assert_eq!(
             parse_env("\n# hi\n  # ind\nA=1"),
