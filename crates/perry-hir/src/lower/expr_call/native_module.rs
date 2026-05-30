@@ -45,6 +45,13 @@ fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
+fn is_node_stream_class_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+    )
+}
+
 pub(super) fn try_native_module_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -1212,10 +1219,17 @@ pub(super) fn try_native_module_methods(
                                 crate::lower_bail!(member.span, "{}", msg);
                             }
                         }
+                        let class_name = if module_name == "stream"
+                            && imported_method.is_some_and(is_node_stream_class_name)
+                        {
+                            imported_method.map(str::to_string)
+                        } else {
+                            None
+                        };
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: module_name.to_string(),
-                            class_name: None, // Will be set by js_transform if needed
-                            object: None,     // Static call on module itself
+                            class_name,
+                            object: None, // Static call on module itself
                             method: method_name,
                             args,
                         }));

@@ -209,6 +209,11 @@ pub(super) fn install_stream_async_dispose_symbol(stream: f64) {
     }
     let closure = js_closure_alloc(ns_async_dispose as *const u8, 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    set_hidden_value(
+        stream,
+        hidden_key(b"__perry_async_dispose__"),
+        box_pointer(closure as *const u8),
+    );
     unsafe {
         crate::symbol::js_object_set_symbol_property(
             stream,

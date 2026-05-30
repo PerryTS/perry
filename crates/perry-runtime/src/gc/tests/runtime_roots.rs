@@ -26,13 +26,26 @@ fn force_next_general_arena_alloc_slow() {
     let _ = crate::arena::arena_alloc(TEST_BLOCK_SIZE, 8);
 }
 
-fn register_runtime_handle_root_scanner_for_tests() {
-    gc_register_budgeted_mutable_root_scanner_with_source(
-        scan_runtime_handle_roots_mut,
-        scan_runtime_handle_roots_mut_step,
-        new_runtime_handle_root_scan_state,
-        MutableRootScannerSource::RuntimeHandles,
-    );
+fn assert_marked_user_ptr(ptr: usize, label: &str) {
+    unsafe {
+        let header = header_from_user_ptr(ptr as *const u8);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "{label} should be marked"
+        );
+    }
+}
+
+fn assert_unmarked_user_ptr(ptr: usize, label: &str) {
+    unsafe {
+        let header = header_from_user_ptr(ptr as *const u8);
+        assert_eq!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "{label} should not be marked"
+        );
+    }
 }
 
 fn assert_automatic_minor_gc_progressed(before: u64, context: &str) -> bool {
@@ -90,6 +103,15 @@ fn assert_moved_closure_ptr(bits: u64, original: usize) -> usize {
     );
     assert!(crate::arena::pointer_in_nursery(rewritten));
     rewritten
+}
+
+fn register_runtime_handle_root_scanner_for_tests() {
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        scan_runtime_handle_roots_mut_step,
+        new_runtime_handle_root_scan_state,
+        MutableRootScannerSource::RuntimeHandles,
+    );
 }
 
 #[test]
@@ -362,6 +384,255 @@ fn test_implicit_this_root_scanner_marks_and_rewrites() {
     crate::object::js_implicit_this_set(prev_this);
     clear_marks();
     clear_mark_seeds();
+}
+
+#[test]
+fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
+    let _guard = GcTestIsolationGuard::new();
+    clear_marks();
+    clear_mark_seeds();
+    crate::object::test_clear_class_side_table_roots();
+
+    let dynamic_value = young_leaf();
+    let prototype_value = young_leaf();
+    let cached_value = young_leaf();
+    let prototype_object = crate::object::js_object_alloc(0, 0) as usize;
+    let parent_closure = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+    let function_key = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+    unsafe {
+        init_test_closure(parent_closure as *mut u8);
+        init_test_closure(function_key as *mut u8);
+    }
+
+    crate::object::test_seed_class_dynamic_prop_root(0x5201, "dyn", string_bits(dynamic_value));
+    crate::object::test_seed_class_prototype_method_root(
+        0x5201,
+        "proto",
+        string_bits(prototype_value),
+    );
+    crate::object::test_seed_class_prototype_method_value_root(
+        0x5201,
+        "bound",
+        string_bits(cached_value),
+    );
+    crate::object::test_seed_class_prototype_object_root(0x5201, prototype_object);
+    crate::object::test_seed_class_parent_closure_root(0x5201, parent_closure);
+    crate::object::test_seed_function_class_id_key(ptr_bits(function_key), 0x8200_5201);
+
+    let valid_ptrs = build_valid_pointer_set();
+    crate::object::scan_class_side_table_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
+
+    assert_marked_user_ptr(dynamic_value, "dynamic class property value");
+    assert_marked_user_ptr(prototype_value, "prototype method value");
+    assert_marked_user_ptr(cached_value, "cached bound prototype method value");
+    assert_marked_user_ptr(prototype_object, "prototype-object side-table value");
+    assert_marked_user_ptr(parent_closure, "parent-closure side-table value");
+    assert_unmarked_user_ptr(function_key, "function-to-class metadata key");
+
+    crate::object::test_clear_class_side_table_roots();
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
+fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+
+    let value_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let key_user = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(key_user);
+    }
+    let valid_ptrs = build_valid_pointer_set();
+    let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+    let key_old = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(key_old);
+        set_forwarding_address(header_from_user_ptr(value_user) as *mut GcHeader, value_old);
+        set_forwarding_address(header_from_user_ptr(key_user) as *mut GcHeader, key_old);
+    }
+
+    let value_bits = ptr_bits(value_user as usize);
+    let value_old_bits = ptr_bits(value_old as usize);
+    let key_bits = ptr_bits(key_user as usize);
+    let key_old_bits = ptr_bits(key_old as usize);
+    crate::object::test_seed_class_dynamic_prop_root(0x5202, "dyn", value_bits);
+    crate::object::test_seed_class_prototype_method_root(0x5202, "proto", value_bits);
+    crate::object::test_seed_class_prototype_method_value_root(0x5202, "bound", value_bits);
+    crate::object::test_seed_class_prototype_object_root(0x5202, value_user as usize);
+    crate::object::test_seed_class_parent_closure_root(0x5202, key_user as usize);
+    crate::object::test_seed_function_class_id_key(key_bits, 0x8200_5202);
+
+    rewrite_mutable_registered_roots(&valid_ptrs);
+
+    assert_eq!(
+        crate::object::test_class_dynamic_prop_root_bits(0x5202, "dyn"),
+        value_old_bits
+    );
+    assert_eq!(
+        crate::object::test_class_prototype_method_root_bits(0x5202, "proto"),
+        value_old_bits
+    );
+    assert_eq!(
+        crate::object::test_class_prototype_method_value_root_bits(0x5202, "bound"),
+        value_old_bits
+    );
+    assert_eq!(
+        crate::object::test_class_prototype_object_root_addr(0x5202),
+        value_old as usize
+    );
+    assert_eq!(
+        crate::object::test_class_parent_closure_root_addr(0x5202),
+        key_old as usize
+    );
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(key_old_bits)),
+        0x8200_5202
+    );
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_5202),
+        key_old_bits
+    );
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(key_bits)),
+        0
+    );
+
+    crate::object::test_clear_class_side_table_roots();
+}
+
+#[test]
+fn test_symbol_side_table_scanner_marks_keys_and_values_without_marking_owner() {
+    let _guard = GcTestIsolationGuard::new();
+    clear_marks();
+    clear_mark_seeds();
+    crate::symbol::test_clear_symbol_side_table_roots();
+
+    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    let sym_key = unsafe { alloc_nursery_test_symbol() };
+    let value = young_leaf();
+    let static_sym_key = unsafe { alloc_nursery_test_symbol() };
+    let static_value = young_leaf();
+
+    crate::symbol::test_seed_symbol_property_root(owner, sym_key, string_bits(value));
+    crate::symbol::test_seed_class_static_symbol_root(
+        0x5301,
+        static_sym_key,
+        string_bits(static_value),
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    crate::symbol::scan_symbol_side_table_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
+
+    assert_unmarked_user_ptr(owner, "symbol side-table owner metadata key");
+    assert_marked_user_ptr(sym_key, "symbol property key");
+    assert_marked_user_ptr(value, "symbol property value");
+    assert_marked_user_ptr(static_sym_key, "class static symbol key");
+    assert_marked_user_ptr(static_value, "class static symbol value");
+
+    crate::symbol::test_clear_symbol_side_table_roots();
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
+fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::symbol::test_clear_symbol_side_table_roots();
+    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
+
+    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    let sym_key = unsafe { alloc_nursery_test_symbol() };
+    let value = young_leaf();
+    let static_sym_key = unsafe { alloc_nursery_test_symbol() };
+    let static_value = young_leaf();
+
+    let valid_ptrs = build_valid_pointer_set();
+    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let sym_key_old = unsafe { alloc_old_test_symbol() };
+    let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
+    let static_sym_key_old = unsafe { alloc_old_test_symbol() };
+    let static_value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(owner as *const u8) as *mut GcHeader,
+            owner_old as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(sym_key as *const u8) as *mut GcHeader,
+            sym_key_old as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(value as *const u8) as *mut GcHeader,
+            value_old as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(static_sym_key as *const u8) as *mut GcHeader,
+            static_sym_key_old as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(static_value as *const u8) as *mut GcHeader,
+            static_value_old as *mut u8,
+        );
+    }
+
+    crate::symbol::test_seed_symbol_pointer_root(sym_key);
+    crate::symbol::test_seed_symbol_pointer_root(static_sym_key);
+    crate::symbol::test_seed_symbol_property_root(owner, sym_key, string_bits(value));
+    crate::symbol::test_seed_class_static_symbol_root(
+        0x5302,
+        static_sym_key,
+        string_bits(static_value),
+    );
+
+    rewrite_mutable_registered_roots(&valid_ptrs);
+
+    assert!(
+        !crate::symbol::test_symbol_property_owner_exists(owner),
+        "symbol side table should remove the stale owner key"
+    );
+    assert_eq!(
+        crate::symbol::test_symbol_property_root_bits(owner_old, sym_key_old),
+        Some(string_bits(value_old))
+    );
+    assert_eq!(
+        crate::symbol::test_class_static_symbol_root_bits(0x5302, static_sym_key_old),
+        Some(string_bits(static_value_old))
+    );
+    assert_eq!(
+        crate::symbol::test_class_static_symbol_root_bits(0x5302, static_sym_key),
+        None
+    );
+    assert!(crate::symbol::test_symbol_pointer_root_contains(
+        sym_key_old
+    ));
+    assert!(crate::symbol::test_symbol_pointer_root_contains(
+        static_sym_key_old
+    ));
+    assert!(!crate::symbol::test_symbol_pointer_root_contains(sym_key));
+    assert!(!crate::symbol::test_symbol_pointer_root_contains(
+        static_sym_key
+    ));
+
+    crate::symbol::test_clear_symbol_side_table_roots();
 }
 
 #[test]

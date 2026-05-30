@@ -2,6 +2,59 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1039 — validate path and throw real errors from `fs.statfsSync` (#2921)
+
+`fs.statfsSync(path[, options])` returned a zero-filled `StatFs` object when the
+path could not be decoded, contained an interior NUL, or `statvfs` failed —
+letting callers proceed with fake filesystem statistics instead of seeing
+Node's `ERR_INVALID_ARG_TYPE` or `ENOENT`.
+
+`crates/perry-runtime/src/fs/fd_ops.rs::js_fs_statfs_sync_options` now:
+
+- calls `validate_path("path", path_value)` up front, so a non path-like
+  argument (number, `null`, object, boolean) throws
+  `TypeError [ERR_INVALID_ARG_TYPE]` with Node's exact message, and
+- throws the OS error via `build_fs_error_value(&err, "statfs", &path)` when
+  `statvfs` fails (`ENOENT`, …) or the path holds an interior NUL, instead of
+  swallowing it into default stats. The thrown `Error` carries `code`,
+  `syscall: "statfs"`, and `path`.
+
+The successful StatFs field construction and the bigint option behavior (#2561)
+are unchanged, and the callback `fs.statfs` path — which already has error-first
+handling — is untouched.
+
+New `test-parity/node-suite/fs/stats/statfs-sync-invalid.ts` is byte-identical
+to `node --experimental-strip-types`; the existing `statfs`, `statfs-bigint-options`,
+`stat-lstat-missing-errors`, and `fd-and-statfs` parity tests still pass.
+
+## v0.5.1038 — validate `node:timers/promises` delay and options arguments (#3067)
+
+`node:timers/promises` helpers passed `delay` and `options` straight into the
+timer primitive. Node rejects a non-number `delay` and a non-object `options`
+with `TypeError [ERR_INVALID_ARG_TYPE]`; Perry silently accepted them, and
+`setImmediate` didn't even take an `options` argument.
+
+`crates/perry-runtime/src/node_submodules/timers.rs` gains two small validators:
+
+- `validate_delay` throws unless `delay` is `undefined` (Node defaults it) or a
+  number. `NaN` still passes — the warn/coerce path is tracked separately by
+  #2966.
+- `validate_options` throws unless `options` is `undefined` (treated as the
+  empty object) or a non-null, non-array object, mirroring Node's
+  `validateObject`. Array/`null` detection reuses the GC-header check that
+  `describe_received` already performs.
+
+Both are wired into `timers_promises_set_timeout`, `timers_promises_set_immediate`,
+and — by delegation — `timers_promises_scheduler_wait`. `setImmediate` now
+accepts an `options` argument: its `ExportThunk` arity is bumped from `Fn1` to
+`Fn2` in `ensure_export_singleton`, and the closure dispatch pads a missing
+options arg with `undefined`. Honoring the `signal`/`ref` fields of `options`
+remains tracked by #2603.
+
+New `test-parity/node-suite/timers/promises/delay-options-validation.ts` is
+byte-identical to `node --experimental-strip-types`; the rest of the
+`timers/promises` suite is unchanged (the validators no-op for valid inputs).
+
 ## v0.5.1037 — split `node_stream.rs` into topical sub-modules (#1987)
 
 `crates/perry-runtime/src/node_stream.rs` had grown to ~5,980 lines during

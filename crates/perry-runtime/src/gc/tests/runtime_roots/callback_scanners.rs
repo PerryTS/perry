@@ -931,6 +931,14 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     );
     crate::object::test_seed_transition_cache_root(fixture.nursery_addr());
     crate::object::test_seed_object_cache_roots([fixture.nursery_bits; 7], fixture.nursery_i64());
+    crate::object::test_seed_class_dynamic_prop_root(0x5501, "dyn", fixture.nursery_bits);
+    crate::object::test_seed_class_prototype_method_root(0x5501, "proto", fixture.nursery_bits);
+    crate::object::test_seed_class_prototype_method_value_root(
+        0x5501,
+        "bound",
+        fixture.nursery_bits,
+    );
+    crate::object::test_seed_function_class_id_key(fixture.nursery_bits, 0x8200_5501);
     crate::json::test_seed_parse_roots(
         fixture.nursery_value(),
         fixture.nursery_user as *const crate::string::StringHeader,
@@ -988,6 +996,7 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     crate::array::scan_template_raw_roots_mut(&mut visitor);
     transition_cache_mutable_root_scanner(&mut visitor);
     crate::object::scan_object_cache_roots_mut(&mut visitor);
+    crate::object::scan_class_side_table_roots_mut(&mut visitor);
     json_parse_mutable_root_scanner(&mut visitor);
     intern_table_mutable_root_scanner(&mut visitor);
     small_int_cache_mutable_root_scanner(&mut visitor);
@@ -1074,6 +1083,22 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     assert_eq!(
         crate::object::test_object_cache_roots(),
         ([fixture.old_bits; 7], fixture.old_addr() as i64)
+    );
+    assert_eq!(
+        crate::object::test_class_dynamic_prop_root_bits(0x5501, "dyn"),
+        fixture.old_bits
+    );
+    assert_eq!(
+        crate::object::test_class_prototype_method_root_bits(0x5501, "proto"),
+        fixture.old_bits
+    );
+    assert_eq!(
+        crate::object::test_class_prototype_method_value_root_bits(0x5501, "bound"),
+        fixture.old_bits
+    );
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_5501),
+        fixture.old_bits
     );
     assert_eq!(
         crate::json::test_parse_roots_snapshot(),

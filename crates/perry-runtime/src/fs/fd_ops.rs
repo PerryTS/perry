@@ -634,17 +634,33 @@ pub extern "C" fn js_fs_statfs_sync(path_value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64) -> f64 {
+    // #2921 — Node validates `path` and surfaces filesystem errors instead of
+    // returning a zero-filled StatFs object. A non path-like argument throws
+    // `TypeError [ERR_INVALID_ARG_TYPE]`; a missing/unreadable path throws the
+    // OS error (`ENOENT`, …) with syscall `statfs`.
+    crate::fs::validate::validate_path("path", path_value);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
     unsafe {
         let path = match decode_path_value(path_value) {
             Some(s) => s,
-            None => return build_statfs_object(StatFsFields::default(), bigint),
+            None => {
+                // The type was accepted by `validate_path` but could not be
+                // decoded — treat as a missing target rather than fake stats.
+                let err = std::io::Error::from(std::io::ErrorKind::NotFound);
+                crate::exception::js_throw(build_fs_error_value(&err, "statfs", ""))
+            }
         };
         #[cfg(unix)]
         {
-            let c_path = match std::ffi::CString::new(path) {
+            let c_path = match std::ffi::CString::new(path.as_bytes()) {
                 Ok(s) => s,
-                Err(_) => return build_statfs_object(StatFsFields::default(), bigint),
+                Err(_) => {
+                    let err = std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "path contained an interior null byte",
+                    );
+                    crate::exception::js_throw(build_fs_error_value(&err, "statfs", &path))
+                }
             };
             let mut stat: libc::statvfs = std::mem::zeroed();
             if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
@@ -662,12 +678,16 @@ pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64)
                     bigint,
                 );
             }
+            // statvfs failed — surface the OS error (ENOENT, EACCES, …) the way
+            // Node does instead of swallowing it into default stats.
+            let err = std::io::Error::last_os_error();
+            crate::exception::js_throw(build_fs_error_value(&err, "statfs", &path))
         }
         #[cfg(not(unix))]
         {
             let _ = path;
+            build_statfs_object(StatFsFields::default(), bigint)
         }
-        build_statfs_object(StatFsFields::default(), bigint)
     }
 }
 

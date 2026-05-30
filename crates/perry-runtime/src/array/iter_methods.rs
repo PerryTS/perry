@@ -77,6 +77,7 @@ pub extern "C" fn js_array_map(
             } else {
                 js_closure_call2(callback, element, i as f64)
             };
+            // GC_STORE_AUDIT(INIT): map result is unpublished; slot layout is noted immediately below.
             ptr::write(result_elements.add(i), mapped);
             let mapped_bits = mapped.to_bits();
             if length <= 64 {

@@ -232,6 +232,7 @@ pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, 
         let value = canonicalize_array_numeric_store_value(arr, value);
         let value_bits = value.to_bits();
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // GC_STORE_AUDIT(BARRIERED): unchecked array set is immediately recorded via note_array_slot.
         ptr::write(elements_ptr.add(index as usize), value);
         note_array_slot(arr, index as usize, value_bits);
     }
@@ -285,6 +286,7 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
         let value = canonicalize_array_numeric_store_value(arr, value);
         let value_bits = value.to_bits();
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // GC_STORE_AUDIT(BARRIERED): array set is immediately recorded via note_array_slot.
         ptr::write(elements_ptr.add(index as usize), value);
         note_array_slot(arr, index as usize, value_bits);
     }
@@ -332,6 +334,7 @@ pub extern "C" fn js_array_set_f64_extend(
             let value = canonicalize_array_numeric_store_value(arr, value);
             let value_bits = value.to_bits();
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): in-bounds extending set is immediately recorded via note_array_slot.
             ptr::write(elements_ptr.add(index as usize), value);
             note_array_slot(arr, index as usize, value_bits);
             return arr;
@@ -356,6 +359,7 @@ pub extern "C" fn js_array_set_f64_extend(
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         let hole = f64::from_bits(crate::value::TAG_HOLE);
         for i in length..index {
+            // GC_STORE_AUDIT(BARRIERED): sparse gap sentinel is immediately recorded via note_array_slot.
             ptr::write(elements_ptr.add(i as usize), hole);
             note_array_slot(arr, i as usize, crate::value::TAG_HOLE);
         }
@@ -363,6 +367,7 @@ pub extern "C" fn js_array_set_f64_extend(
         // Set the value
         let value = canonicalize_array_numeric_store_value(arr, value);
         let value_bits = value.to_bits();
+        // GC_STORE_AUDIT(BARRIERED): extending set value is immediately recorded via note_array_slot.
         ptr::write(elements_ptr.add(index as usize), value);
         note_array_slot(arr, index as usize, value_bits);
         (*arr).length = new_length;

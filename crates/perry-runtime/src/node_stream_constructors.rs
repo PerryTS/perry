@@ -796,18 +796,11 @@ pub extern "C" fn js_node_stream_add_abort_signal(signal: f64, stream: f64) -> f
     stream
 }
 
-fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
+fn attach_duplex_readable_source(duplex: f64, source: f64) -> Result<(), f64> {
     let chunks = if let Some(chunks) = readable_hidden_chunks(source) {
         chunks
     } else {
-        match collect_pipeline_chunks(source) {
-            Ok(chunks) => chunks,
-            Err(err) => {
-                let duplex = js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED));
-                set_hidden_value(duplex, hidden_error_key(), err);
-                return duplex;
-            }
-        }
+        collect_pipeline_chunks(source)?
     };
     let values = pipeline_chunks_vec(chunks);
     let mut arr = crate::array::js_array_alloc(values.len() as u32);
@@ -815,8 +808,6 @@ fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
         arr = crate::array::js_array_push_f64(arr, chunk);
     }
 
-    let duplex = js_node_stream_duplex_new(readable_from_options(f64::from_bits(TAG_UNDEFINED)));
-    set_visible_writable(duplex, false);
     set_hidden_value(duplex, hidden_chunks_key(), box_pointer(arr as *const u8));
     set_hidden_value(
         duplex,
@@ -828,7 +819,102 @@ fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
         hidden_key(b"readableLength"),
         crate::array::js_array_length(arr) as f64,
     );
+    Ok(())
+}
+
+fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
+    let duplex = js_node_stream_duplex_new(readable_from_options(f64::from_bits(TAG_UNDEFINED)));
+    set_visible_writable(duplex, false);
+    if let Err(err) = attach_duplex_readable_source(duplex, source) {
+        set_hidden_value(duplex, hidden_error_key(), err);
+    }
     duplex
+}
+
+pub(super) extern "C" fn duplex_from_writable_write_callback(
+    closure: *const ClosureHeader,
+    chunk: f64,
+    encoding: f64,
+    cb: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let writable = js_closure_get_capture_f64(closure, 0);
+    js_node_stream_method_write(raw_ptr_from_value(writable) as i64, chunk, encoding, cb)
+}
+
+pub(super) extern "C" fn duplex_from_writable_final_callback(
+    closure: *const ClosureHeader,
+    cb: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let writable = js_closure_get_capture_f64(closure, 0);
+    js_node_stream_method_end(
+        raw_ptr_from_value(writable) as i64,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    call_listener_args(writable, cb, &[]);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn install_duplex_from_writable(duplex: f64, writable: f64) {
+    let raw = raw_ptr_from_value(duplex);
+    if raw < 0x10000 {
+        return;
+    }
+    let obj = raw as *mut ObjectHeader;
+    let write = js_closure_alloc(duplex_from_writable_write_callback as *const u8, 1);
+    js_closure_set_capture_f64(write, 0, writable);
+    js_object_set_field_by_name(
+        obj,
+        hidden_write_key(),
+        f64::from_bits(JSValue::pointer(write as *const u8).bits()),
+    );
+
+    let final_cb = js_closure_alloc(duplex_from_writable_final_callback as *const u8, 1);
+    js_closure_set_capture_f64(final_cb, 0, writable);
+    js_object_set_field_by_name(
+        obj,
+        hidden_writable_final_key(),
+        f64::from_bits(JSValue::pointer(final_cb as *const u8).bits()),
+    );
+
+    set_hidden_value(duplex, hidden_key(b"duplexWrappedWritable"), writable);
+    set_hidden_value(
+        duplex,
+        hidden_key(b"writableCustomSink"),
+        f64::from_bits(TAG_TRUE),
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_duplex_from_options(body: f64, _opts: f64) -> f64 {
+    if object_ptr_from_value(body).is_some() && !is_classic_stream_instance_value(body) {
+        let readable = get_hidden_value(body, hidden_key(b"readable"));
+        let writable = get_hidden_value(body, hidden_key(b"writable"));
+        if readable.is_some() || writable.is_some() {
+            let duplex =
+                js_node_stream_duplex_new(readable_from_options(f64::from_bits(TAG_UNDEFINED)));
+            if let Some(readable) = readable {
+                if let Err(err) = attach_duplex_readable_source(duplex, readable) {
+                    set_hidden_value(duplex, hidden_error_key(), err);
+                }
+            } else {
+                set_visible_readable(duplex, false);
+            }
+            if let Some(writable) = writable {
+                install_duplex_from_writable(duplex, writable);
+            } else {
+                set_visible_writable(duplex, false);
+            }
+            return duplex;
+        }
+    }
+
+    node_stream_duplex_from_source_chunks(body)
 }
 
 /// #1539: `stream.compose(...streams)` chains a sequence of streams

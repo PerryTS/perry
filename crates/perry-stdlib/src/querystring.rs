@@ -270,8 +270,8 @@ pub unsafe extern "C" fn js_querystring_parse(
     options_arg: f64,
 ) -> *mut ObjectHeader {
     let input = nanboxed_to_string(str_arg).unwrap_or_default();
-    let sep = resolve_separator_str(sep_arg, "&");
-    let eq = resolve_separator_str(eq_arg, "=");
+    let sep = resolve_parse_separator_str(sep_arg, "&");
+    let eq = resolve_parse_separator_str(eq_arg, "=");
     let max_keys = resolve_max_keys(options_arg);
     let decode = resolve_codec_option(options_arg, "decodeURIComponent");
 
@@ -501,8 +501,8 @@ pub unsafe extern "C" fn js_querystring_stringify(
 ) -> f64 {
     // Default separators are the bytes Node uses; we read into UTF-8
     // strings instead of bytes since the chars are always ASCII.
-    let sep = resolve_separator_str(sep_arg, "&");
-    let eq = resolve_separator_str(eq_arg, "=");
+    let sep = resolve_stringify_separator_str(sep_arg, "&");
+    let eq = resolve_stringify_separator_str(eq_arg, "=");
     let encode = resolve_codec_option(options_arg, "encodeURIComponent");
 
     let bits = obj_arg.to_bits();
@@ -538,15 +538,29 @@ pub unsafe extern "C" fn js_querystring_stringify(
     nanbox_string(intern_string(&out))
 }
 
-fn resolve_separator_str(value: f64, default: &'static str) -> String {
-    let bits = value.to_bits();
-    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+unsafe fn resolve_parse_separator_str(value: f64, default: &'static str) -> String {
+    if perry_runtime::value::js_is_truthy(value) == 0 {
         return default.to_string();
     }
-    match unsafe { nanboxed_to_string(value) } {
-        Some(s) if !s.is_empty() => s,
-        _ => default.to_string(),
+    jsvalue_to_owned_string(value)
+}
+
+unsafe fn resolve_stringify_separator_str(value: f64, default: &'static str) -> String {
+    if perry_runtime::value::js_is_truthy(value) == 0 {
+        return default.to_string();
     }
+    if perry_runtime::symbol::js_is_symbol(value) != 0 {
+        throw_symbol_to_string_type_error();
+    }
+    jsvalue_to_owned_string(value)
+}
+
+fn throw_symbol_to_string_type_error() -> ! {
+    let msg = "Cannot convert a Symbol value to a string";
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = perry_runtime::error::js_typeerror_new(msg_str);
+    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
+    perry_runtime::exception::js_throw(f64::from_bits(err_value))
 }
 
 /// Append `key=value` (or `key=v1&key=v2` for arrays) to `out`.

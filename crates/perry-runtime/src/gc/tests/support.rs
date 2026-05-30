@@ -40,6 +40,17 @@ pub(super) fn test_heap_child_slot_count(user_ptr: *mut u8) -> usize {
     }
 }
 
+pub(super) fn assert_marked_user_ptr(ptr: usize, label: &str) {
+    unsafe {
+        let header = header_from_user_ptr(ptr as *const u8);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "{label} should be marked"
+        );
+    }
+}
+
 pub(super) fn malloc_user_ptr_tracked(ptr: *mut u8) -> bool {
     let header = unsafe { header_from_user_ptr(ptr) };
     MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header))
@@ -257,6 +268,9 @@ fn reset_copying_nursery_runtime_test_state() {
     crate::object::test_clear_overflow_fields_root();
     crate::object::test_clear_transition_cache_root();
     crate::object::test_clear_object_cache_roots();
+    crate::object::test_clear_class_side_table_roots();
+    crate::symbol::test_clear_symbol_side_table_roots();
+    crate::json::test_clear_parse_roots();
     crate::set::test_clear_set_roots();
     crate::os::test_clear_process_event_listeners();
     crate::promise::test_clear_promise_scanner_roots();
@@ -675,6 +689,46 @@ pub(super) unsafe fn alloc_nursery_test_object(
         *fields.add(i) = 0;
     }
     (obj, fields)
+}
+
+pub(super) unsafe fn init_test_symbol(ptr: *mut u8) {
+    let id = YOUNG_LEAF_COUNTER.fetch_add(1, Ordering::Relaxed) as u64;
+    let sym = ptr as *mut crate::symbol::SymbolHeader;
+    (*sym).magic = crate::symbol::SYMBOL_MAGIC;
+    (*sym).registered = 0;
+    (*sym).description = std::ptr::null_mut();
+    (*sym).id = 0x5A00_0000 | id;
+}
+
+pub(super) unsafe fn alloc_nursery_test_symbol() -> usize {
+    let ptr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::symbol::SymbolHeader>(),
+        std::mem::align_of::<crate::symbol::SymbolHeader>(),
+        GC_TYPE_STRING,
+    );
+    init_test_symbol(ptr);
+    ptr as usize
+}
+
+pub(super) unsafe fn alloc_old_test_symbol() -> usize {
+    let ptr = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::symbol::SymbolHeader>(),
+        std::mem::align_of::<crate::symbol::SymbolHeader>(),
+        GC_TYPE_STRING,
+    );
+    init_test_symbol(ptr);
+    ptr as usize
+}
+
+pub(super) fn alloc_tracked_test_symbol() -> *mut crate::symbol::SymbolHeader {
+    let ptr = gc_malloc(
+        std::mem::size_of::<crate::symbol::SymbolHeader>(),
+        GC_TYPE_STRING,
+    );
+    unsafe {
+        init_test_symbol(ptr);
+    }
+    ptr as *mut crate::symbol::SymbolHeader
 }
 
 pub(super) unsafe fn alloc_old_test_array(

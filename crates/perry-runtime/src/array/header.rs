@@ -418,6 +418,7 @@ unsafe fn rebuild_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
             clear_array_numeric_layout(arr);
             return false;
         };
+        // GC_STORE_AUDIT(POINTER_FREE): raw-f64 layout rewrite stores numeric payloads only.
         std::ptr::write(elements.add(i) as *mut f64, number);
     }
 
@@ -497,6 +498,7 @@ pub(crate) unsafe fn note_array_numeric_index_write(
     };
     if array_has_raw_f64_layout_flag(arr) && index < (*arr).length as usize {
         let elements = array_elements_ptr(arr) as *mut f64;
+        // GC_STORE_AUDIT(POINTER_FREE): raw-f64 numeric slot update cannot contain a heap pointer.
         std::ptr::write(elements.add(index), number);
         return number.to_bits();
     }
@@ -554,6 +556,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
         return false;
     }
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
+    // GC_STORE_AUDIT(POINTER_FREE): raw-f64 numeric field store is layout-noted below.
     std::ptr::write(elements_ptr.add(index as usize), value);
     note_array_numeric_index_write(arr, index as usize, value_bits);
     crate::gc::layout_note_slot(arr as usize, index as usize, value_bits);
@@ -580,6 +583,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
         return false;
     };
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
+    // GC_STORE_AUDIT(POINTER_FREE): raw-f64 push stores numeric payloads only.
     std::ptr::write(elements_ptr.add(length as usize), number);
     crate::gc::layout_note_slot(arr as usize, length as usize, number.to_bits());
     (*arr).length = length + 1;
@@ -681,6 +685,7 @@ pub(crate) unsafe fn gc_element_slot_range(
 #[inline]
 pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
     let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
+    // GC_STORE_AUDIT(BARRIERED): shared helper notes layout and emits the array slot barrier below.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
@@ -695,6 +700,7 @@ pub(crate) unsafe fn note_array_slot_layout_only(
     value_bits: u64,
 ) {
     let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
+    // GC_STORE_AUDIT(INIT): layout-only helper is restricted to fresh/suppressed caller sites.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
