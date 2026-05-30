@@ -13,11 +13,13 @@
 //! call in runtime-only mode prints `[perry] warning: ...` once per
 //! symbol per process — see issue #464 and `src/stub_diag.rs`.
 
-use crate::promise::Promise;
-use crate::string::StringHeader;
 use crate::stub_diag::perry_stub_warn;
-use std::ptr;
 
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "android",
+    feature = "external-ws-symbols"
+)))]
 const WS_REASON: &str =
     "WebSocket symbol from perry-stdlib not linked into this binary (runtime-only build)";
 const READLINE_REASON: &str =
@@ -31,7 +33,11 @@ const STDLIB_DISPATCH_REASON: &str =
 // WebSocket implementation using tungstenite+rustls. These stubs must NOT
 // be compiled for either platform, otherwise the real implementations will
 // be shadowed by the no-op stubs.
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "android",
+    feature = "external-ws-symbols"
+)))]
 mod ws_stubs {
     use super::{perry_stub_warn, WS_REASON};
     use crate::promise::Promise;
