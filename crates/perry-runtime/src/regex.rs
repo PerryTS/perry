@@ -71,13 +71,19 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
         let translated = js_regex_to_rust(pattern);
         let case_insensitive = flags.contains('i');
         let multiline = flags.contains('m');
-        let regex_pattern = if case_insensitive || multiline {
+        // #2828: the `s` (dotAll) flag maps directly onto the Rust `regex`
+        // crate's `(?s)` inline mode, so `.` matches newlines.
+        let dot_all = flags.contains('s');
+        let regex_pattern = if case_insensitive || multiline || dot_all {
             let mut prefix = String::from("(?");
             if case_insensitive {
                 prefix.push('i');
             }
             if multiline {
                 prefix.push('m');
+            }
+            if dot_all {
+                prefix.push('s');
             }
             prefix.push(')');
             format!("{}{}", prefix, translated)
@@ -124,6 +130,13 @@ pub struct RegExpHeader {
     pub case_insensitive: bool,
     pub global: bool,
     pub multiline: bool,
+    /// #2828: additional observable flags. `sticky`/`unicode`/`has_indices`
+    /// are exposed via getters (matching behavior is scoped — see notes in
+    /// `js_regexp_new`); `dot_all` IS honored at compile time via `(?s)`.
+    pub sticky: bool,
+    pub dot_all: bool,
+    pub unicode: bool,
+    pub has_indices: bool,
     /// lastIndex for global/sticky regexes (byte offset into the string for stateful exec)
     pub last_index: u32,
 }
@@ -232,6 +245,53 @@ fn js_regex_to_rust(pattern: &str) -> String {
     result
 }
 
+/// Throw a `SyntaxError` with the given message and never return.
+fn throw_regexp_syntax_error(message: &str) -> ! {
+    let msg = js_string_from_str(message);
+    let err = crate::error::js_syntaxerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// #2829: validate a RegExp flags string the way the spec's
+/// `RegExpInitialize` does — each flag must be one of `dgimsuvy` and must not
+/// repeat. Returns the flags in canonical (sorted) order, or throws a
+/// `SyntaxError` mirroring Node's "Invalid flags supplied to RegExp
+/// constructor '<flags>'" message.
+///
+/// Note: the `v` flag (unicodeSets) is accepted as a valid flag for parity but
+/// its set-notation matching semantics are not implemented (the regex crate
+/// has no equivalent); it behaves like an ordinary unicode pattern.
+fn validate_and_canonicalize_flags(flags: &str) -> String {
+    // Spec order of the flag bits: d g i m s u v y.
+    const FLAG_ORDER: &[char] = &['d', 'g', 'i', 'm', 's', 'u', 'v', 'y'];
+    let mut seen = [false; 8];
+    for ch in flags.chars() {
+        match FLAG_ORDER.iter().position(|&f| f == ch) {
+            Some(idx) => {
+                if seen[idx] {
+                    throw_regexp_syntax_error(&format!(
+                        "Invalid flags supplied to RegExp constructor '{}'",
+                        flags
+                    ));
+                }
+                seen[idx] = true;
+            }
+            None => {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid flags supplied to RegExp constructor '{}'",
+                    flags
+                ));
+            }
+        }
+    }
+    FLAG_ORDER
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| seen[*i])
+        .map(|(_, c)| *c)
+        .collect()
+}
+
 /// Create a new RegExp from pattern and flags strings
 /// Returns a pointer to RegExpHeader
 ///
@@ -248,15 +308,41 @@ pub extern "C" fn js_regexp_new(
     } else {
         ""
     };
-    let flags_str = if is_valid_ptr(flags) {
+    let raw_flags_str = if is_valid_ptr(flags) {
         string_as_str(flags)
     } else {
         ""
     };
 
+    // #2829: reject duplicate/unknown flags (SyntaxError) and store the
+    // canonical sorted form so `.flags` reflects Node's ordering.
+    let canonical_flags = validate_and_canonicalize_flags(raw_flags_str);
+    let flags_str = canonical_flags.as_str();
+
     let case_insensitive = flags_str.contains('i');
     let global = flags_str.contains('g');
     let multiline = flags_str.contains('m');
+    let sticky = flags_str.contains('y');
+    let dot_all = flags_str.contains('s');
+    let unicode = flags_str.contains('u') || flags_str.contains('v');
+    let has_indices = flags_str.contains('d');
+
+    // #2829: reject invalid pattern syntax with a SyntaxError. A pattern the
+    // `regex` crate rejects is only a real error if `fancy-regex` (which
+    // covers the full JS feature set: lookbehind/lookahead/backreferences)
+    // ALSO rejects it — otherwise it is a valid JS pattern we route through
+    // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
+    // the regex crate fails but fancy-regex succeeds; check both here.
+    {
+        let translated = js_regex_to_rust(pattern_str);
+        if regex::Regex::new(&translated).is_err() && fancy_regex::Regex::new(&translated).is_err()
+        {
+            throw_regexp_syntax_error(&format!(
+                "Invalid regular expression: /{}/: invalid pattern",
+                pattern_str
+            ));
+        }
+    }
 
     // Get or compile the regex from the cache. The returned Arc is stored
     // in the cache indefinitely, so the raw pointer we extract stays valid
@@ -269,6 +355,11 @@ pub extern "C" fn js_regexp_new(
     // leaked every header, which was a 64-byte-per-call leak on top of the
     // (now-fixed) regex object leak.
     let header_size = std::mem::size_of::<RegExpHeader>();
+    // Materialize the canonical flags into a fresh StringHeader so that
+    // `flags_ptr`-keyed lookups (FANCY_CACHE, lookup_fancy_regex) and the
+    // GC-survivable source table all agree on the canonical form, and the
+    // header never holds the caller's possibly-temporary input flags.
+    let canonical_flags_ptr = js_string_from_str(flags_str);
     unsafe {
         let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_OBJECT);
         if raw.is_null() {
@@ -278,10 +369,14 @@ pub extern "C" fn js_regexp_new(
 
         (*ptr).regex_ptr = regex_ptr;
         (*ptr).pattern_ptr = pattern;
-        (*ptr).flags_ptr = flags;
+        (*ptr).flags_ptr = canonical_flags_ptr;
         (*ptr).case_insensitive = case_insensitive;
         (*ptr).global = global;
         (*ptr).multiline = multiline;
+        (*ptr).sticky = sticky;
+        (*ptr).dot_all = dot_all;
+        (*ptr).unicode = unicode;
+        (*ptr).has_indices = has_indices;
         (*ptr).last_index = 0;
 
         // Record the pointer so that js_string_split can detect
