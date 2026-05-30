@@ -359,7 +359,7 @@ impl SH for Expr {
             Expr::StringSplit(a, b) => { tag(h, 282); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::StringFromCharCode(e) => { tag(h, 283); e.as_ref().hash(h); }
             Expr::StringFromCodePoint(e) => { tag(h, 284); e.as_ref().hash(h); }
-            Expr::StringRaw { call_site, substitutions } => { tag(h, 12043); call_site.as_ref().hash(h); substitutions.hash(h); }
+            Expr::StringRaw { call_site, substitutions } => { tag(h, 12047); call_site.as_ref().hash(h); substitutions.hash(h); }
             Expr::StringAt { string, index } => { tag(h, 285); string.as_ref().hash(h); index.as_ref().hash(h); }
             Expr::StringCodePointAt { string, index } => { tag(h, 286); string.as_ref().hash(h); index.as_ref().hash(h); }
             Expr::MapNew => tag(h, 287),
