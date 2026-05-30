@@ -91,6 +91,31 @@ pub(crate) fn string_from_header(ptr: *mut crate::StringHeader) -> String {
     }
 }
 
+/// `String(value)` per Web-IDL / ECMAScript string conversion, used to
+/// normalize arguments to the WHATWG URL / URLSearchParams APIs (#3054,
+/// #3055). Numbers, `null`, `undefined`, booleans, BigInts, and objects with
+/// a custom `toString`/`valueOf` are stringified; **Symbols throw**
+/// `TypeError: Cannot convert a Symbol value to a string` (matching Node /
+/// V8). Returns a heap `*mut StringHeader` (never null for non-symbol inputs).
+///
+/// Callers previously routed arguments through `js_get_string_pointer_unified`,
+/// which only extracts an existing string pointer and yields a null/garbage
+/// pointer for non-string values — so `new URL(123, base)` lost its argument
+/// and symbols silently produced the wrong result instead of throwing. This
+/// mirrors `text::text_encoder_string_ptr`, the analogous coercion used by
+/// `TextEncoder.encode`.
+#[no_mangle]
+pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        let msg = b"Cannot convert a Symbol value to a string";
+        let m = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(m);
+        let bits = crate::value::JSValue::pointer(err as *const u8).bits();
+        crate::exception::js_throw(f64::from_bits(bits));
+    }
+    crate::value::js_jsvalue_to_string(value)
+}
+
 pub(crate) fn object_from_f64(value: f64) -> Option<*mut ObjectHeader> {
     let bits = value.to_bits();
     if (bits & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000 {
