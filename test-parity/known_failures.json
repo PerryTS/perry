@@ -224,12 +224,6 @@
     "category": "bug-open",
     "reason": "node:stream: Duplex.from(asyncIterable) \u2014 async-gen \u2192 Duplex form not yet wired. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/duplex/from-object-form": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Duplex.from({readable, writable}) \u2014 combine-form not yet wired. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/compose/compose-array-form": {
     "issue": "1531",
     "added": "2026-05-24",
