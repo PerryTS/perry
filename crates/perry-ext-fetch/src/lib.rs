@@ -1409,7 +1409,9 @@ mod tests {
     #[test]
     fn response_static_json() {
         let v = JsValue::from_string_ptr(alloc_string("hello").as_raw());
-        let resp = unsafe { js_response_static_json(f64::from_bits(v.bits())) };
+        // No init: status defaults to 200, no statusText, no headers.
+        let resp =
+            unsafe { js_response_static_json(f64::from_bits(v.bits()), 0.0, std::ptr::null(), 0.0) };
         assert!(resp > 0.0);
         let status = js_fetch_response_status(resp);
         assert_eq!(status, 200.0);
