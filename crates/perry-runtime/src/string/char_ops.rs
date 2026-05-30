@@ -110,38 +110,69 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
     arr as i64
 }
 
-/// Create a string from a character code (String.fromCharCode)
-/// Takes a single character code and returns a 1-character string
-#[no_mangle]
-pub extern "C" fn js_string_from_char_code(code: i32) -> *mut StringHeader {
-    if !(0..=0xFFFF).contains(&code) {
-        // Invalid character code, return empty string
-        return js_string_from_bytes(std::ptr::null(), 0);
+/// JS `ToUint16` for `String.fromCharCode` (#2788): a non-finite value
+/// (`NaN`/`±Inf`) maps to `0`; otherwise truncate toward zero and reduce
+/// modulo 2^16 into `[0, 65535]`. `rem_euclid` keeps the result non-negative,
+/// so `-1` wraps to `65535` and `0x1F600` wraps to `0xF600`.
+fn to_uint16(code: f64) -> u16 {
+    if !code.is_finite() {
+        return 0;
     }
+    code.trunc().rem_euclid(65536.0) as u16
+}
 
-    // For ASCII characters, create a simple 1-byte string
-    if code < 128 {
-        let byte = code as u8;
+/// Create a string from a character code (String.fromCharCode).
+/// The argument is coerced with `ToUint16` (#2788), so out-of-range and
+/// negative values wrap modulo 65536 rather than returning `""`. Codegen
+/// passes the raw NaN-boxed `f64` (not `fptosi`, which is UB on a NaN).
+#[no_mangle]
+pub extern "C" fn js_string_from_char_code(code: f64) -> *mut StringHeader {
+    let unit = to_uint16(code);
+
+    // For ASCII characters, create a simple 1-byte string.
+    if unit < 128 {
+        let byte = unit as u8;
         return js_string_from_bytes(&byte as *const u8, 1);
     }
 
-    // For non-ASCII, encode as UTF-8
-    let ch = char::from_u32(code as u32).unwrap_or('\u{FFFD}');
+    // For non-ASCII, encode as UTF-8. Lone surrogates (0xD800..=0xDFFF) are
+    // not valid Rust `char`s; emit U+FFFD (the documented WTF-8 / lone-
+    // surrogate categorical gap — Node would emit the lone surrogate).
+    let ch = char::from_u32(unit as u32).unwrap_or('\u{FFFD}');
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
     js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
 }
 
+/// Throw `RangeError: Invalid code point <n>` for `String.fromCodePoint`,
+/// matching Node's message. Rust's `f64` Display drops the trailing `.0` for
+/// integer-valued floats (`1114112.0` -> "1114112") and keeps fractional
+/// digits (`3.14` -> "3.14"), so it matches JS number formatting here.
+fn throw_invalid_code_point(code: f64) -> ! {
+    let msg = format!("Invalid code point {}", code);
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_rangeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
 /// Create a string from a Unicode code point (String.fromCodePoint).
-/// Supports the full Unicode range (0..0x10FFFF), unlike fromCharCode (0..0xFFFF).
+/// Supports the full Unicode range (0..=0x10FFFF), unlike fromCharCode
+/// (0..=0xFFFF). Per spec (#2788), a negative, non-integer, or `> 0x10FFFF`
+/// argument throws `RangeError`. Codegen passes the raw NaN-boxed `f64` so the
+/// non-integer/non-finite cases are observable (a prior `fptosi` truncated
+/// `3.14` to `3` and silently produced a character).
 #[no_mangle]
-pub extern "C" fn js_string_from_code_point(code: i32) -> *mut StringHeader {
-    if !(0..=0x10FFFF).contains(&code) {
-        return js_string_from_bytes(std::ptr::null(), 0);
+pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
+    if !code.is_finite() || code.fract() != 0.0 || code < 0.0 || code > 0x10FFFF as f64 {
+        throw_invalid_code_point(code);
     }
-    let ch = match char::from_u32(code as u32) {
+    let cp = code as u32;
+    let ch = match char::from_u32(cp) {
         Some(c) => c,
-        None => return js_string_from_bytes(std::ptr::null(), 0),
+        // Lone surrogate: a valid code point for fromCodePoint but not a Rust
+        // `char`. Emit U+FFFD (WTF-8 categorical gap); do NOT throw.
+        None => '\u{FFFD}',
     };
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);

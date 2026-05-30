@@ -1217,8 +1217,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // String extras (already in string.rs; expr.rs was stubbing or missing dispatch).
     module.declare_function("js_string_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_code_point_at", DOUBLE, &[I64, I32]);
-    module.declare_function("js_string_from_code_point", I64, &[I32]);
-    module.declare_function("js_string_from_char_code", I64, &[I32]);
+    // #2788: take the raw NaN-boxed f64 so the runtime can apply ToUint16
+    // (fromCharCode) / RangeError validation (fromCodePoint) — a prior fptosi
+    // truncated fractional/non-finite inputs before they could be observed.
+    module.declare_function("js_string_from_code_point", I64, &[DOUBLE]);
+    module.declare_function("js_string_from_char_code", I64, &[DOUBLE]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
     module.declare_function(
