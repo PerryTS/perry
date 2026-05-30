@@ -72,14 +72,16 @@ pub use self::jsvalue_api::{
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
     js_array_push_f64, js_array_push_spread_f64, js_array_set_length, js_array_shift_f64,
-    js_array_unshift_f64, js_array_unshift_jsvalue,
+    js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
 };
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{
     js_array_includes_f64, js_array_includes_jsvalue, js_array_indexOf_f64,
     js_array_indexOf_jsvalue, js_array_last_index_of_jsvalue,
 };
-pub use self::sort::{js_array_sort_default, js_array_sort_with_comparator};
+pub use self::sort::{
+    js_array_sort_default, js_array_sort_with_comparator, js_validate_array_comparator,
+};
 pub use self::splice_slice::{
     js_array_slice, js_array_slice_values, js_array_splice, js_array_splice_delete_count,
 };

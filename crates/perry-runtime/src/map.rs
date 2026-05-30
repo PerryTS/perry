@@ -1261,6 +1261,75 @@ pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *m
     map_handle.get_raw_mut_ptr::<MapHeader>()
 }
 
+/// `new Map(init)` with full `AddEntriesFromIterable` semantics (issue #2770).
+///
+/// Takes the NaN-boxed init value (not a pre-unboxed array pointer) so it can
+/// classify the argument exactly like Node:
+/// - `null`/`undefined` → empty Map,
+/// - another Map / Set / Array / string / custom iterable → consume its
+///   yielded values,
+/// - non-iterable (number, boolean, bigint, symbol, function, plain object
+///   without `[Symbol.iterator]`) → throw
+///   `TypeError: <type> ... is not iterable (...)`.
+///
+/// Each yielded value must be an *object* (array or plain object). Its `[0]`
+/// and `[1]` properties become the entry key/value (missing → `undefined`),
+/// so `new Map([['k']])` and `new Map([[]])` keep entries with `undefined`
+/// components. A non-object yielded value throws
+/// `TypeError: Iterator value <v> is not an entry object`.
+///
+/// The `new Map(existingMap)` fast path is preserved via `js_for_of_to_array`
+/// (Maps materialize to their `[k, v]` pair arrays) inside `classify_init`.
+#[no_mangle]
+pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
+    use crate::collection_iter::{classify_init, InitIter};
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_ptr = match classify_init(value) {
+        InitIter::Empty => return js_map_alloc(4),
+        InitIter::Values(p) => p,
+    };
+    let arr_handle = if arr_ptr.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_mut_ptr(arr_ptr))
+    };
+    let map = js_map_alloc(4);
+    let map_handle = scope.root_raw_mut_ptr(map);
+    let Some(arr_handle) = arr_handle.as_ref() else {
+        return map_handle.get_raw_mut_ptr::<MapHeader>();
+    };
+    let len = {
+        let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
+        crate::array::js_array_length(arr)
+    };
+    for i in 0..len {
+        let entry = {
+            let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
+            crate::array::js_array_get_f64(arr, i)
+        };
+        // Each yielded value must be an object (array or plain object).
+        if !crate::collection_iter::is_entry_object(entry) {
+            crate::collection_iter::throw_not_entry_object(entry);
+        }
+        let entry_bits = entry.to_bits() as i64;
+        let key = crate::object::js_object_get_index_polymorphic(entry_bits, 0.0);
+        let val = crate::object::js_object_get_index_polymorphic(entry_bits, 1.0);
+        let map = map_handle.get_raw_mut_ptr::<MapHeader>();
+        js_map_set(map, key, val);
+    }
+    map_handle.get_raw_mut_ptr::<MapHeader>()
+}
+
+// #2770: `js_map_from_iterable` is only invoked from generated LLVM IR
+// (codegen emits the `new Map(...)` call in
+// `perry-codegen/src/expr/misc_methods.rs`), so it has zero internal Rust
+// callers. The whole-program auto-optimize bitcode link would otherwise
+// internalize + dead-strip the `#[no_mangle]` export and break the default
+// compile path. The `#[used]` anchor pins it (see project_auto_optimize_keepalive).
+#[used]
+static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_from_iterable;
+
 /// Iterate over map entries, calling a callback with (value, key, map) for each
 #[no_mangle]
 pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64) {

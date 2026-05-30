@@ -236,6 +236,13 @@ fn throw_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+#[cold]
+fn throw_range_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 #[inline]
 fn is_arena_backed_addr(addr: usize) -> bool {
     !matches!(
@@ -1018,6 +1025,10 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
     ta: *mut TypedArrayHeader,
     comparator: *const ClosureHeader,
 ) -> *mut TypedArrayHeader {
+    // #2796: null comparator (validated `undefined`) -> default sort.
+    if comparator.is_null() {
+        return js_typed_array_sort_default(ta);
+    }
     let ta_clean = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
     if ta_clean.is_null() {
         return ta_clean;
@@ -1074,6 +1085,10 @@ pub extern "C" fn js_typed_array_to_sorted_with_comparator(
     ta: *const TypedArrayHeader,
     comparator: *const ClosureHeader,
 ) -> *mut TypedArrayHeader {
+    // #2796: null comparator (validated `undefined`) -> default sort.
+    if comparator.is_null() {
+        return js_typed_array_to_sorted_default(ta);
+    }
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return typed_array_alloc(KIND_FLOAT64, 0);
@@ -1114,11 +1129,18 @@ pub extern "C" fn js_typed_array_with(
     unsafe {
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
-        let out = typed_array_alloc(kind, len as u32);
-        let mut idx = index as i64;
-        if idx < 0 {
-            idx += len as i64;
+        // ECMA ToIntegerOrInfinity: NaN -> 0, reject non-finite / out-of-range
+        // with RangeError("Invalid typed array index") (Node parity, #2792).
+        let rel = if index.is_nan() { 0.0 } else { index };
+        if !rel.is_finite() {
+            throw_range_error(b"Invalid typed array index");
         }
+        let resolved = if rel < 0.0 { rel + len as f64 } else { rel };
+        if resolved < 0.0 || resolved >= len as f64 {
+            throw_range_error(b"Invalid typed array index");
+        }
+        let idx = resolved as i64;
+        let out = typed_array_alloc(kind, len as u32);
         for i in 0..len {
             if i as i64 == idx {
                 store_at(out, i, jsvalue_to_f64(value));

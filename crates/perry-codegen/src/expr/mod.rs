@@ -1630,6 +1630,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegExpExecGroups => misc_methods::lower(ctx, expr),
         Expr::SetClear(..)
         | Expr::StringFromCodePoint(..)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::StringCodePointAt { .. }
         | Expr::RegExpSource(..)

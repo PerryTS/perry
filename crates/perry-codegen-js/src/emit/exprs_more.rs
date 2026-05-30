@@ -2,6 +2,20 @@ use super::*;
 use std::fmt::Write as FmtWrite;
 
 impl JsEmitter {
+    /// Emit `<date><method><a0>, <a1>, …)` for a Date setter, preserving all
+    /// supplied arguments (#2851).
+    fn emit_date_setter(&mut self, date: &Expr, method: &str, args: &[Expr]) {
+        self.emit_expr(date);
+        self.output.push_str(method);
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.emit_expr(a);
+        }
+        self.output.push(')');
+    }
+
     pub fn emit_expr_continued(&mut self, expr: &Expr) {
         match expr {
             // --- Child process (throw stubs) ---
@@ -571,96 +585,45 @@ impl JsEmitter {
                 self.emit_expr(d);
                 self.output.push_str(".getUTCMilliseconds()");
             }
-            Expr::DateSetUtcFullYear { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCFullYear(");
-                self.emit_expr(value);
-                self.output.push(')');
+            // Date setters (#2851): emit every supplied argument so Node's
+            // optional-trailing-component semantics survive round-tripping.
+            Expr::DateSetUtcFullYear { date, args } => {
+                self.emit_date_setter(date, ".setUTCFullYear(", args)
             }
-            Expr::DateSetUtcMonth { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCMonth(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcMonth { date, args } => {
+                self.emit_date_setter(date, ".setUTCMonth(", args)
             }
-            Expr::DateSetUtcDate { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCDate(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcDate { date, args } => {
+                self.emit_date_setter(date, ".setUTCDate(", args)
             }
-            Expr::DateSetUtcHours { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCHours(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcHours { date, args } => {
+                self.emit_date_setter(date, ".setUTCHours(", args)
             }
-            Expr::DateSetUtcMinutes { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCMinutes(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcMinutes { date, args } => {
+                self.emit_date_setter(date, ".setUTCMinutes(", args)
             }
-            Expr::DateSetUtcSeconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCSeconds(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcSeconds { date, args } => {
+                self.emit_date_setter(date, ".setUTCSeconds(", args)
             }
-            Expr::DateSetUtcMilliseconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setUTCMilliseconds(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetUtcMilliseconds { date, args } => {
+                self.emit_date_setter(date, ".setUTCMilliseconds(", args)
             }
-            Expr::DateSetFullYear { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setFullYear(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetFullYear { date, args } => {
+                self.emit_date_setter(date, ".setFullYear(", args)
             }
-            Expr::DateSetMonth { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setMonth(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetMonth { date, args } => self.emit_date_setter(date, ".setMonth(", args),
+            Expr::DateSetDate { date, args } => self.emit_date_setter(date, ".setDate(", args),
+            Expr::DateSetHours { date, args } => self.emit_date_setter(date, ".setHours(", args),
+            Expr::DateSetMinutes { date, args } => {
+                self.emit_date_setter(date, ".setMinutes(", args)
             }
-            Expr::DateSetDate { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setDate(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetSeconds { date, args } => {
+                self.emit_date_setter(date, ".setSeconds(", args)
             }
-            Expr::DateSetHours { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setHours(");
-                self.emit_expr(value);
-                self.output.push(')');
+            Expr::DateSetMilliseconds { date, args } => {
+                self.emit_date_setter(date, ".setMilliseconds(", args)
             }
-            Expr::DateSetMinutes { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setMinutes(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
-            Expr::DateSetSeconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setSeconds(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
-            Expr::DateSetMilliseconds { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setMilliseconds(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
-            Expr::DateSetTime { date, value } => {
-                self.emit_expr(date);
-                self.output.push_str(".setTime(");
-                self.emit_expr(value);
-                self.output.push(')');
-            }
+            Expr::DateSetTime { date, args } => self.emit_date_setter(date, ".setTime(", args),
             Expr::DateValueOf(d) => {
                 self.emit_expr(d);
                 self.output.push_str(".valueOf()");

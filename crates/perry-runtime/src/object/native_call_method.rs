@@ -755,7 +755,15 @@ pub unsafe extern "C" fn js_native_call_method(
                         return crate::typedarray::js_typed_array_at(ta, arg0());
                     }
                     "sort" => {
-                        let cmp = arg_closure(0);
+                        // #2796: validate the comparator (function | undefined)
+                        // before sorting — throws TypeError for any other value.
+                        let cmp = if args_len >= 1 && !args_ptr.is_null() {
+                            let raw = unsafe { *args_ptr };
+                            crate::array::js_validate_array_comparator(raw)
+                                as *const crate::closure::ClosureHeader
+                        } else {
+                            std::ptr::null()
+                        };
                         let result = if cmp.is_null() {
                             crate::typedarray::js_typed_array_sort_default(ta)
                         } else {
@@ -764,7 +772,14 @@ pub unsafe extern "C" fn js_native_call_method(
                         return f64::from_bits(result as u64);
                     }
                     "toSorted" => {
-                        let cmp = arg_closure(0);
+                        // #2796: validate comparator before sorting.
+                        let cmp = if args_len >= 1 && !args_ptr.is_null() {
+                            let raw = unsafe { *args_ptr };
+                            crate::array::js_validate_array_comparator(raw)
+                                as *const crate::closure::ClosureHeader
+                        } else {
+                            std::ptr::null()
+                        };
                         let result = if cmp.is_null() {
                             crate::typedarray::js_typed_array_to_sorted_default(ta)
                         } else {
@@ -1348,9 +1363,15 @@ pub unsafe extern "C" fn js_native_call_method(
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
                         return crate::array::js_array_shift_f64(arr);
                     }
-                    "unshift" if args_len >= 1 && !args_ptr.is_null() => {
+                    "unshift" => {
+                        // #2814: zero-arg returns current length (no mutation);
+                        // 1+ args insert all items at the front in source order.
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        let result = crate::array::js_array_unshift_f64(arr, *args_ptr);
+                        if args_len == 0 || args_ptr.is_null() {
+                            return crate::array::js_array_length(arr) as f64;
+                        }
+                        let result =
+                            crate::array::js_array_unshift_variadic(arr, args_ptr, args_len as u32);
                         return crate::array::js_array_length(result) as f64;
                     }
                     // Issue #515 followup: defensive `with` arm for arrays that
@@ -1433,9 +1454,10 @@ pub unsafe extern "C" fn js_native_call_method(
                     // receivers.
                     "sort" => {
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        // #2796: validate comparator (function | undefined) before sorting.
                         let result = if args_len >= 1 && !args_ptr.is_null() {
-                            let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
-                            let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                            let cb_ptr = crate::array::js_validate_array_comparator(*args_ptr)
+                                as *const crate::closure::ClosureHeader;
                             crate::array::js_array_sort_with_comparator(arr, cb_ptr)
                         } else {
                             crate::array::js_array_sort_default(arr)

@@ -127,6 +127,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::StringCoerce(_)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
         | Expr::RegExpFlags(_)
@@ -958,6 +959,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::JsonStringifyFull(..)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::FsReadFileSync(_)
         | Expr::FsReadFileBinary(_)
         | Expr::PathSep
@@ -1166,6 +1168,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // / RegExp.source|flags — all produce string handles.
         Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
+        | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::RegExpSource(_)
         | Expr::RegExpFlags(_)
