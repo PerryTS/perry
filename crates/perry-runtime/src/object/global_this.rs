@@ -204,6 +204,20 @@ extern "C" fn global_this_string_thunk(
     crate::value::js_nanbox_string(string_ptr as i64)
 }
 
+extern "C" fn global_this_object_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if js_value.is_undefined() || js_value.is_null() {
+        return crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
+    }
+    if crate::value::js_nanbox_get_pointer(value) != 0 {
+        return value;
+    }
+    crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64)
+}
+
 extern "C" fn global_this_structured_clone_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -699,16 +713,16 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             );
             continue;
         }
-        let func_ptr = if name == "String" {
-            global_this_string_thunk as *const u8
-        } else {
-            global_this_builtin_noop_thunk as *const u8
+        let func_ptr = match name {
+            "Object" => global_this_object_thunk as *const u8,
+            "String" => global_this_string_thunk as *const u8,
+            _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure_ptr.is_null() {
             continue;
         }
-        if name == "String" {
+        if matches!(name, "Object" | "String") {
             crate::closure::js_register_closure_arity(func_ptr, 1);
         }
         if matches!(name, "File" | "EvalError" | "URIError" | "Uint8Array") {
