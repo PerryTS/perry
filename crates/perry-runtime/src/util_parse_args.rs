@@ -9,10 +9,7 @@ use crate::object::{
     ObjectHeader,
 };
 use crate::string::{js_string_from_bytes, js_string_materialize_to_heap, StringHeader};
-use crate::value::{
-    js_nanbox_pointer, JSValue, POINTER_MASK, POINTER_TAG, TAG_FALSE, TAG_MASK, TAG_TRUE,
-    TAG_UNDEFINED,
-};
+use crate::value::{js_nanbox_pointer, JSValue, TAG_FALSE, TAG_TRUE, TAG_UNDEFINED};
 
 const TAG_UNDEFINED_F64: f64 = f64::from_bits(TAG_UNDEFINED);
 
@@ -350,8 +347,14 @@ fn parse_short_option(
 
 fn specs_from_value(options_value: f64) -> ParseSpecs {
     let mut specs = ParseSpecs::default();
-    let Some(options_obj) = object_ptr(options_value) else {
+    if is_nullish(options_value) {
         return specs;
+    };
+    let Some(options_obj) = object_ptr(options_value) else {
+        throw_invalid_arg_type(
+            "The \"options\" argument must be of type object",
+            options_value,
+        );
     };
     let keys = js_object_keys(options_obj);
     let key_count = js_array_length(keys) as usize;
@@ -364,14 +367,46 @@ fn specs_from_value(options_value: f64) -> ParseSpecs {
             continue;
         };
         let desc_value = js_object_get_field_by_name_f64(options_obj, key_ptr);
-        let kind = match string_from_value(get_prop(desc_value, b"type")).as_deref() {
-            Some("string") => OptionKind::String,
-            _ => OptionKind::Boolean,
+        let Some(desc_obj) = object_ptr(desc_value) else {
+            throw_invalid_arg_type(
+                &format!("The \"options.{name}\" property must be of type object"),
+                desc_value,
+            );
         };
-        let short =
-            string_from_value(get_prop(desc_value, b"short")).and_then(|s| s.chars().next());
-        if let Some(short) = short {
+        let type_value = get_prop(desc_value, b"type");
+        let kind = match string_from_value(type_value).as_deref() {
+            Some("string") => OptionKind::String,
+            Some("boolean") => OptionKind::Boolean,
+            _ => throw_invalid_union_type(&format!("options.{name}.type"), type_value),
+        };
+        if object_has_own_property(desc_obj, b"short") {
+            let short_value = get_prop(desc_value, b"short");
+            let Some(short_string) = string_from_value(short_value) else {
+                throw_invalid_arg_type(
+                    &format!("The \"options.{name}.short\" property must be of type string"),
+                    short_value,
+                );
+            };
+            if short_string.chars().count() != 1 {
+                throw_invalid_arg_value_single_char(
+                    &format!("options.{name}.short"),
+                    &short_string,
+                );
+            }
+            let short = short_string
+                .chars()
+                .next()
+                .expect("validated one-char short option");
             specs.short_to_long.insert(short, name.clone());
+        }
+        if object_has_own_property(desc_obj, b"multiple") {
+            let multiple_value = get_prop(desc_value, b"multiple");
+            if !JSValue::from_bits(multiple_value.to_bits()).is_bool() {
+                throw_invalid_arg_type(
+                    &format!("The \"options.{name}.multiple\" property must be of type boolean"),
+                    multiple_value,
+                );
+            }
         }
         specs.options.insert(name, OptionSpec { kind });
     }
@@ -379,8 +414,14 @@ fn specs_from_value(options_value: f64) -> ParseSpecs {
 }
 
 fn args_from_value(args_value: f64) -> Vec<String> {
-    let Some(args_ptr) = array_ptr(args_value) else {
+    if is_nullish(args_value) {
         return Vec::new();
+    }
+    let Some(args_ptr) = array_ptr(args_value) else {
+        throw_invalid_arg_type(
+            "The \"args\" argument must be an instance of Array",
+            args_value,
+        );
     };
     let len = js_array_length(args_ptr) as usize;
     let mut args = Vec::with_capacity(len);
@@ -493,21 +534,64 @@ fn boxed_ptr(ptr: *const u8) -> f64 {
 }
 
 fn object_ptr(value: f64) -> Option<*const ObjectHeader> {
-    let bits = value.to_bits();
-    if (bits & TAG_MASK) == POINTER_TAG {
-        Some((bits & POINTER_MASK) as *const ObjectHeader)
+    let ptr = heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_OBJECT)?;
+    Some(ptr as *const ObjectHeader)
+}
+
+fn heap_ptr_with_gc_type(value: f64, expected_type: u8) -> Option<*const u8> {
+    let jsvalue = JSValue::from_bits(value.to_bits());
+    if !jsvalue.is_pointer() {
+        return None;
+    }
+    let ptr = jsvalue.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    if gc_header.obj_type == expected_type {
+        Some(ptr)
     } else {
         None
     }
 }
 
 fn array_ptr(value: f64) -> Option<*const crate::array::ArrayHeader> {
-    let bits = value.to_bits();
-    if (bits & TAG_MASK) == POINTER_TAG {
-        Some((bits & POINTER_MASK) as *const crate::array::ArrayHeader)
-    } else {
-        None
-    }
+    let ptr = heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_ARRAY)?;
+    Some(ptr as *const crate::array::ArrayHeader)
+}
+
+fn is_nullish(value: f64) -> bool {
+    let jsvalue = JSValue::from_bits(value.to_bits());
+    jsvalue.is_undefined() || jsvalue.is_null()
+}
+
+fn object_has_own_property(obj: *const ObjectHeader, name: &[u8]) -> bool {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    unsafe { crate::object::own_key_present(obj as *mut ObjectHeader, key) }
+}
+
+fn throw_invalid_arg_type(prefix: &str, value: f64) -> ! {
+    let message = format!(
+        "{prefix}. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_invalid_union_type(property: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{property}\" property must be ('string|boolean'). Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_invalid_arg_value_single_char(property: &str, value: &str) -> ! {
+    let message = format!(
+        "The property '{property}' must be a single character. Received '{}'",
+        value
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
 }
 
 fn string_ptr_from_value(value: f64) -> Option<*const StringHeader> {
