@@ -339,18 +339,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let end_d = if let Some(end_expr) = end {
                 lower_expr(ctx, end_expr)?
             } else {
-                // No end → pass i32::MAX so the runtime clamps to length.
-                // Encode as 2147483647.0 → fptosi → i32 max.
-                "2147483647.0".to_string()
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let end_i32 = blk.fptosi(DOUBLE, &end_d, I32);
             let result = blk.call(
                 I64,
-                "js_array_slice",
-                &[(I64, &arr_handle), (I32, &start_i32), (I32, &end_i32)],
+                "js_array_slice_values",
+                &[(I64, &arr_handle), (DOUBLE, &start_d), (DOUBLE, &end_d)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }

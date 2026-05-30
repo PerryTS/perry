@@ -78,7 +78,7 @@ pub use self::search::{
     js_array_indexOf_jsvalue, js_array_last_index_of_jsvalue,
 };
 pub use self::sort::{js_array_sort_default, js_array_sort_with_comparator};
-pub use self::splice_slice::{js_array_slice, js_array_splice};
+pub use self::splice_slice::{js_array_slice, js_array_slice_values, js_array_splice};
 
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::header::{

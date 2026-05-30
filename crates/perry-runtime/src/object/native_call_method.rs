@@ -1048,22 +1048,16 @@ pub unsafe extern "C" fn js_native_call_method(
                     // sentinel and the next chained operation segfaulted.
                     "slice" => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let arg_i32 = |i: usize| -> i32 {
+                        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                        let arg_value = |i: usize| -> f64 {
                             if i < args_len && !args_ptr.is_null() {
-                                let v = *args_ptr.add(i);
-                                if v.is_nan() || v.is_infinite() {
-                                    0
-                                } else {
-                                    v as i32
-                                }
+                                *args_ptr.add(i)
                             } else {
-                                0
+                                undefined
                             }
                         };
-                        let len = crate::array::js_array_length(arr) as i32;
-                        let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-                        let end = if args_len >= 2 { arg_i32(1) } else { len };
-                        let result = crate::array::js_array_slice(arr, start, end);
+                        let result =
+                            crate::array::js_array_slice_values(arr, arg_value(0), arg_value(1));
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     // Issue #321 (effect Context/Layer): defensive `splice`

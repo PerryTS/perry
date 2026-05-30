@@ -521,28 +521,27 @@ pub(crate) fn lower_array_method(
                     args.len()
                 );
             }
-            // Zero-arg `.slice()` is the JS shallow-copy idiom: same as
-            // `.slice(0)`. Lower it to start=0, end=i32::MAX.
-            let start_i32 = if args.is_empty() {
-                "0".to_string()
+            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let start_value = if args.is_empty() {
+                "0.0".to_string()
             } else {
-                let start_box = lower_expr(ctx, &args[0])?;
-                let blk = ctx.block();
-                blk.fptosi(DOUBLE, &start_box, I32)
+                lower_expr(ctx, &args[0])?
             };
-            let end_i32 = if args.len() == 2 {
-                let end_box = lower_expr(ctx, &args[1])?;
-                let blk = ctx.block();
-                blk.fptosi(DOUBLE, &end_box, I32)
+            let end_value = if args.len() == 2 {
+                lower_expr(ctx, &args[1])?
             } else {
-                "2147483647".to_string()
+                undefined
             };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let result = blk.call(
                 I64,
-                "js_array_slice",
-                &[(I64, &recv_handle), (I32, &start_i32), (I32, &end_i32)],
+                "js_array_slice_values",
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &start_value),
+                    (DOUBLE, &end_value),
+                ],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }

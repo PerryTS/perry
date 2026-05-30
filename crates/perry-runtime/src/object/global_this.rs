@@ -407,10 +407,10 @@ extern "C" fn object_prototype_to_string_thunk(
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
-/// `js_native_call_method`) and forwards to `js_array_slice`.
+/// `js_native_call_method`) and forwards to the shared slice-value helper.
 ///
-/// Coerces start/end through `JSValue::to_number`, with `undefined`
-/// mapping to `0` for start and `i32::MAX` for end — matching
+/// Coerces start/end through the shared array slice helper, with
+/// `undefined` mapping to `0` for start and end-of-array for end — matching
 /// `Array.prototype.slice`'s ECMA-262 defaults.
 ///
 /// Unblocks the `Array.prototype.slice.call(list, …)` pattern that
@@ -445,29 +445,7 @@ extern "C" fn array_prototype_slice_thunk(
     if arr_ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let start_jsv = JSValue::from_bits(start_val.to_bits());
-    let end_jsv = JSValue::from_bits(end_val.to_bits());
-    let start_i32 = if start_jsv.is_undefined() {
-        0
-    } else {
-        let n = start_jsv.to_number();
-        if n.is_nan() {
-            0
-        } else {
-            n as i32
-        }
-    };
-    let end_i32 = if end_jsv.is_undefined() {
-        i32::MAX
-    } else {
-        let n = end_jsv.to_number();
-        if n.is_nan() {
-            0
-        } else {
-            n as i32
-        }
-    };
-    let result = crate::array::js_array_slice(arr_ptr, start_i32, end_i32);
+    let result = crate::array::js_array_slice_values(arr_ptr, start_val, end_val);
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
 }
 
