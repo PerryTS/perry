@@ -2190,6 +2190,34 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
 
+        // #2856: a property READ (not a call) of `next` on a Map/Set
+        // iterator object must yield a callable (so `typeof it.next ===
+        // "function"` and `const n = it.next; n()` work). The iterators
+        // dispatch via class id and store no `next` field, so bind the
+        // method to the receiver. Also bind the self-iterator methods.
+        if !key.is_null()
+            && ((*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID)
+        {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            let bind_name: Option<&'static [u8]> = match key_bytes {
+                b"next" => Some(b"next"),
+                b"return" => Some(b"return"),
+                b"throw" => Some(b"throw"),
+                b"@@iterator" => Some(b"@@iterator"),
+                _ => None,
+            };
+            if let Some(name) = bind_name {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
+                return JSValue::from_bits(result.to_bits());
+            }
+            return JSValue::undefined();
+        }
+
         // Issue #649: native-module sub-namespace property access.
         // `fs.constants.F_OK` lowers to `PropertyGet { PropertyGet { fs,
         // "constants" }, "F_OK" }` — the inner expression's runtime value
