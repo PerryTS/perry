@@ -34,6 +34,7 @@ pub mod buffer;
 pub mod builtins;
 pub mod child_process;
 pub mod closure;
+pub mod collection_iter;
 pub mod color_parse;
 pub mod date;
 pub mod error;

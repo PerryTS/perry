@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1801 entries across 89 modules
+// Coverage: 1819 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2824,17 +2824,53 @@ declare module "validator" {
 
 declare module "worker_threads" {
   /** stdlib */
+  export class BroadcastChannel { [key: string]: any; }
+  /** stdlib */
+  export class MessageChannel { [key: string]: any; }
+  /** stdlib */
+  export class MessagePort { [key: string]: any; }
+  /** stdlib */
+  export class Worker { [key: string]: any; }
+  /** stdlib */
+  export const SHARE_ENV: any;
+  /** stdlib */
+  export const isInternalThread: any;
+  /** stdlib */
   export const isMainThread: any;
+  /** stdlib */
+  export const locks: any;
+  /** stdlib */
+  export const parentPort: any;
   /** stdlib */
   export const resourceLimits: any;
   /** stdlib */
   export const threadId: any;
   /** stdlib */
+  export const threadName: any;
+  /** stdlib */
+  export const workerData: any;
+  /** stdlib */
+  export function BroadcastChannel(p0: any): any;
+  /** stdlib */
+  export function MessageChannel(...args: any[]): any;
+  /** stdlib */
   export function getEnvironmentData(p0: any): any;
   /** stdlib */
   export function getWorkerData(...args: any[]): any;
   /** stdlib */
+  export function isMarkedAsUntransferable(p0: any): boolean;
+  /** stdlib */
+  export function markAsUncloneable(p0: any): void;
+  /** stdlib */
+  export function markAsUntransferable(p0: any): void;
+  /** stdlib */
+  export function moveMessagePortToContext(p0: any, p1: any): any;
+  /** stdlib */
   export function parentPort(...args: any[]): any;
+  /** stdlib */
+  export function postMessageToThread(p0: any, p1: any, p2: any, p3: any): any;
+  /** stdlib */
+  export function receiveMessageOnPort(p0: any): any;
   /** stdlib */
   export function setEnvironmentData(p0: any, p1: any): void;
   /** stdlib */

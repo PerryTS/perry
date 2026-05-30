@@ -65,6 +65,64 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
     }
 }
 
+/// Validate a `sort` / `toSorted` comparator argument (#2796).
+///
+/// Per ECMA-262, the comparator must be either `undefined` or a callable
+/// function; any other value throws `TypeError` *before* sorting begins.
+/// Takes the raw NaN-boxed comparator value (NOT a pre-unboxed pointer) so
+/// it can distinguish `undefined`/`null`/numbers/etc.
+///
+/// Returns the resolved `ClosureHeader*` (as `i64`) for the comparator path,
+/// or `0` when the argument is `undefined` (use the default sort path).
+#[no_mangle]
+pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cmp_boxed.to_bits());
+    // undefined -> default sort path.
+    if jv.is_undefined() {
+        return 0;
+    }
+    // Callable function -> comparator path.
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<ClosureHeader>();
+        if !ptr.is_null() && unsafe { (*ptr).type_tag == crate::closure::CLOSURE_MAGIC } {
+            return ptr as i64;
+        }
+    }
+    // Anything else (null, number, string, object, boolean) is a TypeError.
+    throw_invalid_comparator(cmp_boxed);
+}
+
+#[used]
+static KEEP_VALIDATE_ARRAY_COMPARATOR: extern "C" fn(f64) -> i64 = js_validate_array_comparator;
+
+#[cold]
+fn throw_invalid_comparator(cmp_boxed: f64) -> ! {
+    // Stringify the supplied value the way Node renders it in the message,
+    // e.g. "null", "1". `js_jsvalue_to_string` yields the JS String form.
+    let value_str = {
+        let sp = crate::value::js_jsvalue_to_string(cmp_boxed);
+        if sp.is_null() {
+            String::new()
+        } else {
+            unsafe {
+                let header = &*(sp as *const crate::string::StringHeader);
+                let bytes_ptr =
+                    (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let slice = std::slice::from_raw_parts(bytes_ptr, header.byte_len as usize);
+                std::str::from_utf8(slice).unwrap_or("").to_string()
+            }
+        }
+    };
+    let message = format!(
+        "The comparison function must be either a function or undefined: {}",
+        value_str
+    );
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
 /// sort - sort array in-place using a comparator closure
 /// The comparator takes (a, b) and returns negative if a < b, positive if a > b, 0 if equal
 /// Returns the same array pointer (sorts in-place)
@@ -73,6 +131,11 @@ pub extern "C" fn js_array_sort_with_comparator(
     arr: *mut ArrayHeader,
     comparator: *const ClosureHeader,
 ) -> *mut ArrayHeader {
+    // #2796: a null comparator (validated `undefined`, or absent) means
+    // "use the default sort path".
+    if comparator.is_null() {
+        return js_array_sort_default(arr);
+    }
     unsafe {
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;
         if arr.is_null() {

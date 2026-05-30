@@ -316,6 +316,19 @@ pub extern "C" fn js_object_set_field_by_name(
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    // #3143: honor a non-writable registered descriptor — a
+                    // built-in method's `.name`/`.length` are spec'd
+                    // `writable: false`, so a sloppy-mode write must be a silent
+                    // no-op (this is what Test262's `verifyProperty` checks).
+                    // Only fires when a descriptor was actually recorded for
+                    // this closure+key (built-in proto methods, or a user
+                    // `Object.defineProperty`); plain `fn.x = 1` finds none and
+                    // proceeds. Closure writes are not the object hot path.
+                    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
+                        if !attrs.writable() {
+                            return;
+                        }
+                    }
                     crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
                 }
             }
