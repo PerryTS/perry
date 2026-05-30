@@ -202,13 +202,10 @@ pub(super) fn try_imported_array_methods(
                                     // #2794: handle omitted args.
                                     let arg_count = args.len();
                                     let mut args_iter = args.into_iter();
-                                    let start =
-                                        args_iter.next().unwrap_or(Expr::Number(0.0));
+                                    let start = args_iter.next().unwrap_or(Expr::Number(0.0));
                                     let delete_count = match args_iter.next() {
                                         Some(dc) => dc,
-                                        None if arg_count >= 1 => {
-                                            Expr::Number(f64::INFINITY)
-                                        }
+                                        None if arg_count >= 1 => Expr::Number(f64::INFINITY),
                                         None => Expr::Number(0.0),
                                     };
                                     let items: Vec<Expr> = args_iter.collect();

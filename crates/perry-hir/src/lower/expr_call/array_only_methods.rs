@@ -673,9 +673,7 @@ pub(super) fn try_array_only_methods(
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         let arg_count = args.len();
                         let mut args_iter = args.into_iter();
-                        let start = args_iter
-                            .next()
-                            .unwrap_or(Expr::Number(0.0));
+                        let start = args_iter.next().unwrap_or(Expr::Number(0.0));
                         let delete_count = match args_iter.next() {
                             Some(dc) => dc,
                             // 1 arg: delete through end; 0 args: delete nothing.

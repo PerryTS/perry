@@ -134,11 +134,7 @@ pub(crate) fn lower_array_method(
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, &recv_box);
                 // #2796: validate comparator (function | undefined) before sorting.
-                let cb_handle = blk.call(
-                    I64,
-                    "js_validate_array_comparator",
-                    &[(DOUBLE, &cb_box)],
-                );
+                let cb_handle = blk.call(I64, "js_validate_array_comparator", &[(DOUBLE, &cb_box)]);
                 blk.call(
                     I64,
                     "js_array_sort_with_comparator",

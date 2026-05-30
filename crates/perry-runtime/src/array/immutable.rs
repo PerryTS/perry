@@ -138,11 +138,7 @@ pub extern "C" fn js_array_to_spliced(
 
         // Normalize start index (ECMA ToIntegerOrInfinity). NaN -> 0,
         // +Infinity -> len, -Infinity -> 0. Avoid `f as isize` on non-finite.
-        let start_int = if start.is_nan() {
-            0.0
-        } else {
-            start
-        };
+        let start_int = if start.is_nan() { 0.0 } else { start };
         let mut s: isize = if !start_int.is_finite() {
             if start_int > 0.0 {
                 len
@@ -241,11 +237,7 @@ pub extern "C" fn js_array_with(
         if !rel.is_finite() {
             throw_invalid_index(index);
         }
-        let resolved = if rel < 0.0 {
-            rel + len as f64
-        } else {
-            rel
-        };
+        let resolved = if rel < 0.0 { rel + len as f64 } else { rel };
         if resolved < 0.0 || resolved >= len as f64 {
             throw_invalid_index(index);
         }

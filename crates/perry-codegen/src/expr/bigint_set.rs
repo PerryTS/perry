@@ -134,11 +134,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // #2796: validate the comparator (function | undefined) before
             // sorting — throws TypeError for any other value, returns 0
             // (default sort) for undefined.
-            let cmp_handle = blk.call(
-                I64,
-                "js_validate_array_comparator",
-                &[(DOUBLE, &cmp_box)],
-            );
+            let cmp_handle = blk.call(I64, "js_validate_array_comparator", &[(DOUBLE, &cmp_box)]);
             let result = blk.call(
                 I64,
                 "js_array_sort_with_comparator",

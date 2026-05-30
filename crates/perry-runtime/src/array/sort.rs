@@ -107,7 +107,8 @@ fn throw_invalid_comparator(cmp_boxed: f64) -> ! {
         } else {
             unsafe {
                 let header = &*(sp as *const crate::string::StringHeader);
-                let bytes_ptr = (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let bytes_ptr =
+                    (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
                 let slice = std::slice::from_raw_parts(bytes_ptr, header.byte_len as usize);
                 std::str::from_utf8(slice).unwrap_or("").to_string()
             }

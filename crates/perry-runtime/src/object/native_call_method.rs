@@ -1370,11 +1370,8 @@ pub unsafe extern "C" fn js_native_call_method(
                         if args_len == 0 || args_ptr.is_null() {
                             return crate::array::js_array_length(arr) as f64;
                         }
-                        let result = crate::array::js_array_unshift_variadic(
-                            arr,
-                            args_ptr,
-                            args_len as u32,
-                        );
+                        let result =
+                            crate::array::js_array_unshift_variadic(arr, args_ptr, args_len as u32);
                         return crate::array::js_array_length(result) as f64;
                     }
                     // Issue #515 followup: defensive `with` arm for arrays that
