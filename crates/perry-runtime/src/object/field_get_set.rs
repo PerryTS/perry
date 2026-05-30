@@ -1629,6 +1629,9 @@ pub extern "C" fn js_object_get_field_by_name(
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
+                if key_bytes == b"byteOffset" {
+                    return JSValue::number(crate::buffer::buffer_byte_offset(obj as usize) as f64);
+                }
                 if key_bytes == b"constructor" {
                     if crate::buffer::is_uint8array_buffer(obj as usize) {
                         let ctor =
@@ -1654,11 +1657,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                 }
                 if key_bytes == b"buffer" {
-                    // Issue #1225: a copied Buffer aliases its source's
-                    // ArrayBuffer identity so `Buffer.from(src).buffer ===
-                    // src.buffer` matches Node's pool-slab sharing.  Fresh
-                    // buffers without an entry fall back to their own pointer.
-                    let alias = crate::buffer::resolve_buffer_ab_alias(obj as usize);
+                    let alias = crate::buffer::buffer_backing_array_buffer(obj as usize);
+                    return JSValue::from_bits(
+                        crate::value::js_nanbox_pointer(alias as i64).to_bits(),
+                    );
+                }
+                if key_bytes == b"parent" {
+                    if crate::buffer::is_any_array_buffer(obj as usize)
+                        || crate::buffer::is_data_view(obj as usize)
+                        || crate::buffer::is_uint8array_buffer(obj as usize)
+                    {
+                        return JSValue::undefined();
+                    }
+                    let alias = crate::buffer::buffer_backing_array_buffer(obj as usize);
                     return JSValue::from_bits(
                         crate::value::js_nanbox_pointer(alias as i64).to_bits(),
                     );

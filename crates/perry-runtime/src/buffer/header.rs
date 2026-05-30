@@ -290,12 +290,56 @@ pub fn buffer_ab_alias(buf: usize) -> Option<usize> {
     BUFFER_AB_ALIAS.with(|m| m.borrow().get(&buf).copied())
 }
 
+/// Return the visible byte offset for a Buffer/Uint8Array view.
+pub fn buffer_byte_offset(buf: usize) -> u32 {
+    super::view::lookup(buf).map(|v| v.offset).unwrap_or(0)
+}
+
+/// Return a stable ArrayBuffer object for a Buffer-like value's `.buffer`.
+///
+/// Perry stores Buffer bytes inline in `BufferHeader`; Node exposes a separate
+/// backing ArrayBuffer object. Allocate that backing lazily, seed it with the
+/// current bytes, mark it as ArrayBuffer, and cache it so repeated `.buffer`
+/// and legacy `.parent` reads preserve identity.
+pub fn buffer_backing_array_buffer(buf: usize) -> usize {
+    if is_any_array_buffer(buf) {
+        return buf;
+    }
+    if let Some(alias) = buffer_ab_alias(buf) {
+        return alias;
+    }
+    if !is_registered_buffer(buf) {
+        return buf;
+    }
+
+    let src = buf as *const BufferHeader;
+    let len = unsafe { (*src).length };
+    let backing = buffer_alloc(len);
+    if backing.is_null() {
+        return buf;
+    }
+    unsafe {
+        (*backing).length = len;
+        if len > 0 {
+            std::ptr::copy_nonoverlapping(buffer_data(src), buffer_data_mut(backing), len as usize);
+        }
+    }
+    let alias = backing as usize;
+    mark_as_array_buffer(alias);
+    set_buffer_ab_alias(buf, alias);
+    alias
+}
+
 /// Collapse an alias chain to its root: if `buf` already aliases something,
 /// return that; otherwise return `buf` itself.  Callers use this to seed the
 /// alias on a fresh copy so chained `Buffer.from(Buffer.from(src))` keeps
 /// `===` identity with the original source.
 pub fn resolve_buffer_ab_alias(buf: usize) -> usize {
-    buffer_ab_alias(buf).unwrap_or(buf)
+    if is_any_array_buffer(buf) {
+        buf
+    } else {
+        buffer_backing_array_buffer(buf)
+    }
 }
 
 /// Allocate a buffer with the given capacity

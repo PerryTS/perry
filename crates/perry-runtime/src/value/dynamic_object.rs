@@ -259,18 +259,20 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
                 return (*buf).length as f64;
             }
             "byteOffset" => {
-                return 0.0;
+                return crate::buffer::buffer_byte_offset(ptr as usize) as f64;
             }
             "buffer" => {
-                // Issue #1225: return the ArrayBuffer-identity alias when the
-                // buffer is a copy (so `src.buffer === Buffer.from(src).buffer`);
-                // otherwise return the buffer itself, matching the
-                // pre-aliasing behavior where Perry didn't separate
-                // ArrayBuffer from BufferHeader.
-                let alias = crate::buffer::resolve_buffer_ab_alias(ptr as usize);
-                if alias == ptr as usize {
-                    return obj_value;
+                let alias = crate::buffer::buffer_backing_array_buffer(ptr as usize);
+                return f64::from_bits(crate::value::js_nanbox_pointer(alias as i64).to_bits());
+            }
+            "parent" => {
+                if crate::buffer::is_any_array_buffer(ptr as usize)
+                    || crate::buffer::is_data_view(ptr as usize)
+                    || crate::buffer::is_uint8array_buffer(ptr as usize)
+                {
+                    return f64::from_bits(TAG_UNDEFINED);
                 }
+                let alias = crate::buffer::buffer_backing_array_buffer(ptr as usize);
                 return f64::from_bits(crate::value::js_nanbox_pointer(alias as i64).to_bits());
             }
             _ => {

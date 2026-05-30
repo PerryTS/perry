@@ -1532,9 +1532,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                     Expr::PropertyGet { object, property }
-                        if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "File" =>
+                        if matches!(object.as_ref(), Expr::GlobalGet(_))
+                            && matches!(property.as_str(), "Blob" | "File") =>
                     {
-                        ctx.register_let_class_alias(name.clone(), "File".to_string());
+                        ctx.register_let_class_alias(name.clone(), property.clone());
+                        ctx.uses_fetch = true;
+                    }
+                    Expr::PropertyGet { object, property }
+                        if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "buffer")
+                            && matches!(property.as_str(), "Blob" | "File") =>
+                    {
+                        ctx.register_let_class_alias(name.clone(), property.clone());
                         ctx.uses_fetch = true;
                     }
                     // Issue #838: `var p = <ClassName>.prototype` records
