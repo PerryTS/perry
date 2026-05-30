@@ -897,6 +897,11 @@ fn install_proto_method(
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
+    // #3143: record this method's spec `.length` per closure instance — all
+    // noop-backed methods share one func_ptr, so the func-ptr arity registry
+    // can't distinguish `map` (1) from `slice` (2). Read back by the `.length`
+    // value-accessor and `getOwnPropertyDescriptor`.
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
@@ -909,6 +914,22 @@ fn install_proto_method(
         proto_obj as usize,
         method_name.to_string(),
         super::PropertyAttrs::new(true, false, true),
+    );
+    // #3143: the method's own `.name` / `.length` data properties are
+    // `{ writable: false, enumerable: false, configurable: true }` per spec.
+    // Register those on the closure itself so `getOwnPropertyDescriptor(
+    // Array.prototype.map, "name")` reports `writable: false` (it previously
+    // read the dynamic-prop slot and defaulted to writable). Reflection-only —
+    // no hot-path gate flip.
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
     );
 }
 
