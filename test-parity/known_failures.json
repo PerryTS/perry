@@ -224,12 +224,6 @@
     "category": "bug-open",
     "reason": "node:stream: compose() \u2014 error in middle transform does not propagate to composite 'error' event. Flips to PASS when #1531 lands."
   },
-  "node-suite/stream/web/transform-cancel-propagates": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TransformStream readable.cancel() does not propagate to writable \u2014 writes still succeed after cancel. Flips to PASS when #1545 lands."
-  },
   "node-suite/stream/compose/async-handler-promise": {
     "issue": "1531",
     "added": "2026-05-24",
@@ -283,12 +277,6 @@
     "added": "2026-05-24",
     "category": "bug-open",
     "reason": "node:stream/web: pipeThrough().pipeThrough() chain \u2014 second transform output wrong. Flips to PASS when #1545 lands."
-  },
-  "node-suite/stream/web/transform-readable-cancel-propagates": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: TS readable.cancel \u2014 writable.write does not reject after. Flips to PASS when #1545 lands."
   },
   "node-suite/stream/web/writer-write-resolves-after-sink": {
     "issue": "1545",

@@ -798,6 +798,9 @@ unsafe fn js_readable_stream_cancel_inner(
         reject_type_error(promise, "ReadableStream is locked");
         return promise;
     }
+    if let Some(writable_id) = transform_writable_for_readable(id) {
+        let _ = js_writable_stream_abort(writable_id as f64, reason);
+    }
     if cb != 0 {
         js_closure_call1(cb as *const ClosureHeader, reason);
     }
@@ -1936,12 +1939,35 @@ lazy_static::lazy_static! {
     static ref TRANSFORM_PAIRS: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
 }
 
+fn transform_writable_for_readable(readable_id: usize) -> Option<usize> {
+    TRANSFORM_STREAMS
+        .lock()
+        .unwrap()
+        .values()
+        .find_map(|t| (t.readable_handle == readable_id).then_some(t.writable_handle))
+}
+
 /// Replacement `writer.write` for the writable side of a TransformStream
 /// — invokes the user transform with (chunk, transformController) where
 /// the transformController is the readable-side stream handle (so
 /// `controller.enqueue(...)` reuses the readable controller path).
 unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     let promise = js_promise_new();
+    {
+        let g = WRITABLE_STREAMS.lock().unwrap();
+        match g.get(&writable_id) {
+            Some(s) if s.state == WritableState::Writable => {}
+            Some(s) if s.state == WritableState::Errored => {
+                js_promise_reject(promise, f64::from_bits(s.error_value));
+                return promise;
+            }
+            _ => {
+                let err = make_error_with_message("Stream is closed or closing");
+                js_promise_reject(promise, f64::from_bits(err));
+                return promise;
+            }
+        }
+    }
     let (transform_cb, readable_id) = {
         let pairs = TRANSFORM_PAIRS.lock().unwrap();
         match pairs.get(&writable_id) {
