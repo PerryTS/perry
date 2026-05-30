@@ -1755,12 +1755,29 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_headers_values", DOUBLE, &[DOUBLE]);
     module.declare_function("js_headers_entries", DOUBLE, &[DOUBLE]);
 
-    // new Request(url_ptr, method_ptr, body_ptr, headers_handle_f64) -> f64
-    module.declare_function("js_request_new", DOUBLE, &[I64, I64, I64, DOUBLE]);
+    // new Request(url_ptr, method_ptr, body_ptr, headers_handle_f64, metadata...) -> f64
+    module.declare_function(
+        "js_request_new",
+        DOUBLE,
+        &[
+            I64, I64, I64, DOUBLE, I64, I64, I64, I64, I64, I64, I64, DOUBLE, I64, DOUBLE,
+        ],
+    );
     module.declare_function("js_request_get_url", I64, &[DOUBLE]);
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
     module.declare_function("js_request_body_used", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_request_get_destination", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_referrer", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_referrer_policy", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_mode", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_credentials", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_cache", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_redirect", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_integrity", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_keepalive", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_request_get_duplex", I64, &[DOUBLE]);
+    module.declare_function("js_request_get_signal", DOUBLE, &[DOUBLE]);
     // #1649: `req.headers` → NaN-boxed Headers handle.
     module.declare_function("js_request_get_headers", DOUBLE, &[DOUBLE]);
     // #1688: request body-consuming methods. text/json/arrayBuffer return a
@@ -1768,6 +1785,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_request_text", I64, &[DOUBLE]);
     module.declare_function("js_request_json", I64, &[DOUBLE]);
     module.declare_function("js_request_array_buffer", I64, &[DOUBLE]);
+    module.declare_function("js_request_blob", I64, &[DOUBLE]);
+    module.declare_function("js_request_bytes", I64, &[DOUBLE]);
+    module.declare_function("js_request_form_data", I64, &[DOUBLE]);
     module.declare_function("js_request_clone", DOUBLE, &[DOUBLE]);
 
     // Response body getters — handles flow as NaN-boxed POINTER_TAG f64
@@ -1776,6 +1796,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fetch_response_status", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fetch_response_status_text", I64, &[DOUBLE]);
     module.declare_function("js_fetch_response_ok", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fetch_response_type", I64, &[DOUBLE]);
+    module.declare_function("js_fetch_response_url", I64, &[DOUBLE]);
+    module.declare_function("js_fetch_response_redirected", DOUBLE, &[DOUBLE]);
     module.declare_function("js_response_body_used", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fetch_response_text", I64, &[DOUBLE]);
     module.declare_function("js_fetch_response_json", I64, &[DOUBLE]);
@@ -1785,6 +1808,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_response_clone", DOUBLE, &[DOUBLE]);
     module.declare_function("js_response_array_buffer", I64, &[DOUBLE]);
     module.declare_function("js_response_blob", I64, &[DOUBLE]);
+    module.declare_function("js_response_bytes", I64, &[DOUBLE]);
+    module.declare_function("js_response_form_data", I64, &[DOUBLE]);
+    module.declare_function("js_form_data_get", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_form_data_get_all", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_form_data_entries", DOUBLE, &[DOUBLE]);
     // Blob instance methods (issue #234) — handle is f64 (registry id).
     // arrayBuffer/bytes/text return a Promise pointer (i64); slice returns a
     // new blob handle as f64.
@@ -1809,6 +1837,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, I64, DOUBLE],
     );
     module.declare_function("js_response_static_redirect", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_response_static_error", DOUBLE, &[]);
 
     // ──────────────────────────────────────────────────────────────────
     // Web Streams API (issue #237) — perry-stdlib/src/streams.rs +

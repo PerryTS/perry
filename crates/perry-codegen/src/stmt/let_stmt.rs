@@ -30,6 +30,13 @@ pub(crate) fn lower_let(
     // class-alias chain resolution below (and any other site
     // that needs id → name) can use it.
     ctx.local_id_to_name.insert(id, name.to_string());
+    if !mutable {
+        if let Some(init_expr) = init {
+            if let Some(props) = crate::lower_call::extract_options_fields(ctx, init_expr) {
+                ctx.option_object_locals.insert(id, props);
+            }
+        }
+    }
     if let Some(init_expr) = init {
         if let Some(source_id) = native_i32_alias_source(init_expr) {
             ctx.native_i32_aliases.insert(id, source_id);

@@ -74,6 +74,7 @@ pub(in crate::lower_call) fn build_headers_from_object(
 pub(crate) fn extract_options_fields(ctx: &FnCtx<'_>, e: &Expr) -> Option<Vec<(String, Expr)>> {
     match e {
         Expr::Object(props) => Some(props.clone()),
+        Expr::LocalGet(id) => ctx.option_object_locals.get(id).cloned(),
         Expr::New {
             class_name, args, ..
         } if class_name.starts_with("__AnonShape_") => {

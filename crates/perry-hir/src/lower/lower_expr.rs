@@ -299,6 +299,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "btoa"
                     && name != "BigInt"
                     && name != "WebAssembly"
+                    && !is_builtin_global_value_name(&name)
                 {
                     eprintln!(
                         "  Warning: unknown identifier '{}' — assuming global; member access will dispatch by name at runtime, bare reads lower to 0",
@@ -765,7 +766,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 Some(("Request", "Request")) | Some(("fetch", "Response"))
                             ) && matches!(
                                 prop_name,
-                                "json" | "text" | "arrayBuffer" | "blob" | "formData" | "clone"
+                                "json"
+                                    | "text"
+                                    | "arrayBuffer"
+                                    | "blob"
+                                    | "bytes"
+                                    | "formData"
+                                    | "clone"
                             ) {
                                 return Ok(Expr::String("function".to_string()));
                             }
