@@ -676,7 +676,11 @@ pub fn try_lower_native_method_str_dispatch(
         // (returning `undefined`) and threw `value is not a function`.
         let is_well_known_proto_method = matches!(
             property.as_str(),
-            "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" | "toLocaleString"
+            "hasOwnProperty"
+                | "propertyIsEnumerable"
+                | "isPrototypeOf"
+                | "toLocaleString"
+                | "valueOf"
         );
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))

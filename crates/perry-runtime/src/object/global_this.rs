@@ -422,6 +422,20 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     )
 }
 
+extern "C" fn object_prototype_value_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_value_of(this_value) }
+}
+
+extern "C" fn object_prototype_to_locale_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_to_locale_string(this_value) }
+}
+
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
@@ -994,14 +1008,21 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 object_prototype_is_prototype_of_thunk as *const u8,
                 1,
             );
+            install_proto_method(
+                proto_obj,
+                "toLocaleString",
+                object_prototype_to_locale_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                object_prototype_value_of_thunk as *const u8,
+                0,
+            );
             install_noop_proto_methods(
                 proto_obj,
-                &[
-                    ("hasOwnProperty", 1),
-                    ("propertyIsEnumerable", 1),
-                    ("toLocaleString", 0),
-                    ("valueOf", 0),
-                ],
+                &[("hasOwnProperty", 1), ("propertyIsEnumerable", 1)],
             );
         }
         "Function" => {
