@@ -107,6 +107,19 @@ pub extern "C" fn js_crypto_random_uuid() -> *mut StringHeader {
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
+/// Generate an RFC 9562 version 7 UUID — a 48-bit millisecond Unix
+/// timestamp in the most-significant bits followed by cryptographically
+/// secure randomness, with the version (`7`) and variant (`10`) bits set
+/// per spec. `crypto.randomUUIDv7([options])` -> string (#2550). The
+/// optional `options` object (Node's `{ disableEntropyCache }`) is
+/// accepted for shape parity but does not change the generated value.
+#[no_mangle]
+pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
+    let uuid = uuid::Uuid::now_v7();
+    let uuid_str = uuid.to_string();
+    js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
+}
+
 /// Issue #2013 — validate one of `randomInt`'s integer arguments
 /// (min/max). Non-number → ERR_INVALID_ARG_TYPE; non-finite /
 /// fractional / out-of-(-2^48, 2^48) → ERR_OUT_OF_RANGE. Mirrors
@@ -207,6 +220,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
         "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid()).bits()),
+        "randomUUIDv7" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuidv7()).bits()),
         "randomBytes" => {
             let buf = js_crypto_random_bytes_buffer(arg(0));
             f64::from_bits(JSValue::pointer(buf as *const u8).bits())
@@ -602,5 +616,48 @@ mod tests {
         assert!(catch_runtime_throw(|| {
             let _ = js_crypto_random_fill_sync(target, undefined(), undefined());
         }));
+    }
+
+    /// #2550 — `crypto.randomUUIDv7()` must emit an RFC 9562 v7 UUID:
+    /// canonical 36-char dashed form, version nibble `7`, variant nibble
+    /// in `{8,9,a,b}`, a non-zero timestamp prefix, and fresh randomness
+    /// on every call.
+    fn read_uuid_string(ptr: *mut StringHeader) -> String {
+        unsafe {
+            let blen = (*ptr).byte_len as usize;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            let bytes = std::slice::from_raw_parts(data, blen);
+            std::str::from_utf8(bytes).unwrap().to_string()
+        }
+    }
+
+    #[test]
+    fn random_uuidv7_has_version_and_variant_bits() {
+        let s = read_uuid_string(js_crypto_random_uuidv7());
+        assert_eq!(s.len(), 36, "v7 UUID is 36 chars, got {:?}", s);
+        let b = s.as_bytes();
+        assert_eq!(b[8], b'-');
+        assert_eq!(b[13], b'-');
+        assert_eq!(b[18], b'-');
+        assert_eq!(b[23], b'-');
+        // version nibble (index 14) must be '7'
+        assert_eq!(b[14] as char, '7', "version nibble in {:?}", s);
+        // variant nibble (index 19) must encode the 10xx variant
+        assert!(
+            matches!(b[19], b'8' | b'9' | b'a' | b'b'),
+            "variant nibble {:?} not in {{8,9,a,b}} for {:?}",
+            b[19] as char,
+            s
+        );
+        // The 48-bit millisecond timestamp prefix is non-zero for a
+        // current-epoch value (it would only be all-zero near 1970).
+        assert_ne!(&s[0..8], "00000000", "timestamp prefix should be set");
+    }
+
+    #[test]
+    fn random_uuidv7_is_fresh_each_call() {
+        let a = read_uuid_string(js_crypto_random_uuidv7());
+        let b = read_uuid_string(js_crypto_random_uuidv7());
+        assert_ne!(a, b, "consecutive v7 UUIDs must differ");
     }
 }

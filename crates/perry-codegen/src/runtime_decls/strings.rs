@@ -1341,6 +1341,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_bytes_async", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
+    module.declare_function("js_crypto_random_uuidv7", I64, &[]);
     // crypto.randomInt([min,] max[, cb]) -> number; codegen passes min=0 for the
     // single-arg form. Returns the integer as a plain double.
     module.declare_function("js_crypto_random_int", DOUBLE, &[DOUBLE, DOUBLE]);
