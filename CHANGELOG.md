@@ -2,6 +2,37 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1043 — fix(runtime): restore the default auto-optimize compile (keepalive anchors)
+
+The default `perry file.ts -o out` flow (auto-optimize on) was broken on `main`:
+linking failed with `Undefined symbols for architecture arm64` for
+`_js_write_barrier_root_nanbox`, `_js_write_barrier_root_heap_word`, and
+`_js_array_join_value`. Any program with module-level string variables (which
+emit barrier-root calls in `__perry_init_strings`) or an `arr.join(sep)` call
+could not compile.
+
+**Root cause.** #2345 ("Tighten GC root and barrier contracts") added the two
+`js_write_barrier_root_*` entry points and made codegen emit them, but added no
+symbol-retention anchor. `js_array_join_value` has the same exposure. These are
+`#[no_mangle]` functions called only from generated code (and, for join, an
+in-crate caller behind a dispatch path the optimizer can prove unreachable). The
+default `.a` staticlib keeps them via staticlib-export semantics, but the
+auto-optimize build round-trips the runtime through whole-program LLVM bitcode
+and is free to internalize and dead-strip an unreferenced `#[no_mangle]` symbol —
+so the auto-optimized `libperry_runtime.a` dropped all three, breaking the link.
+PR CI did not catch this because `compile-smoke` is gated to tag pushes only
+(v0.5.1018), not PRs.
+
+**Fix.** Add `#[used]` keepalive anchors for the three symbols — `KEEP_*` statics
+holding their function pointers — mirroring the established pattern in
+`node_stream_keepalive.rs` / `typedarray.rs`. The anchors pin retained reference
+edges so the symbols survive every link mode (default staticlib + auto-optimize
+bitcode). Verified by clearing the `perry-auto-*` cache and compiling/running
+representative programs (module strings, classes, async/await, `arr.join`,
+objects, `Map`/`Set`, `JSON.stringify`, `reduce`) with auto-optimize on — all
+link and produce correct output, and the three symbols are present in the
+rebuilt auto-optimized runtime lib.
+
 ## v0.5.1042 — validate AsyncLocalStorage run/exit callbacks (#3092)
 
 `AsyncLocalStorage#run(store, callback, ...)` and `#exit(callback, ...)` lowered
