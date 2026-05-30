@@ -1,69 +1,108 @@
-#[no_mangle]
-pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
-    unsafe {
-        let s_ptr = crate::value::js_jsvalue_to_string(value);
-        let input = if s_ptr.is_null() {
-            String::new()
-        } else {
-            let len = (*s_ptr).byte_len as usize;
-            let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            std::str::from_utf8(bytes).unwrap_or("").to_string()
-        };
-        let mut out = String::with_capacity(input.len());
-        let bytes = input.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == 0x1b {
-                let start = i;
+fn throw_invalid_str_arg(value: f64) -> ! {
+    let message = format!(
+        "The \"str\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn is_utf8_c1(bytes: &[u8], i: usize, code: u8) -> bool {
+    i + 1 < bytes.len() && bytes[i] == 0xc2 && bytes[i + 1] == code
+}
+
+fn skip_csi(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() {
+        let b = bytes[i];
+        i += 1;
+        if (0x40..=0x7e).contains(&b) {
+            break;
+        }
+    }
+    i
+}
+
+fn skip_string_control(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() {
+        if bytes[i] == 0x07 {
+            return i + 1;
+        }
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+            return i + 2;
+        }
+        if is_utf8_c1(bytes, i, 0x9c) {
+            return i + 2;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn strip_vt_control_sequences(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            if i + 1 >= bytes.len() {
+                out.push('\x1b');
                 i += 1;
-                if i < bytes.len() && bytes[i] == b'[' {
-                    i += 1;
-                    while i < bytes.len() {
-                        let b = bytes[i];
-                        i += 1;
-                        if (0x40..=0x7e).contains(&b) {
-                            break;
-                        }
-                    }
-                    continue;
-                } else if i < bytes.len() && bytes[i] == b']' {
-                    i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
+                continue;
+            }
+
+            match bytes[i + 1] {
+                b'[' => {
+                    i = skip_csi(bytes, i + 2);
                     continue;
                 }
-                out.push_str(&input[start..i]);
-            } else {
-                // Preserve multi-byte UTF-8 sequences by advancing through
-                // the whole code point instead of casting one byte to char.
-                let lead = bytes[i];
-                let width = if lead < 0x80 {
-                    1
-                } else if lead < 0xc0 {
-                    1
-                } else if lead < 0xe0 {
-                    2
-                } else if lead < 0xf0 {
-                    3
-                } else {
-                    4
-                };
-                let end = (i + width).min(bytes.len());
-                out.push_str(std::str::from_utf8(&bytes[i..end]).unwrap_or(""));
-                i = end;
+                b']' | b'P' | b'^' | b'_' => {
+                    i = skip_string_control(bytes, i + 2);
+                    continue;
+                }
+                b'(' | b')' | b'*' | b'+' | b'-' | b'.' | b'/' | b'#' | b'%' => {
+                    i = (i + 3).min(bytes.len());
+                    continue;
+                }
+                0x30..=0x7e => {
+                    i += 2;
+                    continue;
+                }
+                _ => {
+                    out.push('\x1b');
+                    i += 1;
+                    continue;
+                }
             }
         }
-        let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
-        f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+
+        if is_utf8_c1(bytes, i, 0x9b) {
+            i = skip_csi(bytes, i + 2);
+            continue;
+        }
+        if is_utf8_c1(bytes, i, 0x9d)
+            || is_utf8_c1(bytes, i, 0x90)
+            || is_utf8_c1(bytes, i, 0x9e)
+            || is_utf8_c1(bytes, i, 0x9f)
+        {
+            i = skip_string_control(bytes, i + 2);
+            continue;
+        }
+
+        let ch = input[i..].chars().next().unwrap_or_default();
+        out.push(ch);
+        i += ch.len_utf8();
     }
+    out
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_strip_vt_control_characters(value: f64) -> f64 {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if !js_value.is_any_string() {
+        throw_invalid_str_arg(value);
+    }
+
+    let input = crate::url::get_string_content(value);
+    let out = strip_vt_control_sequences(&input);
+    let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
 }
