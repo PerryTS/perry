@@ -125,6 +125,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
+                // `Promise` — runtime detects via GC_TYPE_PROMISE because
+                // Promise values are raw promise allocations, not ObjectHeader
+                // instances with a class_id field.
+                "Promise" => 0xFFFF0027u32,
                 // #1545: Web Streams. Handles are numeric ids; the runtime
                 // resolves these via the stdlib stream-kind probe rather than
                 // the class chain (`ts.readable instanceof ReadableStream`,

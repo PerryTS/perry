@@ -981,6 +981,13 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::util_syserr::js_util_get_system_error_message(arg(0))
         }
         ("util", "getSystemErrorMap") => crate::util_syserr::js_util_get_system_error_map(),
+        ("util", "aborted") => crate::util_abort::js_util_aborted(arg(0), arg(1)),
+        ("util", "transferableAbortController") => {
+            crate::util_abort::js_util_transferable_abort_controller()
+        }
+        ("util", "transferableAbortSignal") => {
+            crate::util_abort::js_util_transferable_abort_signal(arg(0))
+        }
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
         ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),

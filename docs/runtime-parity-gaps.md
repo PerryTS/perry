@@ -659,7 +659,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:util
 
-**Gap APIs: 97** · Already covered: 8
+**Gap APIs: 94** · Already covered: 8
 
 #### Missing from Perry
 
@@ -674,9 +674,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `util.stripVTControlCharacters(str)`
 - `util.styleText(format, text[, options])`
 - `util.toUSVString(string)`
-- `util.transferableAbortController()`
-- `util.transferableAbortSignal(signal)`
-- `util.aborted(signal, resource)`
 - `util.convertProcessSignalToExitCode(signal)`
 - `util.diff(actual, expected)`
 - `util.setTraceSigInt(enable)`
