@@ -16,6 +16,20 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {
+        // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+        let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
+        if obj_jv.is_null() || obj_jv.is_undefined() {
+            super::has_own_helpers::throw_to_object_nullish_type_error();
+        }
+
+        // #2818: string primitives box to String objects whose own
+        // properties are the index keys "0".."len-1" (writable:false,
+        // enumerable:true, configurable:false) plus "length"
+        // (writable:false, enumerable:false, configurable:false).
+        if obj_jv.is_any_string() {
+            return string_primitive_descriptor(obj_value, key_value);
+        }
+
         if let Some(class_id) = class_ref_id(obj_value) {
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
@@ -245,11 +259,85 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
     }
 }
 
+/// Build a `{ value, writable, enumerable, configurable }` data descriptor
+/// object. Shared by the string-primitive descriptor path (#2818).
+unsafe fn build_data_descriptor(
+    value: f64,
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let bf = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
+    let packed = b"value\0writable\0enumerable\0configurable";
+    let desc = js_object_alloc_with_shape(0x0D_E5_C0, 4, packed.as_ptr(), packed.len() as u32);
+    let header_size = std::mem::size_of::<ObjectHeader>();
+    let fields = (desc as *mut u8).add(header_size) as *mut f64;
+    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
+    *fields = value;
+    *fields.add(1) = bf(writable);
+    *fields.add(2) = bf(enumerable);
+    *fields.add(3) = bf(configurable);
+    super::rebuild_object_field_layout(desc, 4);
+    f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
+}
+
+/// #2818: own-property descriptor for a string primitive receiver. Index keys
+/// in range yield the single-char value descriptor (writable:false,
+/// enumerable:true, configurable:false); "length" yields the length value
+/// descriptor (writable:false, enumerable:false, configurable:false). Any
+/// other key is absent → undefined.
+unsafe fn string_primitive_descriptor(str_value: f64, key_value: f64) -> f64 {
+    let key_str = crate::builtins::js_string_coerce(key_value);
+    if key_str.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key_str).byte_len as usize;
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        Ok(s) => s,
+        Err(_) => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (sptr, sblen) = match crate::string::str_bytes_from_jsvalue(str_value, &mut scratch) {
+        Some((p, b)) if !p.is_null() => (p, b),
+        _ => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    let utf16_len = crate::string::compute_utf16_len(sptr, sblen);
+
+    if name == "length" {
+        return build_data_descriptor(utf16_len as f64, false, false, false);
+    }
+
+    if let Some(index) = super::canonical_array_index(name) {
+        if index < utf16_len {
+            // Materialize the single UTF-16 unit at `index` as a 1-char string.
+            let bytes = std::slice::from_raw_parts(sptr, sblen as usize);
+            let s = std::str::from_utf8(bytes).unwrap_or("");
+            if let Some(ch) = s.chars().nth(index as usize) {
+                let mut buf = [0u8; 4];
+                let cs = ch.encode_utf8(&mut buf);
+                let cstr = crate::string::js_string_from_bytes(cs.as_ptr(), cs.len() as u32);
+                let char_val = f64::from_bits(JSValue::string_ptr(cstr).bits());
+                return build_data_descriptor(char_val, false, true, false);
+            }
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// Object.getOwnPropertyNames(obj) — returns all own property names (including non-enumerable).
 /// Takes a NaN-boxed f64 object pointer, returns a NaN-boxed f64 array pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
     unsafe {
+        // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+        let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
+        if obj_jv.is_null() || obj_jv.is_undefined() {
+            super::has_own_helpers::throw_to_object_nullish_type_error();
+        }
         if let Some(class_id) = class_ref_id(obj_value) {
             let mut names: Vec<String> = vec!["constructor".to_string()];
             if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {

@@ -1136,6 +1136,8 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::Uint8ArrayNew(Some(operand))
         | Expr::Uint8ArrayLength(operand)
         | Expr::JsonParse(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::MathSqrt(operand)
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)

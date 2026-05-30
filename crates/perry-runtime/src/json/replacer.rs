@@ -497,6 +497,13 @@ pub(crate) unsafe fn stringify_value_pretty(
             stringify_buffer_pretty(ptr, buf, indent, depth);
             return;
         }
+        // #2900: raw-JSON wrapper — emit stored text verbatim (pretty-print
+        // output never indents a scalar, so no indentation is applied here
+        // either).
+        if let Some(raw) = super::raw_json_text_bytes(ptr) {
+            buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
+            return;
+        }
         if matches!(
             gc_obj_type(ptr),
             crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_ERROR
