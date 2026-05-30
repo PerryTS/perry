@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1831 entries across 89 modules.
+Total: 1883 entries across 91 modules.
 
 ## Modules
 
@@ -27,6 +27,8 @@ Total: 1831 entries across 89 modules.
 - [`date-fns`](#date-fns)
 - [`dayjs`](#dayjs)
 - [`decimal.js`](#decimal-js)
+- [`dns`](#dns)
+- [`dns/promises`](#dns-promises)
 - [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
@@ -745,6 +747,68 @@ Total: 1831 entries across 89 modules.
 - `toNumber` — instance
 - `toString` — instance
 - `valueOf` — instance
+
+## `dns`
+
+### Properties
+
+- `ADDRCONFIG`
+- `ADDRGETNETWORKPARAMS`
+- `ALL`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADNAME`
+- `BADQUERY`
+- `BADRESP`
+- `BADSTR`
+- `CANCELLED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `EOF`
+- `FILE`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NOMEM`
+- `NONAME`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `SERVFAIL`
+- `TIMEOUT`
+- `V4MAPPED`
+- `promises`
+
+## `dns/promises`
+
+### Properties
+
+- `ADDRGETNETWORKPARAMS`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADNAME`
+- `BADQUERY`
+- `BADRESP`
+- `BADSTR`
+- `CANCELLED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `EOF`
+- `FILE`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NOMEM`
+- `NONAME`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `SERVFAIL`
+- `TIMEOUT`
 
 ## `dotenv`
 
