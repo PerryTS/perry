@@ -1540,9 +1540,21 @@ pub(super) fn collection_iterable_chunks(raw: usize) -> Option<f64> {
     None
 }
 
-pub(super) fn normalize_readable_from_input(iterable: f64) -> f64 {
+pub(super) struct NormalizedReadableInput {
+    pub chunks: f64,
+    pub source_iterator: Option<f64>,
+}
+
+fn normalized_readable_chunks(chunks: f64) -> NormalizedReadableInput {
+    NormalizedReadableInput {
+        chunks,
+        source_iterator: None,
+    }
+}
+
+pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadableInput {
     if let Some(chunks) = readable_hidden_chunks(iterable) {
-        return chunks;
+        return normalized_readable_chunks(chunks);
     }
     let raw = raw_ptr_from_value(iterable);
     if raw >= 0x10000
@@ -1550,43 +1562,53 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> f64 {
         && crate::buffer::is_uint8array_buffer(raw)
         && !crate::buffer::is_array_buffer(raw)
     {
-        return uint8array_byte_chunks(raw);
+        return normalized_readable_chunks(uint8array_byte_chunks(raw));
     }
     if let Some(chunks) = typed_uint8array_byte_chunks(raw) {
-        return chunks;
+        return normalized_readable_chunks(chunks);
     }
     if let Some(chunks) = collection_iterable_chunks(raw) {
-        return chunks;
+        return normalized_readable_chunks(chunks);
     }
     if is_array_like_value(iterable) {
-        return iterable;
+        return normalized_readable_chunks(iterable);
     }
     if is_single_chunk_value(iterable) {
         let arr = crate::array::js_array_alloc(1);
         let arr = crate::array::js_array_push_f64(arr, iterable);
-        return box_pointer(arr as *const u8);
+        return normalized_readable_chunks(box_pointer(arr as *const u8));
     }
-    if let Some(chunks) = flatten_async_iterable_value(iterable) {
-        return box_pointer(chunks as *const u8);
+    if let Some((chunks, source_iterator)) = flatten_async_iterable_with_source(iterable) {
+        return NormalizedReadableInput {
+            chunks: box_pointer(chunks as *const u8),
+            source_iterator,
+        };
     }
-    if let Some(chunks) = flatten_sync_iterable_value(iterable) {
-        return box_pointer(chunks as *const u8);
+    if let Some((chunks, source_iterator)) = flatten_sync_iterable_value(iterable) {
+        return NormalizedReadableInput {
+            chunks: box_pointer(chunks as *const u8),
+            source_iterator,
+        };
     }
 
     let arr = crate::array::js_array_alloc(1);
-    box_pointer(arr as *const u8)
+    normalized_readable_chunks(box_pointer(arr as *const u8))
 }
 
-fn flatten_sync_iterable_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
+fn flatten_sync_iterable_value(
+    value: f64,
+) -> Option<(*mut crate::array::ArrayHeader, Option<f64>)> {
     if has_symbol_async_iterator(value) {
         return None;
     }
     if crate::object::js_util_types_is_generator_object(value).to_bits() == TAG_TRUE {
-        return crate::array::sync_iterator_to_array_if_not_async(value);
+        return crate::array::sync_iterator_to_array_if_not_async(value)
+            .map(|chunks| (chunks, Some(value)));
     }
     let iter = crate::symbol::js_get_iterator(value);
     if iter.to_bits() != value.to_bits() {
-        return crate::array::sync_iterator_to_array_if_not_async(iter);
+        return crate::array::sync_iterator_to_array_if_not_async(iter)
+            .map(|chunks| (chunks, Some(iter)));
     }
     None
 }

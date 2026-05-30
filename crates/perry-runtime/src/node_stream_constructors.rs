@@ -664,9 +664,20 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
         let trap_buf = crate::exception::js_try_push();
         let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
         if jumped == 0 {
-            let chunks = normalize_readable_from_input(iterable);
+            let normalized = normalize_readable_from_input(iterable);
             crate::exception::js_try_end();
-            js_object_set_field_by_name(raw as *mut ObjectHeader, hidden_chunks_key(), chunks);
+            js_object_set_field_by_name(
+                raw as *mut ObjectHeader,
+                hidden_chunks_key(),
+                normalized.chunks,
+            );
+            if let Some(source_iterator) = normalized.source_iterator {
+                js_object_set_field_by_name(
+                    raw as *mut ObjectHeader,
+                    hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+                    source_iterator,
+                );
+            }
         } else {
             let err = crate::exception::js_get_exception();
             crate::exception::js_clear_exception();

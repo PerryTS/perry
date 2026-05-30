@@ -308,12 +308,6 @@
     "category": "bug-open",
     "reason": "node:stream/web: cancel() during pull \u2014 read() does not resolve {done:true}. Flips to PASS when #1545 lands."
   },
-  "node-suite/stream/readable/iter-with-custom-return": {
-    "issue": "1531",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: for-await break \u2014 custom iterator.return() not invoked. Flips to PASS when #1531 lands."
-  },
   "node-suite/stream/compose/three-stages-order": {
     "issue": "1531",
     "added": "2026-05-24",

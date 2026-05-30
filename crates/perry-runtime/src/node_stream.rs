@@ -73,6 +73,7 @@ const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FEE0;
 // can't collide as method sets grow.
 const WEB_STREAM_SHAPE_ID: u32 = 0x7FFF_FF20;
 const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
+const READABLE_SOURCE_ITERATOR_KEY: &[u8] = b"__perryReadableSourceIterator";
 const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
