@@ -988,6 +988,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "transferableAbortSignal") => {
             crate::util_abort::js_util_transferable_abort_signal(arg(0))
         }
+        ("util", "getCallSites") => crate::util_call_sites::js_util_get_call_sites(arg(0), arg(1)),
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
         ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),

@@ -35,6 +35,7 @@ pub mod builtins;
 pub mod child_process;
 pub mod closure;
 pub mod collection_iter;
+pub mod collection_iter_object;
 pub mod color_parse;
 pub mod date;
 pub mod error;
@@ -144,6 +145,7 @@ mod ui_harmonyos_stubs;
 /// startup. See module docs for the ohos-napi gating story.
 pub mod ui_text_registry;
 pub mod util_abort;
+pub mod util_call_sites;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;

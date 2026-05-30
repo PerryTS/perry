@@ -1767,6 +1767,22 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            // #2856: Map/Set iterators returned from a value-level
+            // `m.entries()`/`.keys()`/`.values()` / `s.entries()` etc. carry
+            // dedicated class ids so `.next()` lands in the matching iterator
+            // dispatcher (mirroring the array iterator above).
+            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_map_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_set_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
             let keys = (*obj).keys_array;
@@ -2043,17 +2059,32 @@ pub unsafe extern "C" fn js_native_call_method(
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     "size" => crate::map::js_map_size(map) as f64,
+                    // #2856: value-level iterator methods return real iterator
+                    // OBJECTS (not arrays), dispatched via class id.
                     "entries" => f64::from_bits(
-                        JSValue::pointer(crate::map::js_map_entries(map) as *mut u8).bits(),
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_map_entries_iter_obj(map) as *mut u8,
+                        )
+                        .bits(),
                     ),
                     "keys" => f64::from_bits(
-                        JSValue::pointer(crate::map::js_map_keys(map) as *mut u8).bits(),
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_map_keys_iter_obj(map) as *mut u8
+                        )
+                        .bits(),
                     ),
                     "values" => f64::from_bits(
-                        JSValue::pointer(crate::map::js_map_values(map) as *mut u8).bits(),
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_map_values_iter_obj(map) as *mut u8,
+                        )
+                        .bits(),
                     ),
                     "forEach" if !args.is_empty() => {
-                        crate::map::js_map_foreach(map, args[0]);
+                        let this_arg = args
+                            .get(1)
+                            .copied()
+                            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                        crate::map::js_map_foreach(map, args[0], this_arg);
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -2084,6 +2115,30 @@ pub unsafe extern "C" fn js_native_call_method(
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     "size" => crate::set::js_set_size(set) as f64,
+                    // #2856: dynamic Set iterator methods previously fell
+                    // through to `undefined` (only add/has/delete/clear/size
+                    // were handled). Return real iterator objects; `entries`
+                    // yields `[v, v]` pairs.
+                    "values" | "keys" => f64::from_bits(
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_set_values_iter_obj(set) as *mut u8,
+                        )
+                        .bits(),
+                    ),
+                    "entries" => f64::from_bits(
+                        JSValue::pointer(
+                            crate::collection_iter_object::js_set_entries_iter_obj(set) as *mut u8,
+                        )
+                        .bits(),
+                    ),
+                    "forEach" if !args.is_empty() => {
+                        let this_arg = args
+                            .get(1)
+                            .copied()
+                            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                        crate::set::js_set_foreach(set, args[0], this_arg);
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    }
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
                 };
             }
@@ -2128,6 +2183,19 @@ pub unsafe extern "C" fn js_native_call_method(
             // #321: same array-iterator class-id check as the NaN-boxed path.
             if (*obj).class_id == crate::array::ARRAY_ITERATOR_CLASS_ID {
                 return crate::array::dispatch_array_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            // #2856: same Map/Set-iterator class-id checks as the NaN-boxed path.
+            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_map_iterator_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                );
+            }
+            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+                return crate::collection_iter_object::dispatch_set_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 );

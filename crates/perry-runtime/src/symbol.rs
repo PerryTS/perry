@@ -1294,6 +1294,35 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // #2856: `Map.prototype[Symbol.iterator]` aliases `entries`, and
+    // `Set.prototype[Symbol.iterator]` aliases `values`. Bind the matching
+    // method so `m[Symbol.iterator]()` returns a real iterator object (and
+    // `Symbol.iterator in m` / `typeof m[Symbol.iterator]` are correct).
+    if raw_addr >= 0x10000 {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
+                if crate::map::is_registered_map(raw_addr) {
+                    let mname = b"entries";
+                    return crate::object::js_class_method_bind(
+                        obj_f64,
+                        mname.as_ptr(),
+                        mname.len(),
+                    );
+                }
+                if crate::set::is_registered_set(raw_addr) {
+                    let mname = b"values";
+                    return crate::object::js_class_method_bind(
+                        obj_f64,
+                        mname.as_ptr(),
+                        mname.len(),
+                    );
+                }
+            }
+        }
+    }
     // #1758: a POINTER class-object whose OWN symbol props miss may inherit
     // the symbol through its class_id prototype chain. (The SYMBOL_PROPERTIES
     // lock is released above before recursing into the resolver, which takes

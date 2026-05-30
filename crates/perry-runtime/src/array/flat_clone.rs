@@ -321,7 +321,13 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             // (the runtime array-iterator class id / a stored `.next` closure).
             unsafe {
                 let iter_f64 = crate::value::js_nanbox_pointer(raw_addr as i64);
-                let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID;
+                // #2856: Map/Set iterator objects dispatch `.next()` /
+                // `[Symbol.iterator]()` via class id (no stored symbol prop or
+                // `.next` field), so detect them here so `[...m.entries()]` /
+                // `Array.from(s.values())` drive the iterator protocol.
+                let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID;
                 let is_iterable = is_array_iterator || {
                     let iter_sym = crate::symbol::well_known_symbol("iterator");
                     if iter_sym.is_null() {
