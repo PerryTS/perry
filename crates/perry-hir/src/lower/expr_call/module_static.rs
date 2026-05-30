@@ -2,7 +2,7 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
@@ -776,6 +776,8 @@ pub(super) fn try_module_static_methods(
                                 return Ok(Ok(Expr::ParseFloat(Box::new(
                                     args.into_iter().next().unwrap(),
                                 ))));
+                            } else {
+                                return Ok(Ok(Expr::ParseFloat(Box::new(Expr::Undefined))));
                             }
                         }
                         "parseInt" => {
@@ -784,9 +786,7 @@ pub(super) fn try_module_static_methods(
                             let string_arg = if let Some(s) = iter.next() {
                                 Box::new(s)
                             } else {
-                                return Err(anyhow!(
-                                    "Number.parseInt requires at least one argument"
-                                ));
+                                Box::new(Expr::Undefined)
                             };
                             let radix_arg = iter.next().map(Box::new);
                             return Ok(Ok(Expr::ParseInt {
