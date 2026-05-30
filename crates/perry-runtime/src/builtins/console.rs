@@ -597,7 +597,11 @@ fn is_callable(value: f64) -> bool {
     if header.is_null() {
         return false;
     }
-    unsafe { (*header).as_str() == "function" }
+    unsafe {
+        let len = (*header).byte_len as usize;
+        let data = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        std::slice::from_raw_parts(data, len) == b"function"
+    }
 }
 
 /// True when `value` is an object that exposes a callable `write` method, which

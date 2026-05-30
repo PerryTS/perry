@@ -63,6 +63,10 @@ crates/perry-codegen/src/lower_call/native/mod.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
 crates/perry-hir/src/ir/expr.rs
+# HIR member-expression lowering tower; already over the line-count threshold
+# on main after the process allowed-flags additions. Split by member family is
+# tracked alongside the lower/codegen file-size cleanup in #1435.
+crates/perry-hir/src/lower/expr_member.rs
 # Object field get/set + handle/native dispatch shim; grew past the limit
 # after the #1419 KeyObject/.export/.equals routing + main's process-module
 # additions. Splitting tracked under #1435.
