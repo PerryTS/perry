@@ -836,6 +836,35 @@ pub(crate) fn set_bound_native_closure_name(
     crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
 }
 
+thread_local! {
+    /// Per-closure spec `.length` for built-in *prototype methods*. Those
+    /// methods all share one no-op closure thunk
+    /// (`global_this_builtin_noop_thunk`), so the func-ptr-keyed
+    /// `CLOSURE_ARITY_REGISTRY` can't give `Array.prototype.map.length === 1`
+    /// while `Array.prototype.slice.length === 2` — the last install would
+    /// win for every method. Recording the length per *closure instance* here
+    /// (keyed by the closure pointer, like the user-facing dynamic-prop table
+    /// but isolated from it so a user `fn.length = x` write can't perturb it)
+    /// lets the `.length` value-read and `getOwnPropertyDescriptor` agree with
+    /// the spec count. #3143.
+    static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<std::collections::HashMap<usize, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record the spec `.length` for a built-in prototype-method closure. See
+/// [`BUILTIN_CLOSURE_LENGTH`].
+pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
+    BUILTIN_CLOSURE_LENGTH.with(|m| {
+        m.borrow_mut().insert(closure, length);
+    });
+}
+
+/// Look up the recorded spec `.length` for a built-in prototype-method
+/// closure, or `None` if this closure isn't one. See [`BUILTIN_CLOSURE_LENGTH`].
+pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
+    BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
+}
+
 /// Whitelist of (module, property) pairs for which property-read should
 /// produce a callable handle (a bound-method closure) rather than undefined.
 /// Needed so `typeof tty.ReadStream === "function"` matches Node — the
