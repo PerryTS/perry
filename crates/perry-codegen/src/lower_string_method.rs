@@ -160,34 +160,58 @@ pub(crate) fn lower_string_method(
             // Returns an array pointer (ArrayHeader*) — NaN-box with POINTER_TAG.
             Ok(crate::expr::nanbox_pointer_inline(blk, &result_arr))
         }
+        // toLocaleLowerCase / toLocaleUpperCase — honor the `locales` arg:
+        // validate BCP 47 tags (throwing RangeError on a bad tag) and apply
+        // Turkic (tr/az) dotted/dotless `I` casing. Other locales fall back to
+        // language-neutral Unicode casing. Closes #2781. (#592: Effect's
+        // `aliasOrValue` at Cron.ts:846 was the original user-impact site.)
+        "toLocaleLowerCase" | "toLocaleUpperCase" => {
+            if args.len() > 1 {
+                bail!(
+                    "perry-codegen: String.{} expects 0 or 1 args, got {}",
+                    property,
+                    args.len()
+                );
+            }
+            // The `locales` arg is passed as a NaN-boxed JSValue (double) to the
+            // runtime, which extracts/validates it. Missing → undefined.
+            let locales_box = if args.is_empty() {
+                None
+            } else {
+                Some(lower_expr(ctx, &args[0])?)
+            };
+            let blk = ctx.block();
+            let locales_box = match locales_box {
+                Some(v) => v,
+                None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
+            };
+            let recv_handle = unbox_str_handle(blk, &recv_box);
+            let runtime_fn = if property == "toLocaleLowerCase" {
+                "js_string_to_locale_lower_case"
+            } else {
+                "js_string_to_locale_upper_case"
+            };
+            let result = blk.call(
+                I64,
+                runtime_fn,
+                &[(I64, &recv_handle), (DOUBLE, &locales_box)],
+            );
+            Ok(nanbox_string_inline(blk, &result))
+        }
         // Unary string-returning methods (no args).
-        // toLocaleLowerCase / toLocaleUpperCase route to the same runtime
-        // fns as toLowerCase / toUpperCase. Without an Intl.* locale system
-        // (a documented categorical gap) Perry can't honor a `locales` arg,
-        // and for the common ASCII/non-Turkic case the output matches Node
-        // byte-for-byte. Closes #592 — Effect's `aliasOrValue` (Cron.ts:846)
-        // is the load-bearing user-impact site.
-        "toLowerCase" | "toUpperCase" | "toLocaleLowerCase" | "toLocaleUpperCase" | "trim"
-        | "trimStart" | "trimEnd" => {
-            // toLocaleLowerCase / toLocaleUpperCase optionally take a
-            // `locales` arg per ECMAScript spec; we evaluate it for side
-            // effects but ignore the value (no Intl support).
-            let allows_locale_arg = matches!(property, "toLocaleLowerCase" | "toLocaleUpperCase");
-            if !args.is_empty() && !allows_locale_arg {
+        "toLowerCase" | "toUpperCase" | "trim" | "trimStart" | "trimEnd" => {
+            if !args.is_empty() {
                 bail!(
                     "perry-codegen: String.{} takes no args, got {}",
                     property,
                     args.len()
                 );
             }
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let runtime_fn = match property {
-                "toLowerCase" | "toLocaleLowerCase" => "js_string_to_lower_case",
-                "toUpperCase" | "toLocaleUpperCase" => "js_string_to_upper_case",
+                "toLowerCase" => "js_string_to_lower_case",
+                "toUpperCase" => "js_string_to_upper_case",
                 "trim" => "js_string_trim",
                 "trimStart" => "js_string_trim_start",
                 "trimEnd" => "js_string_trim_end",
@@ -500,18 +524,24 @@ pub(crate) fn lower_string_method(
                 );
             }
             let other_box = lower_expr(ctx, &args[0])?;
-            // `options` is the 3rd arg; `locales` (2nd) is evaluated for side
-            // effects but unused (no Intl). With an options object present,
-            // route to the variant that honors `{ numeric: true }`.
-            let options_box = if args.len() == 3 {
-                let _ = lower_expr(ctx, &args[1])?; // locales (side effects only)
-                Some(lower_expr(ctx, &args[2])?)
+            // `options` is the 3rd arg; `locales` (2nd) is validated for its
+            // RangeError side effect (#2781) but collation ordering stays
+            // locale-neutral (full ICU deferred). With an options object
+            // present, route to the variant that honors `{ numeric: true }`.
+            let locales_box = if args.len() >= 2 {
+                Some(lower_expr(ctx, &args[1])?)
             } else {
-                for extra in args.iter().skip(1) {
-                    let _ = lower_expr(ctx, extra)?;
-                }
                 None
             };
+            let options_box = if args.len() == 3 {
+                Some(lower_expr(ctx, &args[2])?)
+            } else {
+                None
+            };
+            let blk = ctx.block();
+            if let Some(loc) = &locales_box {
+                blk.call_void("js_string_validate_locales", &[(DOUBLE, loc)]);
+            }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let other_handle = unbox_str_handle(blk, &other_box);
@@ -636,8 +666,11 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(ctx.block(), &acc_handle))
         }
         "substr" => {
-            // Legacy substr(start, length) — map to slice(start, start+length).
-            // Without a dedicated runtime helper we approximate with substring.
+            // Legacy substr(start, length) — distinct from substring/slice:
+            // negative start counts from the end, the 2nd arg is a LENGTH, and
+            // a non-positive length yields "". Routed to the dedicated runtime
+            // helper `js_string_substr` (#2897). The length sentinel i32::MIN
+            // signals "argument omitted" (take rest of string).
             if args.is_empty() || args.len() > 2 {
                 bail!(
                     "perry-codegen: String.substr expects 1 or 2 args, got {}",
@@ -645,25 +678,23 @@ pub(crate) fn lower_string_method(
                 );
             }
             let start_d = lower_expr(ctx, &args[0])?;
+            let len_d = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let end_i32 = if args.len() == 2 {
-                let len_d = lower_expr(ctx, &args[1])?;
-                let blk = ctx.block();
-                let len_i32 = blk.fptosi(DOUBLE, &len_d, I32);
-                blk.add(I32, &start_i32, &len_i32)
-            } else {
-                // Default end = receiver length.
-                let blk = ctx.block();
-                let len_ptr = blk.inttoptr(I64, &recv_handle);
-                blk.load(I32, &len_ptr)
+            let length_i32 = match len_d {
+                Some(len_d) => blk.fptosi(DOUBLE, &len_d, I32),
+                // i32::MIN sentinel = "length omitted".
+                None => i32::MIN.to_string(),
             };
-            let blk = ctx.block();
             let result = blk.call(
                 I64,
-                "js_string_substring",
-                &[(I64, &recv_handle), (I32, &start_i32), (I32, &end_i32)],
+                "js_string_substr",
+                &[(I64, &recv_handle), (I32, &start_i32), (I32, &length_i32)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
