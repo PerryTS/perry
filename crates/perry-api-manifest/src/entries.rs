@@ -3177,6 +3177,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "of", false, None),
     method("buffer", "concat", false, None),
     method("buffer", "copyBytesFrom", false, None),
+    // #2901: TC39 `Uint8Array.fromBase64` / `fromHex` static factories,
+    // routed through the buffer module (Uint8Array ≡ Buffer in Perry).
+    method("buffer", "fromBase64", false, None),
+    method("buffer", "fromHex", false, None),
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),

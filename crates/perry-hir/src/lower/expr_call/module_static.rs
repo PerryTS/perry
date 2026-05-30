@@ -1164,6 +1164,25 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // #2901: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)`
+            // static factories. Perry aliases Uint8Array → Buffer; route these
+            // through the buffer native-module dispatch table (no new HIR
+            // variant) so the runtime decodes into a fresh BufferHeader.
+            if obj_name == "Uint8Array" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if matches!(method_name, "fromBase64" | "fromHex") {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "buffer".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: method_name.to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
             // Check for child_process named imports (execSync, spawnSync, spawn, exec)
             let is_child_process_module =
                 ctx.lookup_builtin_module_alias(obj_name) == Some("child_process");
