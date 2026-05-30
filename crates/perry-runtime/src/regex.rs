@@ -298,6 +298,13 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
     let str_data = string_as_str(s);
 
     unsafe {
+        if let Some(fre) = lookup_fancy_regex(re) {
+            return match fre.is_match(str_data) {
+                Ok(true) => 1,
+                Ok(false) | Err(_) => 0,
+            };
+        }
+
         let regex = &*(*re).regex_ptr;
         if regex.is_match(str_data) {
             1
