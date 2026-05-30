@@ -358,6 +358,8 @@ pub fn check_escapes_in_expr(
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)
         | Expr::JsonStringify(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
         | Expr::ForOfToArray(operand)

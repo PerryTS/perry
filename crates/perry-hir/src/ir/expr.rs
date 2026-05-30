@@ -674,6 +674,10 @@ pub enum Expr {
         space: Box<Expr>,
     },
     JsonStringifyFull(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `JSON.rawJSON(text)` (#2900) -> raw-JSON wrapper object.
+    JsonRawJson(Box<Expr>),
+    /// `JSON.isRawJSON(value)` (#2900) -> boolean.
+    JsonIsRawJson(Box<Expr>),
 
     // Math operations
     MathFloor(Box<Expr>),            // Math.floor(x) -> number

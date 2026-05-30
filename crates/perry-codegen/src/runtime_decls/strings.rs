@@ -437,6 +437,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_set_has", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_delete", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_size", I32, &[I64]);
+    // #2872: ES2024 Set composition methods.
+    module.declare_function("js_set_union", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_intersection", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_difference", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_symmetric_difference", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_subset_of", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_superset_of", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_disjoint_from", I32, &[I64, DOUBLE]);
     module.declare_function("js_string_to_lower_case", I64, &[I64]);
     module.declare_function("js_string_to_upper_case", I64, &[I64]);
     // Locale-aware casing + locales validation (#2781). The locales arg is a
@@ -1021,6 +1029,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // JSON.parse returns JSValue (u64) via integer register on ARM64,
     // not f64. Use I64 return + bitcast to avoid ABI mismatch crash.
     module.declare_function("js_json_parse", I64, &[I64]);
+    // #2900: JSON.rawJSON(text) / JSON.isRawJSON(value). Both take and return
+    // a NaN-boxed f64 (the wrapper object pointer / a boolean).
+    module.declare_function("js_json_raw_json", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_json_is_raw_json", DOUBLE, &[DOUBLE]);
     // JSON.parse(text) shim that returns `null` for a null `text_ptr`
     // instead of throwing. Used by NR_OBJ_FROM_JSON_STR dispatch rows
     // (e.g. `jwt.verify` on bad signature) — see issue #927.

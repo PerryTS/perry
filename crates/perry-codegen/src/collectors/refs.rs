@@ -241,6 +241,8 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::Uint8ArrayNew(Some(operand))
         | Expr::Uint8ArrayLength(operand)
         | Expr::JsonParse(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::MathSqrt(operand)
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)

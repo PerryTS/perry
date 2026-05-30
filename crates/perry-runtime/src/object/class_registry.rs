@@ -890,19 +890,74 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let obj = js_object_alloc(0, 0);
                 return crate::value::js_nanbox_pointer(obj as i64);
             }
-            "EvalError" | "URIError" => {
-                let message = if args.is_empty() || args[0].to_bits() == crate::value::TAG_UNDEFINED
-                {
-                    crate::string::js_string_from_bytes(b"".as_ptr(), 0)
+            // #2889: `new (rebound Error subclass)(msg)` through a global
+            // constructor value. Mirrors the bare `new TypeError(msg)`
+            // lowering so `const E = TypeError; new E("x")` produces a real
+            // error instance with the right `.name`.
+            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
+            | "EvalError" | "URIError" => {
+                let has_msg = !args.is_empty() && args[0].to_bits() != crate::value::TAG_UNDEFINED;
+                let message = if has_msg {
+                    crate::builtins::js_string_coerce(args[0])
+                } else {
+                    std::ptr::null_mut()
+                };
+                let error = match name {
+                    "TypeError" => crate::error::js_typeerror_new(message),
+                    "RangeError" => crate::error::js_rangeerror_new(message),
+                    "ReferenceError" => crate::error::js_referenceerror_new(message),
+                    "SyntaxError" => crate::error::js_syntaxerror_new(message),
+                    "EvalError" => crate::error::js_evalerror_new(message),
+                    "URIError" => crate::error::js_urierror_new(message),
+                    _ => {
+                        if has_msg {
+                            crate::error::js_error_new_with_message(message)
+                        } else {
+                            crate::error::js_error_new()
+                        }
+                    }
+                };
+                return crate::value::js_nanbox_pointer(error as i64);
+            }
+            // #2889: `new (rebound RegExp)(pattern, flags)`.
+            "RegExp" => {
+                let pattern = if args.is_empty() {
+                    std::ptr::null_mut()
                 } else {
                     crate::builtins::js_string_coerce(args[0])
                 };
-                let error = if name == "EvalError" {
-                    crate::error::js_evalerror_new(message)
+                let flags = if args.len() < 2 || args[1].to_bits() == crate::value::TAG_UNDEFINED {
+                    std::ptr::null_mut()
                 } else {
-                    crate::error::js_urierror_new(message)
+                    crate::builtins::js_string_coerce(args[1])
                 };
-                return crate::value::js_nanbox_pointer(error as i64);
+                let re = crate::regex::js_regexp_new(pattern, flags);
+                return crate::value::js_nanbox_pointer(re as i64);
+            }
+            // #2889: `new (rebound TypedArray)(lengthOrSource)`.
+            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+            | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
+            | "BigUint64Array" => {
+                let kind = match name {
+                    "Int8Array" => crate::typedarray::KIND_INT8,
+                    "Uint8Array" => crate::typedarray::KIND_UINT8,
+                    "Uint8ClampedArray" => crate::typedarray::KIND_UINT8_CLAMPED,
+                    "Int16Array" => crate::typedarray::KIND_INT16,
+                    "Uint16Array" => crate::typedarray::KIND_UINT16,
+                    "Int32Array" => crate::typedarray::KIND_INT32,
+                    "Uint32Array" => crate::typedarray::KIND_UINT32,
+                    "Float32Array" => crate::typedarray::KIND_FLOAT32,
+                    "Float64Array" => crate::typedarray::KIND_FLOAT64,
+                    "BigInt64Array" => crate::typedarray::KIND_BIGINT64,
+                    _ => crate::typedarray::KIND_BIGUINT64,
+                } as i32;
+                let arg0 = if args.is_empty() {
+                    f64::from_bits(crate::value::JSValue::number(0.0).bits())
+                } else {
+                    args[0]
+                };
+                let ta = crate::typedarray::js_typed_array_new(kind, arg0);
+                return crate::value::js_nanbox_pointer(ta as i64);
             }
             "TextEncoderStream" | "TextDecoderStream" => {
                 return js_text_encoding_stream_new();

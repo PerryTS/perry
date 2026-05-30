@@ -345,6 +345,20 @@ pub(super) fn try_module_static_methods(
                                 )));
                             }
                         }
+                        "rawJSON" => {
+                            // #2900: `JSON.rawJSON(text)` -> raw-JSON wrapper.
+                            if !args.is_empty() {
+                                let text = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonRawJson(Box::new(text))));
+                            }
+                        }
+                        "isRawJSON" => {
+                            // #2900: `JSON.isRawJSON(value)` -> boolean.
+                            if !args.is_empty() {
+                                let value = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonIsRawJson(Box::new(value))));
+                            }
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }
