@@ -827,11 +827,10 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
 
 pub(super) fn schedule_writable_finish_then_transform_end(stream: f64, callback: Option<f64>) {
     schedule_writable_finish(stream, callback);
-    if is_transform_stream(stream)
-        && !has_truthy_hidden(stream, hidden_writable_final_pending_key())
-        && (has_truthy_hidden(stream, hidden_finish_scheduled_key())
-            || has_truthy_hidden(stream, hidden_finish_emitted_key()))
-    {
+    let finish_ready = has_truthy_hidden(stream, hidden_finish_scheduled_key())
+        || has_truthy_hidden(stream, hidden_finish_emitted_key());
+    let final_pending = has_truthy_hidden(stream, hidden_writable_final_pending_key());
+    if is_transform_stream(stream) && finish_ready && !final_pending {
         schedule_readable_end(stream);
     }
 }
