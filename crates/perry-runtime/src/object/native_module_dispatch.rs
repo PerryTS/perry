@@ -26,6 +26,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
     } else {
         ""
     };
+    let module_name = match module_name {
+        "path/posix" => "path.posix",
+        "path/win32" => "path.win32",
+        _ => module_name,
+    };
     // Helper: get arg N as f64
     let arg = |n: usize| -> f64 {
         if n < args_len && !args_ptr.is_null() {
@@ -47,16 +52,6 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
     };
 
-    // Helper: extract raw string pointer from a NaN-boxed f64 value
-    let arg_str_ptr = |n: usize| -> *const crate::StringHeader {
-        let v = arg(n);
-        let jsv = JSValue::from_bits(v.to_bits());
-        if jsv.is_string() {
-            jsv.as_string_ptr()
-        } else {
-            std::ptr::null()
-        }
-    };
     let require_path_str_ptr = |n: usize| -> *const crate::StringHeader {
         if n < args_len {
             let v = arg(n);
@@ -187,6 +182,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
             bits as usize
+        }
+    };
+    let optional_ptr_addr = |v: f64| -> usize {
+        let value = JSValue::from_bits(v.to_bits());
+        if value.is_undefined() || value.is_null() {
+            0
+        } else {
+            ptr_addr(v)
         }
     };
     let arg_event_ptr = |n: usize| -> *const crate::StringHeader {
@@ -622,7 +625,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // Root-callable `assert(x, msg)` / `assert.strict(x, msg)` —
         // HIR lowers these to method "default".
         ("assert", "default") | ("assert/strict", "default") => js_assert_ok(arg(0), arg(1)),
-        ("assert", "strict") => js_assert_ok(arg(0), arg(1)),
+        ("assert", "strict") | ("assert/strict", "strict") => js_assert_ok(arg(0), arg(1)),
         ("assert", "ok") | ("assert/strict", "ok") => js_assert_ok(arg(0), arg(1)),
         ("assert", "fail") | ("assert/strict", "fail") => js_assert_fail(arg(0)),
         ("assert", "equal") => js_assert_equal(arg(0), arg(1), arg(2)),
@@ -839,6 +842,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
+        ("path", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
+        ("path", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -864,9 +869,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
             require_path_str_ptr(0),
             require_path_str_ptr(1),
         )),
-        ("path.win32", "toNamespacedPath") => str_to_f64(
-            crate::path::js_path_win32_to_namespaced_path(arg_str_ptr(0)),
-        ),
+        ("path.win32", "toNamespacedPath") => {
+            crate::path::js_path_win32_to_namespaced_path_value(arg(0))
+        }
+        ("path.win32", "_makeLong") => crate::path::js_path_win32_to_namespaced_path_value(arg(0)),
         ("path.win32", "isAbsolute") => bool_to_f64(crate::path::js_path_win32_is_absolute(
             require_path_str_ptr(0),
         )),
@@ -895,9 +901,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
             require_path_str_ptr(0),
             require_path_str_ptr(1),
         )),
-        ("path.posix", "toNamespacedPath") => {
-            str_to_f64(crate::path::js_path_to_namespaced_path(arg_str_ptr(0)))
-        }
+        ("path.posix", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
+        ("path.posix", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
         ("path.posix", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
@@ -1265,6 +1270,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(JSValue::undefined().bits())
         }
         ("stream", "compose") => crate::node_stream::js_node_stream_compose_args(pack_args()),
+        ("stream", "duplexPair") => crate::node_stream::js_node_stream_duplex_pair(arg(0)),
         ("stream", "pipeline") => crate::node_stream::js_node_stream_pipeline(pack_args()),
         // Classic stream constructors are legacy-callable in Node:
         // `PassThrough()` behaves like `new PassThrough()`.
@@ -1287,20 +1293,20 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // undefined inside the impls).
         ("child_process", "spawn") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
-            let args_p = ptr_addr(arg(1)) as i64;
-            let opts_p = ptr_addr(arg(2)) as i64;
+            let args_p = optional_ptr_addr(arg(1)) as i64;
+            let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::reactor::js_child_process_spawn_streams(cmd, args_p, opts_p)
         }
         ("child_process", "spawnSync") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0));
-            let args_p = ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
-            let opts_p = ptr_addr(arg(2)) as *const ObjectHeader;
+            let args_p = optional_ptr_addr(arg(1)) as *const crate::array::ArrayHeader;
+            let opts_p = optional_ptr_addr(arg(2)) as *const ObjectHeader;
             let result = crate::child_process::js_child_process_spawn_sync(cmd, args_p, opts_p);
             ptr_to_f64(result as *const u8)
         }
         ("child_process", "execSync") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0));
-            let opts_p = ptr_addr(arg(1)) as *const ObjectHeader;
+            let opts_p = optional_ptr_addr(arg(1)) as *const ObjectHeader;
             crate::child_process::js_child_process_exec_sync(cmd, opts_p)
         }
         ("child_process", "exec") => {
@@ -1317,8 +1323,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
         ("child_process", "fork") => {
             let module = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
-            let args_p = ptr_addr(arg(1)) as i64;
-            let opts_p = ptr_addr(arg(2)) as i64;
+            let args_p = optional_ptr_addr(arg(1)) as i64;
+            let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
         }
 

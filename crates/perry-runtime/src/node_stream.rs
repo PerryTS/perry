@@ -33,6 +33,7 @@ use crate::value::JSValue;
 use std::os::raw::c_int;
 
 mod async_iterator;
+mod readable_from_promises;
 
 #[path = "node_stream_event_emitter.rs"]
 mod event_emitter;
@@ -178,6 +179,9 @@ extern "C" fn ns_readable_event_microtask(closure: *const ClosureHeader) -> f64 
         return f64::from_bits(TAG_UNDEFINED);
     }
     let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    if !has_truthy_hidden(stream, hidden_readable_scheduled_key()) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     set_hidden_value(
         stream,
         hidden_readable_scheduled_key(),
@@ -1182,10 +1186,14 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 }
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
-    mark_stream_ended(stream);
-    refresh_readable_aborted_flag(stream);
+    let pair_peer = get_hidden_value(stream, hidden_key(b"duplexPairPeer"));
+    if pair_peer.is_none() {
+        mark_stream_ended(stream);
+        refresh_readable_aborted_flag(stream);
+    }
     mark_writable_ended(stream);
-    if get_hidden_value(stream, hidden_readable_flag_key()).is_none()
+    if pair_peer.is_none()
+        && get_hidden_value(stream, hidden_readable_flag_key()).is_none()
         && !has_truthy_hidden(stream, hidden_end_emitted_key())
     {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));

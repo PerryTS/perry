@@ -228,6 +228,13 @@ extern "C" fn global_this_btoa_thunk(
     crate::value::js_nanbox_string(encoded as i64)
 }
 
+extern "C" fn math_f16round_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::math::js_math_f16round(value)
+}
+
 extern "C" fn global_this_error_capture_stack_trace_thunk(
     _closure: *const crate::closure::ClosureHeader,
     target: f64,
@@ -420,6 +427,20 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     f64::from_bits(
         JSValue::bool(unsafe { super::js_object_is_prototype_of_value(this_value, value) }).bits(),
     )
+}
+
+extern "C" fn object_prototype_value_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_value_of(this_value) }
+}
+
+extern "C" fn object_prototype_to_locale_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    unsafe { super::js_object_default_to_locale_string(this_value) }
 }
 
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
@@ -690,7 +711,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if name == "String" {
             crate::closure::js_register_closure_arity(func_ptr, 1);
         }
-        if matches!(name, "File" | "EvalError" | "URIError") {
+        if matches!(name, "File" | "EvalError" | "URIError" | "Uint8Array") {
             super::native_module::set_bound_native_closure_name(closure_ptr, name);
         }
         if name == "Error" {
@@ -795,6 +816,9 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             let ns_obj = js_object_alloc(0, 0);
             if ns_obj.is_null() {
                 continue;
+            }
+            if name == "Math" {
+                install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
@@ -994,14 +1018,21 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 object_prototype_is_prototype_of_thunk as *const u8,
                 1,
             );
+            install_proto_method(
+                proto_obj,
+                "toLocaleString",
+                object_prototype_to_locale_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                object_prototype_value_of_thunk as *const u8,
+                0,
+            );
             install_noop_proto_methods(
                 proto_obj,
-                &[
-                    ("hasOwnProperty", 1),
-                    ("propertyIsEnumerable", 1),
-                    ("toLocaleString", 0),
-                    ("valueOf", 0),
-                ],
+                &[("hasOwnProperty", 1), ("propertyIsEnumerable", 1)],
             );
         }
         "Function" => {

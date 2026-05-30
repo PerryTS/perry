@@ -439,19 +439,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .map(|a| lower_expr(ctx, a))
                 .collect::<Result<Vec<_>, _>>()?;
             match method {
+                PathWin32Method::ToNamespacedPath => {
+                    let blk = ctx.block();
+                    Ok(blk.call(
+                        DOUBLE,
+                        "js_path_win32_to_namespaced_path_value",
+                        &[(DOUBLE, &lowered[0])],
+                    ))
+                }
                 PathWin32Method::Dirname
                 | PathWin32Method::Basename
                 | PathWin32Method::Extname
                 | PathWin32Method::Normalize
-                | PathWin32Method::Resolve
-                | PathWin32Method::ToNamespacedPath => {
+                | PathWin32Method::Resolve => {
                     let fn_name = match method {
                         PathWin32Method::Dirname => "js_path_win32_dirname",
                         PathWin32Method::Basename => "js_path_win32_basename",
                         PathWin32Method::Extname => "js_path_win32_extname",
                         PathWin32Method::Normalize => "js_path_win32_normalize",
                         PathWin32Method::Resolve => "js_path_win32_resolve",
-                        PathWin32Method::ToNamespacedPath => "js_path_win32_to_namespaced_path",
                         _ => unreachable!(),
                     };
                     let blk = ctx.block();

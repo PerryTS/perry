@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1546 entries across 85 modules
+// Coverage: 1782 entries across 88 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -124,6 +124,8 @@ declare module "assert/strict" {
   /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
+  export const strict: any;
+  /** stdlib */
   export function deepEqual(...args: any[]): any;
   /** stdlib */
   export function deepStrictEqual(...args: any[]): any;
@@ -157,6 +159,8 @@ declare module "assert/strict" {
   export function partialDeepStrictEqual(...args: any[]): any;
   /** stdlib */
   export function rejects(...args: any[]): any;
+  /** stdlib */
+  export function strict(...args: any[]): any;
   /** stdlib */
   export function strictEqual(...args: any[]): any;
   /** stdlib */
@@ -381,6 +385,405 @@ declare module "console" {
   export function warn(...args: any[]): any;
 }
 
+declare module "constants" {
+  /** stdlib */
+  export const COPYFILE_EXCL: any;
+  /** stdlib */
+  export const COPYFILE_FICLONE: any;
+  /** stdlib */
+  export const COPYFILE_FICLONE_FORCE: any;
+  /** stdlib */
+  export const DH_CHECK_P_NOT_PRIME: any;
+  /** stdlib */
+  export const DH_CHECK_P_NOT_SAFE_PRIME: any;
+  /** stdlib */
+  export const DH_NOT_SUITABLE_GENERATOR: any;
+  /** stdlib */
+  export const DH_UNABLE_TO_CHECK_GENERATOR: any;
+  /** stdlib */
+  export const E2BIG: any;
+  /** stdlib */
+  export const EACCES: any;
+  /** stdlib */
+  export const EADDRINUSE: any;
+  /** stdlib */
+  export const EADDRNOTAVAIL: any;
+  /** stdlib */
+  export const EAFNOSUPPORT: any;
+  /** stdlib */
+  export const EAGAIN: any;
+  /** stdlib */
+  export const EALREADY: any;
+  /** stdlib */
+  export const EBADF: any;
+  /** stdlib */
+  export const EBADMSG: any;
+  /** stdlib */
+  export const EBUSY: any;
+  /** stdlib */
+  export const ECANCELED: any;
+  /** stdlib */
+  export const ECHILD: any;
+  /** stdlib */
+  export const ECONNABORTED: any;
+  /** stdlib */
+  export const ECONNREFUSED: any;
+  /** stdlib */
+  export const ECONNRESET: any;
+  /** stdlib */
+  export const EDEADLK: any;
+  /** stdlib */
+  export const EDESTADDRREQ: any;
+  /** stdlib */
+  export const EDOM: any;
+  /** stdlib */
+  export const EDQUOT: any;
+  /** stdlib */
+  export const EEXIST: any;
+  /** stdlib */
+  export const EFAULT: any;
+  /** stdlib */
+  export const EFBIG: any;
+  /** stdlib */
+  export const EHOSTUNREACH: any;
+  /** stdlib */
+  export const EIDRM: any;
+  /** stdlib */
+  export const EILSEQ: any;
+  /** stdlib */
+  export const EINPROGRESS: any;
+  /** stdlib */
+  export const EINTR: any;
+  /** stdlib */
+  export const EINVAL: any;
+  /** stdlib */
+  export const EIO: any;
+  /** stdlib */
+  export const EISCONN: any;
+  /** stdlib */
+  export const EISDIR: any;
+  /** stdlib */
+  export const ELOOP: any;
+  /** stdlib */
+  export const EMFILE: any;
+  /** stdlib */
+  export const EMLINK: any;
+  /** stdlib */
+  export const EMSGSIZE: any;
+  /** stdlib */
+  export const EMULTIHOP: any;
+  /** stdlib */
+  export const ENAMETOOLONG: any;
+  /** stdlib */
+  export const ENETDOWN: any;
+  /** stdlib */
+  export const ENETRESET: any;
+  /** stdlib */
+  export const ENETUNREACH: any;
+  /** stdlib */
+  export const ENFILE: any;
+  /** stdlib */
+  export const ENGINE_METHOD_ALL: any;
+  /** stdlib */
+  export const ENGINE_METHOD_CIPHERS: any;
+  /** stdlib */
+  export const ENGINE_METHOD_DH: any;
+  /** stdlib */
+  export const ENGINE_METHOD_DIGESTS: any;
+  /** stdlib */
+  export const ENGINE_METHOD_DSA: any;
+  /** stdlib */
+  export const ENGINE_METHOD_EC: any;
+  /** stdlib */
+  export const ENGINE_METHOD_NONE: any;
+  /** stdlib */
+  export const ENGINE_METHOD_PKEY_ASN1_METHS: any;
+  /** stdlib */
+  export const ENGINE_METHOD_PKEY_METHS: any;
+  /** stdlib */
+  export const ENGINE_METHOD_RAND: any;
+  /** stdlib */
+  export const ENGINE_METHOD_RSA: any;
+  /** stdlib */
+  export const ENOBUFS: any;
+  /** stdlib */
+  export const ENODATA: any;
+  /** stdlib */
+  export const ENODEV: any;
+  /** stdlib */
+  export const ENOENT: any;
+  /** stdlib */
+  export const ENOEXEC: any;
+  /** stdlib */
+  export const ENOLCK: any;
+  /** stdlib */
+  export const ENOLINK: any;
+  /** stdlib */
+  export const ENOMEM: any;
+  /** stdlib */
+  export const ENOMSG: any;
+  /** stdlib */
+  export const ENOPROTOOPT: any;
+  /** stdlib */
+  export const ENOSPC: any;
+  /** stdlib */
+  export const ENOSR: any;
+  /** stdlib */
+  export const ENOSTR: any;
+  /** stdlib */
+  export const ENOSYS: any;
+  /** stdlib */
+  export const ENOTCONN: any;
+  /** stdlib */
+  export const ENOTDIR: any;
+  /** stdlib */
+  export const ENOTEMPTY: any;
+  /** stdlib */
+  export const ENOTSOCK: any;
+  /** stdlib */
+  export const ENOTSUP: any;
+  /** stdlib */
+  export const ENOTTY: any;
+  /** stdlib */
+  export const ENXIO: any;
+  /** stdlib */
+  export const EOPNOTSUPP: any;
+  /** stdlib */
+  export const EOVERFLOW: any;
+  /** stdlib */
+  export const EPERM: any;
+  /** stdlib */
+  export const EPIPE: any;
+  /** stdlib */
+  export const EPROTO: any;
+  /** stdlib */
+  export const EPROTONOSUPPORT: any;
+  /** stdlib */
+  export const EPROTOTYPE: any;
+  /** stdlib */
+  export const ERANGE: any;
+  /** stdlib */
+  export const EROFS: any;
+  /** stdlib */
+  export const ESPIPE: any;
+  /** stdlib */
+  export const ESRCH: any;
+  /** stdlib */
+  export const ESTALE: any;
+  /** stdlib */
+  export const ETIME: any;
+  /** stdlib */
+  export const ETIMEDOUT: any;
+  /** stdlib */
+  export const ETXTBSY: any;
+  /** stdlib */
+  export const EWOULDBLOCK: any;
+  /** stdlib */
+  export const EXDEV: any;
+  /** stdlib */
+  export const F_OK: any;
+  /** stdlib */
+  export const OPENSSL_VERSION_NUMBER: any;
+  /** stdlib */
+  export const O_APPEND: any;
+  /** stdlib */
+  export const O_CREAT: any;
+  /** stdlib */
+  export const O_EXCL: any;
+  /** stdlib */
+  export const O_NOFOLLOW: any;
+  /** stdlib */
+  export const O_RDONLY: any;
+  /** stdlib */
+  export const O_RDWR: any;
+  /** stdlib */
+  export const O_TRUNC: any;
+  /** stdlib */
+  export const O_WRONLY: any;
+  /** stdlib */
+  export const POINT_CONVERSION_COMPRESSED: any;
+  /** stdlib */
+  export const POINT_CONVERSION_HYBRID: any;
+  /** stdlib */
+  export const POINT_CONVERSION_UNCOMPRESSED: any;
+  /** stdlib */
+  export const PRIORITY_ABOVE_NORMAL: any;
+  /** stdlib */
+  export const PRIORITY_BELOW_NORMAL: any;
+  /** stdlib */
+  export const PRIORITY_HIGH: any;
+  /** stdlib */
+  export const PRIORITY_HIGHEST: any;
+  /** stdlib */
+  export const PRIORITY_LOW: any;
+  /** stdlib */
+  export const PRIORITY_NORMAL: any;
+  /** stdlib */
+  export const RSA_NO_PADDING: any;
+  /** stdlib */
+  export const RSA_PKCS1_OAEP_PADDING: any;
+  /** stdlib */
+  export const RSA_PKCS1_PADDING: any;
+  /** stdlib */
+  export const RSA_PKCS1_PSS_PADDING: any;
+  /** stdlib */
+  export const RSA_PSS_SALTLEN_AUTO: any;
+  /** stdlib */
+  export const RSA_PSS_SALTLEN_DIGEST: any;
+  /** stdlib */
+  export const RSA_PSS_SALTLEN_MAX_SIGN: any;
+  /** stdlib */
+  export const RSA_X931_PADDING: any;
+  /** stdlib */
+  export const RTLD_DEEPBIND: any;
+  /** stdlib */
+  export const RTLD_GLOBAL: any;
+  /** stdlib */
+  export const RTLD_LAZY: any;
+  /** stdlib */
+  export const RTLD_LOCAL: any;
+  /** stdlib */
+  export const RTLD_NOW: any;
+  /** stdlib */
+  export const R_OK: any;
+  /** stdlib */
+  export const SIGABRT: any;
+  /** stdlib */
+  export const SIGALRM: any;
+  /** stdlib */
+  export const SIGBUS: any;
+  /** stdlib */
+  export const SIGCHLD: any;
+  /** stdlib */
+  export const SIGCONT: any;
+  /** stdlib */
+  export const SIGFPE: any;
+  /** stdlib */
+  export const SIGHUP: any;
+  /** stdlib */
+  export const SIGILL: any;
+  /** stdlib */
+  export const SIGINT: any;
+  /** stdlib */
+  export const SIGIO: any;
+  /** stdlib */
+  export const SIGIOT: any;
+  /** stdlib */
+  export const SIGKILL: any;
+  /** stdlib */
+  export const SIGPIPE: any;
+  /** stdlib */
+  export const SIGPROF: any;
+  /** stdlib */
+  export const SIGQUIT: any;
+  /** stdlib */
+  export const SIGSEGV: any;
+  /** stdlib */
+  export const SIGSTOP: any;
+  /** stdlib */
+  export const SIGSYS: any;
+  /** stdlib */
+  export const SIGTERM: any;
+  /** stdlib */
+  export const SIGTRAP: any;
+  /** stdlib */
+  export const SIGTSTP: any;
+  /** stdlib */
+  export const SIGTTIN: any;
+  /** stdlib */
+  export const SIGTTOU: any;
+  /** stdlib */
+  export const SIGURG: any;
+  /** stdlib */
+  export const SIGUSR1: any;
+  /** stdlib */
+  export const SIGUSR2: any;
+  /** stdlib */
+  export const SIGVTALRM: any;
+  /** stdlib */
+  export const SIGWINCH: any;
+  /** stdlib */
+  export const SIGXCPU: any;
+  /** stdlib */
+  export const SIGXFSZ: any;
+  /** stdlib */
+  export const SSL_OP_ALL: any;
+  /** stdlib */
+  export const SSL_OP_ALLOW_NO_DHE_KEX: any;
+  /** stdlib */
+  export const SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION: any;
+  /** stdlib */
+  export const SSL_OP_CIPHER_SERVER_PREFERENCE: any;
+  /** stdlib */
+  export const SSL_OP_CISCO_ANYCONNECT: any;
+  /** stdlib */
+  export const SSL_OP_COOKIE_EXCHANGE: any;
+  /** stdlib */
+  export const SSL_OP_CRYPTOPRO_TLSEXT_BUG: any;
+  /** stdlib */
+  export const SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS: any;
+  /** stdlib */
+  export const SSL_OP_LEGACY_SERVER_CONNECT: any;
+  /** stdlib */
+  export const SSL_OP_NO_COMPRESSION: any;
+  /** stdlib */
+  export const SSL_OP_NO_ENCRYPT_THEN_MAC: any;
+  /** stdlib */
+  export const SSL_OP_NO_QUERY_MTU: any;
+  /** stdlib */
+  export const SSL_OP_NO_RENEGOTIATION: any;
+  /** stdlib */
+  export const SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION: any;
+  /** stdlib */
+  export const SSL_OP_NO_SSLv2: any;
+  /** stdlib */
+  export const SSL_OP_NO_SSLv3: any;
+  /** stdlib */
+  export const SSL_OP_NO_TICKET: any;
+  /** stdlib */
+  export const SSL_OP_NO_TLSv1: any;
+  /** stdlib */
+  export const SSL_OP_NO_TLSv1_1: any;
+  /** stdlib */
+  export const SSL_OP_NO_TLSv1_2: any;
+  /** stdlib */
+  export const SSL_OP_NO_TLSv1_3: any;
+  /** stdlib */
+  export const SSL_OP_PRIORITIZE_CHACHA: any;
+  /** stdlib */
+  export const SSL_OP_TLS_ROLLBACK_BUG: any;
+  /** stdlib */
+  export const S_IRGRP: any;
+  /** stdlib */
+  export const S_IROTH: any;
+  /** stdlib */
+  export const S_IRUSR: any;
+  /** stdlib */
+  export const S_IWGRP: any;
+  /** stdlib */
+  export const S_IWOTH: any;
+  /** stdlib */
+  export const S_IWUSR: any;
+  /** stdlib */
+  export const S_IXGRP: any;
+  /** stdlib */
+  export const S_IXOTH: any;
+  /** stdlib */
+  export const S_IXUSR: any;
+  /** stdlib */
+  export const TLS1_1_VERSION: any;
+  /** stdlib */
+  export const TLS1_2_VERSION: any;
+  /** stdlib */
+  export const TLS1_3_VERSION: any;
+  /** stdlib */
+  export const TLS1_VERSION: any;
+  /** stdlib */
+  export const W_OK: any;
+  /** stdlib */
+  export const X_OK: any;
+}
+
 declare module "cron" {
   /** stdlib */
   export function describe(expr: string): string;
@@ -459,6 +862,8 @@ declare module "crypto" {
   export function publicEncrypt(...args: any[]): any;
   /** stdlib */
   export function randomBytes(...args: any[]): any;
+  /** stdlib */
+  export function randomFill(...args: any[]): any;
   /** stdlib */
   export function randomFillSync(...args: any[]): any;
   /** stdlib */
@@ -1082,6 +1487,82 @@ declare module "path" {
   export const sep: any;
   /** stdlib */
   export const win32: any;
+  /** stdlib */
+  export function _makeLong(...args: any[]): any;
+  /** stdlib */
+  export function basename(...args: any[]): any;
+  /** stdlib */
+  export function dirname(...args: any[]): any;
+  /** stdlib */
+  export function extname(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function isAbsolute(...args: any[]): any;
+  /** stdlib */
+  export function join(...args: any[]): any;
+  /** stdlib */
+  export function matchesGlob(...args: any[]): any;
+  /** stdlib */
+  export function normalize(...args: any[]): any;
+  /** stdlib */
+  export function parse(...args: any[]): any;
+  /** stdlib */
+  export function relative(...args: any[]): any;
+  /** stdlib */
+  export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function toNamespacedPath(...args: any[]): any;
+}
+
+declare module "path/posix" {
+  /** stdlib */
+  export const delimiter: any;
+  /** stdlib */
+  export const posix: any;
+  /** stdlib */
+  export const sep: any;
+  /** stdlib */
+  export const win32: any;
+  /** stdlib */
+  export function _makeLong(...args: any[]): any;
+  /** stdlib */
+  export function basename(...args: any[]): any;
+  /** stdlib */
+  export function dirname(...args: any[]): any;
+  /** stdlib */
+  export function extname(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function isAbsolute(...args: any[]): any;
+  /** stdlib */
+  export function join(...args: any[]): any;
+  /** stdlib */
+  export function matchesGlob(...args: any[]): any;
+  /** stdlib */
+  export function normalize(...args: any[]): any;
+  /** stdlib */
+  export function parse(...args: any[]): any;
+  /** stdlib */
+  export function relative(...args: any[]): any;
+  /** stdlib */
+  export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function toNamespacedPath(...args: any[]): any;
+}
+
+declare module "path/win32" {
+  /** stdlib */
+  export const delimiter: any;
+  /** stdlib */
+  export const posix: any;
+  /** stdlib */
+  export const sep: any;
+  /** stdlib */
+  export const win32: any;
+  /** stdlib */
+  export function _makeLong(...args: any[]): any;
   /** stdlib */
   export function basename(...args: any[]): any;
   /** stdlib */

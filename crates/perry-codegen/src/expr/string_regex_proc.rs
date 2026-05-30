@@ -201,12 +201,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::MathExpm1(o) => {
-            // expm1(x) = exp(x) - 1. No llvm.expm1 intrinsic; use llvm.exp.f64
-            // and subtract 1.0.
             let v = lower_expr(ctx, o)?;
-            let blk = ctx.block();
-            let exp_v = blk.call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]);
-            Ok(blk.fsub(&exp_v, "1.0"))
+            Ok(ctx.block().call(DOUBLE, "js_math_expm1", &[(DOUBLE, &v)]))
         }
         Expr::MathExp(o) => {
             let v = lower_expr(ctx, o)?;

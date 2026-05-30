@@ -148,6 +148,8 @@ pub(super) fn register_stub_arities() {
     register(pipe_drain_callback as *const u8, 0);
     register(pipe_finish_destination_callback as *const u8, 0);
     register(writable_write_callback_noop as *const u8, 0);
+    register(duplex_pair_write_callback as *const u8, 3);
+    register(duplex_pair_final_callback as *const u8, 1);
     register(transform_write_callback as *const u8, 2);
     register(transform_flush_callback as *const u8, 2);
     register(pipeline_success_callback as *const u8, 0);
@@ -171,6 +173,14 @@ pub(super) fn register_stub_arities() {
     register(ns_is_paused0 as *const u8, 0);
     register(ns_unpipe1 as *const u8, 1);
     register(ns_readable_resume_microtask as *const u8, 0);
+    register(
+        super::readable_from_promises::ns_readable_from_promise_fulfilled as *const u8,
+        1,
+    );
+    register(
+        super::readable_from_promises::ns_readable_from_promise_rejected as *const u8,
+        1,
+    );
     register(ns_finished_error_false_close as *const u8, 0);
     register(ns_finished_signal_abort as *const u8, 0);
     register(ns_iter_to_array as *const u8, 1);
