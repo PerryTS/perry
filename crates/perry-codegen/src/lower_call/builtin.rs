@@ -486,19 +486,17 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Array" => {
-            // `new Array()` → empty array, `new Array(n)` → length-n array
-            // (slots NaN-boxed `undefined`, see issue #323), `new Array(a, b, c)` → 3-element array
-            // [a, b, c]. We handle the no-arg and single-numeric-arg cases
-            // here. Multi-arg / non-numeric single arg falls back to the
-            // generic Expr::New path.
+            // `new Array()` → empty array, `new Array(n)` → length-n sparse
+            // array after runtime validation, and `new Array(value)` with a
+            // non-number argument → one-element array. Multi-arg calls fall
+            // back to the generic Expr::New path.
             let blk = ctx.block();
             let handle = if args.is_empty() {
                 blk.call(I64, "js_array_create", &[])
             } else if args.len() == 1 {
-                let cap = lower_expr(ctx, &args[0])?;
+                let value = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                let cap_i32 = blk.fptosi(DOUBLE, &cap, I32);
-                blk.call(I64, "js_array_alloc_with_length", &[(I32, &cap_i32)])
+                blk.call(I64, "js_array_constructor_single", &[(DOUBLE, &value)])
             } else {
                 return Ok(None);
             };

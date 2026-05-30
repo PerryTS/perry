@@ -841,19 +841,16 @@ pub unsafe extern "C" fn js_new_function_construct(
                 );
             }
             "Array" => {
-                // `new Array(n)`: empty array of length n.
+                if args.len() == 1 {
+                    let arr = crate::array::js_array_constructor_single(args[0]);
+                    return crate::value::js_nanbox_pointer(arr as i64);
+                }
                 // `new Array(a, b, c)`: array filled with the args.
-                let single_len = args.len() == 1 && args[0].is_finite() && args[0] >= 0.0;
-                let len = if single_len {
-                    args[0] as u32
-                } else {
-                    args.len() as u32
-                };
+                let len = args.len() as u32;
                 let arr = crate::array::js_array_alloc(len);
-                if !single_len {
-                    for (i, &v) in args.iter().enumerate() {
-                        crate::array::js_array_set_f64(arr, i as u32, v);
-                    }
+                (*arr).length = len;
+                for (i, &v) in args.iter().enumerate() {
+                    crate::array::js_array_set_f64(arr, i as u32, v);
                 }
                 return crate::value::js_nanbox_pointer(arr as i64);
             }
