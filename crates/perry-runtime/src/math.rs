@@ -87,6 +87,60 @@ pub extern "C" fn js_math_fround(x: f64) -> f64 {
     x as f32 as f64
 }
 
+fn round_ties_to_even(value: f64) -> u64 {
+    let floor = value.floor();
+    let floor_int = floor as u64;
+    let frac = value - floor;
+    if frac < 0.5 {
+        floor_int
+    } else if frac > 0.5 {
+        floor_int + 1
+    } else if floor_int & 1 == 0 {
+        floor_int
+    } else {
+        floor_int + 1
+    }
+}
+
+/// Math.f16round(x) -> number — nearest IEEE-754 binary16 value
+#[no_mangle]
+pub extern "C" fn js_math_f16round(value: f64) -> f64 {
+    let x = crate::builtins::js_number_coerce(value);
+    if x == 0.0 || !x.is_finite() {
+        return x;
+    }
+
+    const MIN_HALF_SUBNORMAL: f64 = 5.960464477539063e-8; // 2^-24
+    const MIN_HALF_NORMAL: f64 = 0.00006103515625; // 2^-14
+    const MAX_HALF_FINITE: f64 = 65504.0;
+    const OVERFLOW_THRESHOLD: f64 = 65520.0;
+
+    let negative = x.is_sign_negative();
+    let abs = x.abs();
+    let rounded = if abs >= OVERFLOW_THRESHOLD {
+        f64::INFINITY
+    } else if abs < MIN_HALF_NORMAL {
+        let mantissa = round_ties_to_even(abs / MIN_HALF_SUBNORMAL);
+        mantissa as f64 * MIN_HALF_SUBNORMAL
+    } else {
+        let exponent = (((abs.to_bits() >> 52) & 0x7ff) as i32) - 1023;
+        let step = 2.0f64.powi(exponent - 10);
+        let significand = round_ties_to_even(abs / step);
+        let rounded = significand as f64 * step;
+        if rounded > MAX_HALF_FINITE {
+            f64::INFINITY
+        } else {
+            rounded
+        }
+    };
+
+    if negative {
+        -rounded
+    } else {
+        rounded
+    }
+}
+
 /// Math.clz32(x) -> number — count leading zeros of 32-bit integer
 #[no_mangle]
 pub extern "C" fn js_math_clz32(x: f64) -> f64 {

@@ -1025,6 +1025,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_clz32", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_cbrt", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_fround", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_f16round", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_sinh", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_cosh", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_tanh", DOUBLE, &[DOUBLE]);

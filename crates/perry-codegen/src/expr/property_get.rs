@@ -614,6 +614,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &ctor_handle), (I64, &key_raw)],
                     ));
                 }
+                if property == "f16round" {
+                    let math_idx = ctx.strings.intern("Math");
+                    let math_bytes_global =
+                        format!("@{}", ctx.strings.entry(math_idx).bytes_global);
+                    let math_len = "Math".len().to_string();
+                    let math_obj = ctx.block().call(
+                        DOUBLE,
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &math_bytes_global), (I64, &math_len)],
+                    );
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let math_handle = unbox_to_i64(blk, &math_obj);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &math_handle), (I64, &key_raw)],
+                    ));
+                }
                 if matches!(
                     property.as_str(),
                     "Console"

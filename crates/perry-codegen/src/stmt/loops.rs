@@ -965,7 +965,8 @@ pub(crate) fn expr_preserves_array_length(
         | Expr::MathSqrt(a)
         | Expr::MathFloor(a)
         | Expr::MathCeil(a)
-        | Expr::MathRound(a) => walk(a),
+        | Expr::MathRound(a)
+        | Expr::MathF16round(a) => walk(a),
         Expr::Array(elements) => elements.iter().all(&walk),
         Expr::ArraySpread(elements) => elements.iter().all(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e),

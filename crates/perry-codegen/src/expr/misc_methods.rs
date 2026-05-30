@@ -52,6 +52,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "js_math_fround", &[(DOUBLE, &v)]))
         }
+        Expr::MathF16round(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_math_f16round", &[(DOUBLE, &v)]))
+        }
 
         // -------- new Map([[k,v], ...]) — alloc empty map, ignore source --------
         Expr::MapNewFromArray(arr_expr) => {
