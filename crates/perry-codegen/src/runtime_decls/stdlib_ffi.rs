@@ -362,9 +362,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function(
         "js_async_resource_run_in_async_scope",
         DOUBLE,
-        &[I64, I64, DOUBLE, I64],
+        &[I64, DOUBLE, DOUBLE, I64],
     );
-    module.declare_function("js_async_resource_bind", I64, &[I64, I64]);
+    module.declare_function("js_async_resource_bind", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_async_resource_static_bind", I64, &[I64, DOUBLE]);
     module.declare_function("js_async_local_storage_disable", VOID, &[I64]);
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
