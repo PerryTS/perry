@@ -11,6 +11,10 @@ fn undefined_f64() -> f64 {
     f64::from_bits(crate::value::JSValue::undefined().bits())
 }
 
+fn null_f64() -> f64 {
+    f64::from_bits(crate::value::JSValue::null().bits())
+}
+
 fn string_f64(s: &str) -> f64 {
     let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
@@ -33,19 +37,23 @@ fn is_null_or_undefined(value: f64) -> bool {
     jv.is_null() || jv.is_undefined()
 }
 
-fn is_error_value(value: f64) -> bool {
+fn gc_type_of(value: f64) -> Option<u8> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
-        return false;
+        return None;
     }
     let ptr = jv.as_pointer::<u8>();
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return false;
+        return None;
     }
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR
+        Some((*gc_header).obj_type)
     }
+}
+
+fn is_error_value(value: f64) -> bool {
+    gc_type_of(value) == Some(crate::gc::GC_TYPE_ERROR)
 }
 
 fn regexp_ptr(pattern: f64) -> Option<*const crate::regex::RegExpHeader> {
@@ -321,6 +329,44 @@ fn throw_assertion(
     crate::exception::js_throw(make_assertion_error(
         message, actual, expected, operator, generated,
     ))
+}
+
+fn if_error_value_message(value: f64) -> Option<String> {
+    match gc_type_of(value) {
+        Some(crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_ERROR) => {}
+        _ => return None,
+    }
+
+    let message = read_property(value, "message");
+    if !crate::value::JSValue::from_bits(message.to_bits()).is_any_string() {
+        return None;
+    }
+
+    let message = value_to_string(message);
+    if !message.is_empty() {
+        return Some(message);
+    }
+
+    let name = read_property(value, "name");
+    if crate::value::JSValue::from_bits(name.to_bits()).is_any_string() {
+        let name = value_to_string(name);
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+
+    Some(message)
+}
+
+fn inspected_value_to_string(value: f64) -> String {
+    let inspected = crate::builtins::js_util_inspect(value, undefined_f64());
+    value_to_string(inspected)
+}
+
+fn if_error_message(value: f64) -> String {
+    let value_message =
+        if_error_value_message(value).unwrap_or_else(|| inspected_value_to_string(value));
+    format!("ifError got unwanted exception: {value_message}")
 }
 
 fn promise_ptr_from_value(value: f64) -> Option<*mut crate::promise::Promise> {
@@ -963,11 +1009,5 @@ pub extern "C" fn js_assert_if_error(value: f64) -> f64 {
     if is_null_or_undefined(value) {
         return undefined_f64();
     }
-    throw_assertion(
-        format!("ifError got unwanted exception: {}", value_to_string(value)),
-        value,
-        undefined_f64(),
-        "ifError",
-        true,
-    )
+    throw_assertion(if_error_message(value), value, null_f64(), "ifError", false)
 }
