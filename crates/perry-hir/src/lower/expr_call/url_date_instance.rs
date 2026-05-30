@@ -293,82 +293,86 @@ pub(super) fn try_url_date_weakref_instance(
                     | "setUTCMinutes" | "setUTCSeconds" | "setUTCMilliseconds" | "setFullYear"
                     | "setMonth" | "setDate" | "setHours" | "setMinutes" | "setSeconds"
                     | "setMilliseconds" | "setTime" => {
-                        if !args.is_empty() {
-                            let value_expr = args.into_iter().next().unwrap();
-                            let date_expr = lower_expr(ctx, &member.obj)?;
-                            let setter_call = match method_name {
-                                "setUTCFullYear" => Expr::DateSetUtcFullYear {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCMonth" => Expr::DateSetUtcMonth {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCDate" => Expr::DateSetUtcDate {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCHours" => Expr::DateSetUtcHours {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCMinutes" => Expr::DateSetUtcMinutes {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCSeconds" => Expr::DateSetUtcSeconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setUTCMilliseconds" => Expr::DateSetUtcMilliseconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setFullYear" => Expr::DateSetFullYear {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setMonth" => Expr::DateSetMonth {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setDate" => Expr::DateSetDate {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setHours" => Expr::DateSetHours {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setMinutes" => Expr::DateSetMinutes {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setSeconds" => Expr::DateSetSeconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setMilliseconds" => Expr::DateSetMilliseconds {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                "setTime" => Expr::DateSetTime {
-                                    date: Box::new(date_expr.clone()),
-                                    value: Box::new(value_expr),
-                                },
-                                _ => unreachable!(),
-                            };
-                            // #2089: Date is now a reference type — a setter
-                            // mutates the shared `DateCell` in place, so its
-                            // effect is already visible through every alias /
-                            // param / closure that holds this Date. The setter
-                            // call evaluates to the numeric ms (the JS setter
-                            // return value). The old `LocalSet(id, setter_call)`
-                            // writeback is dropped: it would now overwrite the
-                            // receiver local's Date POINTER with that number.
-                            return Ok(Ok(setter_call));
-                        }
+                        // #2851: Node Date setters accept optional trailing
+                        // components (e.g. `setUTCHours(h, min?, sec?, ms?)`)
+                        // and apply every supplied field in one call; an
+                        // omitted *leading* argument (`setHours()`) coerces to
+                        // NaN and makes the Date Invalid. We forward the entire
+                        // argument list to the runtime, which handles defaults,
+                        // NaN propagation, and the zero-argument case. So the
+                        // dispatch no longer requires `!args.is_empty()`.
+                        let setter_args = args;
+                        let date_expr = lower_expr(ctx, &member.obj)?;
+                        let date = Box::new(date_expr);
+                        let setter_call = match method_name {
+                            "setUTCFullYear" => Expr::DateSetUtcFullYear {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCMonth" => Expr::DateSetUtcMonth {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCDate" => Expr::DateSetUtcDate {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCHours" => Expr::DateSetUtcHours {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCMinutes" => Expr::DateSetUtcMinutes {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCSeconds" => Expr::DateSetUtcSeconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setUTCMilliseconds" => Expr::DateSetUtcMilliseconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setFullYear" => Expr::DateSetFullYear {
+                                date,
+                                args: setter_args,
+                            },
+                            "setMonth" => Expr::DateSetMonth {
+                                date,
+                                args: setter_args,
+                            },
+                            "setDate" => Expr::DateSetDate {
+                                date,
+                                args: setter_args,
+                            },
+                            "setHours" => Expr::DateSetHours {
+                                date,
+                                args: setter_args,
+                            },
+                            "setMinutes" => Expr::DateSetMinutes {
+                                date,
+                                args: setter_args,
+                            },
+                            "setSeconds" => Expr::DateSetSeconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setMilliseconds" => Expr::DateSetMilliseconds {
+                                date,
+                                args: setter_args,
+                            },
+                            "setTime" => Expr::DateSetTime {
+                                date,
+                                args: setter_args,
+                            },
+                            _ => unreachable!(),
+                        };
+                        // #2089: Date is a reference type — a setter mutates the
+                        // shared `DateCell` in place, so its effect is already
+                        // visible through every alias / param / closure that
+                        // holds this Date. The setter call evaluates to the
+                        // numeric ms (the JS setter return value).
+                        return Ok(Ok(setter_call));
                     }
                     _ => {} // Fall through to other handling
                 }

@@ -1464,68 +1464,70 @@ pub enum Expr {
     DateGetUtcSeconds(Box<Expr>),      // date.getUTCSeconds() -> number (0-59)
     DateGetUtcMilliseconds(Box<Expr>), // date.getUTCMilliseconds() -> number (0-999)
 
-    // Date setters (UTC variants) — return the new timestamp
+    // Date setters (UTC variants) — return the new timestamp. `args` carries
+    // all call arguments (Node setters accept optional trailing components,
+    // e.g. `setUTCHours(h, min?, sec?, ms?)`) — #2851.
     DateSetUtcFullYear {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMonth {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcDate {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcHours {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMinutes {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcSeconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetUtcMilliseconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Date setters (local-time variants) — return the new timestamp (#1187)
     DateSetFullYear {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMonth {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetDate {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetHours {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMinutes {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetSeconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetMilliseconds {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
     DateSetTime {
         date: Box<Expr>,
-        value: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     // Date misc

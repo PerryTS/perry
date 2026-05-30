@@ -210,15 +210,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]))
         }
-        Expr::DateSetUtcFullYear { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_full_year",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
+        Expr::DateSetUtcFullYear { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_FULL_YEAR,
+        ),
         Expr::DateGetDate(d) => {
             let v = lower_expr(ctx, d)?;
             Ok(ctx
@@ -414,24 +412,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_atanh", &[(DOUBLE, &v)]))
         }
-        Expr::DateSetUtcDate { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_date",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
-        Expr::DateSetUtcHours { date, value } => {
-            let d = lower_expr(ctx, date)?;
-            let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_date_set_utc_hours",
-                &[(DOUBLE, &d), (DOUBLE, &v)],
-            ))
-        }
+        Expr::DateSetUtcDate { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_DATE,
+        ),
+        Expr::DateSetUtcHours { date, args } => super::os_uri_dates::lower_date_setter(
+            ctx,
+            date,
+            args,
+            true,
+            super::os_uri_dates::DATE_FIELD_HOURS,
+        ),
         Expr::ProcessKill { pid, signal } => {
             let pid_d = lower_expr(ctx, pid)?;
             let sig_d = match signal {

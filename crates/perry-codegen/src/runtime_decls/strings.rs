@@ -1003,33 +1003,23 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_number_is_safe_integer", DOUBLE, &[DOUBLE]);
     // Date parsing / UTC constructors / UTC setters.
     module.declare_function("js_date_parse", DOUBLE, &[I64]);
-    module.declare_function(
-        "js_date_utc",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
+    // Date.UTC(args_ptr, argc) — buffer of NaN-boxed args + count (#2826).
+    module.declare_function("js_date_utc", DOUBLE, &[PTR, I32]);
     // `new Date(year, month, day?, hour?, min?, sec?, ms?)` (local time).
     module.declare_function(
         "js_date_new_local_components",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
-    module.declare_function("js_date_set_utc_full_year", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_month", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_date", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_hours", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_minutes", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_seconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_utc_milliseconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    // Local-time setters (#1187).
-    module.declare_function("js_date_set_full_year", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_month", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_date", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_hours", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_minutes", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_seconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_milliseconds", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_date_set_time", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Unified Date setter entry point (#2851):
+    // js_date_apply_setter(date, is_utc, field, args_ptr, argc). Replaces the
+    // per-setter (date, value) helpers — `args` carries optional trailing
+    // components.
+    module.declare_function(
+        "js_date_apply_setter",
+        DOUBLE,
+        &[DOUBLE, I32, I32, PTR, I32],
+    );
     // Math extras (stubs in expr.rs had fallen through to no-op/passthrough).
     module.declare_function("js_math_clz32", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_cbrt", DOUBLE, &[DOUBLE]);
