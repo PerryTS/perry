@@ -25,6 +25,9 @@ pub use headers::*;
 mod dispatch;
 pub use dispatch::*;
 
+mod body_metadata;
+pub use body_metadata::*;
+
 // Response handle storage
 lazy_static::lazy_static! {
     static ref FETCH_RESPONSES: Mutex<HashMap<usize, FetchResponse>> = Mutex::new(HashMap::new());
@@ -76,6 +79,9 @@ struct FetchResponse {
     body: Vec<u8>,
     body_present: bool,
     body_used: bool,
+    type_name: String,
+    url: String,
+    redirected: bool,
     /// Cached Headers handle id, allocated on first `response.headers`
     /// access. None until a property/method dispatcher needs to expose
     /// the headers as a Headers instance. Subsequent reads of `.headers`
@@ -229,6 +235,9 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -304,6 +313,9 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -381,6 +393,9 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -461,6 +476,9 @@ pub unsafe extern "C" fn js_fetch_post(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -560,6 +578,9 @@ pub unsafe extern "C" fn js_fetch_with_options(
                         body,
                         body_present: true,
                         body_used: false,
+                        type_name: "basic".to_string(),
+                        url: url.clone(),
+                        redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                     },
@@ -1051,6 +1072,17 @@ struct RequestRecord {
     body: Option<String>,
     body_used: bool,
     headers: HeadersStore,
+    destination: String,
+    referrer: String,
+    referrer_policy: String,
+    mode: String,
+    credentials: String,
+    cache: String,
+    redirect: String,
+    integrity: String,
+    keepalive: bool,
+    duplex: String,
+    signal: f64,
     /// Cached Headers handle id, allocated on first `request.headers` read so
     /// repeat reads return the same handle (preserves `req.headers ===
     /// req.headers`). Mirrors `FetchResponse::cached_headers_id` (#1649).
@@ -1122,6 +1154,9 @@ fn alloc_response(
             body,
             body_present,
             body_used: false,
+            type_name: "default".to_string(),
+            url: String::new(),
+            redirected: false,
             cached_headers_id: None,
             cached_body_stream_id: None,
         },
@@ -1229,6 +1264,9 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 body: resp.body.clone(),
                 body_present: resp.body_present,
                 body_used: false,
+                type_name: resp.type_name.clone(),
+                url: resp.url.clone(),
+                redirected: resp.redirected,
                 cached_headers_id: None,
                 cached_body_stream_id: None,
             }
@@ -1630,9 +1668,21 @@ pub unsafe extern "C" fn js_request_new(
     method_ptr: *const StringHeader,
     body_ptr: *const StringHeader,
     headers_handle: f64,
+    referrer_ptr: *const StringHeader,
+    referrer_policy_ptr: *const StringHeader,
+    mode_ptr: *const StringHeader,
+    credentials_ptr: *const StringHeader,
+    cache_ptr: *const StringHeader,
+    redirect_ptr: *const StringHeader,
+    integrity_ptr: *const StringHeader,
+    keepalive: f64,
+    duplex_ptr: *const StringHeader,
+    signal: f64,
 ) -> f64 {
     let url = string_from_header(url_ptr).unwrap_or_default();
-    let method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
+    let method = string_from_header(method_ptr)
+        .unwrap_or_else(|| "GET".to_string())
+        .to_ascii_uppercase();
     let body = string_from_header(body_ptr);
     let headers_id_in = handle_id(headers_handle);
     let headers = if headers_id_in != 0 {
@@ -1657,6 +1707,19 @@ pub unsafe extern "C" fn js_request_new(
             body,
             body_used: false,
             headers,
+            destination: String::new(),
+            referrer: string_from_header(referrer_ptr)
+                .unwrap_or_else(|| "about:client".to_string()),
+            referrer_policy: string_from_header(referrer_policy_ptr).unwrap_or_default(),
+            mode: string_from_header(mode_ptr).unwrap_or_else(|| "cors".to_string()),
+            credentials: string_from_header(credentials_ptr)
+                .unwrap_or_else(|| "same-origin".to_string()),
+            cache: string_from_header(cache_ptr).unwrap_or_else(|| "default".to_string()),
+            redirect: string_from_header(redirect_ptr).unwrap_or_else(|| "follow".to_string()),
+            integrity: string_from_header(integrity_ptr).unwrap_or_default(),
+            keepalive: body_metadata::bool_from_js(keepalive),
+            duplex: string_from_header(duplex_ptr).unwrap_or_else(|| "half".to_string()),
+            signal: body_metadata::signal_or_default(signal),
             cached_headers_id: None,
         },
     );
@@ -1762,6 +1825,17 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 body: req.body.clone(),
                 body_used: false,
                 headers: req.headers.clone(),
+                destination: req.destination.clone(),
+                referrer: req.referrer.clone(),
+                referrer_policy: req.referrer_policy.clone(),
+                mode: req.mode.clone(),
+                credentials: req.credentials.clone(),
+                cache: req.cache.clone(),
+                redirect: req.redirect.clone(),
+                integrity: req.integrity.clone(),
+                keepalive: req.keepalive,
+                duplex: req.duplex.clone(),
+                signal: req.signal,
                 cached_headers_id: None,
             }
         })

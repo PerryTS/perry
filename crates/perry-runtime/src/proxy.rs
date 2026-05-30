@@ -231,6 +231,26 @@ fn closure_from(value: f64) -> *const crate::ClosureHeader {
     ((bits & POINTER_MASK) as usize) as *const crate::ClosureHeader
 }
 
+/// Coerce a trap return value to a NaN-boxed boolean (`ToBoolean`), as the
+/// `Reflect.{set,deleteProperty,defineProperty,preventExtensions}` paths must
+/// return the trap's boolean result rather than discarding it.
+fn nanbox_bool(b: bool) -> f64 {
+    f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE })
+}
+
+fn coerce_trap_bool(value: f64) -> f64 {
+    nanbox_bool(crate::value::js_is_truthy(value) != 0)
+}
+
+/// Throw `TypeError: Reflect.<op> called on non-object`. Does not return.
+fn reflect_non_object_typeerror(op: &str) -> f64 {
+    let msg = format!("Reflect.{op} called on non-object");
+    let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_handle);
+    let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
+    crate::exception::js_throw(boxed);
+}
+
 /// Detect the runtime's "null object" sentinel returned by
 /// `js_native_call_method` when a method lookup falls off the end.
 /// Matches the static `NULL_OBJECT_BYTES` in `object.rs` — we treat
@@ -337,12 +357,35 @@ pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
     }
     let trap = handler_trap(handler, "set");
     if is_callable(trap) {
-        let _ = js_closure_call3(closure_from(trap), target, key, value);
-        return f64::from_bits(TAG_TRUE);
+        // #2756: the `set` trap's boolean result is observable through
+        // `Reflect.set(proxy, …)` (and strict-mode assignment). Coerce and
+        // return it rather than discarding it.
+        let trap_result = js_closure_call3(closure_from(trap), target, key, value);
+        return coerce_trap_bool(trap_result);
     }
-    // No set trap — write to target.
+    // No set trap — write to target and report the ordinary [[Set]] result.
+    reflect_ordinary_set(target, key, value)
+}
+
+/// Perform an ordinary (non-proxy) `[[Set]]` and report success as a NaN-boxed
+/// boolean, without throwing on a non-writable / non-extensible target the way
+/// strict-mode assignment does (#2756 / #615). Returns `false` when the write
+/// cannot be applied.
+fn reflect_ordinary_set(target: f64, key: f64, value: f64) -> f64 {
+    // Non-writable existing data property → write fails.
+    if let Some((writable, _configurable)) = crate::object::obj_value_attrs(target, key) {
+        if !writable {
+            return nanbox_bool(false);
+        }
+    }
+    // New property on a non-extensible object → write fails.
+    if crate::object::obj_value_no_extend(target)
+        && !crate::object::obj_value_has_own_key(target, key)
+    {
+        return nanbox_bool(false);
+    }
     target_set(target, key, value);
-    f64::from_bits(TAG_TRUE)
+    nanbox_bool(true)
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
@@ -407,16 +450,32 @@ pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
     }
     let trap = handler_trap(handler, "deleteProperty");
     if is_callable(trap) {
-        let _ = js_closure_call2(closure_from(trap), target, key);
-        return f64::from_bits(TAG_TRUE);
+        // #2760: the `deleteProperty` trap's boolean result is observable
+        // through `Reflect.deleteProperty(proxy, …)`.
+        let trap_result = js_closure_call2(closure_from(trap), target, key);
+        return coerce_trap_bool(trap_result);
     }
-    // Forward to target.
+    // Forward to target with ordinary `[[Delete]]` semantics.
+    reflect_ordinary_delete(target, key)
+}
+
+/// Perform an ordinary (non-proxy) `[[Delete]]` and report the result as a
+/// NaN-boxed boolean. Returns `false` for a non-configurable property (#2760),
+/// matching `Reflect.deleteProperty` rather than the silent-success behavior of
+/// the `delete` operator.
+fn reflect_ordinary_delete(target: f64, key: f64) -> f64 {
+    if let Some((_writable, configurable)) = crate::object::obj_value_attrs(target, key) {
+        if !configurable {
+            return nanbox_bool(false);
+        }
+    }
     let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
     let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
     if !obj_ptr.is_null() && !key_ptr.is_null() {
-        crate::object::js_object_delete_field(obj_ptr, key_ptr);
+        let deleted = crate::object::js_object_delete_field(obj_ptr, key_ptr);
+        return nanbox_bool(deleted != 0);
     }
-    f64::from_bits(TAG_TRUE)
+    nanbox_bool(true)
 }
 
 /// `proxy(arg0, arg1)` — if handler.apply exists, call it with
@@ -537,14 +596,15 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64) -> f64 {
     target_get(target, key)
 }
 
-/// `Reflect.set(target, key, value)` — always returns TAG_TRUE.
+/// `Reflect.set(target, key, value)` — returns the boolean result of the
+/// `[[Set]]` operation (#2756): `false` for a non-writable property or a new
+/// key on a non-extensible object, and the coerced trap result for a proxy.
 #[no_mangle]
 pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_set(target, key, value);
     }
-    target_set(target, key, value);
-    f64::from_bits(TAG_TRUE)
+    reflect_ordinary_set(target, key, value)
 }
 
 /// `Reflect.has(target, key)` — bool.
@@ -556,18 +616,15 @@ pub extern "C" fn js_reflect_has(target: f64, key: f64) -> f64 {
     crate::object::js_object_has_property(target, key)
 }
 
-/// `Reflect.deleteProperty(target, key)` — bool.
+/// `Reflect.deleteProperty(target, key)` — returns the boolean delete result
+/// (#2760): `false` for a non-configurable property, and the coerced trap
+/// result for a proxy.
 #[no_mangle]
 pub extern "C" fn js_reflect_delete(target: f64, key: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_delete(target, key);
     }
-    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
-    if !obj_ptr.is_null() && !key_ptr.is_null() {
-        crate::object::js_object_delete_field(obj_ptr, key_ptr);
-    }
-    f64::from_bits(TAG_TRUE)
+    reflect_ordinary_delete(target, key)
 }
 
 /// `Reflect.ownKeys(target)` — forward to getOwnPropertyNames.
@@ -586,20 +643,133 @@ pub extern "C" fn js_reflect_apply(f: f64, this_arg: f64, args_array: f64) -> f6
     call_with_args_array(f, args_array)
 }
 
-/// `Reflect.defineProperty(obj, key, descriptor)` — forwards to
-/// `js_object_define_property`, returns TAG_TRUE on success.
+/// `Reflect.defineProperty(obj, key, descriptor)` — returns `false` when the
+/// definition cannot be applied (#2758): defining a *new* property on a
+/// non-extensible object, or redefining an existing *non-configurable*
+/// property. Successful definitions return `true`. For a proxy target, the
+/// coerced `defineProperty` trap result is returned.
 #[no_mangle]
 pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f64 {
-    crate::object::js_object_define_property(obj, key, descriptor);
-    f64::from_bits(TAG_TRUE)
+    if lookup(obj).is_some() {
+        let id = lookup(obj).unwrap();
+        let (target, handler, revoked) = PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|o| o.as_ref())
+                .map(|e| (e.target, e.handler, e.revoked))
+                .unwrap_or((
+                    f64::from_bits(TAG_UNDEFINED),
+                    f64::from_bits(TAG_UNDEFINED),
+                    false,
+                ))
+        });
+        if revoked {
+            return revoked_return();
+        }
+        let trap = handler_trap(handler, "defineProperty");
+        if is_callable(trap) {
+            let trap_result = js_closure_call3(closure_from(trap), target, key, descriptor);
+            return coerce_trap_bool(trap_result);
+        }
+        // No trap — define on the underlying target with ordinary semantics.
+        return reflect_ordinary_define(target, key, descriptor);
+    }
+    reflect_ordinary_define(obj, key, descriptor)
 }
 
-/// `Reflect.getPrototypeOf(obj)` — returns `obj` itself (matches the test's
-/// `Reflect.getPrototypeOf(dog) === Dog.prototype` check which the compiler
-/// lowers to a constant-true anyway).
+/// Ordinary (non-proxy) `[[DefineOwnProperty]]` reporting success as a boolean.
+fn reflect_ordinary_define(obj: f64, key: f64, descriptor: f64) -> f64 {
+    let has_own = crate::object::obj_value_has_own_key(obj, key);
+    // Redefining a non-configurable existing property fails.
+    if has_own {
+        if let Some((_writable, configurable)) = crate::object::obj_value_attrs(obj, key) {
+            if !configurable {
+                return nanbox_bool(false);
+            }
+        }
+    } else if crate::object::obj_value_no_extend(obj) {
+        // Defining a brand-new property on a non-extensible object fails.
+        return nanbox_bool(false);
+    }
+    crate::object::js_object_define_property(obj, key, descriptor);
+    nanbox_bool(true)
+}
+
+/// `Reflect.getPrototypeOf(obj)` — shares the actual prototype lookup with
+/// `Object.getPrototypeOf` (#2757): returns the object's `[[Prototype]]`,
+/// including `null` for null-prototype objects, not the object itself.
 #[no_mangle]
 pub extern "C" fn js_reflect_get_prototype_of(obj: f64) -> f64 {
-    obj
+    crate::object::js_object_get_prototype_of(obj)
+}
+
+/// `Reflect.isExtensible(target)` — throws a `TypeError` for non-object targets
+/// (#2762), otherwise returns the boolean extensibility of the target. For a
+/// proxy, dispatches to the `isExtensible` trap when present.
+#[no_mangle]
+pub extern "C" fn js_reflect_is_extensible(target: f64) -> f64 {
+    if let Some(id) = lookup(target) {
+        let (inner, handler, revoked) = PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|o| o.as_ref())
+                .map(|e| (e.target, e.handler, e.revoked))
+                .unwrap_or((
+                    f64::from_bits(TAG_UNDEFINED),
+                    f64::from_bits(TAG_UNDEFINED),
+                    false,
+                ))
+        });
+        if revoked {
+            return revoked_return();
+        }
+        let trap = handler_trap(handler, "isExtensible");
+        if is_callable(trap) {
+            let trap_result = js_closure_call1(closure_from(trap), inner);
+            return coerce_trap_bool(trap_result);
+        }
+        return crate::object::js_object_is_extensible(inner);
+    }
+    if !crate::object::js_value_is_heap_object(target) {
+        return reflect_non_object_typeerror("isExtensible");
+    }
+    crate::object::js_object_is_extensible(target)
+}
+
+/// `Reflect.preventExtensions(target)` — throws a `TypeError` for non-object
+/// targets (#2762) and returns a boolean (`true` on success), unlike
+/// `Object.preventExtensions` which returns the object. For a proxy, dispatches
+/// to the `preventExtensions` trap when present and returns its coerced result.
+#[no_mangle]
+pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
+    if let Some(id) = lookup(target) {
+        let (inner, handler, revoked) = PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|o| o.as_ref())
+                .map(|e| (e.target, e.handler, e.revoked))
+                .unwrap_or((
+                    f64::from_bits(TAG_UNDEFINED),
+                    f64::from_bits(TAG_UNDEFINED),
+                    false,
+                ))
+        });
+        if revoked {
+            return revoked_return();
+        }
+        let trap = handler_trap(handler, "preventExtensions");
+        if is_callable(trap) {
+            let trap_result = js_closure_call1(closure_from(trap), inner);
+            return coerce_trap_bool(trap_result);
+        }
+        crate::object::js_object_prevent_extensions(inner);
+        return nanbox_bool(true);
+    }
+    if !crate::object::js_value_is_heap_object(target) {
+        return reflect_non_object_typeerror("preventExtensions");
+    }
+    crate::object::js_object_prevent_extensions(target);
+    nanbox_bool(true)
 }
 
 #[no_mangle]
@@ -838,3 +1008,12 @@ fn metadata_keys_for(target: f64, property_key: f64, include_prototypes: bool) -
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
     f64::from_bits(POINTER_TAG | ((arr as u64) & POINTER_MASK))
 }
+
+// #2762: retention anchors for the Reflect-specific extensibility entry points.
+// These `#[no_mangle]` fns are emitted only by codegen (no Rust caller in the
+// crate graph), so the auto-optimize whole-program LLVM bitcode rebuild would
+// otherwise internalize and dead-strip them. See node_stream_keepalive.rs.
+#[used]
+static KEEP_REFLECT_IS_EXTENSIBLE: extern "C" fn(f64) -> f64 = js_reflect_is_extensible;
+#[used]
+static KEEP_REFLECT_PREVENT_EXTENSIONS: extern "C" fn(f64) -> f64 = js_reflect_prevent_extensions;

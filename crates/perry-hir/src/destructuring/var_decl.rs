@@ -903,15 +903,15 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ctx.uses_fetch = true;
                             }
                             other
-                                if ctx
-                                    .resolve_class_alias(other)
-                                    .as_deref()
-                                    .is_some_and(|resolved| resolved == "File") =>
+                                if ctx.resolve_class_alias(other).as_deref().is_some_and(
+                                    |resolved| matches!(resolved, "Blob" | "File"),
+                                ) =>
                             {
+                                let resolved = ctx.resolve_class_alias(other).unwrap();
                                 ctx.register_native_instance(
                                     name.clone(),
                                     "blob".to_string(),
-                                    "File".to_string(),
+                                    resolved,
                                 );
                                 ctx.uses_fetch = true;
                             }
@@ -968,33 +968,36 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             }
                         }
                     } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
-                        let is_global_file = match member.obj.as_ref() {
+                        let class_name = match &member.prop {
+                            ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.as_ref()),
+                            ast::MemberProp::Computed(prop) => match prop.expr.as_ref() {
+                                ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let is_blob_file_ctor = match member.obj.as_ref() {
                             ast::Expr::Ident(obj_ident)
                                 if obj_ident.sym.as_ref() == "globalThis" =>
                             {
-                                match &member.prop {
-                                    ast::MemberProp::Ident(prop_ident) => {
-                                        prop_ident.sym.as_ref() == "File"
-                                    }
-                                    ast::MemberProp::Computed(prop) => {
-                                        matches!(
-                                            prop.expr.as_ref(),
-                                            ast::Expr::Lit(ast::Lit::Str(s))
-                                                if s.value.as_str() == Some("File")
-                                        )
-                                    }
-                                    _ => false,
-                                }
+                                true
                             }
+                            ast::Expr::Ident(obj_ident) => ctx
+                                .lookup_native_module(obj_ident.sym.as_ref())
+                                .is_some_and(|(module, _)| {
+                                    module == "buffer" || module == "node:buffer"
+                                }),
                             _ => false,
                         };
-                        if is_global_file {
-                            ctx.register_native_instance(
-                                name.clone(),
-                                "blob".to_string(),
-                                "File".to_string(),
-                            );
-                            ctx.uses_fetch = true;
+                        if is_blob_file_ctor {
+                            if let Some(class_name @ ("Blob" | "File")) = class_name {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "blob".to_string(),
+                                    class_name.to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
                         }
                     }
                 }
@@ -1049,29 +1052,44 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                 }
-                // Issue #234: const blob = await <res>.blob() — register `blob`
-                // as a blob::Blob native instance so subsequent `blob.text()` /
-                // `.arrayBuffer()` / `.bytes()` / `.slice()` / `.size` /
-                // `.type` calls dispatch through the codegen `module=="blob"`
-                // arm in `lower_call.rs`.
+                // Issue #234 / fetch body helpers: const blob = await <res|req>.blob()
+                // registers Blob results; const form = await <res|req>.formData()
+                // registers FormData results so follow-up calls dispatch through
+                // the typed fetch lowering instead of the generic handle path.
                 if let ast::Expr::Await(await_expr) = init_expr.as_ref() {
                     if let ast::Expr::Call(call_expr) = await_expr.arg.as_ref() {
                         if let ast::Callee::Expr(callee) = &call_expr.callee {
                             if let ast::Expr::Member(member) = callee.as_ref() {
                                 if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                                        if prop_ident.sym.as_ref() == "blob" {
-                                            if let Some((_, c)) =
-                                                ctx.lookup_native_instance(obj_ident.sym.as_ref())
-                                            {
-                                                if c == "Response" {
-                                                    ctx.register_native_instance(
-                                                        name.clone(),
-                                                        "blob".to_string(),
-                                                        "Blob".to_string(),
-                                                    );
+                                        match prop_ident.sym.as_ref() {
+                                            "blob" => {
+                                                if let Some((_, c)) = ctx
+                                                    .lookup_native_instance(obj_ident.sym.as_ref())
+                                                {
+                                                    if c == "Response" || c == "Request" {
+                                                        ctx.register_native_instance(
+                                                            name.clone(),
+                                                            "blob".to_string(),
+                                                            "Blob".to_string(),
+                                                        );
+                                                    }
                                                 }
                                             }
+                                            "formData" => {
+                                                if let Some((_, c)) = ctx
+                                                    .lookup_native_instance(obj_ident.sym.as_ref())
+                                                {
+                                                    if c == "Response" || c == "Request" {
+                                                        ctx.register_native_instance(
+                                                            name.clone(),
+                                                            "FormData".to_string(),
+                                                            "FormData".to_string(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -1532,9 +1550,18 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                     Expr::PropertyGet { object, property }
-                        if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "File" =>
+                        if matches!(object.as_ref(), Expr::GlobalGet(_))
+                            && matches!(property.as_str(), "Blob" | "File") =>
                     {
-                        ctx.register_let_class_alias(name.clone(), "File".to_string());
+                        ctx.register_let_class_alias(name.clone(), property.clone());
+                        ctx.uses_fetch = true;
+                    }
+                    Expr::PropertyGet { object, property }
+                        if matches!(object.as_ref(), Expr::NativeModuleRef(module)
+                            if module == "buffer" || module == "node:buffer")
+                            && matches!(property.as_str(), "Blob" | "File") =>
+                    {
+                        ctx.register_let_class_alias(name.clone(), property.clone());
                         ctx.uses_fetch = true;
                     }
                     // Issue #838: `var p = <ClassName>.prototype` records
