@@ -872,9 +872,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path.win32", "toNamespacedPath") => {
             crate::path::js_path_win32_to_namespaced_path_value(arg(0))
         }
-        ("path.win32", "_makeLong") => {
-            crate::path::js_path_win32_to_namespaced_path_value(arg(0))
-        }
+        ("path.win32", "_makeLong") => crate::path::js_path_win32_to_namespaced_path_value(arg(0)),
         ("path.win32", "isAbsolute") => bool_to_f64(crate::path::js_path_win32_is_absolute(
             require_path_str_ptr(0),
         )),
