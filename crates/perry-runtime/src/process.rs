@@ -1244,19 +1244,14 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
 /// `process.env.X = v` now persisting via std::env (#1344), eager loading
 /// is meaningful.
 #[no_mangle]
-pub extern "C" fn js_process_load_env_file(path_ptr: *const StringHeader) {
-    let target = unsafe {
-        if path_ptr.is_null() {
-            ".env".to_string()
-        } else {
-            let len = (*path_ptr).byte_len as usize;
-            let data = (path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            match std::str::from_utf8(bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => return,
-            }
-        }
+pub extern "C" fn js_process_load_env_file(path_value: f64) {
+    let jv = JSValue::from_bits(path_value.to_bits());
+    let target = if jv.is_undefined() || jv.is_null() {
+        ".env".to_string()
+    } else {
+        unsafe { validate_load_env_file_url(path_value) };
+        unsafe { crate::fs::decode_path_value(path_value) }
+            .unwrap_or_else(|| crate::fs::validate::throw_invalid_path_arg("path", path_value))
     };
     let contents = match std::fs::read_to_string(&target) {
         Ok(s) => s,
@@ -1264,39 +1259,148 @@ pub extern "C" fn js_process_load_env_file(path_ptr: *const StringHeader) {
             throw_load_env_file_open_error(&err, &target);
         },
     };
-    for line in contents.lines() {
-        let trimmed = line.trim_start();
-        // Comments and blank lines.
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
+    for (key, value) in parse_dotenv_entries(&contents) {
+        if std::env::var_os(&key).is_none() {
+            std::env::set_var(key, value);
         }
-        let Some((raw_key, raw_value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        let key = raw_key.trim();
-        if key.is_empty() {
-            continue;
-        }
-        // Strip a matched surrounding quote pair on the trimmed value;
-        // otherwise keep the trimmed text verbatim (so unquoted spaces
-        // around `=` are dropped but inner `=` survives — see Node's
-        // built-in `.env` parser).
-        let value_trimmed = raw_value.trim();
-        let value = strip_matched_quotes(value_trimmed);
-        std::env::set_var(key, value);
     }
 }
 
-fn strip_matched_quotes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' || first == b'\'') && first == last {
-            return &s[1..s.len() - 1];
-        }
+unsafe fn validate_load_env_file_url(path_value: f64) {
+    let jv = JSValue::from_bits(path_value.to_bits());
+    if !jv.is_pointer() {
+        return;
     }
-    s
+    let obj = jv.as_pointer::<crate::object::ObjectHeader>();
+    if obj.is_null() {
+        return;
+    }
+    let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PROTOCOL,
+    ));
+    if protocol.is_empty() {
+        return;
+    }
+    if protocol != "file:" {
+        crate::fs::validate::throw_type_error_with_code(
+            "The URL must be of scheme file",
+            "ERR_INVALID_URL_SCHEME",
+        );
+    }
+
+    let pathname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PATHNAME,
+    ));
+    if has_encoded_forward_slash(&pathname) {
+        crate::fs::validate::throw_type_error_with_code(
+            "File URL path must not include encoded / characters",
+            "ERR_INVALID_FILE_URL_PATH",
+        );
+    }
+}
+
+fn has_encoded_forward_slash(pathname: &str) -> bool {
+    let bytes = pathname.as_bytes();
+    let mut i = 0usize;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' && bytes[i + 1] == b'2' && (bytes[i + 2] | 0x20) == b'f' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn parse_dotenv_entries(contents: &str) -> Vec<(String, String)> {
+    let bytes = contents.as_bytes();
+    let mut entries = Vec::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        if bytes[i] == b'\n' {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'#' {
+            skip_to_next_line(bytes, &mut i);
+            continue;
+        }
+
+        if bytes[i..].starts_with(b"export")
+            && bytes
+                .get(i + b"export".len())
+                .is_some_and(|b| matches!(*b, b' ' | b'\t'))
+        {
+            i += b"export".len();
+            while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+                i += 1;
+            }
+        }
+
+        let key_start = i;
+        while i < bytes.len() && bytes[i] != b'=' && bytes[i] != b'\n' {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] == b'\n' {
+            skip_to_next_line(bytes, &mut i);
+            continue;
+        }
+
+        let key = contents[key_start..i].trim();
+        i += 1; // '='
+        if key.is_empty() {
+            skip_to_next_line(bytes, &mut i);
+            continue;
+        }
+
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+            i += 1;
+        }
+
+        let value = if i < bytes.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+            let quote = bytes[i];
+            i += 1;
+            let value_start = i;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            let value = contents[value_start..i].to_string();
+            if i < bytes.len() {
+                i += 1;
+            }
+            skip_to_next_line(bytes, &mut i);
+            value
+        } else {
+            let value_start = i;
+            while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'#' {
+                i += 1;
+            }
+            let value = contents[value_start..i].trim().to_string();
+            skip_to_next_line(bytes, &mut i);
+            value
+        };
+
+        entries.push((key.to_string(), value));
+    }
+
+    entries
+}
+
+fn skip_to_next_line(bytes: &[u8], i: &mut usize) {
+    while *i < bytes.len() && bytes[*i] != b'\n' {
+        *i += 1;
+    }
+    if *i < bytes.len() {
+        *i += 1;
+    }
 }
 
 unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> ! {
