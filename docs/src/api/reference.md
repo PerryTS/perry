@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1820 entries across 89 modules.
+Total: 1837 entries across 90 modules.
 
 ## Modules
 
@@ -76,6 +76,7 @@ Total: 1820 entries across 89 modules.
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
+- [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
@@ -2074,9 +2075,34 @@ Total: 1820 entries across 89 modules.
 
 ### Methods
 
+- `clearLine` — module
+- `clearScreenDown` — module
 - `close` — instance
 - `createInterface` — module
+- `cursorTo` — module
+- `emitKeypressEvents` — module
+- `getCursorPos` — instance
+- `getPrompt` — instance
+- `moveCursor` — module
 - `on` — instance
+- `pause` — instance
+- `prompt` — instance
+- `question` — instance
+- `resume` — instance
+- `setPrompt` — instance
+- `write` — instance
+
+## `readline/promises`
+
+### Classes
+
+- `Interface`
+- `Readline`
+
+### Methods
+
+- `close` — instance
+- `createInterface` — module
 - `question` — instance
 
 ## `redis`

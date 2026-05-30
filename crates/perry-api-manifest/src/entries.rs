@@ -131,7 +131,12 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2", "sys"];
+pub const NODE_SUBMODULES: &[&str] = &[
+    "stream/promises",
+    "readline/promises",
+    "punycode.ucs2",
+    "sys",
+];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -1950,9 +1955,33 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    method("readline", "clearLine", false, None),
+    method("readline", "clearScreenDown", false, None),
+    method("readline", "cursorTo", false, None),
+    method("readline", "moveCursor", false, None),
+    method("readline", "emitKeypressEvents", false, None),
     method("readline", "question", true, None),
     method("readline", "on", true, None),
     method("readline", "close", true, None),
+    method("readline", "pause", true, None),
+    method("readline", "resume", true, None),
+    method("readline", "prompt", true, None),
+    method("readline", "setPrompt", true, None),
+    method("readline", "getPrompt", true, None),
+    method("readline", "write", true, None),
+    method("readline", "getCursorPos", true, None),
+    method_sig(
+        "readline/promises",
+        "createInterface",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Any,
+    ),
+    method("readline/promises", "question", true, None),
+    method("readline/promises", "close", true, None),
+    class("readline/promises", "Interface"),
+    class("readline/promises", "Readline"),
     method_sig(
         "worker_threads",
         "getEnvironmentData",

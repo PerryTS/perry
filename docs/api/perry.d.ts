@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1820 entries across 89 modules
+// Coverage: 1837 entries across 90 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2490,6 +2490,25 @@ declare module "rate-limiter-flexible" {
 }
 
 declare module "readline" {
+  /** stdlib */
+  export function clearLine(...args: any[]): any;
+  /** stdlib */
+  export function clearScreenDown(...args: any[]): any;
+  /** stdlib */
+  export function createInterface(p0: any): any;
+  /** stdlib */
+  export function cursorTo(...args: any[]): any;
+  /** stdlib */
+  export function emitKeypressEvents(...args: any[]): any;
+  /** stdlib */
+  export function moveCursor(...args: any[]): any;
+}
+
+declare module "readline/promises" {
+  /** stdlib */
+  export class Interface { [key: string]: any; }
+  /** stdlib */
+  export class Readline { [key: string]: any; }
   /** stdlib */
   export function createInterface(p0: any): any;
 }
