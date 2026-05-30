@@ -274,7 +274,7 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return func_ptr;
     }
-    // BOUND_FUNCTION_FUNC_PTR (0xBADD_B1ND) is the Function.prototype.bind
+    // BOUND_FUNCTION_FUNC_PTR (0xBADD_B12D) is the Function.prototype.bind
     // sentinel — like BOUND_METHOD_FUNC_PTR it's not a real code address, so
     // pass it through here and let the call sites route to
     // dispatch_bound_function (#2840).

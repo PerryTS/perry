@@ -1489,9 +1489,12 @@ pub extern "C" fn js_string_replace_regex_fn(
                     let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
                     crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
                 }
-                // The groups object handle is a POINTER_TAG raw root — its
-                // refreshed nanbox value is exactly the `groups` callback arg.
-                arg_handles.push(groups_handle);
+                // Re-root the (possibly-moved) groups object as a NaN-boxed
+                // pointer value so it lands in the uniform `arg_handles` list
+                // alongside the other NaN-boxed callback args.
+                let groups_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                let groups_value = crate::value::js_nanbox_pointer(groups_ptr as i64);
+                arg_handles.push(scope.root_nanbox_f64(groups_value));
             }
 
             let call_args: Vec<f64> = arg_handles.iter().map(|h| h.get_nanbox_f64()).collect();

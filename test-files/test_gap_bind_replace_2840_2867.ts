@@ -29,7 +29,7 @@ console.log("bind multi-partial length:", a3.length); // 1
 
 // --- #2867: String.replace regex callback arguments ---
 
-function argsFor(pattern: RegExp, input: string) {
+function argsFor(label: string, pattern: RegExp, input: string) {
   let seen: string[] = [];
   input.replace(pattern, function (...args: any[]) {
     seen = args.map((v) =>
@@ -37,12 +37,12 @@ function argsFor(pattern: RegExp, input: string) {
     );
     return "x";
   });
-  console.log(String(pattern), seen.length, seen.join("|"));
+  console.log(label, seen.length, seen.join("|"));
 }
 
-argsFor(/b/, "abc"); // /b/ 3 b|1|abc
-argsFor(/(a)(b)(c)/, "abc"); // /(a)(b)(c)/ 6 abc|a|b|c|0|abc
-argsFor(/(?<word>\w+)-(?<num>\d+)/, "abc-123"); // 6 abc-123|abc|123|0|abc-123|{"word":"abc","num":"123"}
+argsFor("no-capture", /b/, "abc"); // no-capture 3 b|1|abc
+argsFor("captures", /(a)(b)(c)/, "abc"); // captures 6 abc|a|b|c|0|abc
+argsFor("named", /(?<word>\w+)-(?<num>\d+)/, "abc-123"); // named 6 abc-123|abc|123|0|abc-123|{"word":"abc","num":"123"}
 
 // Global flag still calls the callback per match with the full arg list.
 const out = "abcabc".replace(/(a)(b)/g, (m, p1, p2, off, str) => {

@@ -565,7 +565,7 @@ pub const BOUND_METHOD_FUNC_PTR: *const u8 = 0xBADD_DEAD_u64 as *const u8;
 ///   [0] = target closure value (f64, NaN-boxed)
 ///   [1] = bound `this` value (f64)
 ///   [2] = bound-args JS Array pointer (i64; 0 when no partial args)
-pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B1ND_u64 as *const u8;
+pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B12D_u64 as *const u8;
 
 /// Flag stored in the high bit of capture_count to indicate that capture slot 0
 /// holds `this` (i.e., this closure is an object literal method that captures `this`).
