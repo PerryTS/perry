@@ -1244,59 +1244,78 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
 /// `process.env.X = v` now persisting via std::env (#1344), eager loading
 /// is meaningful.
 #[no_mangle]
-pub extern "C" fn js_process_load_env_file(path_ptr: *const StringHeader) {
-    let target = unsafe {
-        if path_ptr.is_null() {
-            ".env".to_string()
-        } else {
-            let len = (*path_ptr).byte_len as usize;
-            let data = (path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            match std::str::from_utf8(bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => return,
-            }
-        }
-    };
+pub extern "C" fn js_process_load_env_file(path_value: f64) {
+    let target = load_env_file_path(path_value);
     let contents = match std::fs::read_to_string(&target) {
         Ok(s) => s,
         Err(err) => unsafe {
             throw_load_env_file_open_error(&err, &target);
         },
     };
-    for line in contents.lines() {
-        let trimmed = line.trim_start();
-        // Comments and blank lines.
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
+    for (key, value) in crate::util_parse_env::parse_env(&contents) {
+        if std::env::var_os(&key).is_none() {
+            std::env::set_var(key, value);
         }
-        let Some((raw_key, raw_value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        let key = raw_key.trim();
-        if key.is_empty() {
-            continue;
-        }
-        // Strip a matched surrounding quote pair on the trimmed value;
-        // otherwise keep the trimmed text verbatim (so unquoted spaces
-        // around `=` are dropped but inner `=` survives — see Node's
-        // built-in `.env` parser).
-        let value_trimmed = raw_value.trim();
-        let value = strip_matched_quotes(value_trimmed);
-        std::env::set_var(key, value);
     }
 }
 
-fn strip_matched_quotes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' || first == b'\'') && first == last {
-            return &s[1..s.len() - 1];
-        }
+fn load_env_file_path(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return ".env".to_string();
     }
-    s
+    unsafe {
+        validate_load_env_file_url(value);
+        crate::fs::decode_path_value(value)
+            .unwrap_or_else(|| crate::fs::validate::throw_invalid_path_arg("path", value))
+    }
+}
+
+unsafe fn validate_load_env_file_url(value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return;
+    }
+    let obj = jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+    if obj.is_null() || !crate::url::is_url_object_shape(obj) {
+        return;
+    }
+    let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PROTOCOL,
+    ));
+    if protocol != "file:" {
+        throw_invalid_load_env_file_url_scheme();
+    }
+    let pathname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PATHNAME,
+    ));
+    if has_encoded_forward_slash(&pathname) {
+        crate::fs::validate::throw_type_error_with_code(
+            "File URL path must not include encoded / characters",
+            "ERR_INVALID_FILE_URL_PATH",
+        );
+    }
+}
+
+fn has_encoded_forward_slash(pathname: &str) -> bool {
+    let bytes = pathname.as_bytes();
+    let mut i = 0usize;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' && bytes[i + 1] == b'2' && (bytes[i + 2] | 0x20) == b'f' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn throw_invalid_load_env_file_url_scheme() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "The URL must be of scheme file",
+        "ERR_INVALID_URL_SCHEME",
+    )
 }
 
 unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> ! {
