@@ -22,6 +22,43 @@ fn readable_iterator_done() -> f64 {
     resolved_promise(iterator_result(f64::from_bits(TAG_UNDEFINED), true))
 }
 
+extern "C" fn ns_readable_iterator_chunk_fulfilled(
+    closure: *const ClosureHeader,
+    value: f64,
+) -> f64 {
+    let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    if !outer.is_null() {
+        crate::promise::js_promise_resolve(outer, iterator_result(value, false));
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn ns_readable_iterator_chunk_rejected(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    if !outer.is_null() {
+        crate::promise::js_promise_reject(outer, reason);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn readable_iterator_chunk_result(value: f64) -> f64 {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return resolved_promise(iterator_result(value, false));
+    }
+
+    let inner = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
+    let outer = crate::promise::js_promise_new();
+    let fulfill = js_closure_alloc(ns_readable_iterator_chunk_fulfilled as *const u8, 1);
+    let reject = js_closure_alloc(ns_readable_iterator_chunk_rejected as *const u8, 1);
+    js_closure_set_capture_ptr(fulfill, 0, outer as i64);
+    js_closure_set_capture_ptr(reject, 0, outer as i64);
+    crate::promise::js_promise_attach_handlers(inner, fulfill, reject);
+    box_pointer(outer as *const u8)
+}
+
 fn destroy_on_return_from_options(opts: f64) -> bool {
     !matches!(
         get_hidden_value(opts, hidden_key(b"destroyOnReturn")),
@@ -87,7 +124,7 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
             (iterator_local_index(iterator) + 1) as f64,
         );
         mark_disturbed(stream);
-        return resolved_promise(iterator_result(value, false));
+        return readable_iterator_chunk_result(value);
     }
     if let Some(err) = readable_hidden_error(stream) {
         set_hidden_value(
@@ -198,4 +235,6 @@ pub(super) fn register_arities() {
     crate::closure::js_register_closure_arity(ns_readable_iterator_next as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_readable_iterator_return as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_readable_iterator_self as *const u8, 0);
+    crate::closure::js_register_closure_arity(ns_readable_iterator_chunk_fulfilled as *const u8, 1);
+    crate::closure::js_register_closure_arity(ns_readable_iterator_chunk_rejected as *const u8, 1);
 }

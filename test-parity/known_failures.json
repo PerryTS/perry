@@ -380,18 +380,6 @@
     "category": "bug-open",
     "reason": "node:stream: Readable.from(asyncGen yielding mixed types) \u2014 types lost or wrong. Flips to PASS when #1532 lands."
   },
-  "node-suite/stream/readable/from-array-of-promises": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from([P1, P2, P3]) \u2014 does not await each Promise. Flips to PASS when #1532 lands."
-  },
-  "node-suite/stream/readable/from-rejected-promise-in-array": {
-    "issue": "1532",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream: Readable.from(array with one Promise.reject) \u2014 error not emitted at the right point. Flips to PASS when #1532 lands."
-  },
   "node-suite/stream/readable/from-gen-yield-order": {
     "issue": "1532",
     "added": "2026-05-24",

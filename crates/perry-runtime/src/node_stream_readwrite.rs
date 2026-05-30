@@ -611,9 +611,115 @@ pub(super) fn end_pipe_destinations(stream: f64) {
     }
 }
 
+fn hidden_readable_from_promise_pending_key() -> *mut crate::string::StringHeader {
+    hidden_key(b"__perryReadableFromPromisePending")
+}
+
+fn attach_readable_from_promise_chunk(stream: f64, chunk: f64) -> bool {
+    if crate::promise::js_value_is_promise(chunk) == 0 {
+        return false;
+    }
+    if has_truthy_hidden(stream, hidden_readable_from_promise_pending_key()) {
+        return true;
+    }
+    let promise = crate::value::js_nanbox_get_pointer(chunk) as *mut crate::promise::Promise;
+    match crate::promise::js_promise_state(promise) {
+        1 => {
+            settle_readable_from_promise_fulfilled(
+                stream,
+                chunk,
+                crate::promise::js_promise_result(promise),
+            );
+            return true;
+        }
+        2 => {
+            settle_readable_from_promise_rejected(
+                stream,
+                chunk,
+                crate::promise::js_promise_result(promise),
+            );
+            return true;
+        }
+        _ => {}
+    }
+
+    let fulfill = js_closure_alloc(ns_readable_from_promise_fulfilled as *const u8, 2);
+    let reject = js_closure_alloc(ns_readable_from_promise_rejected as *const u8, 2);
+    js_closure_set_capture_ptr(fulfill, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(fulfill, 1, chunk.to_bits() as i64);
+    js_closure_set_capture_ptr(reject, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(reject, 1, chunk.to_bits() as i64);
+    set_hidden_value(
+        stream,
+        hidden_readable_from_promise_pending_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    crate::promise::js_promise_attach_handlers(promise, fulfill, reject);
+    true
+}
+
+fn settle_readable_from_promise_fulfilled(stream: f64, chunk: f64, value: f64) {
+    set_hidden_value(
+        stream,
+        hidden_readable_from_promise_pending_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    if stream_destroyed(stream) {
+        return;
+    }
+    consume_readable_buffered_front(stream, chunk);
+    mark_disturbed(stream);
+    if readable_is_flowing(stream) {
+        emit_readable_data_unchecked(stream, value);
+        schedule_readable_from_drain(stream);
+    } else {
+        buffer_pending_readable_chunk(stream, value);
+    }
+}
+
+fn settle_readable_from_promise_rejected(stream: f64, chunk: f64, reason: f64) {
+    set_hidden_value(
+        stream,
+        hidden_readable_from_promise_pending_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    if !stream_destroyed(stream) {
+        consume_readable_buffered_front(stream, chunk);
+        let _ = emit_stream_event(stream, string_value(b"error"), &[reason]);
+        destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+    }
+}
+
+pub(super) extern "C" fn ns_readable_from_promise_fulfilled(
+    closure: *const ClosureHeader,
+    value: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let chunk = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    settle_readable_from_promise_fulfilled(stream, chunk, value);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+pub(super) extern "C" fn ns_readable_from_promise_rejected(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let chunk = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    settle_readable_from_promise_rejected(stream, chunk, reason);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 pub(super) fn schedule_readable_from_drain(stream: f64) {
     if readable_hidden_chunks(stream).is_none()
         || has_truthy_hidden(stream, hidden_drain_scheduled_key())
+        || has_truthy_hidden(stream, hidden_readable_from_promise_pending_key())
         || readable_is_paused(stream)
         || stream_destroyed(stream)
     {
@@ -1054,6 +1160,9 @@ pub(super) fn drain_readable_from_events(stream: f64) {
                 }
                 consume_readable_buffered_front(stream, chunk);
                 emit_readable_data_unchecked(stream, chunk);
+                return;
+            }
+            if attach_readable_from_promise_chunk(stream, chunk) {
                 return;
             }
             consume_readable_buffered_front(stream, chunk);
