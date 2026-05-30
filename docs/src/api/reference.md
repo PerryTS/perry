@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1837 entries across 89 modules.
+Total: 1854 entries across 89 modules.
 
 ## Modules
 
@@ -2296,7 +2296,24 @@ Total: 1837 entries across 89 modules.
 
 ### Methods
 
+- `ReadStream` — module
+- `WriteStream` — module
+- `_refreshSize` — instance *(class: `WriteStream`)*
+- `addListener` — instance *(class: `WriteStream`)*
+- `clearLine` — instance *(class: `WriteStream`)*
+- `clearScreenDown` — instance *(class: `WriteStream`)*
+- `cursorTo` — instance *(class: `WriteStream`)*
+- `getColorDepth` — instance *(class: `WriteStream`)*
+- `getWindowSize` — instance *(class: `WriteStream`)*
+- `hasColors` — instance *(class: `WriteStream`)*
 - `isatty` — module
+- `moveCursor` — instance *(class: `WriteStream`)*
+- `off` — instance *(class: `WriteStream`)*
+- `on` — instance *(class: `WriteStream`)*
+- `once` — instance *(class: `WriteStream`)*
+- `removeAllListeners` — instance *(class: `WriteStream`)*
+- `removeListener` — instance *(class: `WriteStream`)*
+- `setRawMode` — instance *(class: `ReadStream`)*
 
 ## `tursodb`
 

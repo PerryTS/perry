@@ -3116,6 +3116,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
     class("tty", "WriteStream"),
+    // Constructor-style factory dispatch (`tty.ReadStream(fd)` /
+    // `tty.WriteStream(fd)`) — `has_receiver: false` rows in
+    // NATIVE_MODULE_TABLE need a matching Method entry so the
+    // dispatch->manifest drift guard (manifest_consistency.rs) passes.
+    method("tty", "ReadStream", false, None),
+    method("tty", "WriteStream", false, None),
     method("tty", "setRawMode", true, Some("ReadStream")),
     method("tty", "getColorDepth", true, Some("WriteStream")),
     method("tty", "hasColors", true, Some("WriteStream")),
