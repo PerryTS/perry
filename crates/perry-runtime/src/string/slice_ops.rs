@@ -95,6 +95,76 @@ pub extern "C" fn js_string_substring(
     js_string_from_bytes(slice_bytes.as_ptr(), slice_bytes.len() as u32)
 }
 
+/// Legacy `String.prototype.substr(start, length)`.
+///
+/// Differs from `substring`/`slice`:
+///   * a negative `start` counts from the END of the string
+///     (`max(len + start, 0)`),
+///   * the second argument is a LENGTH, not an end index, and a missing /
+///     non-positive length yields the empty string vs. "rest of string" for an
+///     omitted length.
+///
+/// `start` and `length` arrive already integer-coerced from codegen. `length`
+/// uses the i32 sentinel `i32::MIN` to mean "argument omitted" — Node treats an
+/// omitted length as "to the end of the string", which a real call site can
+/// never reach with a finite numeric arg (`substr(0, undefined)` coerces the
+/// length to 0, matching JS). Closes #2897.
+#[no_mangle]
+pub extern "C" fn js_string_substr(
+    s: *const StringHeader,
+    start: i32,
+    length: i32,
+) -> *mut StringHeader {
+    if !is_valid_string_ptr(s) {
+        return js_string_from_bytes(ptr::null(), 0);
+    }
+
+    let len = unsafe { (*s).utf16_len } as i32;
+
+    // Negative start counts from the end; clamp into [0, len].
+    let start = if start < 0 {
+        (len + start).max(0)
+    } else {
+        start.min(len)
+    };
+
+    // i32::MIN is the "length omitted" sentinel → take the rest of the string.
+    let end = if length == i32::MIN {
+        len
+    } else if length <= 0 {
+        // Non-positive length yields the empty string.
+        return js_string_from_bytes(ptr::null(), 0);
+    } else {
+        (start as i64 + length as i64).min(len as i64) as i32
+    };
+
+    if start >= end {
+        return js_string_from_bytes(ptr::null(), 0);
+    }
+
+    // ASCII fast path: byte offsets == UTF-16 offsets.
+    if is_ascii_string(s) {
+        let slice_len = (end - start) as u32;
+        unsafe {
+            let src = string_data(s).add(start as usize);
+            return js_string_from_ascii_bytes(src, slice_len);
+        }
+    }
+
+    let str_data = string_as_str(s);
+    let byte_start = utf16_offset_to_byte_offset(str_data, start as usize);
+    let byte_end = utf16_offset_to_byte_offset(str_data, end as usize);
+    let slice_bytes = &str_data.as_bytes()[byte_start..byte_end];
+    js_string_from_bytes(slice_bytes.as_ptr(), slice_bytes.len() as u32)
+}
+
+// `#[used]` keepalive: `js_string_substr` is reached only from generated `.o`,
+// so the whole-program auto-optimize bitcode rebuild would dead-strip it
+// without an anchor (see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_SUBSTR: extern "C" fn(*const StringHeader, i32, i32) -> *mut StringHeader =
+    js_string_substr;
+
 /// Trim whitespace from both ends of a string
 #[no_mangle]
 pub extern "C" fn js_string_trim(s: *const StringHeader) -> *mut StringHeader {
