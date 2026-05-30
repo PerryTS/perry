@@ -1726,6 +1726,81 @@ pub unsafe extern "C" fn js_native_call_method(
                     "entries" => {
                         return crate::array::array_entries_iter(object);
                     }
+                    // #2803: ES2023 immutable methods reaching the dynamic
+                    // dispatch tower (`(arr as any).toSorted()`, computed
+                    // `arr[m]()`, chained-call receivers that escape the HIR
+                    // fold). Each returns a NEW array and leaves the receiver
+                    // unchanged, mirroring the static codegen helpers.
+                    "toReversed" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result = crate::array::js_array_to_reversed(arr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "toSorted" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        // #2796: validate comparator (function | undefined);
+                        // a null/undefined comparator routes to the default
+                        // (string) sort inside js_array_to_sorted_with_comparator.
+                        let cmp_ptr = if args_len >= 1 && !args_ptr.is_null() {
+                            crate::array::js_validate_array_comparator(*args_ptr)
+                                as *const crate::closure::ClosureHeader
+                        } else {
+                            std::ptr::null()
+                        };
+                        let result = crate::array::js_array_to_sorted_with_comparator(arr, cmp_ptr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "toSpliced" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        // Per spec / #2794: toSpliced() inserts/deletes nothing,
+                        // toSpliced(start) deletes through the end. NaN-coercion
+                        // for the f64 start/deleteCount is handled in the helper.
+                        let start = if args_len >= 1 { *args_ptr } else { 0.0 };
+                        let delete_count = if args_len == 0 {
+                            0.0
+                        } else if args_len == 1 {
+                            f64::INFINITY
+                        } else {
+                            *args_ptr.add(1)
+                        };
+                        let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
+                            std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        let items_ptr = if items.is_empty() {
+                            std::ptr::null()
+                        } else {
+                            items.as_ptr()
+                        };
+                        let result = crate::array::js_array_to_spliced(
+                            arr,
+                            start,
+                            delete_count,
+                            items_ptr,
+                            items.len() as u32,
+                        );
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    // #2808: Array.prototype.toLocaleString — calls each
+                    // non-nullish element's own toLocaleString(locales, options),
+                    // renders nullish/hole elements as empty fields, and joins
+                    // with commas. Routed here for any-typed / computed receivers.
+                    "toLocaleString" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let locales = if args_len >= 1 && !args_ptr.is_null() {
+                            *args_ptr
+                        } else {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        };
+                        let options = if args_len >= 2 && !args_ptr.is_null() {
+                            *args_ptr.add(1)
+                        } else {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        };
+                        let s = crate::array::js_array_to_locale_string(arr, locales, options);
+                        return f64::from_bits(JSValue::string_ptr(s).bits());
+                    }
                     _ => {} // not a handled array method — fall through to object dispatch
                 }
             }
