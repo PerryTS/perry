@@ -17,11 +17,13 @@ mod arrays;
 mod objects;
 mod stdlib_ffi;
 mod strings;
+mod strings_part2;
 
 pub use arrays::declare_phase_b_arrays;
 pub use objects::declare_phase_b_objects;
 pub use stdlib_ffi::declare_stdlib_ffi;
 pub use strings::declare_phase_b_strings;
+pub(crate) use strings_part2::declare_phase_b_strings_part2;
 
 /// Declare the minimum set of runtime functions needed by Phase 1
 /// (`console.log(42)`):
