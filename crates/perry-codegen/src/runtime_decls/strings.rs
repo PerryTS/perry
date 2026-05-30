@@ -1632,6 +1632,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_console_count_value", VOID, &[DOUBLE]);
     module.declare_function("js_console_count_reset_value", VOID, &[DOUBLE]);
     module.declare_function("js_console_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_console_new2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_console_group_begin", VOID, &[]);
     module.declare_function("js_console_group_end", VOID, &[]);
     module.declare_function("js_console_clear", VOID, &[]);

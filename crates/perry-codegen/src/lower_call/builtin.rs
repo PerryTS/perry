@@ -219,8 +219,16 @@ pub(super) fn lower_builtin_new(
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
+            if let Some(stderr_arg) = args.get(1) {
+                let stderr = lower_expr(ctx, stderr_arg)?;
+                for a in args.iter().skip(2) {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                return Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_console_new2",
+                    &[(DOUBLE, &opts), (DOUBLE, &stderr)],
+                )));
             }
             Ok(Some(ctx.block().call(
                 DOUBLE,

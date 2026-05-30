@@ -637,6 +637,20 @@ pub extern "C" fn js_console_new(options: f64) -> f64 {
         stderr_candidate = object_property(options, b"stderr");
     }
 
+    let ignore_errors = unsafe { decode_dir_bool_option(options, "ignoreErrors") }.unwrap_or(true);
+    js_console_new_resolved(stdout, stderr_candidate, ignore_errors)
+}
+
+#[no_mangle]
+pub extern "C" fn js_console_new2(stdout: f64, stderr_candidate: f64) -> f64 {
+    let has_options_stdout = !null_or_undefined(object_property(stdout, b"stdout"));
+    if null_or_undefined(stderr_candidate) && has_options_stdout {
+        return js_console_new(stdout);
+    }
+    js_console_new_resolved(stdout, stderr_candidate, true)
+}
+
+fn js_console_new_resolved(stdout: f64, stderr_candidate: f64, ignore_errors: bool) -> f64 {
     if !has_write_method(stdout) {
         throw_console_writable_stream("stdout");
     }
@@ -650,8 +664,6 @@ pub extern "C" fn js_console_new(options: f64) -> f64 {
     } else {
         stderr_candidate
     };
-    let ignore_errors = unsafe { decode_dir_bool_option(options, "ignoreErrors") }.unwrap_or(true);
-
     let obj = crate::object::js_object_alloc(CONSOLE_INSTANCE_CLASS_ID, 0);
     let value = crate::value::js_nanbox_pointer(obj as i64);
     CONSOLE_INSTANCES.with(|instances| {
