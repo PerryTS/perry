@@ -1022,3 +1022,52 @@ pub extern "C" fn js_buffer_concat_with_length(
     super::validate::validate_concat_length(total_length);
     js_buffer_concat_impl(arr_ptr, normalize_buffer_concat_total_length(total_length))
 }
+
+/// `Buffer.copyBytesFrom(view[, offset[, length]])` — copy raw bytes out of a
+/// TypedArray view into a freshly allocated Buffer. `offset` and `length` are
+/// measured in **elements** of the source view (Node semantics); a negative
+/// value means the argument was omitted. Returns a raw `*mut BufferHeader` as
+/// `i64`; codegen then registers it via `js_buffer_register_and_box` and
+/// NaN-boxes the pointer with POINTER_TAG.
+#[no_mangle]
+pub extern "C" fn js_buffer_copy_bytes_from(view: i64, offset: i32, length: i32) -> i64 {
+    let value = f64::from_bits(view as u64);
+    let kind = match crate::typedarray::typed_array_kind_from_value(value) {
+        Some(k) => k,
+        None => return js_buffer_alloc(0, 0) as i64,
+    };
+    let elem_size = crate::typedarray::elem_size_for_kind(kind).max(1);
+    let view_ptr =
+        (view as u64 & 0x0000_FFFF_FFFF_FFFF) as *const crate::typedarray::TypedArrayHeader;
+    let src = match unsafe { crate::typedarray::typed_array_bytes(view_ptr) } {
+        Some(s) => s,
+        None => return js_buffer_alloc(0, 0) as i64,
+    };
+    let num_elems = src.len() / elem_size;
+
+    let off_elems = if offset < 0 {
+        0
+    } else {
+        (offset as usize).min(num_elems)
+    };
+    let len_elems = if length < 0 {
+        num_elems - off_elems
+    } else {
+        (length as usize).min(num_elems - off_elems)
+    };
+
+    let start_byte = off_elems * elem_size;
+    let byte_count = len_elems * elem_size;
+
+    let out = js_buffer_alloc(byte_count as i32, 0);
+    if out.is_null() {
+        return out as i64;
+    }
+    if byte_count > 0 {
+        unsafe {
+            let dst = buffer_data_mut(out);
+            std::ptr::copy_nonoverlapping(src.as_ptr().add(start_byte), dst, byte_count);
+        }
+    }
+    out as i64
+}
