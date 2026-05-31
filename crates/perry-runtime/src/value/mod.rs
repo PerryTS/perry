@@ -105,7 +105,9 @@ pub use dynamic_arith::{
 pub use dyn_index::{js_dyn_index_get, js_dyn_index_set, js_is_undefined_or_bare_nan};
 
 // ----- to-string conversion helpers -----
-pub(crate) use to_string::coerce_validate_radix;
+pub(crate) use to_string::{
+    coerce_validate_radix, ordinary_to_primitive_number_for_add, OrdinaryToPrimitiveOutcome,
+};
 pub use to_string::{js_ensure_string_ptr, js_jsvalue_to_string, js_jsvalue_to_string_radix};
 
 // ----- Equality, comparison, SameValueZero, dynamic string equality -----
