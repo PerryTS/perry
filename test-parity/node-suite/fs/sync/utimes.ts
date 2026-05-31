@@ -23,3 +23,20 @@ fs.lutimesSync(link, 1_600_000_020, 1_600_000_789);
 const lst = fs.lstatSync(link);
 console.log("lutimes symlink:", lst.isSymbolicLink());
 console.log("lutimes mtime:", Math.round(lst.mtimeMs / 1000));
+
+const invalidFd = fs.openSync(p, "r+");
+for (const [label, fn] of [
+  ["utimes invalid atime", () => fs.utimesSync(p, NaN, 1)],
+  ["utimes invalid mtime", () => fs.utimesSync(p, 1, NaN)],
+  ["lutimes invalid atime", () => fs.lutimesSync(link, NaN, 1)],
+  ["futimes invalid atime", () => fs.futimesSync(invalidFd, NaN, 1)],
+  ["futimes invalid mtime", () => fs.futimesSync(invalidFd, 1, Infinity)],
+] as const) {
+  try {
+    fn();
+    console.log(label + " ok");
+  } catch (e: any) {
+    console.log(label + " error:", e instanceof TypeError, e.code);
+  }
+}
+fs.closeSync(invalidFd);

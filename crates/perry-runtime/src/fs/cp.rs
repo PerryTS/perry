@@ -243,38 +243,56 @@ pub extern "C" fn js_fs_cp_sync(from_value: f64, to_value: f64) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_cp_sync_options(from_value: f64, to_value: f64, options_value: f64) -> i32 {
-    js_fs_cp_options_inner(from_value, to_value, options_value, true)
+    match js_fs_cp_options_result(from_value, to_value, options_value, true) {
+        Ok(()) => 1,
+        Err(err) => crate::exception::js_throw(err),
+    }
 }
 
 pub(crate) fn js_fs_cp_async_options(from_value: f64, to_value: f64, options_value: f64) -> i32 {
-    js_fs_cp_options_inner(from_value, to_value, options_value, false)
+    match js_fs_cp_async_result(from_value, to_value, options_value) {
+        Ok(()) => 1,
+        Err(err) => crate::exception::js_throw(err),
+    }
 }
 
-fn js_fs_cp_options_inner(
+pub(crate) fn js_fs_cp_async_result(
+    from_value: f64,
+    to_value: f64,
+    options_value: f64,
+) -> Result<(), f64> {
+    js_fs_cp_options_result(from_value, to_value, options_value, false)
+}
+
+fn js_fs_cp_options_result(
     from_value: f64,
     to_value: f64,
     options_value: f64,
     sync_symlink_resolution: bool,
-) -> i32 {
+) -> Result<(), f64> {
+    validate::validate_path("src", from_value);
+    validate::validate_path("dest", to_value);
+    validate::validate_object_options("options", options_value);
     unsafe {
         let from = match decode_path_value(from_value) {
             Some(s) => s,
-            None => return 0,
+            None => validate::throw_invalid_path_arg("src", from_value),
         };
         let to = match decode_path_value(to_value) {
             Some(s) => s,
-            None => return 0,
+            None => validate::throw_invalid_path_arg("dest", to_value),
         };
         let src = Path::new(&from);
         let dst = Path::new(&to);
         let mut opts = fs_copy_options_from_value(options_value);
         opts.sync_symlink_resolution = sync_symlink_resolution;
-        // Node throws ERR_FS_CP_EINVAL if `src == dest`. We don't propagate
-        // typed errors yet, so return 0 (failure) to keep `cpSync` from
-        // silently no-op'ing into itself.
         if let (Ok(canon_src), Ok(canon_dst)) = (fs::canonicalize(src), fs::canonicalize(dst)) {
             if canon_src == canon_dst {
-                return 0;
+                let err = std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "src and dest are the same",
+                );
+                return Err(build_fs_error_value(&err, "cp", &from));
             }
         }
         let meta = if opts.dereference {
@@ -296,12 +314,14 @@ fn js_fs_cp_options_inner(
             Ok(meta) if meta.is_dir() => copy_dir_recursive(src, dst, opts),
             Ok(meta) if meta.file_type().is_symlink() => copy_symlink_with_options(src, dst, opts),
             Ok(_) => copy_file_with_options(src, dst, opts),
-            Err(err) => Err(err),
+            Err(err) => {
+                let syscall = if opts.dereference { "stat" } else { "lstat" };
+                return Err(build_fs_error_value(&err, syscall, &from));
+            }
         };
-        if result.is_ok() {
-            1
-        } else {
-            0
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => Err(build_fs_error_value_with_dest(&err, "cp", &from, &to)),
         }
     }
 }

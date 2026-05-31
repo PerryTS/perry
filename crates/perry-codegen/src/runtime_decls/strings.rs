@@ -326,6 +326,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // fs.readFileSync(path, encoding) — returns a raw *mut StringHeader i64.
     module.declare_function("js_fs_read_file_sync", I64, &[DOUBLE]);
     module.declare_function("js_fs_read_file_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_promises_read_file", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_promises_write_file",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_fs_promises_append_file",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_fs_promises_mkdir", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.mkdirSync(path) — returns i32 status (1=success).
     module.declare_function("js_fs_mkdir_sync", I32, &[DOUBLE]);
     module.declare_function("js_fs_mkdir_sync_options", I32, &[DOUBLE, DOUBLE]);
@@ -363,6 +375,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_utimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_lutimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_futimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_to_unix_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fs_readv_sync", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_writev_sync", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_statfs_sync", DOUBLE, &[DOUBLE]);
@@ -413,6 +426,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_mkdtemp_sync", I64, &[DOUBLE]);
     module.declare_function("js_fs_mkdtemp_sync_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_mkdtemp_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_mkdtemp_disposable_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.rmdirSync(path) — returns i32 status.
     module.declare_function("js_fs_rmdir_sync", I32, &[DOUBLE]);
     module.declare_function("js_fs_rmdir_sync_options", I32, &[DOUBLE, DOUBLE]);
@@ -423,6 +437,25 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_create_write_stream", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.createReadStream(path[, options]) — returns NaN-boxed stream object.
     module.declare_function("js_fs_create_read_stream", DOUBLE, &[DOUBLE, DOUBLE]);
+    // fs.Utf8Stream constructor dispatch.
+    module.declare_function("js_fs_utf8_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_call_without_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_write", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_flush", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_flush_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_end", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_destroy", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_reopen", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_on", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_once", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_off", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_utf8_stream_remove_all", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_utf8_stream_listener_count",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_fs_utf8_stream_emit", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     // fs.readFile(path, encoding, callback) — Node-compatible callback variant.
     module.declare_function(
         "js_fs_read_file_callback",

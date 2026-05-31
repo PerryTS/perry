@@ -3278,6 +3278,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "realpathSync", false, None),
     method("fs", "realpath", false, None),
     method("fs", "mkdtempSync", false, None),
+    method("fs", "mkdtempDisposableSync", false, None),
     method("fs", "mkdtemp", false, None),
     method("fs", "chmodSync", false, None),
     method("fs", "chmod", false, None),
@@ -3309,6 +3310,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "stat", false, None),
     method("fs", "createReadStream", false, None),
     method("fs", "createWriteStream", false, None),
+    class("fs", "Dir"),
+    class("fs", "Dirent"),
+    class("fs", "Stats"),
+    class("fs", "ReadStream"),
+    class("fs", "WriteStream"),
+    class("fs", "FileReadStream"),
+    class("fs", "FileWriteStream"),
+    class("fs", "Utf8Stream"),
+    method("fs", "_toUnixTimestamp", false, None),
     method("fs", "watchFile", false, None),
     method("fs", "unwatchFile", false, None),
     method("fs", "watch", false, None),
@@ -3325,9 +3335,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
-    // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
-    // intentionally omitted — they are tracked separately (#2133). The parent
-    // `fs.promises` namespace above still resolves to the same surface.
+    // methods (ftruncate/fchown/futimes etc.) are intentionally omitted — they
+    // are tracked separately (#2133). The parent `fs.promises` namespace above
+    // still resolves to the same surface.
     property("fs/promises", "default"),
     property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
@@ -3344,6 +3354,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs/promises", "lutimes", false, None),
     method("fs/promises", "mkdir", false, None),
     method("fs/promises", "mkdtemp", false, None),
+    method("fs/promises", "mkdtempDisposable", false, None),
     method("fs/promises", "open", false, None),
     method("fs/promises", "opendir", false, None),
     method("fs/promises", "readFile", false, None),
