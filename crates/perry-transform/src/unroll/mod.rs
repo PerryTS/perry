@@ -1760,6 +1760,7 @@ mod tests {
                     mutable_captures: vec![],
                     captures_this: false,
                     enclosing_class: None,
+                    is_strict: false,
                     is_async: false,
                     is_generator: false,
                 }),

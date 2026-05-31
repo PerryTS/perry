@@ -222,6 +222,38 @@ fn every_native_module_has_at_least_one_manifest_entry() {
     );
 }
 
+#[test]
+fn cjs_style_node_builtins_have_default_entries() {
+    const CJS_DEFAULT_BUILTINS: &[&str] = &[
+        "async_hooks",
+        "events",
+        "os",
+        "path",
+        "querystring",
+        "sys",
+        "url",
+        "util",
+    ];
+
+    let mut missing: Vec<&'static str> = Vec::new();
+    for &module in CJS_DEFAULT_BUILTINS {
+        let has_default = API_MANIFEST
+            .iter()
+            .any(|entry| entry.module == module && entry.name == "default");
+        if !has_default {
+            missing.push(module);
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "CommonJS-style Node builtin(s) are missing manifest `default` entries:\n  {}\n\n\
+         Add a `default` entry or document why the module is not modeled as a \
+         CJS-style builtin.",
+        missing.join("\n  ")
+    );
+}
+
 /// #513 — every well-known binding must appear in API_MANIFEST.
 ///
 /// The well-known bindings table at `crates/perry/well_known_bindings.toml`

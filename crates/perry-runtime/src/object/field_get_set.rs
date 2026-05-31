@@ -115,6 +115,40 @@ unsafe fn own_data_field_by_name(
     None
 }
 
+unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
+    let closure = (get_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+    if closure.is_null() {
+        return JSValue::undefined();
+    }
+    let prev = super::js_implicit_this_set(receiver);
+    let result_f64 = crate::closure::js_closure_call0(closure);
+    super::js_implicit_this_set(prev);
+    JSValue::from_bits(result_f64.to_bits())
+}
+
+unsafe fn primitive_object_prototype_accessor(name: &str, receiver: f64) -> Option<JSValue> {
+    if !ACCESSORS_IN_USE.with(|c| c.get()) {
+        return None;
+    }
+    let object_ctor = super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_value = JSValue::from_bits(object_ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<ObjectHeader>() as usize;
+    let acc = get_accessor_descriptor(proto_ptr, name)?;
+    if acc.get == 0 {
+        return Some(JSValue::undefined());
+    }
+    Some(invoke_accessor_getter(acc.get, receiver))
+}
+
 // Issue #922: Rate-limit and bound the [WARN_NULL_PTR] message stream
 // + abort the process when a runaway loop is detected.
 //
@@ -1354,6 +1388,13 @@ pub extern "C" fn js_object_get_field_by_name(
                         let v = js_get_global_this_builtin_value(b"Number".as_ptr(), 6);
                         return JSValue::from_bits(v.to_bits());
                     }
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        if let Some(v) =
+                            primitive_object_prototype_accessor(name, f64::from_bits(bits))
+                        {
+                            return v;
+                        }
+                    }
                 }
             }
             return JSValue::undefined();
@@ -1632,6 +1673,11 @@ pub extern "C" fn js_object_get_field_by_name(
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                if let Ok(name) = std::str::from_utf8(name_bytes) {
+                    if let Some(v) = primitive_object_prototype_accessor(name, f) {
+                        return v;
+                    }
+                }
                 if is_primitive_proto_method(name_bytes) {
                     let result = super::js_class_method_bind(f, name_ptr, name_len);
                     return JSValue::from_bits(result.to_bits());
@@ -2742,12 +2788,8 @@ pub extern "C" fn js_object_get_field_by_name(
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
-                                let closure = (acc.get & crate::value::POINTER_MASK)
-                                    as *const crate::closure::ClosureHeader;
-                                if !closure.is_null() {
-                                    let result_f64 = crate::closure::js_closure_call0(closure);
-                                    return JSValue::from_bits(result_f64.to_bits());
-                                }
+                                let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                                return invoke_accessor_getter(acc.get, receiver);
                             }
                             // Has accessor but no getter → undefined.
                             return JSValue::undefined();
@@ -2783,12 +2825,8 @@ pub extern "C" fn js_object_get_field_by_name(
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
-                                let closure = (acc.get & crate::value::POINTER_MASK)
-                                    as *const crate::closure::ClosureHeader;
-                                if !closure.is_null() {
-                                    let result_f64 = crate::closure::js_closure_call0(closure);
-                                    return JSValue::from_bits(result_f64.to_bits());
-                                }
+                                let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                                return invoke_accessor_getter(acc.get, receiver);
                             }
                             return JSValue::undefined();
                         }

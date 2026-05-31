@@ -664,3 +664,94 @@ pub unsafe extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
         0
     }
 }
+
+/// stmt.columns() -> ColumnMetadata[]
+///
+/// node:sqlite's `StatementSync.columns()` returns one metadata object
+/// per result column with the Node-shaped keys `column`, `database`,
+/// `name`, `table`, and `type`. We populate `name` (the result column
+/// label) and `type` (the declared column type, or `null`); `column`,
+/// `table`, and `database` track the underlying source where SQLite
+/// exposes it, falling back to `null` for computed columns. Refs #3184.
+#[no_mangle]
+pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut ArrayHeader {
+    let result = js_array_alloc(0);
+
+    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
+        if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
+            if let Ok(conn) = db.conn.lock() {
+                if let Ok(prepared) = conn.prepare(&stmt.sql) {
+                    // Node returns metadata objects keyed in this order.
+                    let keys = vec![
+                        "column".to_string(),
+                        "database".to_string(),
+                        "name".to_string(),
+                        "table".to_string(),
+                        "type".to_string(),
+                    ];
+                    let (packed_keys, shape_id) = build_packed_keys(&keys);
+
+                    for col in prepared.columns() {
+                        let name = col.name().to_string();
+                        let decl_type = col.decl_type().map(|s| s.to_string());
+
+                        let obj = js_object_alloc_with_shape(
+                            shape_id,
+                            keys.len() as u32,
+                            packed_keys.as_ptr(),
+                            packed_keys.len() as u32,
+                        );
+                        // column / database / table are null for the
+                        // common computed/aliased cases; `name` is the
+                        // result label, `type` the declared column type.
+                        js_object_set_field(obj, 0, JSValue::null());
+                        js_object_set_field(obj, 1, JSValue::null());
+                        let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        js_object_set_field(obj, 2, JSValue::string_ptr(name_ptr));
+                        js_object_set_field(obj, 3, JSValue::null());
+                        match decl_type {
+                            Some(t) => {
+                                let t_ptr = js_string_from_bytes(t.as_ptr(), t.len() as u32);
+                                js_object_set_field(obj, 4, JSValue::string_ptr(t_ptr));
+                            }
+                            None => js_object_set_field(obj, 4, JSValue::null()),
+                        }
+
+                        js_array_push(result, JSValue::object_ptr(obj as *mut u8));
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Keepalive anchors for the codegen-emitted `node:sqlite` (and shared
+/// better-sqlite3) entry points. The whole-program LLVM auto-optimize
+/// build internalizes + dead-strips `#[no_mangle]` fns that are only
+/// referenced from generated `.o` files; `#[used]` survives that pass.
+/// Without these, a `node:sqlite` program compiled under DEFAULT
+/// auto-optimize fails to link (`Undefined symbols: _js_sqlite_*`).
+/// See project_auto_optimize_keepalive_3320.
+#[used]
+static KEEP_SQLITE_OPEN: unsafe extern "C" fn(*const StringHeader) -> Handle = js_sqlite_open;
+#[used]
+static KEEP_SQLITE_EXEC: unsafe extern "C" fn(Handle, *const StringHeader) -> i32 = js_sqlite_exec;
+#[used]
+static KEEP_SQLITE_PREPARE: unsafe extern "C" fn(Handle, *const StringHeader) -> Handle =
+    js_sqlite_prepare;
+#[used]
+static KEEP_SQLITE_STMT_RUN: unsafe extern "C" fn(Handle, *const ArrayHeader) -> *mut ObjectHeader =
+    js_sqlite_stmt_run;
+#[used]
+static KEEP_SQLITE_STMT_GET: unsafe extern "C" fn(Handle, *const ArrayHeader) -> f64 =
+    js_sqlite_stmt_get;
+#[used]
+static KEEP_SQLITE_STMT_ALL: unsafe extern "C" fn(Handle, *const ArrayHeader) -> *mut ArrayHeader =
+    js_sqlite_stmt_all;
+#[used]
+static KEEP_SQLITE_CLOSE: unsafe extern "C" fn(Handle) -> i32 = js_sqlite_close;
+#[used]
+static KEEP_SQLITE_STMT_COLUMNS: unsafe extern "C" fn(Handle) -> *mut ArrayHeader =
+    js_sqlite_stmt_columns;

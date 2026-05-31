@@ -21,12 +21,12 @@
 use std::collections::HashMap;
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
+    alloc_buffer, alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
     RawClosureHeader, StringHeader,
 };
 
 use crate::types::{
-    jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK, STRING_TAG, TAG_UNDEFINED,
+    jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK, STRING_TAG,
 };
 
 /// Per-request handle backing `IncomingMessage` JS-side. Stored in
@@ -68,6 +68,9 @@ pub struct IncomingMessage {
     /// Pause/resume flag — toggled by `.pause()` / `.resume()`. Phase 1
     /// honors this only for the synthetic data emit.
     pub paused: bool,
+    /// Encoding requested through `req.setEncoding(enc)`. `None`
+    /// preserves Node's default Buffer chunks.
+    pub encoding: Option<String>,
     /// Trailers placeholder — Node populates after `'end'`. We hand
     /// back an empty object until trailing-headers support lands.
     pub trailers: HashMap<String, String>,
@@ -99,6 +102,7 @@ impl IncomingMessage {
             data_emitted: false,
             end_emitted: false,
             paused: false,
+            encoding: None,
             trailers: HashMap::new(),
         }
     }
@@ -227,6 +231,7 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     let body_bytes;
     let data_listeners;
     let end_listeners;
+    let encoding;
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.paused = false;
         if !im.data_emitted && !im.body_bytes.is_empty() {
@@ -238,6 +243,7 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
         body_bytes = im.body_bytes.clone();
         data_listeners = im.listeners.get("data").cloned().unwrap_or_default();
         end_listeners = im.listeners.get("end").cloned().unwrap_or_default();
+        encoding = im.encoding.clone();
         if should_emit_data {
             im.data_emitted = true;
         }
@@ -249,7 +255,7 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
         return;
     }
     if should_emit_data {
-        emit_data_to_listeners(&data_listeners, &body_bytes);
+        emit_data_to_listeners(&data_listeners, &body_bytes, encoding.as_deref());
     }
     if should_emit_end {
         emit_end_to_listeners(&end_listeners);
@@ -282,6 +288,7 @@ pub unsafe extern "C" fn js_node_http_im_on(
 ) -> f64 {
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
     let body_to_emit;
+    let encoding_to_emit;
     let should_emit_end;
     {
         let im = match get_handle_mut::<IncomingMessage>(handle) {
@@ -326,16 +333,19 @@ pub unsafe extern "C" fn js_node_http_im_on(
             "data" if !im.paused && !im.data_emitted && !im.body_bytes.is_empty() => {
                 im.data_emitted = true;
                 body_to_emit = Some(im.body_bytes.clone());
+                encoding_to_emit = im.encoding.clone();
                 should_emit_end = false;
             }
             "end" if !im.paused && !im.end_emitted => {
                 im.end_emitted = true;
                 im.complete = true;
                 body_to_emit = None;
+                encoding_to_emit = None;
                 should_emit_end = true;
             }
             _ => {
                 body_to_emit = None;
+                encoding_to_emit = None;
                 should_emit_end = false;
             }
         }
@@ -343,7 +353,7 @@ pub unsafe extern "C" fn js_node_http_im_on(
 
     if let Some(bytes) = body_to_emit {
         let cbs = vec![callback];
-        emit_data_to_listeners(&cbs, &bytes);
+        emit_data_to_listeners(&cbs, &bytes, encoding_to_emit.as_deref());
     }
     if should_emit_end {
         let cbs = vec![callback];
@@ -352,6 +362,20 @@ pub unsafe extern "C" fn js_node_http_im_on(
     // Node's `req.on` returns the IncomingMessage itself for chaining.
     // Return the same handle re-NaN-boxed so `req.on().on()` works.
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+}
+
+/// `req.setEncoding(encoding)` — switch future `'data'` events from Buffer
+/// chunks to decoded string chunks. Returns the receiver for chaining.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_im_set_encoding(
+    handle: i64,
+    encoding_ptr: *const StringHeader,
+) -> i64 {
+    let encoding = read_string_header(encoding_ptr as *mut _).unwrap_or_else(|| "utf8".to_string());
+    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+        im.encoding = Some(encoding);
+    }
+    handle
 }
 
 /// `req.read()` — return a buffered chunk as a string, or null if
@@ -382,14 +406,25 @@ pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
 // ============================================================================
 
 /// Fire a `'data'` event to every registered listener, passing the
-/// body bytes as a single string chunk.
-pub(crate) fn emit_data_to_listeners(listeners: &[i64], body: &[u8]) {
+/// body bytes as a Buffer by default or as decoded text after setEncoding().
+pub(crate) fn emit_data_to_listeners(listeners: &[i64], body: &[u8], encoding: Option<&str>) {
     if listeners.is_empty() || body.is_empty() {
         return;
     }
-    let s = String::from_utf8_lossy(body).into_owned();
-    let header = alloc_string(&s);
-    let chunk_f64 = f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK));
+    let chunk_f64 = match encoding {
+        Some(_) => {
+            let s = String::from_utf8_lossy(body).into_owned();
+            let header = alloc_string(&s);
+            f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
+        }
+        None => {
+            let buf = alloc_buffer(body);
+            if buf.is_null() {
+                return;
+            }
+            f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+        }
+    };
     for cb in listeners {
         if *cb == 0 {
             continue;

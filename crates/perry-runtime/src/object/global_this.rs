@@ -296,6 +296,12 @@ extern "C" fn global_this_object_thunk(
     if js_value.is_undefined() || js_value.is_null() {
         return crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
     }
+    if js_value.is_bigint() {
+        return crate::builtins::js_boxed_bigint_new(value);
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return crate::builtins::js_boxed_symbol_new(value);
+    }
     if crate::value::js_nanbox_get_pointer(value) != 0 {
         return value;
     }
@@ -660,6 +666,65 @@ extern "C" fn object_prototype_to_locale_string_thunk(
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     unsafe { super::js_object_default_to_locale_string(this_value) }
+}
+
+unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
+    let value = JSValue::from_bits(args_array.to_bits());
+    if value.is_undefined() || value.is_null() {
+        return Vec::new();
+    }
+    let is_array = JSValue::from_bits(crate::array::js_array_is_array(args_array).to_bits());
+    if !is_array.is_bool() || !is_array.as_bool() {
+        return Vec::new();
+    }
+    let arr = if value.is_pointer() {
+        value.as_pointer::<crate::array::ArrayHeader>()
+    } else if (args_array.to_bits() >> 48) == 0 {
+        args_array.to_bits() as *const crate::array::ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(arr) as usize;
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        out.push(f64::from_bits(
+            crate::array::js_array_get(arr, i as u32).bits(),
+        ));
+    }
+    out
+}
+
+extern "C" fn function_prototype_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this_arg: f64,
+    rest_array: f64,
+) -> f64 {
+    unsafe {
+        let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let args = function_apply_args(rest_array);
+        let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
+        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        result
+    }
+}
+
+extern "C" fn function_prototype_apply_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this_arg: f64,
+    args_array: f64,
+) -> f64 {
+    unsafe {
+        let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let args = function_apply_args(args_array);
+        let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
+        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        result
+    }
 }
 
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
@@ -1276,6 +1341,19 @@ extern "C" fn object_assign_thunk(
     validated
 }
 
+/// `Object.hasOwn(obj, key)` (ES2022) reified as a callable value so the
+/// feature-detect idiom `typeof Object.hasOwn === "undefined" ? … :
+/// Object.hasOwn` (iconv-lite's merge-exports, #3527) binds a real callable
+/// instead of a non-callable handle. Backed by the same runtime helper as
+/// `Object.prototype.hasOwnProperty.call(obj, key)`.
+extern "C" fn object_hasown_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    obj: f64,
+    key: f64,
+) -> f64 {
+    super::object_ops::js_object_has_own(obj, key)
+}
+
 extern "C" fn array_is_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -1401,6 +1479,7 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 false,
             );
             install_constructor_static(ctor, "assign", object_assign_thunk as *const u8, 1, true);
+            install_constructor_static(ctor, "hasOwn", object_hasown_thunk as *const u8, 2, false);
         }
         "Array" => {
             install_constructor_static(
@@ -1431,7 +1510,7 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
 /// undefined) for methods we don't have a dedicated thunk for; callers
 /// that want spec-accurate call behavior pass a custom thunk instead
 /// (`array_prototype_slice_thunk`, `object_prototype_to_string_thunk`).
-fn install_proto_method(
+pub(super) fn install_proto_method(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
     func_ptr: *const u8,
@@ -1467,6 +1546,39 @@ fn install_proto_method(
     // Array.prototype.map, "name")` reports `writable: false` (it previously
     // read the dynamic-prop slot and defaulted to writable). Reflection-only —
     // no hot-path gate flip.
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+}
+
+fn install_proto_method_rest(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    fixed_arity: u32,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    super::native_module::set_bound_native_closure_name(closure, method_name);
+    super::native_module::set_builtin_closure_length(closure as usize, fixed_arity);
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(proto_obj, key, value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
     super::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
@@ -1532,6 +1644,12 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
 /// `try_builtin_prototype_method_apply_call`) — are unaffected.
 fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
+        return;
+    }
+    // #3662: Map/Set/WeakMap/WeakSet prototypes get brand-checking thunks
+    // (own module, to keep this file under the 2000-line gate).
+    if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         return;
     }
     match builtin_name {
@@ -1617,9 +1735,18 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             );
         }
         "Function" => {
-            install_noop_proto_methods(
+            install_proto_method(
                 proto_obj,
-                &[("apply", 2), ("bind", 1), ("call", 1), ("toString", 0)],
+                "apply",
+                function_prototype_apply_thunk as *const u8,
+                2,
+            );
+            install_noop_proto_methods(proto_obj, &[("bind", 1), ("toString", 0)]);
+            install_proto_method_rest(
+                proto_obj,
+                "call",
+                function_prototype_call_thunk as *const u8,
+                1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
@@ -1754,50 +1881,6 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         "TextDecoder" => {
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "Map" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("clear", 0),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("get", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("values", 0),
-                ],
-            );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "Set" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("add", 1),
-                    ("clear", 0),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("values", 0),
-                ],
-            );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "WeakMap" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[("delete", 1), ("get", 1), ("has", 1), ("set", 2)],
-            );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "WeakSet" => {
-            install_noop_proto_methods(proto_obj, &[("add", 1), ("delete", 1), ("has", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"

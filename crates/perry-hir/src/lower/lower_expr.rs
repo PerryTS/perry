@@ -98,7 +98,23 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "btoa"
             | "BigInt"
             | "WebAssembly"
+            // #3527: `eval` as a VALUE (not a call). Libraries build intrinsic
+            // tables that reference it bare — get-intrinsic's
+            // `'%eval%': eval` — and would otherwise throw `ReferenceError:
+            // identifier is not defined` at module init. `eval(...)` *calls*
+            // keep their dedicated eval-surface classification in
+            // `expr_call::intrinsics` (which matches the callee name before the
+            // callee is lowered through this arm), so this only affects the
+            // value read, which lowers to the `GlobalGet(0)` sentinel.
+            | "eval"
     ) || is_builtin_global_value_name(name)
+}
+
+fn is_cjs_style_native_default_import(module_name: &str) -> bool {
+    matches!(
+        module_name,
+        "async_hooks" | "events" | "os" | "path" | "querystring" | "sys" | "url" | "util"
+    )
 }
 
 pub(crate) fn lower_expr_assignment(
@@ -271,6 +287,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     return Ok(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
                         property: method.to_string(),
+                    });
+                }
+                if ctx.lookup_builtin_module_alias(&name).is_none()
+                    && is_cjs_style_native_default_import(module_name)
+                {
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+                        property: "default".to_string(),
                     });
                 }
                 // Native module reference (e.g., mysql from 'mysql2/promise')
@@ -1869,6 +1893,7 @@ pub(crate) fn try_desugar_reactive_text(
             enclosing_class: None,
             is_async: false,
             is_generator: false,
+            is_strict: ctx.current_strict,
         };
 
         outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
@@ -1907,6 +1932,7 @@ pub(crate) fn try_desugar_reactive_text(
         enclosing_class: None,
         is_async: false,
         is_generator: false,
+        is_strict: ctx.current_strict,
     };
 
     Ok(Some(Expr::Call {

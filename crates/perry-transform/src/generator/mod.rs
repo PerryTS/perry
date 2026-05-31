@@ -221,6 +221,7 @@ fn transform_generator_closures_in_expr(
         mutable_captures,
         captures_this,
         enclosing_class,
+        is_strict,
         is_async,
         ..
     } = expr
@@ -238,6 +239,7 @@ fn transform_generator_closures_in_expr(
                 params: params.clone(),
                 return_type: Type::Any,
                 body: std::mem::take(body),
+                is_strict: *is_strict,
                 is_async: *is_async,
                 is_generator: true,
                 is_exported: false,
@@ -287,6 +289,7 @@ pub fn transform_plain_async_closure_body(
     outer_mutable_captures: &[LocalId],
     outer_captures_this: bool,
     outer_enclosing_class: Option<String>,
+    is_strict: bool,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
 ) -> Vec<Stmt> {
@@ -305,6 +308,7 @@ pub fn transform_plain_async_closure_body(
         params: params.to_vec(),
         return_type: Type::Any,
         body,
+        is_strict,
         is_async: false,
         is_generator: true,
         is_exported: false,

@@ -56,6 +56,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     );
     module.declare_function("js_http_response_headers", DOUBLE, &[I64]);
     module.declare_function("js_http_response_trailers", DOUBLE, &[I64]);
+    module.declare_function("js_http_incoming_message_set_encoding", I64, &[I64, I64]);
     module.declare_function("js_http_server_accept_v2", I64, &[I64]);
     module.declare_function("js_http_server_close", DOUBLE, &[I64]);
     module.declare_function("js_http_server_create", I64, &[DOUBLE]);
@@ -654,9 +655,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_legacy_url_new", DOUBLE, &[]);
     module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_resolve_object", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========
     module.declare_function("js_ws_close", VOID, &[I64]);
@@ -705,6 +708,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_sqlite_pragma", I64, &[I64, I64, I64]);
     module.declare_function("js_sqlite_prepare", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_all", I64, &[I64, I64]);
+    module.declare_function("js_sqlite_stmt_columns", I64, &[I64]);
     module.declare_function("js_sqlite_stmt_get", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_run", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
@@ -1088,6 +1092,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_event_names", I64, &[I64]);
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
+    module.declare_function("js_event_emitter_domain_value", DOUBLE, &[I64]);
     // Module-level helpers
     module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
     module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
@@ -1097,6 +1102,18 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_events_init", DOUBLE, &[]);
+
+    // ========== Domain ==========
+    module.declare_function("js_domain_create", I64, &[]);
+    module.declare_function("js_domain_on", I64, &[I64, I64, I64]);
+    module.declare_function("js_domain_emit", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_domain_run", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_domain_bind", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_domain_intercept", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_domain_add", I64, &[I64, DOUBLE]);
+    module.declare_function("js_domain_remove", I64, &[I64, DOUBLE]);
+    module.declare_function("js_domain_enter", I64, &[I64]);
+    module.declare_function("js_domain_exit", I64, &[I64]);
 
     // ========== StringDecoder (issue #848) ==========
     // `js_string_decoder_new` allocates a real handle; `write` / `end`
@@ -1466,6 +1483,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // closure-typed class field method-style. `Expr::This` codegen reads
     // this when the lexical this_stack is empty.
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
+    module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
 
     // ========== Runtime init / module loader ==========

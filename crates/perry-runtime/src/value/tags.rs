@@ -125,6 +125,8 @@ pub(crate) type JsNativeZlibDispatchFn =
 /// can reach the stdlib implementation without perry-runtime depending on it.
 pub(crate) type JsNativeQuerystringDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+pub(crate) type JsNativeDomainDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:http / node:https / node:http2 server-factory dispatcher (registered
 /// by perry-stdlib under the `external-http-server-pump` feature, which is
 /// enabled whenever a program imports one of those modules). Lets a captured /
@@ -150,4 +152,5 @@ pub static JS_HANDLE_TYPEOF: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut()
 pub static JS_NATIVE_CRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_QUERYSTRING_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

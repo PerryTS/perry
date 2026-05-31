@@ -2,6 +2,46 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1045 — fix(runtime): brand-check collection prototype methods (#3662)
+
+`Set`/`Map`/`WeakSet`/`WeakMap` prototype methods reached as plain values —
+`Set.prototype.add.call(x, v)`, `Reflect.apply(Map.prototype.get, m, [k])`,
+method extraction, etc. — resolved to a shared no-op thunk
+(`global_this_builtin_noop_thunk`). The reflective path therefore did nothing
+and never performed the spec-mandated `this` brand check, so calling these
+methods on an incompatible receiver produced no exception. This was the
+largest single behavioral cluster in the #3662 parity sweep
+("Expected a … to be thrown but no exception was thrown at all").
+
+`populate_builtin_prototype_methods` now installs real per-method thunks for
+the four collection prototypes (`set_proto_*`, `map_proto_*`,
+`weakset_proto_*`, `weakmap_proto_*`). Each thunk:
+
+1. reads the `IMPLICIT_THIS` receiver (set by the `.call`/`.apply`/`.bind`
+   dispatch),
+2. brand-checks it — a registered `Set`/`Map` heap pointer, or the reserved
+   `CLASS_ID_WEAKMAP`/`CLASS_ID_WEAKSET` `class_id` — and throws a `TypeError`
+   ("Method `<proto>`.`<method>` called on incompatible receiver") on a
+   mismatched or primitive receiver, and
+3. otherwise dispatches to the existing runtime helper (`js_set_add`,
+   `js_map_get`, `js_weakmap_set`, …), so reflective collection calls now also
+   *work* on a correct receiver (previously they silently returned
+   `undefined`).
+
+The fast direct-call path (`s.add(v)`) is lowered straight to `js_set_add` by
+codegen and never touches these thunks, so it is unaffected — verified
+byte-identical against Node in both the `PERRY_NO_AUTO_OPTIMIZE` and
+auto-optimize build paths.
+
+New receiver-resolution helpers: `set::set_ptr_from_receiver_bits`,
+`map::map_ptr_from_receiver_bits`, `weakref::weak_class_id_from_receiver`
+(the latter pre-filters on `GcHeader.obj_type == GC_TYPE_OBJECT` before
+reading `class_id`, so a `Set`/`Map` pointer or primitive resolves to `None`
+without an out-of-bounds read). Covered by
+`test-files/test_gap_3662_collection_brand_check.ts`. The broader #3662
+cluster (Function.prototype apply/bind/hasInstance not-callable checks and the
+node-core fs/buffer/process/zlib arg-validation cases) remains open.
+
 ## v0.5.1044 — fix(fs): deliver EBADF to callback for bad fd in close/fsync/fdatasync/fchmod (#3332)
 
 The callback forms of `fs.close`, `fs.fsync`, `fs.fdatasync`, and `fs.fchmod`
