@@ -553,6 +553,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],
     );
+    // #3079: setup-time command/file/args validation. The validators receive
+    // the *original* NaN-boxed value (codegen still has it before unboxing to a
+    // raw pointer) and throw `TypeError [ERR_INVALID_ARG_TYPE]` on a bad shape.
+    // `validate_command` takes (value, name_ptr, name_len); `validate_args`
+    // takes (value). Both return the value so the call can sit inline.
+    module.declare_function(
+        "js_child_process_validate_command",
+        DOUBLE,
+        &[DOUBLE, PTR, I32],
+    );
+    module.declare_function("js_child_process_validate_args", DOUBLE, &[DOUBLE]);
 
     // ========== cheerio ==========
     module.declare_function("js_cheerio_load", I64, &[I64]);
