@@ -63,6 +63,7 @@ fn parse_env(content: &str) -> Vec<(String, String)> {
         upsert_env(&mut out, &key, value);
         pos = next_line_start(&chars, line_end);
     }
+
     // Node's C++ parser stores into a sorted map, so the result object's keys
     // come out byte-lexicographically sorted (e.g. `A`,`M`,`Z`,`m`), NOT in
     // insertion order. Match that.
@@ -154,12 +155,20 @@ fn expand_double_newlines(s: &str) -> String {
     out
 }
 
-/// `util.parseEnv(content)` → plain object of parsed key/value strings.
+/// `util.parseEnv(content)` → null-prototype object of parsed key/value strings.
 #[no_mangle]
 pub extern "C" fn js_util_parse_env(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        let message = format!(
+            "The \"content\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
     let content = get_string_content(value);
     let entries = parse_env(&content);
-    let obj = crate::object::js_object_alloc(0, (entries.len() as u32).max(1));
+    let obj = crate::object::js_object_alloc_null_proto(0, (entries.len() as u32).max(1));
     for (k, v) in &entries {
         let key_ptr = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
         let val = create_string_f64(v);
@@ -189,6 +198,11 @@ mod tests {
             parse_env("A=\"l1\\nl2\""),
             vec![("A".into(), "l1\nl2".into())]
         );
+        assert_eq!(
+            parse_env("A=\"l1\nl2\""),
+            vec![("A".into(), "l1\nl2".into())]
+        );
+        assert_eq!(parse_env("A=\"x\\ty\""), vec![("A".into(), "x\\ty".into())]);
         assert_eq!(parse_env("JUSTKEY\nA=1"), vec![("A".into(), "1".into())]);
         assert_eq!(
             parse_env("\n# hi\n  # ind\nA=1"),
