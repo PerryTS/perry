@@ -370,10 +370,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
     // #3092 — callback is passed as a full NaN-boxed value (DOUBLE), not a raw
     // pointer, so the runtime can reject non-callable callbacks.
-    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
     module.declare_function("js_async_local_storage_new", I64, &[]);
-    module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_async_local_storage_run",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, I64],
+    );
 
     // ========== #2875 DisposableStack / AsyncDisposableStack / SuppressedError ==========
     // `new` ctors (dispatched by lower_builtin_new). Instance methods are
