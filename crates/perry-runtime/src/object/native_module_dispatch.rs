@@ -468,7 +468,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "loadEnvFile") => {
-            crate::process::js_process_load_env_file(optional_path_str_ptr(0));
+            crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getgroups") => crate::process::js_process_getgroups(),

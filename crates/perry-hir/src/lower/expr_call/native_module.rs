@@ -197,21 +197,15 @@ pub(super) fn try_native_module_methods(
                             // didn't persist; #1344 has since wired writes
                             // through `std::env::set_var`, so we lower to a
                             // runtime call that actually reads the file.
-                            // Default the optional path to `.env` (Node's
-                            // default) so the dispatch-table row's single
-                            // NA_STR arg stays satisfied for the no-arg call
-                            // form.
-                            let call_args = if args.is_empty() {
-                                vec![Expr::String(".env".to_string())]
-                            } else {
-                                args
-                            };
+                            // Keep the original JS value: the runtime handles
+                            // omitted/undefined/null defaulting plus Buffer
+                            // and file-URL path objects.
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "process".to_string(),
                                 class_name: None,
                                 object: None,
                                 method: "loadEnvFile".to_string(),
-                                args: call_args,
+                                args,
                             }));
                         }
                         "exit" => {

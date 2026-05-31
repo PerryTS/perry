@@ -8,7 +8,7 @@
 use crate::url::{create_string_f64, get_string_content};
 
 /// Parse `.env` text → sorted `(key, value)` pairs (last duplicate wins).
-fn parse_env(content: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_env(content: &str) -> Vec<(String, String)> {
     let normalized = content.replace('\r', "");
     let chars: Vec<char> = normalized.chars().collect();
     let mut out: Vec<(String, String)> = Vec::new();
