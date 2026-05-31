@@ -16,6 +16,7 @@ pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
             code if code == libc::EISDIR => return "EISDIR",
             code if code == libc::EPERM => return "EPERM",
             code if code == libc::EINVAL => return "EINVAL",
+            code if code == libc::ELOOP => return "ELOOP",
             code if code == libc::EINTR => return "EINTR",
             code if code == libc::ENOSPC => return "ENOSPC",
             code if code == libc::ETIMEDOUT => return "ETIMEDOUT",
