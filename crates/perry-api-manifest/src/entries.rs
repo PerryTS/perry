@@ -49,6 +49,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "ethers",
     "mongodb",
     "better-sqlite3",
+    "sqlite",
     "tursodb",
     "iroh",
     "node-cron",
@@ -595,6 +596,30 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("better-sqlite3", "pluck", true, None),
     method("better-sqlite3", "columns", true, None),
     method("better-sqlite3", "transaction", true, None),
+    // node:sqlite (#3183/#3184). Node's builtin synchronous SQLite
+    // module exposes `DatabaseSync` (constructor) and `StatementSync`
+    // (returned by `db.prepare`). The observable method surface reuses
+    // Perry's existing rusqlite backend (`js_sqlite_*`); these entries
+    // register the module so the strict-API import gate recognizes
+    // `import { DatabaseSync } from "node:sqlite"` and the dispatch
+    // tables route `exec`/`prepare`/`run`/`get`/`all`/`iterate`/
+    // `columns`/`close` to the shared statement registry.
+    method_sig(
+        "sqlite",
+        "DatabaseSync",
+        false,
+        None,
+        &[p_str("p0")],
+        TypeSpec::Any,
+    ),
+    method("sqlite", "prepare", true, None),
+    method("sqlite", "run", true, None),
+    method("sqlite", "get", true, None),
+    method("sqlite", "all", true, None),
+    method("sqlite", "exec", true, None),
+    method("sqlite", "close", true, None),
+    method("sqlite", "iterate", true, None),
+    method("sqlite", "columns", true, None),
     // tursodb (#424). open / exec / execBatch / close /
     // lastInsertRowid / isAutocommit shipped in v0.5.543; queryAll /
     // queryOne shipped in v0.5.553 (close the row-as-object gap by

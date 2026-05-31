@@ -1553,7 +1553,14 @@ mod tests {
     }
 
     #[test]
-    fn sys_default_export_is_util_namespace() {
+    fn sys_default_export_is_util_default_export() {
+        // `sys` is a deprecated alias of `util`, so its CJS default export must
+        // be pointer-identical to `util`'s default export. In Node:
+        //   import sysDefault from "node:sys";  import utilDefault from "node:util";
+        //   sysDefault === utilDefault           // true
+        //   sysDefault === (util namespace)      // false
+        // (#3741 made `util`'s default export a distinct synthetic namespace
+        // object rather than the `util` namespace itself; `sys` must follow it.)
         let sys_default = unsafe {
             js_node_submodule_export_as_function(
                 b"sys".as_ptr(),
@@ -1562,8 +1569,14 @@ mod tests {
                 "default".len() as u32,
             )
         };
-        let util_default =
-            crate::object::js_create_native_module_namespace(b"util".as_ptr(), "util".len());
+        let util_default = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"util".as_ptr(),
+                "util".len(),
+                b"default".as_ptr(),
+                "default".len(),
+            )
+        };
 
         assert_eq!(sys_default.to_bits(), util_default.to_bits());
     }

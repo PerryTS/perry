@@ -1389,9 +1389,16 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 **Gap APIs: 44** · Already covered: 8
 
+#### Covered by Perry (#3183/#3184)
+
+- `new DatabaseSync(path)` (incl. `:memory:`) → rusqlite connection
+- `db.exec(sql)` / `db.prepare(sql)` → `StatementSync` / `db.close()`
+- `stmt.run(...params)` → `{ changes, lastInsertRowid }`
+- `stmt.get(...params)` / `stmt.all(...params)` → row object(s)
+- `stmt.iterate(...params)` (array-backed) / `stmt.columns()` metadata
+
 #### Missing from Perry
 
-- `new DatabaseSync(path[, options])`
 - `db.function(name[, options], fn)`
 - `db.aggregate(name, options)`
 - `db.applyChangeset(changeset[, options])`
@@ -1408,8 +1415,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `db.isTransaction`
 - `db.limits`
 - `db[Symbol.dispose]()`
-- `stmt.iterate([namedParameters][, ...anonymousParameters])`
-- `stmt.columns()`
 - `stmt.setAllowBareNamedParameters(enabled)`
 - `stmt.setAllowUnknownNamedParameters(enabled)`
 - `stmt.setReadBigInts(enabled)`
