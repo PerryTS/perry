@@ -494,6 +494,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("better-sqlite3", "transaction", true, None),
     class("sqlite", "DatabaseSync"),
     method("sqlite", "DatabaseSync", false, None),
+    method("sqlite", "backup", false, None),
     method("sqlite", "open", true, None),
     method("sqlite", "close", true, None),
     method("sqlite", "__perry_dispose__", true, None),

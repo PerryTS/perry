@@ -729,6 +729,15 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
     },
     NativeModSig {
         module: "sqlite",
+        has_receiver: false,
+        method: "backup",
+        class_filter: None,
+        runtime: "js_node_sqlite_backup",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_PROMISE,
+    },
+    NativeModSig {
+        module: "sqlite",
         has_receiver: true,
         method: "open",
         class_filter: None,

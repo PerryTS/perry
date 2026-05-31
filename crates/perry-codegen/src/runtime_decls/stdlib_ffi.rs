@@ -640,6 +640,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction_commit", VOID, &[I64]);
     module.declare_function("js_sqlite_transaction_rollback", VOID, &[I64]);
+    module.declare_function("js_node_sqlite_backup", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_node_sqlite_database_sync_call", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_node_sqlite_database_sync_new", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_node_sqlite_database_sync_open", I32, &[I64]);
