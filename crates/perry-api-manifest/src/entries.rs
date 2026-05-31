@@ -3395,10 +3395,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "toJSON", false, None),
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
-    // #1478: stub — records the entry (no-op today, see codegen).
+    // Resource timing entries are recorded through the perf_hooks timeline.
     method("perf_hooks", "markResourceTiming", false, None),
-    // #1335: returns `fn` unchanged today; the spec'd "wraps fn to
-    // record a 'function' timeline entry" piece isn't recorded yet.
+    // timerify returns a wrapper that emits observer-visible function entries.
     method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route

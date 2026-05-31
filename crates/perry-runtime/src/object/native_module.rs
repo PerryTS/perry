@@ -1334,16 +1334,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_hooks", "toJSON")
             | ("perf_hooks", "clearResourceTimings")
             | ("perf_hooks", "setResourceTimingBufferSize")
-            // #1478: performance.markResourceTiming(info) records a
-            // PerformanceResourceTiming. Perry's runtime no-ops it but
-            // the property must still read as a function for
-            // feature-detection (`typeof X === "function"`) wrappers.
+            // performance.markResourceTiming(info) records a resource entry;
+            // the property also reads as a function for feature-detection
+            // wrappers.
             | ("perf_hooks", "markResourceTiming")
-            // #1335: performance.timerify(fn) wraps `fn` to record a
-            // 'function' timeline entry per call. Perry currently
-            // returns `fn` unchanged (no entry recorded), but the
-            // property must still read as a function for
-            // feature-detection.
+            // performance.timerify(fn) returns a wrapper that preserves the
+            // result and emits observer-visible function entries.
             | ("perf_hooks", "timerify")
             // #1366: `crypto.getRandomValues` is the WebCrypto sync
             // randomness API. Perry lowers the call form via a

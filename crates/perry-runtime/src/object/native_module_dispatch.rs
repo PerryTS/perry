@@ -548,6 +548,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "setResourceTimingBufferSize") => {
             crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
         }
+        ("perf_hooks", "markResourceTiming") => crate::perf_hooks::js_perf_mark_resource_timing(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+            arg(5),
+            arg(6),
+            arg(7),
+        ),
+        ("perf_hooks", "timerify") => crate::perf_hooks::js_perf_timerify(arg(0), arg(1)),
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the
