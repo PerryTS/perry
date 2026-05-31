@@ -1055,6 +1055,26 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // Inline `new TextDecoder(...).encoding | .fatal | .ignoreBOM`.
+    if let ast::Expr::New(new_expr) = member.obj.as_ref() {
+        if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
+            if class_ident.sym.as_ref() == "TextDecoder" {
+                if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                    let prop_name = prop_ident.sym.as_ref();
+                    if matches!(prop_name, "encoding" | "fatal" | "ignoreBOM") {
+                        let d =
+                            super::expr_new::lower_text_decoder_new(ctx, new_expr.args.as_deref())?;
+                        return Ok(match prop_name {
+                            "encoding" => Expr::TextDecoderEncoding(Box::new(d)),
+                            "fatal" => Expr::TextDecoderFatal(Box::new(d)),
+                            _ => Expr::TextDecoderIgnoreBom(Box::new(d)),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // TextEncoder / TextDecoder property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
@@ -1068,8 +1088,25 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 .lookup_local_type(&obj_name)
                 .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
                 .unwrap_or(false);
-            if (is_text_encoder || is_text_decoder) && prop_name == "encoding" {
+            if is_text_encoder && prop_name == "encoding" {
                 return Ok(Expr::String("utf-8".to_string()));
+            }
+            if is_text_decoder {
+                match prop_name {
+                    "encoding" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderEncoding(Box::new(d)));
+                    }
+                    "fatal" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderFatal(Box::new(d)));
+                    }
+                    "ignoreBOM" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderIgnoreBom(Box::new(d)));
+                    }
+                    _ => {}
+                }
             }
         }
     }

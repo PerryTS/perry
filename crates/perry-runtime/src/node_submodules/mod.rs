@@ -112,6 +112,8 @@ mod stream_promises;
 mod test;
 mod timers;
 mod trace_events;
+mod zlib;
+pub use zlib::js_zlib_resolve_level;
 
 // #1671: hono/jsx/server + hono/jsx/streaming. Re-export the stream-creation
 // registration so perry-stdlib's `bundled-streams` init can wire it up.

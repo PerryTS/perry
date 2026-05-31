@@ -376,13 +376,16 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, DOUBLE]);
 
     // ========== zlib ==========
-    module.declare_function("js_zlib_deflate_sync", I64, &[DOUBLE]);
+    // #2935: gzipSync/deflateSync take the data as raw NaN-box bits (I64) plus
+    // an options object (DOUBLE) so the `{ level }` option can select the
+    // compression level / throw RangeError. The codec unboxes the data itself.
+    module.declare_function("js_zlib_deflate_sync", I64, &[I64, DOUBLE]);
     module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_gunzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_gunzip_sync", I64, &[I64]);
     module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_gzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_gzip_sync", I64, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_inflate_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE]);

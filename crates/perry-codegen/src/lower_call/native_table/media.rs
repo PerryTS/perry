@@ -274,7 +274,10 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gzipSync",
         class_filter: None,
         runtime: "js_zlib_gzip_sync",
-        args: &[NA_F64],
+        // #2935: data as raw NaN-box bits (i64) + options object (f64). The
+        // codec extracts the buffer/string pointer itself; the options object
+        // carries `{ level }`.
+        args: &[NA_JSV, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -283,7 +286,9 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "gunzipSync",
         class_filter: None,
         runtime: "js_zlib_gunzip_sync",
-        args: &[NA_F64],
+        // #2935: data as raw NaN-box bits so the codec unboxes the buffer
+        // pointer itself (a Buffer/string both decompress correctly).
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -292,7 +297,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "deflateSync",
         class_filter: None,
         runtime: "js_zlib_deflate_sync",
-        args: &[NA_F64],
+        // #2935: see gzipSync above.
+        args: &[NA_JSV, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -301,7 +307,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "inflateSync",
         class_filter: None,
         runtime: "js_zlib_inflate_sync",
-        args: &[NA_F64],
+        // #2935: see gunzipSync above.
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {

@@ -42,6 +42,11 @@ const TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
 extern "C" {
     fn js_buffer_is_buffer(ptr: i64) -> i32;
     fn js_get_string_pointer_unified(value: f64) -> i64;
+    // #2935: resolve + validate a `{ level }` option to a flate2 level
+    // (`0..=9`); throws `RangeError [ERR_OUT_OF_RANGE]` for out-of-range
+    // values. Lives in perry-runtime (it owns the by-name object reader + the
+    // throwing path). `js_zlib_resolve_level(undefined)` returns the default.
+    pub(crate) fn js_zlib_resolve_level(opts: f64) -> i32;
     fn js_native_call_method_str_key(
         object: f64,
         name_handle: i64,
@@ -84,6 +89,34 @@ pub(crate) unsafe fn read_input_bytes(ptr: *const StringHeader) -> Option<Vec<u8
     let len = (*ptr).byte_len as usize;
     let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     Some(std::slice::from_raw_parts(data, len).to_vec())
+}
+
+/// Read the bytes of a one-shot input passed as raw NaN-box bits (#2935).
+///
+/// `gzipSync`/`deflateSync` now receive the data argument as `i64` NaN-box
+/// bits (NA_JSV) rather than a pre-unboxed pointer, so the codec can accept a
+/// string, Buffer, or TypedArray uniformly. `js_get_string_pointer_unified`
+/// recovers the underlying `StringHeader`/`BufferHeader` pointer (masking the
+/// POINTER/STRING tag), which `read_input_bytes` then reads buffer-aware.
+///
+/// # Safety
+/// `data_bits` must be a valid NaN-box bit pattern from the runtime.
+pub(crate) unsafe fn read_input_from_bits(data_bits: i64) -> Option<Vec<u8>> {
+    let ptr = js_get_string_pointer_unified(f64::from_bits(data_bits as u64));
+    if ptr == 0 {
+        return None;
+    }
+    read_input_bytes(ptr as *const StringHeader)
+}
+
+/// Resolve a `node:zlib` option object to a `flate2::Compression` level.
+///
+/// Delegates the read + range validation to perry-runtime's
+/// `js_zlib_resolve_level` (#2935): an out-of-range `level` throws a
+/// Node-compatible `RangeError` (via longjmp) before this returns, and an
+/// absent/`undefined` `level` yields the zlib default level (`6`).
+pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
+    Compression::new(js_zlib_resolve_level(opts) as u32)
 }
 
 /// `zlib.brotliCompressSync(data)` -> Buffer.

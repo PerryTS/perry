@@ -19,6 +19,47 @@ use crate::lower_types::extract_ts_type_with_ctx;
 
 use super::{lower_expr, LoweringContext};
 
+/// Lower `new TextDecoder(label?, { fatal?, ignoreBOM? })` into
+/// `Expr::TextDecoderNew { label, fatal, ignore_bom }`. Shared by
+/// `expr_new.rs` (bound to a local) and `textencoder.rs` (inline
+/// `new TextDecoder(...).decode(...)`).
+pub(crate) fn lower_text_decoder_new(
+    ctx: &mut LoweringContext,
+    args: Option<&[ast::ExprOrSpread]>,
+) -> Result<Expr> {
+    let label = match args.and_then(|a| a.first()) {
+        Some(arg) => lower_expr(ctx, &arg.expr)?,
+        None => Expr::Undefined,
+    };
+    let mut fatal = Expr::Bool(false);
+    let mut ignore_bom = Expr::Bool(false);
+    if let Some(opts) = args.and_then(|a| a.get(1)) {
+        if let ast::Expr::Object(obj) = opts.expr.as_ref() {
+            for prop in &obj.props {
+                if let ast::PropOrSpread::Prop(p) = prop {
+                    if let ast::Prop::KeyValue(kv) = p.as_ref() {
+                        let key = match &kv.key {
+                            ast::PropName::Ident(i) => i.sym.to_string(),
+                            ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                            _ => continue,
+                        };
+                        match key.as_str() {
+                            "fatal" => fatal = lower_expr(ctx, &kv.value)?,
+                            "ignoreBOM" => ignore_bom = lower_expr(ctx, &kv.value)?,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Expr::TextDecoderNew {
+        label: Box::new(label),
+        fatal: Box::new(fatal),
+        ignore_bom: Box::new(ignore_bom),
+    })
+}
+
 fn peel_new_callee(mut expr: &ast::Expr) -> &ast::Expr {
     loop {
         match expr {
@@ -838,10 +879,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if class_name == "TextEncoder" {
                 return Ok(Expr::TextEncoderNew);
             }
-            // Handle TextDecoder constructor
+            // Handle TextDecoder constructor: new TextDecoder(label?, opts?)
             if class_name == "TextDecoder" {
-                // new TextDecoder() or new TextDecoder("utf-8") — we only support UTF-8
-                return Ok(Expr::TextDecoderNew);
+                return lower_text_decoder_new(ctx, new_expr.args.as_deref());
             }
 
             // Handle Uint8Array constructor
