@@ -1966,6 +1966,9 @@ pub enum Expr {
     /// String(value) -> string
     /// Type coercion to string
     StringCoerce(Box<Expr>),
+    /// `Object(value)` plain-call coercion (#3149). Nullish/primitive → a fresh
+    /// `{}`; an existing object/array passes through unchanged.
+    ObjectCoerce(Box<Expr>),
     /// Boolean(value) -> boolean
     /// Type coercion to boolean via JS truthiness rules
     BooleanCoerce(Box<Expr>),

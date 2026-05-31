@@ -23,6 +23,7 @@ pub fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
         | Expr::TypeOf(operand)
         | Expr::Await(operand)
         | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
         | Expr::NumberCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::Delete(operand) => expr_contains_local_get(operand, target_id),

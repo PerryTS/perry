@@ -922,6 +922,7 @@ pub(crate) fn expr_preserves_array_length(
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => walk(operand),
         Expr::Conditional {

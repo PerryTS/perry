@@ -30,6 +30,32 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
     ptr
 }
 
+/// `Object(value)` plain-call coercion (#3149, ECMAScript §20.1.1.1 / ToObject).
+///
+/// Takes and returns a NaN-boxed JSValue (`f64`):
+/// - `undefined` / `null` / no-arg → a fresh ordinary `{}`.
+/// - an existing object/array/function (any pointer value) → returned unchanged.
+/// - a primitive (number, string, boolean, bigint) → currently a fresh `{}`,
+///   which preserves `typeof Object(5) === "object"`; the primitive value is
+///   not retained in a wrapper object (Perry has no primitive-wrapper objects
+///   yet). This matches the acceptance criteria in #3149, which only require
+///   the nullish cases to round-trip.
+///
+/// The `new Object(value)` form is handled separately by
+/// `js_new_function_construct`'s `"Object"` arm; this is only the bare-call
+/// path that previously fell through to the generic dispatcher and returned
+/// `undefined`.
+#[no_mangle]
+pub extern "C" fn js_object_coerce(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_pointer() {
+        // Already an object/array/function — pass through unchanged.
+        return value;
+    }
+    let obj = js_object_alloc(0, 0);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
 /// Allocate a new object with class ID, parent class ID, and field count
 /// The parent_class_id is used for instanceof inheritance checks
 /// Returns a pointer to the object header

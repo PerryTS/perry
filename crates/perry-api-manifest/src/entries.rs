@@ -79,6 +79,8 @@ pub const NATIVE_MODULES: &[&str] = &[
     "constants",
     "util",
     "util/types",
+    "dns",
+    "dns/promises",
     "url",
     "lru-cache",
     "commander",
@@ -170,6 +172,8 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "console",
     "util",
     "util/types",
+    "dns",
+    "dns/promises",
     "process",
     "perry/ui",
     "perry/system",
@@ -2828,11 +2832,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // at the same address.
     method("querystring", "decode", false, None),
     method("querystring", "encode", false, None),
-    // node:cluster — shape-only surface. The fixture probes
-    // typeof properties + reads constants; we never actually fork.
-    // Methods are wired through `is_native_module_callable_export`
-    // (bound-method closure path) so `typeof cluster.fork === "function"`
-    // holds without us implementing a real fork.
+    // node:cluster — primary lifecycle surface. `setupPrimary` /
+    // `setupMaster`, `fork`, and `disconnect` route through the native
+    // module bound-method path; handle sharing/listening distribution is
+    // outside this manifest entry.
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),
@@ -2992,6 +2995,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "inspect", false, None),
     method("util", "format", false, None),
     method("util", "convertProcessSignalToExitCode", false, None),
+    method("util", "diff", false, None),
     // #2514: libuv-style errno helpers.
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
@@ -3078,6 +3082,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
     method("sys", "convertProcessSignalToExitCode", false, None),
+    method("sys", "diff", false, None),
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
     method("sys", "getSystemErrorMap", false, None),
@@ -3154,6 +3159,58 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("assert/strict", "strict", false, None),
     property("assert/strict", "strict"),
     class("assert/strict", "AssertionError"),
+    property("dns", "ADDRCONFIG"),
+    property("dns", "V4MAPPED"),
+    property("dns", "ALL"),
+    property("dns", "NODATA"),
+    property("dns", "FORMERR"),
+    property("dns", "SERVFAIL"),
+    property("dns", "NOTFOUND"),
+    property("dns", "NOTIMP"),
+    property("dns", "REFUSED"),
+    property("dns", "BADQUERY"),
+    property("dns", "BADNAME"),
+    property("dns", "BADFAMILY"),
+    property("dns", "BADRESP"),
+    property("dns", "CONNREFUSED"),
+    property("dns", "TIMEOUT"),
+    property("dns", "EOF"),
+    property("dns", "FILE"),
+    property("dns", "NOMEM"),
+    property("dns", "DESTRUCTION"),
+    property("dns", "BADSTR"),
+    property("dns", "BADFLAGS"),
+    property("dns", "NONAME"),
+    property("dns", "BADHINTS"),
+    property("dns", "NOTINITIALIZED"),
+    property("dns", "LOADIPHLPAPI"),
+    property("dns", "ADDRGETNETWORKPARAMS"),
+    property("dns", "CANCELLED"),
+    property("dns", "promises"),
+    property("dns/promises", "NODATA"),
+    property("dns/promises", "FORMERR"),
+    property("dns/promises", "SERVFAIL"),
+    property("dns/promises", "NOTFOUND"),
+    property("dns/promises", "NOTIMP"),
+    property("dns/promises", "REFUSED"),
+    property("dns/promises", "BADQUERY"),
+    property("dns/promises", "BADNAME"),
+    property("dns/promises", "BADFAMILY"),
+    property("dns/promises", "BADRESP"),
+    property("dns/promises", "CONNREFUSED"),
+    property("dns/promises", "TIMEOUT"),
+    property("dns/promises", "EOF"),
+    property("dns/promises", "FILE"),
+    property("dns/promises", "NOMEM"),
+    property("dns/promises", "DESTRUCTION"),
+    property("dns/promises", "BADSTR"),
+    property("dns/promises", "BADFLAGS"),
+    property("dns/promises", "NONAME"),
+    property("dns/promises", "BADHINTS"),
+    property("dns/promises", "NOTINITIALIZED"),
+    property("dns/promises", "LOADIPHLPAPI"),
+    property("dns/promises", "ADDRGETNETWORKPARAMS"),
+    property("dns/promises", "CANCELLED"),
     // --- stream (Web Streams API + Node stream classes — see
     //     perry-stdlib/src/streams.rs and perry-ext-streams) ---
     class("stream", "Readable"),
@@ -3339,10 +3396,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "toJSON", false, None),
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
-    // #1478: stub — records the entry (no-op today, see codegen).
+    // Resource timing entries are recorded through the perf_hooks timeline.
     method("perf_hooks", "markResourceTiming", false, None),
-    // #1335: returns `fn` unchanged today; the spec'd "wraps fn to
-    // record a 'function' timeline entry" piece isn't recorded yet.
+    // timerify returns a wrapper that emits observer-visible function entries.
     method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
