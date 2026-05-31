@@ -208,6 +208,22 @@ pub(crate) fn webcrypto_namespace() -> f64 {
     js_create_native_module_namespace(b"crypto.webcrypto".as_ptr(), "crypto.webcrypto".len())
 }
 
+pub(crate) fn install_global_webcrypto(singleton: *mut ObjectHeader) {
+    let key = crate::string::js_string_from_bytes(b"crypto".as_ptr(), "crypto".len() as u32);
+    js_object_set_field_by_name(singleton, key, webcrypto_namespace());
+}
+
+pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, ctor_value: f64) {
+    let constructor = "constructor";
+    let key = crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, ctor_value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
 pub(crate) fn subtle_crypto_namespace() -> f64 {
     js_create_native_module_namespace(b"crypto.subtle".as_ptr(), "crypto.subtle".len())
 }

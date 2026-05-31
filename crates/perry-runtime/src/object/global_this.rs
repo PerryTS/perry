@@ -1084,17 +1084,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
             }
             if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
-                let constructor = "constructor";
-                let constructor_key = crate::string::js_string_from_bytes(
-                    constructor.as_ptr(),
-                    constructor.len() as u32,
-                );
-                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
-                super::set_builtin_property_attrs(
-                    proto_obj as usize,
-                    constructor.to_string(),
-                    super::PropertyAttrs::new(true, false, true),
-                );
+                super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
             }
             // #2145: link per-kind typed-array constructors into the
             // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
@@ -1228,15 +1218,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let value = super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton, key, value);
     }
-    // WebCrypto global — Node exposes `globalThis.crypto` as the same
-    // singleton as `require("node:crypto").webcrypto`, not the full
-    // node:crypto module namespace.
-    {
-        let cname = b"crypto";
-        let ckey = crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);
-        let cval = super::native_module::webcrypto_namespace();
-        js_object_set_field_by_name(singleton, ckey, cval);
-    }
+    super::native_module::install_global_webcrypto(singleton);
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.
     {
