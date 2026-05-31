@@ -39,12 +39,52 @@ pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
     }
 }
 
+pub(crate) fn io_error_errno(err: &std::io::Error) -> i32 {
+    #[cfg(unix)]
+    if let Some(raw) = err.raw_os_error() {
+        return -raw;
+    }
+    #[cfg(unix)]
+    match io_error_code(err) {
+        "ENOENT" => -libc::ENOENT,
+        "EACCES" => -libc::EACCES,
+        "EEXIST" => -libc::EEXIST,
+        "ENOTDIR" => -libc::ENOTDIR,
+        "ENOTEMPTY" => -libc::ENOTEMPTY,
+        "EISDIR" => -libc::EISDIR,
+        "EPERM" => -libc::EPERM,
+        "EINVAL" => -libc::EINVAL,
+        "EINTR" => -libc::EINTR,
+        "ENOSPC" => -libc::ENOSPC,
+        "ETIMEDOUT" => -libc::ETIMEDOUT,
+        "EAGAIN" => -libc::EAGAIN,
+        _ => -libc::EIO,
+    }
+    #[cfg(not(unix))]
+    match io_error_code(err) {
+        "ENOENT" => -2,
+        "EACCES" => -13,
+        "EEXIST" => -17,
+        "ENOTDIR" => -20,
+        "ENOTEMPTY" => -39,
+        "EISDIR" => -21,
+        "EPERM" => -1,
+        "EINVAL" => -22,
+        "EINTR" => -4,
+        "ENOSPC" => -28,
+        "ETIMEDOUT" => -110,
+        "EAGAIN" => -11,
+        _ => -5,
+    }
+}
+
 pub(crate) unsafe fn build_fs_error_value(
     err: &std::io::Error,
     syscall: &'static str,
     path: &str,
 ) -> f64 {
     let code = io_error_code(err);
+    let errno = io_error_errno(err);
     let msg = format!("{}: {}, {} '{}'", code, err, syscall, path);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
@@ -52,6 +92,7 @@ pub(crate) unsafe fn build_fs_error_value(
     // `.code`, `.syscall`, `.path` property getters in `field_get_set`
     // surface Node-compatible values on caught errors.
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_errno(msg_ptr, errno);
     crate::node_submodules::register_error_syscall(msg_ptr, syscall);
     crate::node_submodules::register_error_path(msg_ptr, path.to_string());
     crate::value::js_nanbox_pointer(err_ptr as i64)
@@ -67,10 +108,12 @@ pub(crate) unsafe fn build_fs_error_value_with_dest(
     dest: &str,
 ) -> f64 {
     let code = io_error_code(err);
+    let errno = io_error_errno(err);
     let msg = format!("{}: {}, {} '{}' -> '{}'", code, err, syscall, path, dest);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_errno(msg_ptr, errno);
     crate::node_submodules::register_error_syscall(msg_ptr, syscall);
     crate::node_submodules::register_error_path(msg_ptr, path.to_string());
     crate::node_submodules::register_error_dest(msg_ptr, dest.to_string());
@@ -82,10 +125,12 @@ pub(crate) unsafe fn build_fs_error_value_no_path(
     syscall: &'static str,
 ) -> f64 {
     let code = io_error_code(err);
+    let errno = io_error_errno(err);
     let msg = format!("{}: {}, {}", code, err, syscall);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_errno(msg_ptr, errno);
     crate::node_submodules::register_error_syscall(msg_ptr, syscall);
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }

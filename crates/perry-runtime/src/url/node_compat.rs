@@ -249,6 +249,13 @@ fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
     }
 }
 
+/// POSIX file URL decoder for fs PathLike URL objects. This intentionally
+/// routes through the same parser as `fileURLToPath()`, so encoded separators
+/// and host/scheme errors surface with Node-compatible codes.
+pub(crate) fn file_url_to_path_string_posix(url_f64: f64) -> String {
+    String::from_utf8_lossy(&file_url_to_path_bytes(url_f64, false)).into_owned()
+}
+
 /// Resolve a `node:module` "base" argument (file URL object/string or a
 /// bare path string) to a filesystem path string. URL-shaped values and
 /// `file:`-scheme strings go through the file-URL decoder; any other string

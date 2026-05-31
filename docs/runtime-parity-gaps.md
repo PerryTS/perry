@@ -1342,18 +1342,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `filehandle.datasync()`
 - `filehandle.pull([...transforms][, options])`
 - `filehandle.pullSync([...transforms][, options])`
-- `filehandle.read(buffer, offset, length, position)`
-- `filehandle.read([options])`
-- `filehandle.read(buffer[, options])`
 - `filehandle.readableWebStream([options])`
-- `filehandle.readv(buffers[, position])`
-- `filehandle.sync()`
-- `filehandle.truncate(len)`
-- `filehandle.utimes(atime, mtime)`
-- `filehandle.write(buffer, offset[, length[, position]])`
-- `filehandle.write(buffer[, options])`
-- `filehandle.write(string[, position[, encoding]])`
-- `filehandle.writev(buffers[, position])`
 - `filehandle.writer([options])`
 - `filehandle[Symbol.asyncDispose]()`
 
@@ -1375,12 +1364,28 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `fsPromises.unlink(path)` | `manifest:fs.unlink` |
 | `fsPromises.writeFile(file, data[, options])` | `manifest:fs.writeFile` |
 | `filehandle.appendFile(data[, options])` | `manifest:fs.appendFile` |
+| `filehandle.fd` | `ffi:js_fs_filehandle_open` |
+| `filehandle.chmod(mode)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.chown(uid, gid)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.close()` | `ffi:js_fs_filehandle_open` |
 | `filehandle.createReadStream([options])` | `manifest:fs.createReadStream` |
 | `filehandle.createWriteStream([options])` | `manifest:fs.createWriteStream` |
+| `filehandle.datasync()` | `ffi:js_fs_filehandle_open` |
+| `filehandle.read(buffer, offset, length, position)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.read([options])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.read(buffer[, options])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.readLines([options])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.readFile(options)` | `manifest:fs.readFile` |
+| `filehandle.readv(buffers[, position])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.stat([options])` | `manifest:fs.stat` |
+| `filehandle.sync()` | `ffi:js_fs_filehandle_open` |
+| `filehandle.truncate(len)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.utimes(atime, mtime)` | `ffi:js_fs_filehandle_open` |
+| `filehandle.write(buffer, offset[, length[, position]])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.write(buffer[, options])` | `ffi:js_fs_filehandle_open` |
+| `filehandle.write(string[, position[, encoding]])` | `ffi:js_fs_filehandle_open` |
 | `filehandle.writeFile(data, options)` | `manifest:fs.writeFile` |
+| `filehandle.writev(buffers[, position])` | `ffi:js_fs_filehandle_open` |
 
 ### node:sqlite
 
@@ -2320,7 +2325,7 @@ High-visibility entries (full list in `runtime-parity.md`):
 
 **Methodology decisions:**
 
-- Module aliasing: `node:fs` and `fs` treated as the same module. `node:fs/promises` is its own module key but falls back to `fs` for manifest lookup.
+- Module aliasing: `node:fs` and `fs` treated as the same module. `node:fs/promises` is its own module key; older rows may still be cross-checked against `fs` when documenting FileHandle-derived coverage.
 - Sync/async variants are checked separately: `fs.readFileSync` does not credit `fs.readFile`. The FFI heuristic does try the `_sync` suffix to handle the common pattern.
 - For instance methods (`dir.read`, `socket.write`): the matcher first treats the leading segment as the class name and tries `js_<module>_<class>_<method>`; if that fails it falls through to the generic dispatch table.
 - A small builtin overlay covers symbols like `setTimeout`, `clearTimeout`, `console.error` that ship as `js_set_timeout` / `js_console_*` rather than `js_timers_*` / `js_console_*` — without it the matcher would mis-report those as gaps.

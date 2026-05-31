@@ -105,13 +105,42 @@ fn has_refed_promise_timer() -> bool {
         .any(|timer| timer.has_ref)
 }
 
+fn timer_has_ref_state(id: i64) -> bool {
+    TIMER_REF_STATES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|map| map.get(&id).copied())
+        .unwrap_or(true)
+}
+
+fn has_refed_callback_timer() -> bool {
+    CALLBACK_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|timer| !timer.cleared && timer_has_ref_state(timer.id))
+}
+
+fn has_refed_interval_timer() -> bool {
+    INTERVAL_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|timer| !timer.cleared && timer_has_ref_state(timer.id))
+}
+
 fn other_event_sources_keep_loop_alive() -> bool {
-    js_callback_timer_has_pending() != 0
-        || js_interval_timer_has_pending() != 0
+    has_refed_callback_timer()
+        || has_refed_interval_timer()
         || unsafe { js_stdlib_has_active_handles() != 0 }
 }
 
 fn should_run_unref_promise_timers() -> bool {
+    has_refed_promise_timer() || other_event_sources_keep_loop_alive()
+}
+
+fn should_run_unref_callback_interval_timers() -> bool {
     has_refed_promise_timer() || other_event_sources_keep_loop_alive()
 }
 
@@ -965,6 +994,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     };
 
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     // Collect expired, non-cleared timers
     let expired: Vec<CallbackTimer> = {
@@ -974,7 +1004,8 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         while i < queue.len() {
             if queue[i].cleared {
                 queue.remove(i);
-            } else if queue[i].deadline <= now {
+            } else if queue[i].deadline <= now && (timer_has_ref_state(queue[i].id) || allow_unref)
+            {
                 expired.push(queue.remove(i));
             } else {
                 i += 1;
@@ -1054,12 +1085,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
 /// Check if there are any pending callback timers
 #[no_mangle]
 pub extern "C" fn js_callback_timer_has_pending() -> i32 {
-    let q = CALLBACK_TIMERS.lock().unwrap();
-    if q.iter().any(|t| !t.cleared) {
-        1
-    } else {
-        0
-    }
+    i32::from(has_refed_callback_timer())
 }
 
 pub fn active_timeout_resource_count() -> usize {
@@ -1099,12 +1125,13 @@ pub fn active_timeout_resource_count() -> usize {
 #[no_mangle]
 pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     CALLBACK_TIMERS
         .lock()
         .unwrap()
         .iter()
-        .filter(|t| !t.cleared)
+        .filter(|t| !t.cleared && (timer_has_ref_state(t.id) || allow_unref))
         .map(|t| {
             if t.deadline <= now {
                 0.0
@@ -1316,6 +1343,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     };
 
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     // Collect callbacks to call and update deadlines
     let callbacks_to_call: Vec<(
@@ -1328,7 +1356,10 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         let mut callbacks = Vec::new();
 
         for timer in timers.iter_mut() {
-            if !timer.cleared && timer.next_deadline <= now {
+            if !timer.cleared
+                && timer.next_deadline <= now
+                && (timer_has_ref_state(timer.id) || allow_unref)
+            {
                 callbacks.push((
                     timer.id,
                     timer.callback,
@@ -1391,24 +1422,20 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
 /// Check if there are any pending interval timers
 #[no_mangle]
 pub extern "C" fn js_interval_timer_has_pending() -> i32 {
-    let timers = INTERVAL_TIMERS.lock().unwrap();
-    if timers.iter().any(|t| !t.cleared) {
-        1
-    } else {
-        0
-    }
+    i32::from(has_refed_interval_timer())
 }
 
 /// Get the time until the next interval timer fires (in ms), or -1 if no timers
 #[no_mangle]
 pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
     let now = Instant::now();
+    let allow_unref = should_run_unref_callback_interval_timers();
 
     INTERVAL_TIMERS
         .lock()
         .unwrap()
         .iter()
-        .filter(|t| !t.cleared)
+        .filter(|t| !t.cleared && (timer_has_ref_state(t.id) || allow_unref))
         .map(|t| {
             if t.next_deadline <= now {
                 0.0

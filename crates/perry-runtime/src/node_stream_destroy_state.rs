@@ -96,6 +96,9 @@ pub extern "C" fn js_node_stream_method_destroyed(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_destroy(stream_handle: i64, err: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_destroy_value(stream) {
+        return result;
+    }
     destroy_stream(stream, err);
     stream
 }

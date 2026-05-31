@@ -618,15 +618,26 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         if obj.is_null() || (obj as usize) < 0x10000 || !is_valid_obj_ptr(obj as *const u8) {
             return f64::from_bits(TAG_FALSE);
         }
-        if !own_key_present(obj, key_str) {
-            return f64::from_bits(TAG_FALSE);
-        }
         let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let name_len = (*key_str).byte_len as usize;
         let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
             Ok(s) => s,
             Err(_) => return f64::from_bits(TAG_FALSE),
         };
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(module_name) = read_native_module_name(obj) {
+                return f64::from_bits(
+                    if native_module_has_enumerable_key(&module_name, key_name) {
+                        TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    },
+                );
+            }
+        }
+        if !own_key_present(obj, key_str) {
+            return f64::from_bits(TAG_FALSE);
+        }
         let enumerable = super::get_property_attrs(obj as usize, key_name)
             .map(|attrs| attrs.enumerable())
             .unwrap_or(true);
@@ -1360,112 +1371,6 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
 /// Object.freeze(obj) — sets the frozen flag and drops `writable` +
 /// `configurable` on every existing key so per-key descriptor lookups report
 /// the post-freeze state. Returns the object.
-#[no_mangle]
-pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
-            let gc = gc_header_for(obj);
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_FROZEN
-                | crate::gc::OBJ_FLAG_SEALED
-                | crate::gc::OBJ_FLAG_NO_EXTEND;
-            // Drop writable + configurable for every existing key.
-            mark_all_keys(
-                obj, /*drop_writable=*/ true, false, /*drop_configurable=*/ true,
-            );
-        }
-    }
-    obj_value
-}
-
-/// Object.seal(obj) — sets the sealed flag and drops `configurable` on every
-/// existing key. Writable is preserved (sealed ≠ frozen). Returns the object.
-#[no_mangle]
-pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
-            let gc = gc_header_for(obj);
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
-            // Drop configurable for every existing key (but leave writable intact).
-            mark_all_keys(
-                obj, /*drop_writable=*/ false, false, /*drop_configurable=*/ true,
-            );
-        }
-    }
-    obj_value
-}
-
-/// Object.preventExtensions(obj) — sets the no-extend flag. Returns the object.
-#[no_mangle]
-pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
-            let gc = gc_header_for(obj);
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_NO_EXTEND;
-        }
-    }
-    obj_value
-}
-
-/// Object.isFrozen(obj) — returns NaN-boxed boolean.
-#[no_mangle]
-pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) <= 0x10000 {
-            return f64::from_bits(TAG_TRUE); // non-objects are vacuously frozen
-        }
-        let gc = gc_header_for(obj);
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        }
-    }
-}
-
-/// Object.isSealed(obj) — returns NaN-boxed boolean.
-#[no_mangle]
-pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) <= 0x10000 {
-            return f64::from_bits(TAG_TRUE); // non-objects are vacuously sealed
-        }
-        let gc = gc_header_for(obj);
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_SEALED != 0 {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        }
-    }
-}
-
-/// Object.isExtensible(obj) — returns NaN-boxed boolean.
-#[no_mangle]
-pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) <= 0x10000 {
-            return f64::from_bits(TAG_FALSE); // non-objects are not extensible
-        }
-        let gc = gc_header_for(obj);
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
-            f64::from_bits(TAG_FALSE)
-        } else {
-            f64::from_bits(TAG_TRUE)
-        }
-    }
-}
-
 fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<f64> {
     if obj.is_null() {
         return None;

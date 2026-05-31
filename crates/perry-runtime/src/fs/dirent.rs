@@ -84,7 +84,7 @@ pub(crate) unsafe fn build_dirent_object(name: &str, parent_path: &str, kind: Di
     use crate::string::js_string_from_bytes;
     use crate::value::js_nanbox_string;
 
-    let obj = crate::object::js_object_alloc(0, 10);
+    let obj = crate::object::js_object_alloc(CLASS_ID_FS_DIRENT, 10);
 
     let set = |field: &str, v: f64| {
         let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
@@ -349,6 +349,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
 #[no_mangle]
 pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64 {
     crate::fs::validate::validate_path("path", path_value);
+    crate::fs::validate::validate_string_or_object_options("options", options_value);
     use crate::array::{js_array_alloc, js_array_push_f64};
 
     unsafe {

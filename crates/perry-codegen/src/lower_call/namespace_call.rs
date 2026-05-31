@@ -185,15 +185,12 @@ pub fn try_lower_namespace_member_call(
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
-                let _ = ctx.block().call(
-                    I32,
-                    "js_fs_write_file_sync_options",
+                let promise = ctx.block().call(
+                    DOUBLE,
+                    "js_fs_promises_write_file",
                     &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
                 );
-                let blk = ctx.block();
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-                return Ok(Some(nanbox_pointer_inline(blk, &promise_handle)));
+                return Ok(Some(promise));
             }
             "appendFile" if args.len() >= 2 => {
                 let path = lower_expr(ctx, &args[0])?;
@@ -203,15 +200,12 @@ pub fn try_lower_namespace_member_call(
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
-                let _ = ctx.block().call(
-                    I32,
-                    "js_fs_append_file_sync_options",
+                let promise = ctx.block().call(
+                    DOUBLE,
+                    "js_fs_promises_append_file",
                     &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
                 );
-                let blk = ctx.block();
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-                return Ok(Some(nanbox_pointer_inline(blk, &promise_handle)));
+                return Ok(Some(promise));
             }
             _ => {}
         }
