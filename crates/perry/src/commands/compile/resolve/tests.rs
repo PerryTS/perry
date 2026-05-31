@@ -1480,4 +1480,49 @@ mod declaration_sidecar_tests {
         assert!(is_declaration_file(Path::new("index.d.cts")));
         assert!(!is_declaration_file(Path::new("index.ts")));
     }
+
+    /// #3527 (blocker #4): `enumerate_installed_packages` must surface every
+    /// package name in the `node_modules` tree — flat deps, `@scope/pkg`
+    /// entries, and transitive deps nested under a package's own
+    /// `node_modules` — so the `"*"` / `"@scope/*"` wildcard in
+    /// `perry.compilePackages` can be expanded into concrete names. npm
+    /// bookkeeping dirs (`.bin`, `.cache`) must be skipped.
+    #[test]
+    fn enumerate_installed_packages_covers_flat_scoped_and_nested() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let nm = root.join("node_modules");
+
+        // Flat deps + npm bookkeeping that must be ignored.
+        std::fs::create_dir_all(nm.join("express")).expect("mkdir express");
+        std::fs::create_dir_all(nm.join("qs")).expect("mkdir qs");
+        std::fs::create_dir_all(nm.join(".bin")).expect("mkdir .bin");
+        std::fs::create_dir_all(nm.join(".cache")).expect("mkdir .cache");
+        std::fs::write(nm.join(".package-lock.json"), b"{}").expect("write lockfile");
+
+        // Scoped package.
+        std::fs::create_dir_all(nm.join("@scope/pkg")).expect("mkdir @scope/pkg");
+
+        // Transitive dep npm chose not to hoist (nested node_modules), plus a
+        // nested scoped dep two levels down.
+        std::fs::create_dir_all(nm.join("express/node_modules/nested-dep"))
+            .expect("mkdir nested-dep");
+        std::fs::create_dir_all(nm.join("express/node_modules/@deep/leaf"))
+            .expect("mkdir @deep/leaf");
+
+        let found = enumerate_installed_packages(root);
+
+        assert!(found.contains("express"), "flat dep");
+        assert!(found.contains("qs"), "flat dep");
+        assert!(found.contains("@scope/pkg"), "scoped dep");
+        assert!(found.contains("nested-dep"), "nested transitive dep");
+        assert!(found.contains("@deep/leaf"), "nested scoped dep");
+        assert!(!found.contains(".bin"), "npm bin dir skipped");
+        assert!(!found.contains(".cache"), "npm cache dir skipped");
+        assert!(
+            !found.contains(".package-lock.json"),
+            "lockfile (a file, not a dir) skipped"
+        );
+        assert_eq!(found.len(), 5, "exactly the five real packages");
+    }
 }

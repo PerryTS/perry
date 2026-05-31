@@ -49,6 +49,14 @@ thread_local! {
     static CLOSURE_ARITY_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// Side-table mapping closure body `func_ptr` -> spec `.length`.
+    /// Unlike declared arity, function length stops at the first parameter
+    /// with a default and before rest. Keep this separate from
+    /// CLOSURE_ARITY_REGISTRY because dispatch padding needs the body's real
+    /// ABI arity while `fn.length` needs the ECMAScript-visible length.
+    static CLOSURE_LENGTH_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
     /// Side-table marking closure body `func_ptr`s that came from async
     /// functions. `util.types.isAsyncFunction` uses this when the predicate
     /// sees a runtime closure value instead of a statically-known HIR node.
@@ -249,6 +257,22 @@ pub fn lookup_closure_arity(func_ptr: *const u8) -> Option<u32> {
     CLOSURE_ARITY_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
 }
 
+/// Register a closure body's ECMAScript `.length` value.
+#[no_mangle]
+pub extern "C" fn js_register_closure_length(func_ptr: *const u8, length: u32) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_LENGTH_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, length);
+    });
+}
+
+#[inline(always)]
+pub fn lookup_closure_length(func_ptr: *const u8) -> Option<u32> {
+    CLOSURE_LENGTH_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
+}
+
 #[no_mangle]
 pub extern "C" fn js_register_closure_generator_function(func_ptr: *const u8) {
     if func_ptr.is_null() {
@@ -267,18 +291,8 @@ pub fn is_registered_generator_function(func_ptr: *const u8) -> bool {
 }
 
 /// Public helper: given a `*const ClosureHeader` pointer, return the
-/// closure's declared arity if known. Falls back to the rest-registry
-/// fixed-arity entry for closures declared with `...rest`. Returns
-/// `None` if the pointer isn't a valid closure or no arity was
-/// registered.
-///
-/// Used by the `.length` property accessor on closure values so
-/// `fn.length` returns the spec-compliant declared-param count
-/// (e.g. ramda's `converge` / `juxt` chain that builds a curry arity
-/// from `pluck('length', fns)` — without `.length` returning a real
-/// number, the chain feeds `NaN` to `_arity` and throws
-/// `First argument to _arity must be a non-negative integer no greater
-/// than ten`).
+/// closure's declared ABI arity if known. Falls back to the rest-registry
+/// fixed-arity entry for closures declared with `...rest`.
 pub fn closure_arity(closure: *const ClosureHeader) -> Option<u32> {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
@@ -287,6 +301,25 @@ pub fn closure_arity(closure: *const ClosureHeader) -> Option<u32> {
     // Closures declared with `...rest` register through a separate
     // registry path; prefer the fixed-arity portion of that entry when
     // present so `length` matches the user-visible declared params.
+    if let Some((arity, _synth)) = lookup_closure_rest_full(func_ptr) {
+        return Some(arity);
+    }
+    lookup_closure_arity(func_ptr)
+}
+
+/// Public helper for the ECMAScript-visible function `.length`.
+///
+/// Generated user closures register this explicitly because `.length` stops
+/// at the first default parameter, while the dispatch arity must remain the
+/// full declared parameter count for ABI-safe padding.
+pub fn closure_length(closure: *const ClosureHeader) -> Option<u32> {
+    let func_ptr = get_valid_func_ptr(closure);
+    if func_ptr.is_null() {
+        return None;
+    }
+    if let Some(length) = lookup_closure_length(func_ptr) {
+        return Some(length);
+    }
     if let Some((arity, _synth)) = lookup_closure_rest_full(func_ptr) {
         return Some(arity);
     }

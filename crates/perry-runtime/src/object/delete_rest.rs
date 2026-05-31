@@ -7,13 +7,14 @@ use super::*;
 
 /// Delete a field from an object by its string key name
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
-/// Note: In strict mode, this would return 0 for non-configurable properties,
-/// but we don't track configurability, so we always return 1.
 #[no_mangle]
 pub extern "C" fn js_object_delete_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
+    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
+        return 1;
+    }
     unsafe {
         let keys = (*obj).keys_array;
         if keys.is_null() {
@@ -39,6 +40,18 @@ pub extern "C" fn js_object_delete_field(
             Some(i) => i,
             None => return 1, // Not found — delete succeeds vacuously
         };
+        let key_name = {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()
+        };
+        if let Some(name) = key_name {
+            if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                if !attrs.configurable() {
+                    return 0;
+                }
+            }
+        }
 
         // Proper delete: shift remaining keys + values down by one, then
         // shorten keys_array. Pre-fix this just set the value to

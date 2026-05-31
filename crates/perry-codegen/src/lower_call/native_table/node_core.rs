@@ -33,40 +33,6 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
-    // #3119: module.createRequire(filenameOrURL) → a CommonJS-shaped require
-    // function (resolve/cache/extensions/main). The argument rides in the
-    // NaN-boxed F64 slot.
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "createRequire",
-        class_filter: None,
-        runtime: "js_module_create_require",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    // #3126: module.syncBuiltinESMExports() → undefined (no-op for the
-    // non-patched case). Extra arguments are ignored.
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "syncBuiltinESMExports",
-        class_filter: None,
-        runtime: "js_module_sync_builtin_esm_exports",
-        args: &[],
-        ret: NR_F64,
-    },
-    // #3263: module.runMain() → undefined (entrypoint already run in a
-    // native-compiled binary).
-    NativeModSig {
-        module: "module",
-        has_receiver: false,
-        method: "runMain",
-        class_filter: None,
-        runtime: "js_module_run_main",
-        args: &[],
-        ret: NR_F64,
-    },
     // ========== Node test runner shape stubs ==========
     NativeModSig {
         module: "test",
@@ -304,6 +270,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // ========== Node WASI ==========
+    NativeModSig {
+        module: "wasi",
+        has_receiver: false,
+        method: "WASI",
+        class_filter: None,
+        runtime: "js_wasi_constructor_call",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node OS ==========
     NativeModSig {
         module: "os",
@@ -480,6 +456,29 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_VOID,
     },
+    // #3108 (Node process parity): process.sourceMapsEnabled getter — reads
+    // the live flag toggled by setSourceMapsEnabled, returns a boolean.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "sourceMapsEnabled",
+        class_filter: None,
+        runtime: "js_process_source_maps_enabled",
+        args: &[],
+        ret: NR_F64,
+    },
+    // #3108 (Node process parity): process.setSourceMapsEnabled(enabled)
+    // toggles the live source-map flag. Pass the full JS value so the
+    // runtime can reject non-boolean arguments with ERR_INVALID_ARG_TYPE.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setSourceMapsEnabled",
+        class_filter: None,
+        runtime: "js_process_set_source_maps_enabled",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // #2135 (Node process parity): process.getgroups() — Array<number>
     // of supplementary GIDs from libc::getgroups (empty on non-unix).
     NativeModSig {
@@ -560,7 +559,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "fileURLToPath",
         class_filter: None,
         runtime: "js_url_file_url_to_path",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -569,7 +568,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "fileURLToPathBuffer",
         class_filter: None,
         runtime: "js_url_file_url_to_path_buffer",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -578,7 +577,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "pathToFileURL",
         class_filter: None,
         runtime: "js_url_path_to_file_url",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1757,6 +1756,52 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "isBoxedPrimitive",
         class_filter: None,
         runtime: "js_util_types_is_boxed_primitive",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // #3678: predicate tail.
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
+        method: "isDataView",
+        class_filter: None,
+        runtime: "js_util_types_is_data_view",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
+        method: "isFloat16Array",
+        class_filter: None,
+        runtime: "js_util_types_is_float16_array",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
+        method: "isWeakMap",
+        class_filter: None,
+        runtime: "js_util_types_is_weak_map",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
+        method: "isWeakSet",
+        class_filter: None,
+        runtime: "js_util_types_is_weak_set",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util/types",
+        has_receiver: false,
+        method: "isExternal",
+        class_filter: None,
+        runtime: "js_util_types_is_external",
         args: &[NA_F64],
         ret: NR_F64,
     },

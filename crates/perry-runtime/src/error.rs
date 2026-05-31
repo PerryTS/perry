@@ -478,6 +478,11 @@ pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
     throw_builtin_not_constructor("BigInt")
 }
 
+#[no_mangle]
+pub extern "C" fn js_throw_math_constructor_type_error() -> f64 {
+    throw_builtin_not_constructor("Math")
+}
+
 fn value_to_lossy_string(value: f64) -> String {
     let string = crate::builtins::js_string_coerce(value);
     if string.is_null() {
@@ -514,6 +519,22 @@ pub extern "C" fn js_throw_reference_error_unresolvable_assignment(name: f64) ->
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = js_referenceerror_new(msg_str);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+}
+
+fn throw_reference_error_message(message: &'static [u8]) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_referenceerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
+    throw_reference_error_message(b"identifier is not defined")
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
+    throw_reference_error_message(b"assignment to undeclared variable")
 }
 
 fn throw_capture_stack_trace_target_type_error() -> ! {

@@ -104,6 +104,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "querystring",
     "cluster",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
     "process",
@@ -144,6 +145,7 @@ pub const NATIVE_MODULES: &[&str] = &[
 pub const NODE_SUBMODULES: &[&str] = &[
     "fs/promises",
     "stream/promises",
+    "stream/consumers",
     "readline/promises",
     "punycode.ucs2",
     "sys",
@@ -187,6 +189,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/tui",
     "perry/background",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
 ];
@@ -2768,6 +2771,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "cwd", false, None),
     method("process", "uptime", false, None),
     method("process", "memoryUsage", false, None),
+    // #3108 (shipped in #3684): manifest rows for the source-map toggle
+    // implemented in the native dispatch table. Without these the
+    // manifest-consistency drift check fails.
+    method("process", "sourceMapsEnabled", false, None),
+    method("process", "setSourceMapsEnabled", false, None),
     method("process", "nextTick", false, None),
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
@@ -2781,6 +2789,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
             name: "path",
             ty: TypeSpec::Any,
             optional: true,
+        }],
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "process",
+        "sourceMapsEnabled",
+        false,
+        None,
+        &[],
+        TypeSpec::Bool,
+    ),
+    method_sig(
+        "process",
+        "setSourceMapsEnabled",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "enabled",
+            ty: TypeSpec::Bool,
+            optional: false,
         }],
         TypeSpec::Void,
     ),
@@ -2831,81 +2859,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("process", "stdout"),
     property("process", "stderr"),
     property("process", "env"),
-    // node:v8 — shape-compatible diagnostics plus structured-clone round trips.
-    method("v8", "serialize", false, None),
-    method("v8", "deserialize", false, None),
-    method("v8", "cachedDataVersionTag", false, None),
-    method("v8", "getHeapStatistics", false, None),
-    method("v8", "getHeapCodeStatistics", false, None),
-    method("v8", "getHeapSpaceStatistics", false, None),
-    method("v8", "Serializer", false, None),
-    method("v8", "DefaultSerializer", false, None),
-    method("v8", "Deserializer", false, None),
-    method("v8", "DefaultDeserializer", false, None),
-    method("v8", "writeHeader", true, Some("Serializer")),
-    method("v8", "writeValue", true, Some("Serializer")),
-    method("v8", "releaseBuffer", true, Some("Serializer")),
-    method("v8", "transferArrayBuffer", true, Some("Serializer")),
-    method("v8", "writeUint32", true, Some("Serializer")),
-    method("v8", "writeUint64", true, Some("Serializer")),
-    method("v8", "writeDouble", true, Some("Serializer")),
-    method("v8", "writeRawBytes", true, Some("Serializer")),
-    method("v8", "_getDataCloneError", true, Some("Serializer")),
-    method(
-        "v8",
-        "_setTreatArrayBufferViewsAsHostObjects",
-        true,
-        Some("Serializer"),
-    ),
-    method("v8", "writeHeader", true, Some("DefaultSerializer")),
-    method("v8", "writeValue", true, Some("DefaultSerializer")),
-    method("v8", "releaseBuffer", true, Some("DefaultSerializer")),
-    method("v8", "transferArrayBuffer", true, Some("DefaultSerializer")),
-    method("v8", "writeUint32", true, Some("DefaultSerializer")),
-    method("v8", "writeUint64", true, Some("DefaultSerializer")),
-    method("v8", "writeDouble", true, Some("DefaultSerializer")),
-    method("v8", "writeRawBytes", true, Some("DefaultSerializer")),
-    method("v8", "_getDataCloneError", true, Some("DefaultSerializer")),
-    method(
-        "v8",
-        "_setTreatArrayBufferViewsAsHostObjects",
-        true,
-        Some("DefaultSerializer"),
-    ),
-    method("v8", "readHeader", true, Some("Deserializer")),
-    method("v8", "readValue", true, Some("Deserializer")),
-    method("v8", "transferArrayBuffer", true, Some("Deserializer")),
-    method("v8", "getWireFormatVersion", true, Some("Deserializer")),
-    method("v8", "readUint32", true, Some("Deserializer")),
-    method("v8", "readUint64", true, Some("Deserializer")),
-    method("v8", "readDouble", true, Some("Deserializer")),
-    method("v8", "readRawBytes", true, Some("Deserializer")),
-    method("v8", "readHeader", true, Some("DefaultDeserializer")),
-    method("v8", "readValue", true, Some("DefaultDeserializer")),
-    method(
-        "v8",
-        "transferArrayBuffer",
-        true,
-        Some("DefaultDeserializer"),
-    ),
-    method(
-        "v8",
-        "getWireFormatVersion",
-        true,
-        Some("DefaultDeserializer"),
-    ),
-    method("v8", "readUint32", true, Some("DefaultDeserializer")),
-    method("v8", "readUint64", true, Some("DefaultDeserializer")),
-    method("v8", "readDouble", true, Some("DefaultDeserializer")),
-    method("v8", "readRawBytes", true, Some("DefaultDeserializer")),
     // ===========================================================
     // Class exports (constructors `new Foo(...)` from a module).
     // ===========================================================
     class("buffer", "Buffer"),
-    class("v8", "Serializer"),
-    class("v8", "Deserializer"),
-    class("v8", "DefaultSerializer"),
-    class("v8", "DefaultDeserializer"),
     class("events", "EventEmitter"),
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
@@ -3222,6 +3179,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isStringObject", false, None),
     method("util/types", "isBooleanObject", false, None),
     method("util/types", "isBoxedPrimitive", false, None),
+    // #3678: predicate tail beyond Perry's previously-claimed subset. Only the
+    // predicates Perry can correctly back are exposed — isBigIntObject /
+    // isSymbolObject / isArgumentsObject / isModuleNamespaceObject / isKeyObject
+    // / isCryptoKey are omitted because Perry has no distinct backing value type
+    // for them and a `false`-always stub would lie about Node's positive cases.
+    method("util/types", "isDataView", false, None),
+    method("util/types", "isFloat16Array", false, None),
+    method("util/types", "isWeakMap", false, None),
+    method("util/types", "isWeakSet", false, None),
+    method("util/types", "isExternal", false, None),
     // --- sys: deprecated alias for node:util. Keep this module-level
     // surface aligned with the public `util` manifest rows above; the
     // runtime routes `node:sys` through the util namespace.
@@ -3375,6 +3342,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("stream", "promises"),
     method("stream/promises", "pipeline", false, None),
     method("stream/promises", "finished", false, None),
+    // Direct `node:stream/consumers` submodule exports.
+    method("stream/consumers", "arrayBuffer", false, None),
+    method("stream/consumers", "blob", false, None),
+    method("stream/consumers", "buffer", false, None),
+    method("stream/consumers", "bytes", false, None),
+    method("stream/consumers", "json", false, None),
+    method("stream/consumers", "text", false, None),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does
@@ -3530,6 +3504,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("tty", "removeListener", true, Some("WriteStream")),
     method("tty", "off", true, Some("WriteStream")),
     method("tty", "removeAllListeners", true, Some("WriteStream")),
+    // --- wasi ---
+    class("wasi", "WASI"),
+    method("wasi", "WASI", false, None),
+    method("wasi", "getImportObject", true, Some("WASI")),
+    method("wasi", "start", true, Some("WASI")),
+    method("wasi", "initialize", true, Some("WASI")),
+    method("wasi", "finalizeBindings", true, Some("WASI")),
+    property("wasi", "wasiImport"),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     method("perf_hooks", "now", false, None),
     method("perf_hooks", "mark", false, None),
