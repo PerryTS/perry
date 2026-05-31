@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2289 entries across 99 modules
+// Coverage: 2303 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3038,7 +3038,35 @@ declare module "test" {
 
 declare module "tls" {
   /** stdlib */
+  export class SecureContext { [key: string]: any; }
+  /** stdlib */
+  export const CLIENT_RENEG_LIMIT: any;
+  /** stdlib */
+  export const CLIENT_RENEG_WINDOW: any;
+  /** stdlib */
+  export const DEFAULT_CIPHERS: any;
+  /** stdlib */
+  export const DEFAULT_ECDH_CURVE: any;
+  /** stdlib */
+  export const DEFAULT_MAX_VERSION: any;
+  /** stdlib */
+  export const DEFAULT_MIN_VERSION: any;
+  /** stdlib */
+  export const rootCertificates: any;
+  /** stdlib */
+  export function SecureContext(...args: any[]): any;
+  /** stdlib */
+  export function checkServerIdentity(...args: any[]): any;
+  /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
+  /** stdlib */
+  export function createSecureContext(...args: any[]): any;
+  /** stdlib */
+  export function getCACertificates(...args: any[]): any;
+  /** stdlib */
+  export function getCiphers(...args: any[]): any;
+  /** stdlib */
+  export function setDefaultCACertificates(...args: any[]): any;
 }
 
 declare module "tty" {

@@ -892,6 +892,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
+    if module_name == "tls" && property_name == "SecureContext" {
+        attach_tls_secure_context_prototype(value);
+    }
     if module_name == "wasi" && property_name == "WASI" {
         crate::wasi::attach_wasi_constructor_prototype(value);
     }
@@ -961,6 +964,12 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("tls", "getCiphers") => Some(0),
+        ("tls", "getCACertificates" | "setDefaultCACertificates" | "createSecureContext") => {
+            Some(1)
+        }
+        ("tls", "checkServerIdentity") => Some(2),
+        ("tls", "SecureContext") => Some(1),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
@@ -1246,6 +1255,10 @@ fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
     crate::tty::attach_tty_constructor_prototype(constructor_value, name);
 }
 
+fn attach_tls_secure_context_prototype(constructor_value: f64) {
+    crate::tls::attach_secure_context_constructor_prototype(constructor_value);
+}
+
 pub(crate) unsafe fn bound_native_callable_module_and_method(
     value: f64,
 ) -> Option<(String, String)> {
@@ -1487,6 +1500,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
+            | ("tls", "getCiphers")
+            | ("tls", "getCACertificates")
+            | ("tls", "setDefaultCACertificates")
+            | ("tls", "checkServerIdentity")
+            | ("tls", "createSecureContext")
+            | ("tls", "SecureContext")
             | ("wasi", "WASI")
             | ("net", "createServer")
             | ("net", "Server")
@@ -3377,6 +3396,16 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "test" => crate::node_test::property(property),
+        "tls" => match property {
+            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
+            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
+            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
+            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
+            "CLIENT_RENEG_LIMIT" => Some(3.0),
+            "CLIENT_RENEG_WINDOW" => Some(600.0),
+            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
+            _ => None,
+        },
         "wasi" => match property {
             "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
             _ => None,
