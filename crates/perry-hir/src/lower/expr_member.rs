@@ -32,14 +32,19 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     // flag never leaks past this member, and only touch it when our own
     // detection fires (a method-call receiver sets the flag via `lower_call`
     // instead, and that must survive into the bare `ns[dynamicKey]` lowering).
+    let prev_unresolved_ident_as_global = ctx.unresolved_ident_as_global;
+    ctx.unresolved_ident_as_global = true;
     let suppress_for_obj = stdlib_ns_subnamespace_static_access(ctx, member);
     if !suppress_for_obj {
-        return lower_member_inner(ctx, member);
+        let result = lower_member_inner(ctx, member);
+        ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
+        return result;
     }
     let prev_suppress = ctx.suppress_stdlib_dispatch_guard_once;
     ctx.suppress_stdlib_dispatch_guard_once = true;
     let result = lower_member_inner(ctx, member);
     ctx.suppress_stdlib_dispatch_guard_once = prev_suppress;
+    ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
     result
 }
 
@@ -1284,7 +1289,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             && crate::analysis::is_builtin_global_value_name(property)
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                if obj_ident.sym.as_ref() == property.as_str() {
+                if obj_ident.sym.as_ref() == property.as_str() && property != "globalThis" {
                     // #2060 / #2142 / #2145: `<Ctor>.prototype` and
                     // `<Ctor>.__proto__` must keep reading the constructor
                     // closure's real proto / static-prototype. Each built-in

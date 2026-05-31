@@ -321,36 +321,49 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     }
 
     if let Some(target_ptr) = object_ptr_from_value(target) {
-        let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
-        let mut depth = 0usize;
-        let mut visited: [u32; 32] = [0; 32];
-        while cid != 0 && depth < visited.len() {
-            if visited[..depth].contains(&cid) {
-                break;
-            }
-            visited[depth] = cid;
-
-            let proto_obj = crate::object::class_registry::class_prototype_object(cid);
-            let mut next_cid = 0;
-            if !proto_obj.is_null() {
-                if std::ptr::addr_eq(proto_obj, receiver_ptr) {
-                    return true;
+        let has_instance_prototype =
+            crate::object::prototype_chain::object_static_prototype(target_ptr as usize).is_some();
+        if std::ptr::addr_eq(target_ptr, receiver_ptr) {
+            return false;
+        }
+        // A `new Func()` instance snapshots the function's current
+        // `.prototype` via the object prototype side table. Honor that
+        // per-instance chain before consulting the synthetic class map,
+        // because later `Func.prototype = other` must not rewrite older
+        // instances.
+        if !has_instance_prototype {
+            let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
+            let mut depth = 0usize;
+            let mut visited: [u32; 32] = [0; 32];
+            while cid != 0 && depth < visited.len() {
+                if visited[..depth].contains(&cid) {
+                    break;
                 }
-                next_cid = crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
-            }
+                visited[depth] = cid;
 
-            if next_cid != 0 && next_cid != cid {
-                cid = next_cid;
-                depth += 1;
-                continue;
-            }
+                let proto_obj = crate::object::class_registry::class_prototype_object(cid);
+                let mut next_cid = 0;
+                if !proto_obj.is_null() {
+                    if std::ptr::addr_eq(proto_obj, receiver_ptr) {
+                        return true;
+                    }
+                    next_cid =
+                        crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
+                }
 
-            match crate::object::class_registry::get_parent_class_id(cid) {
-                Some(parent_id) if parent_id != 0 && parent_id != cid => {
-                    cid = parent_id;
+                if next_cid != 0 && next_cid != cid {
+                    cid = next_cid;
                     depth += 1;
+                    continue;
                 }
-                _ => break,
+
+                match crate::object::class_registry::get_parent_class_id(cid) {
+                    Some(parent_id) if parent_id != 0 && parent_id != cid => {
+                        cid = parent_id;
+                        depth += 1;
+                    }
+                    _ => break,
+                }
             }
         }
     } else {
