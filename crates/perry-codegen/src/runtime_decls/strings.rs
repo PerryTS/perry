@@ -52,6 +52,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // - js_string_ends_with(s, suffix) -> i32
     module.declare_function("js_string_index_of", I32, &[I64, I64]);
     module.declare_function("js_string_index_of_from", I32, &[I64, I64, I32]);
+    // #2812: ToIntegerOrInfinity for String.includes(search, position).
+    module.declare_function("js_string_position_to_index", I32, &[DOUBLE]);
     module.declare_function("js_string_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_string_substring", I64, &[I64, I32, I32]);
     // Legacy substr(start, length); length sentinel i32::MIN = omitted (#2897).
@@ -999,6 +1001,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_path_win32_parse", I64, &[I64]);
     module.declare_function("js_path_win32_format", I64, &[DOUBLE]);
     module.declare_function("js_path_win32_relative", I64, &[I64, I64]);
+    module.declare_function("js_path_win32_relative_checked", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_path_win32_resolve", I64, &[I64]);
     module.declare_function("js_path_win32_resolve_join", I64, &[I64, I64]);
     module.declare_function("js_path_win32_to_namespaced_path", I64, &[I64]);
@@ -1009,6 +1012,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_path_dirname", I64, &[I64]);
     module.declare_function("js_path_resolve", I64, &[I64]);
     module.declare_function("js_path_relative", I64, &[I64, I64]);
+    module.declare_function("js_path_relative_checked", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_path_to_namespaced_path", I64, &[I64]);
     module.declare_function("js_path_to_namespaced_path_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_path_matches_glob", I32, &[I64, I64]);
