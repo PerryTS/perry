@@ -723,4 +723,131 @@ mod tests {
             ));
         }
     }
+
+    #[test]
+    fn implemented_node_submodule_manifest_surfaces_are_registered() {
+        let expected: &[(&str, &[(&str, ApiKind)])] = &[
+            (
+                "diagnostics_channel",
+                &[
+                    ("default", ApiKind::Property),
+                    ("Channel", ApiKind::Class),
+                    (
+                        "channel",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "hasSubscribers",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "subscribe",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "tracingChannel",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "unsubscribe",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                ],
+            ),
+            (
+                "fs/promises",
+                &[
+                    ("default", ApiKind::Property),
+                    ("constants", ApiKind::Property),
+                ],
+            ),
+            ("stream/consumers", &[("default", ApiKind::Property)]),
+            (
+                "stream/web",
+                &[
+                    ("default", ApiKind::Property),
+                    ("ReadableStream", ApiKind::Class),
+                    ("WritableStream", ApiKind::Class),
+                    ("TransformStream", ApiKind::Class),
+                    ("ByteLengthQueuingStrategy", ApiKind::Class),
+                    ("CountQueuingStrategy", ApiKind::Class),
+                    ("TextEncoderStream", ApiKind::Class),
+                    ("TextDecoderStream", ApiKind::Class),
+                ],
+            ),
+            (
+                "test/reporters",
+                &[
+                    ("default", ApiKind::Property),
+                    (
+                        "spec",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "tap",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "dot",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "junit",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "lcov",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                ],
+            ),
+        ];
+
+        for (module, symbols) in expected {
+            assert!(is_known_module(module), "{module} must be a known module");
+            assert!(
+                is_known_module(&format!("node:{module}")),
+                "node:{module} must be a known module"
+            );
+            assert!(
+                module_has_any_entries(module),
+                "{module} must have manifest entries"
+            );
+            for (name, kind) in *symbols {
+                let entry = module_has_symbol(&format!("node:{module}"), name)
+                    .unwrap_or_else(|| panic!("{module} missing {name}"));
+                assert_eq!(entry.kind, *kind, "{module}.{name}");
+            }
+        }
+    }
 }

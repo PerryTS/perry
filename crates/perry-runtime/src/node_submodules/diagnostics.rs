@@ -43,7 +43,7 @@ use super::*;
 //   - `channel(name)` mirrors the same shape with `hasSubscribers: false`
 //     and a `publish` no-op — same minimal "satisfies type probe" goal.
 //
-// Other entries (`subscribe`, `unsubscribe`, `publish`, `hasSubscribers`)
+// Other entries (`subscribe`, `unsubscribe`, `hasSubscribers`)
 // surface as no-op thrower thunks the same way the other submodules do —
 // real-tracing semantics are a follow-up under #793.
 

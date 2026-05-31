@@ -900,16 +900,99 @@ fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'
     None
 }
 
+fn extglob_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, char, Vec<&'a str>)> {
+    let bytes = pattern.as_bytes();
+    if open + 1 >= bytes.len() || bytes[open + 1] != b'(' {
+        return None;
+    }
+    let op = bytes[open] as char;
+    if !matches!(op, '@' | '+' | '?' | '*') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut arm_start = open + 2;
+    let mut arms = Vec::new();
+    let mut i = open + 2;
+    while i < bytes.len() {
+        match bytes[i] as char {
+            '[' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] as char != ']' {
+                    i += 1;
+                }
+            }
+            '(' => depth += 1,
+            ')' if depth == 0 => {
+                arms.push(&pattern[arm_start..i]);
+                return Some((i, op, arms));
+            }
+            ')' => depth -= 1,
+            '|' if depth == 0 => {
+                arms.push(&pattern[arm_start..i]);
+                arm_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn push_regex_literal(c: char, out: &mut String) {
+    match c {
+        '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => {
+            out.push('\\');
+            out.push(c);
+        }
+        _ => out.push(c),
+    }
+}
+
 fn push_glob_regex(pattern: &str, out: &mut String) {
     let bytes = pattern.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i] as char;
+        if matches!(c, '@' | '+' | '?' | '*') && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+            if let Some((close, op, arms)) = extglob_alternation(pattern, i) {
+                out.push_str("(?:");
+                for (idx, arm) in arms.iter().enumerate() {
+                    if idx > 0 {
+                        out.push('|');
+                    }
+                    push_glob_regex(arm, out);
+                }
+                out.push(')');
+                match op {
+                    '+' => out.push('+'),
+                    '?' => out.push('?'),
+                    '*' => out.push('*'),
+                    _ => {}
+                }
+                i = close + 1;
+                continue;
+            }
+        }
+
         match c {
             '*' => {
                 if i + 1 < bytes.len() && bytes[i + 1] as char == '*' {
-                    out.push_str(".*");
-                    i += 2;
+                    let after = i + 2;
+                    let segment_start = i == 0 || bytes[i - 1] == b'/';
+                    let segment_end = after == bytes.len() || bytes[after] == b'/';
+                    if segment_start && segment_end {
+                        if after < bytes.len() && bytes[after] == b'/' {
+                            out.push_str("(?:[^/]+/)*");
+                            i = after + 1;
+                        } else {
+                            out.push_str(".*");
+                            i = after;
+                        }
+                    } else {
+                        out.push_str("[^/]*");
+                        i += 2;
+                    }
                     continue;
                 } else {
                     out.push_str("[^/]*");
@@ -946,24 +1029,22 @@ fn push_glob_regex(pattern: &str, out: &mut String) {
                     out.push(c);
                 }
             }
-            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => {
-                out.push('\\');
-                out.push(c);
-            }
-            _ => out.push(c),
+            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => push_regex_literal(c, out),
+            _ => push_regex_literal(c, out),
         }
         i += 1;
     }
 }
 
-/// Convert a glob pattern (`*`, `?`, `[abc]`, `{a,b}`, `**`) into a regex,
-/// anchored at both ends. Mirrors Node's `path.matchesGlob` basics: `*`
-/// matches any chars except `/`, `**` matches across `/`, `?` matches a
-/// single char except `/`, character classes `[...]` work like regex, and
-/// brace alternation expands alternatives such as `*.{md,txt}`.
+/// Convert a glob pattern (`*`, `?`, `[abc]`, `{a,b}`, `**`, positive
+/// extglobs) into a regex anchored at both ends. Node's path matcher uses
+/// minimatch with `windowsPathsNoEscape`, so backslashes in the pattern are
+/// path separators, not escapes. `**` is a globstar only as a whole path
+/// segment; embedded `**` has ordinary `*` segment-wildcard behavior.
 fn glob_to_regex(pattern: &str) -> String {
     let mut out = String::from("^");
-    push_glob_regex(pattern, &mut out);
+    let normalized = pattern.replace('\\', "/");
+    push_glob_regex(&normalized, &mut out);
     out.push('$');
     out
 }
@@ -1347,7 +1428,23 @@ pub extern "C" fn js_path_win32_matches_glob(
     path_ptr: *const StringHeader,
     pattern_ptr: *const StringHeader,
 ) -> i32 {
-    js_path_matches_glob(path_ptr, pattern_ptr)
+    unsafe {
+        let path_str = string_from_header(path_ptr)
+            .unwrap_or_default()
+            .replace('\\', "/");
+        let pattern = string_from_header(pattern_ptr).unwrap_or_default();
+        let regex_src = glob_to_regex(&pattern);
+        match regex::Regex::new(&regex_src) {
+            Ok(re) => {
+                if re.is_match(&path_str) {
+                    1
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
+        }
+    }
 }
 
 #[no_mangle]
@@ -1570,6 +1667,25 @@ mod glob_tests {
     #[test]
     fn braces_without_alternation_stay_literal() {
         assert_eq!(glob_to_regex("file.{md}"), "^file\\.\\{md\\}$");
+    }
+
+    #[test]
+    fn extglob_positive_groups_expand() {
+        assert_eq!(glob_to_regex("*.@(js|ts)"), "^[^/]*\\.(?:js|ts)$");
+        assert_eq!(glob_to_regex("*.+(js|ts)"), "^[^/]*\\.(?:js|ts)+$");
+        assert_eq!(glob_to_regex("*.?(js|ts)"), "^[^/]*\\.(?:js|ts)?$");
+    }
+
+    #[test]
+    fn globstar_is_segment_aware() {
+        assert_eq!(glob_to_regex("a/**/c"), "^a/(?:[^/]+/)*c$");
+        assert_eq!(glob_to_regex("a/**"), "^a/.*$");
+        assert_eq!(glob_to_regex("a**b"), "^a[^/]*b$");
+    }
+
+    #[test]
+    fn pattern_backslashes_are_separators() {
+        assert_eq!(glob_to_regex("foo\\*"), "^foo/[^/]*$");
     }
 }
 
