@@ -918,6 +918,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "net"
+                    && matches!(class_name.as_str(), "Socket" | "Stream")
+                    && is_net_socket_method_name(&property_name)
+                {
+                    // `new net.Socket().write` / `net.Stream().destroy` are
+                    // method-value reads, not zero-arg native calls. Keep the
+                    // PropertyGet shape so runtime handle-property dispatch
+                    // can bind a callable to the socket handle.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "console"
                     && class_name == "Console"
                     && is_console_instance_method_name(&property_name)
@@ -1786,6 +1799,40 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "removeAllListeners"
             | "setMaxListeners"
             | "getMaxListeners"
+    )
+}
+
+fn is_net_socket_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "connect"
+            | "write"
+            | "end"
+            | "destroy"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "listenerCount"
+            | "eventNames"
+            | "listeners"
+            | "rawListeners"
+            | "address"
+            | "resetAndDestroy"
+            | "setNoDelay"
+            | "setKeepAlive"
+            | "setTimeout"
+            | "setEncoding"
+            | "pause"
+            | "resume"
+            | "ref"
+            | "unref"
+            | "cork"
+            | "uncork"
+            | "setDefaultEncoding"
+            | "upgradeToTLS"
     )
 }
 

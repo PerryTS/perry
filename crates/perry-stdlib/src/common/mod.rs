@@ -8,6 +8,7 @@ pub mod handle;
 #[cfg(feature = "async-runtime")]
 pub mod async_bridge;
 pub mod dispatch;
+mod net_socket_bridge;
 
 #[cfg(feature = "async-runtime")]
 pub use async_bridge::*;

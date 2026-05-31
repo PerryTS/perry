@@ -71,12 +71,12 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // instance so subsequent method calls dispatch correctly.
     if let ast::Expr::Member(member) = callee_expr {
         if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
-            (member.obj.as_ref(), &member.prop)
+            (peel_new_callee(member.obj.as_ref()), &member.prop)
         {
             let obj_name = obj_ident.sym.as_ref();
             let is_net_module =
                 obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");
-            if is_net_module && matches!(prop_ident.sym.as_ref(), "Socket" | "Server") {
+            if is_net_module && matches!(prop_ident.sym.as_ref(), "Socket" | "Stream" | "Server") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -87,11 +87,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
+                let method = if prop_ident.sym.as_ref() == "Stream" {
+                    "Socket"
+                } else {
+                    prop_ident.sym.as_ref()
+                };
                 return Ok(Expr::NativeMethodCall {
                     module: "net".to_string(),
                     class_name: None,
                     object: None,
-                    method: prop_ident.sym.to_string(),
+                    method: method.to_string(),
                     args,
                 });
             }

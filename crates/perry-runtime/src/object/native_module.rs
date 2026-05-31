@@ -17,6 +17,8 @@ thread_local! {
     static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_STYLES: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
+    static TIMERS_PROMISES_PARENT_NAMESPACE: Cell<u64> = const { Cell::new(0) };
+    static ZLIB_CODES_OBJECT: Cell<u64> = const { Cell::new(0) };
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
@@ -50,6 +52,20 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     UTIL_INSPECT_COLORS.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    TIMERS_PROMISES_PARENT_NAMESPACE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    ZLIB_CODES_OBJECT.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -440,11 +456,23 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isIPv6",
             b"Server",
             b"Socket",
+            b"Stream",
             b"getDefaultAutoSelectFamily",
             b"setDefaultAutoSelectFamily",
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
         ]),
+        "timers" => Some(&[
+            b"setTimeout",
+            b"clearTimeout",
+            b"setImmediate",
+            b"clearImmediate",
+            b"setInterval",
+            b"clearInterval",
+            b"promises",
+        ]),
+        "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
+        "zlib" => Some(&[b"codes"]),
         _ => None,
     }
 }
@@ -452,7 +480,13 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
-        "assert/strict" | "constants" | "util" | "util.types" | "path.posix" | "path.win32"
+        "assert/strict"
+            | "constants"
+            | "util"
+            | "util.types"
+            | "path.posix"
+            | "path.win32"
+            | "timers/promises"
     )
 }
 
@@ -877,6 +911,58 @@ fn util_inspect_colors() -> f64 {
         }
 
         let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+fn zlib_codes_object() -> f64 {
+    const ZLIB_RETURN_CODES: &[(&str, i32)] = &[
+        ("Z_OK", 0),
+        ("Z_STREAM_END", 1),
+        ("Z_NEED_DICT", 2),
+        ("Z_ERRNO", -1),
+        ("Z_STREAM_ERROR", -2),
+        ("Z_DATA_ERROR", -3),
+        ("Z_MEM_ERROR", -4),
+        ("Z_BUF_ERROR", -5),
+        ("Z_VERSION_ERROR", -6),
+    ];
+
+    ZLIB_CODES_OBJECT.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        for (name, value) in ZLIB_RETURN_CODES.iter().take(3) {
+            native_set_field(obj, &value.to_string(), native_string_value(name));
+        }
+        for (name, value) in ZLIB_RETURN_CODES {
+            native_set_field(obj, name, *value as f64);
+        }
+        for (name, value) in ZLIB_RETURN_CODES.iter().skip(3) {
+            native_set_field(obj, &value.to_string(), native_string_value(name));
+        }
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+pub(crate) fn timers_promises_parent_namespace() -> f64 {
+    TIMERS_PROMISES_PARENT_NAMESPACE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let module_name = "timers/promises";
+        let value = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
         slot.set(value.to_bits());
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
         value
@@ -2615,6 +2701,33 @@ pub(crate) unsafe fn get_native_module_constant(
             }),
             _ => None,
         },
+        "net" => match property {
+            "Stream" => Some(bound_native_callable_export_value("net", "Socket")),
+            _ => None,
+        },
+        "timers" => match property {
+            "promises" => Some(timers_promises_parent_namespace()),
+            _ => None,
+        },
+        "timers/promises" => match property {
+            "setTimeout" | "setImmediate" | "setInterval" => Some(unsafe {
+                crate::node_submodules::js_node_submodule_namespace_member(
+                    b"timers_promises".as_ptr(),
+                    "timers_promises".len() as u32,
+                    property.as_ptr(),
+                    property.len() as u32,
+                )
+            }),
+            "scheduler" => Some(unsafe {
+                crate::node_submodules::js_node_submodule_namespace_member(
+                    b"timers_promises".as_ptr(),
+                    "timers_promises".len() as u32,
+                    b"scheduler".as_ptr(),
+                    "scheduler".len() as u32,
+                )
+            }),
+            _ => None,
+        },
         "crypto" => match property {
             "constants" => Some(create_sub_namespace("crypto.constants")),
             "Certificate" => Some(create_sub_namespace("crypto.Certificate")),
@@ -2667,6 +2780,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // Node also exposes directly on `require('node:zlib')`.
         "zlib" => match property {
             "constants" => Some(create_sub_namespace("zlib.constants")),
+            "codes" => Some(zlib_codes_object()),
             _ => zlib_const(property),
         },
         "zlib.constants" => zlib_const(property),

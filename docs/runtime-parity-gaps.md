@@ -6,11 +6,11 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 18 | 472 | n/a |
-| Partial-module gaps | 29 | 1646 | 371 |
+| Whole-module gaps (zero coverage) | 17 | 467 | n/a |
+| Partial-module gaps | 29 | 1642 | 376 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2400** |  |
+| **Total true gaps** |  | **2391** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -23,7 +23,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:http` — 89
-- `node:zlib` — 79
+- `node:zlib` — 78
 - `node:stream` — 76
 - `node:worker_threads` — 60
 
@@ -320,18 +320,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `wasi.initialize(instance)`
 - `wasi.finalizeBindings(instance[, options])`
 - `wasi.wasiImport`
-
-### node:timers/promises
-
-**Total APIs: 5** · Perry covers: 0 · Gap: 5
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `setTimeout([delay[, value[, options]]])`
-- `setImmediate([value[, options]])`
-- `setInterval([delay[, value[, options]]])`
-- `scheduler.wait(delay[, options])`
-- `scheduler.yield()`
 
 ## Partial-module gaps
 
@@ -857,7 +845,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:zlib
 
-**Gap APIs: 79** · Already covered: 12
+**Gap APIs: 78** · Already covered: 13
 
 #### Missing from Perry
 
@@ -911,7 +899,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `Z_OK`
 - `Z_STREAM_END`
 - `Z_NEED_DICT`
-- … and 29 more (see `runtime-parity.md` for the full list)
+- … and 28 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -921,6 +909,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `zlib.Gzip` | `ffi:js_zlib_gzip` |
 | `zlib.Gunzip` | `ffi:js_zlib_gunzip` |
 | `zlib.Inflate` | `ffi:js_zlib_inflate` |
+| `zlib.codes` | `manifest:zlib.codes` |
 | `zlib.deflate(buffer[, options], callback)` | `ffi:js_zlib_deflate` |
 | `zlib.deflateSync(buffer[, options])` | `ffi:js_zlib_deflate_sync` |
 | `zlib.gzip(buffer[, options], callback)` | `manifest:zlib.gzip` |
@@ -1067,7 +1056,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:net
 
-**Gap APIs: 56** · Already covered: 22
+**Gap APIs: 55** · Already covered: 23
 
 #### Missing from Perry
 
@@ -1121,7 +1110,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `socket.connecting`
 - `socket.destroyed`
 - `socket.localAddress`
-- … and 6 more (see `runtime-parity.md` for the full list)
+- … and 5 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -1141,6 +1130,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `server.listen(path[, backlog][, callback])` | `ffi:js_net_server_listen` |
 | `server.listen([port[, host[, backlog]]][, callback])` | `ffi:js_net_server_listen` |
 | `new net.Socket([options])` | `manifest:net.Socket` |
+| `new net.Stream([options])` | `manifest:net.Stream` |
 | `socket.connect(options[, connectListener])` | `manifest:net.connect` |
 | … | 7 more covered APIs |
 
@@ -1905,12 +1895,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:timers
 
-**Gap APIs: 13** · Already covered: 4
+**Gap APIs: 11** · Already covered: 7
 
 #### Missing from Perry
 
-- `setImmediate(callback[, ...args])`
-- `clearImmediate(immediate)`
 - `immediate.ref()`
 - `immediate.unref()`
 - `immediate.hasRef()`
@@ -1927,8 +1915,11 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 | API | Coverage source |
 |-----|-----------------|
+| `setImmediate(callback[, ...args])` | `manifest:timers.setImmediate` |
 | `setInterval(callback[, delay[, ...args]])` | `ffi:js_interval_timer_*` |
 | `setTimeout(callback[, delay[, ...args]])` | `ffi:js_set_timeout` |
+| `clearImmediate(immediate)` | `manifest:timers.clearImmediate` |
+| `timers.promises` | `manifest:timers.promises` |
 | `clearInterval(timeout)` | `rt:js_interval_timer_*` |
 | `clearTimeout(timeout)` | `rt:js_timer_*` |
 

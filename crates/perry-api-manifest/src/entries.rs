@@ -576,6 +576,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method_sig("net", "Socket", false, None, &[], TypeSpec::Any),
+    method_sig("net", "Stream", false, None, &[], TypeSpec::Any),
     method_sig(
         "net",
         "_normalizeArgs",
@@ -604,6 +605,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "destroy", true, Some("Socket")),
     method("net", "on", true, Some("Socket")),
     method("net", "upgradeToTLS", true, Some("Socket")),
+    method("timers", "setTimeout", false, None),
+    method("timers", "clearTimeout", false, None),
+    method("timers", "setImmediate", false, None),
+    method("timers", "clearImmediate", false, None),
+    method("timers", "setInterval", false, None),
+    method("timers", "clearInterval", false, None),
+    property("timers", "promises"),
+    method("timers/promises", "setTimeout", false, None),
+    method("timers/promises", "setImmediate", false, None),
+    method("timers/promises", "setInterval", false, None),
+    property("timers/promises", "scheduler"),
     // Issue #1852 — chainable no-op `net.Socket` option setters. Perry's
     // TCP transport doesn't model Nagle/keep-alive/idle-timeout or read
     // back-pressure yet, but the methods must be callable (and return the
@@ -1483,6 +1495,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // by axios for stream wiring. Values are resolved at runtime by
     // `get_native_module_constant` in `perry-runtime/src/object.rs`.
     property("zlib", "constants"),
+    property("zlib", "codes"),
     class("zlib", "Deflate"),
     class("zlib", "DeflateRaw"),
     class("zlib", "Gzip"),
@@ -2617,6 +2630,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
     class("net", "Socket"),
+    class("net", "Stream"),
     class("net", "Server"),
     class("ioredis", "Redis"),
     class("mysql2/promise", "Pool"),
