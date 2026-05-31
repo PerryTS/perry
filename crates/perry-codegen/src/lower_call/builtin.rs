@@ -908,6 +908,14 @@ pub(super) fn lower_builtin_new(
             Ok(Some(h))
         }
 
+        "FormData" => {
+            // new FormData() — Perry's current native registry stores string
+            // values, which covers deterministic constructor/mutator parity
+            // for append/set/delete/get/getAll/has/iteration.
+            let h = ctx.block().call(DOUBLE, "js_form_data_new", &[]);
+            Ok(Some(h))
+        }
+
         "Request" => {
             // new Request(url, init?) — init = Fetch RequestInit subset.
             let url_ptr = if !args.is_empty() {

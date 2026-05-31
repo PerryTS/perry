@@ -289,6 +289,13 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+fn is_web_fetch_constructor(name: &str) -> bool {
+    matches!(
+        name,
+        "Headers" | "Request" | "Response" | "Blob" | "File" | "FormData"
+    )
+}
+
 extern "C" fn global_this_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -1073,6 +1080,19 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 "prototype".to_string(),
                 super::PropertyAttrs::new(false, false, false),
             );
+            if is_web_fetch_constructor(name) {
+                let ctor_key = crate::string::js_string_from_bytes(
+                    b"constructor".as_ptr(),
+                    "constructor".len() as u32,
+                );
+                let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
+                js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    "constructor".to_string(),
+                    super::PropertyAttrs::new(true, false, true),
+                );
+            }
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
             // ClosureHeader-backed thunks that read their receiver from
@@ -1443,6 +1463,7 @@ fn install_constructor_static(
         crate::closure::js_register_closure_arity(func_ptr, arity);
     }
     super::native_module::set_bound_native_closure_name(closure, name);
+    super::native_module::set_builtin_closure_length(closure as usize, arity);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
@@ -1535,6 +1556,29 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "Response" => {
+            install_constructor_static(
+                ctor,
+                "error",
+                global_this_builtin_noop_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "json",
+                global_this_builtin_noop_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "redirect",
+                global_this_builtin_noop_thunk as *const u8,
+                1,
+                false,
+            );
         }
         _ => {}
     }
@@ -1968,6 +2012,70 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         "TextDecoder" => {
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Headers" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getSetCookie", 0),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("values", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Request" | "Response" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("arrayBuffer", 0),
+                    ("blob", 0),
+                    ("bytes", 0),
+                    ("clone", 0),
+                    ("formData", 0),
+                    ("json", 0),
+                    ("text", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "Blob" | "File" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("arrayBuffer", 0),
+                    ("bytes", 0),
+                    ("slice", 0),
+                    ("stream", 0),
+                    ("text", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "FormData" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getAll", 1),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("values", 0),
+                ],
+            );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"

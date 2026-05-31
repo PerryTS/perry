@@ -847,9 +847,17 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_response_blob", I64, &[DOUBLE]);
     module.declare_function("js_response_bytes", I64, &[DOUBLE]);
     module.declare_function("js_response_form_data", I64, &[DOUBLE]);
+    module.declare_function("js_form_data_new", DOUBLE, &[]);
+    module.declare_function("js_form_data_append", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_form_data_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_form_data_delete", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get_all", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_form_data_has", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_entries", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_form_data_keys", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_form_data_values", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_form_data_for_each", DOUBLE, &[DOUBLE, DOUBLE]);
     // Blob instance methods (issue #234) — handle is f64 (registry id).
     // arrayBuffer/bytes/text return a Promise pointer (i64); slice returns a
     // new blob handle as f64.

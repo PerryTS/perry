@@ -682,6 +682,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 "Request"
                     | "Response"
                     | "Headers"
+                    | "FormData"
                     | "Blob"
                     | "File"
                     | "ReadableStream"

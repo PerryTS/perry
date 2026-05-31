@@ -1336,6 +1336,8 @@ declare module "fetch" {
   /** stdlib */
   export class Blob { [key: string]: any; }
   /** stdlib */
+  export class FormData { [key: string]: any; }
+  /** stdlib */
   export class Headers { [key: string]: any; }
   /** stdlib */
   export class Request { [key: string]: any; }
@@ -1905,6 +1907,8 @@ declare module "node-cron" {
 declare module "node-fetch" {
   /** stdlib */
   export class Blob { [key: string]: any; }
+  /** stdlib */
+  export class FormData { [key: string]: any; }
   /** stdlib */
   export class Headers { [key: string]: any; }
   /** stdlib */

@@ -605,6 +605,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         {
             return v;
         }
+        if let Some(v) =
+            crate::fetch::dispatch_form_data_method(handle as usize, method_name, &args)
+        {
+            return v;
+        }
         if let Some(v) = crate::fetch::dispatch_blob_method(handle as usize, method_name, &args) {
             return v;
         }
@@ -1569,6 +1574,9 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             return v;
         }
         if let Some(v) = crate::fetch::dispatch_headers_property(handle as usize, property_name) {
+            return v;
+        }
+        if let Some(v) = crate::fetch::dispatch_form_data_property(handle as usize, property_name) {
             return v;
         }
         if let Some(v) = crate::fetch::dispatch_blob_property(handle as usize, property_name) {
