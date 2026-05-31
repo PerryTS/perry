@@ -164,6 +164,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // another function.
     module.declare_function("js_register_closure_synthetic_arguments", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
+    module.declare_function("js_register_closure_length", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
@@ -639,6 +640,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
+    // #3108: process.sourceMapsEnabled getter + setSourceMapsEnabled(bool).
+    module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
+    module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_find_package_json", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64, I64]);
@@ -652,6 +656,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_tty_isatty", DOUBLE, &[DOUBLE]);
     module.declare_function("js_tty_read_stream_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_tty_write_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_wasi_constructor_call", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_stdin_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stdout_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stderr_isatty", DOUBLE, &[]);
@@ -961,6 +966,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_referenceerror_new", I64, &[I64]);
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_throw_math_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_throw_type_error_const_assignment", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_throw_reference_error_unresolvable_assignment",
+        DOUBLE,
+        &[DOUBLE],
+    );
+    module.declare_function("js_throw_reference_error_unresolved_get", DOUBLE, &[]);
+    module.declare_function(
+        "js_throw_reference_error_unresolved_assignment",
+        DOUBLE,
+        &[],
+    );
     module.declare_function("js_evalerror_new", I64, &[I64]);
     module.declare_function("js_urierror_new", I64, &[I64]);
     // WeakMap / WeakSet / WeakRef / FinalizationRegistry — called

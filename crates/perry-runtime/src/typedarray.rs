@@ -17,6 +17,7 @@ use std::ptr;
 
 use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
+use crate::typedarray_half::{f16_bits_to_f64, f64_to_f16_bits};
 
 // Element kind tags. Match the order used by HIR/codegen.
 pub const KIND_INT8: u8 = 0;
@@ -32,6 +33,9 @@ pub const KIND_FLOAT64: u8 = 7;
 pub const KIND_UINT8_CLAMPED: u8 = 8;
 pub const KIND_BIGINT64: u8 = 9;
 pub const KIND_BIGUINT64: u8 = 10;
+/// Float16Array (#2902): IEEE-754 binary16 (half-precision) 2-byte elements.
+/// Stored as `u16` bit patterns; converted to/from f64 on read/write.
+pub const KIND_FLOAT16: u8 = 11;
 
 // Reserved class IDs for instanceof. Stay in the 0xFFFF00xx reserved range.
 pub const CLASS_ID_INT8_ARRAY: u32 = 0xFFFF0030;
@@ -45,12 +49,13 @@ pub const CLASS_ID_FLOAT64_ARRAY: u32 = 0xFFFF0037;
 pub const CLASS_ID_UINT8_CLAMPED_ARRAY: u32 = 0xFFFF0038;
 pub const CLASS_ID_BIGINT64_ARRAY: u32 = 0xFFFF0039;
 pub const CLASS_ID_BIGUINT64_ARRAY: u32 = 0xFFFF003A;
+pub const CLASS_ID_FLOAT16_ARRAY: u32 = 0xFFFF003B;
 
 #[inline]
 pub fn elem_size_for_kind(kind: u8) -> usize {
     match kind {
         KIND_INT8 | KIND_UINT8 | KIND_UINT8_CLAMPED => 1,
-        KIND_INT16 | KIND_UINT16 => 2,
+        KIND_INT16 | KIND_UINT16 | KIND_FLOAT16 => 2,
         KIND_INT32 | KIND_UINT32 | KIND_FLOAT32 => 4,
         KIND_FLOAT64 | KIND_BIGINT64 | KIND_BIGUINT64 => 8,
         _ => 8,
@@ -71,6 +76,7 @@ pub fn class_id_for_kind(kind: u8) -> u32 {
         KIND_UINT8_CLAMPED => CLASS_ID_UINT8_CLAMPED_ARRAY,
         KIND_BIGINT64 => CLASS_ID_BIGINT64_ARRAY,
         KIND_BIGUINT64 => CLASS_ID_BIGUINT64_ARRAY,
+        KIND_FLOAT16 => CLASS_ID_FLOAT16_ARRAY,
         _ => 0,
     }
 }
@@ -89,6 +95,7 @@ pub fn name_for_kind(kind: u8) -> &'static str {
         KIND_UINT8_CLAMPED => "Uint8ClampedArray",
         KIND_BIGINT64 => "BigInt64Array",
         KIND_BIGUINT64 => "BigUint64Array",
+        KIND_FLOAT16 => "Float16Array",
         _ => "TypedArray",
     }
 }
@@ -551,6 +558,9 @@ unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
             let v = value as i64 as u32;
             *(base.add(off) as *mut u32) = v;
         }
+        KIND_FLOAT16 => {
+            *(base.add(off) as *mut u16) = f64_to_f16_bits(value);
+        }
         KIND_FLOAT32 => {
             *(base.add(off) as *mut f32) = value as f32;
         }
@@ -580,6 +590,7 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
         KIND_UINT16 => *(base.add(off) as *const u16) as f64,
         KIND_INT32 => *(base.add(off) as *const i32) as f64,
         KIND_UINT32 => *(base.add(off) as *const u32) as f64,
+        KIND_FLOAT16 => f16_bits_to_f64(*(base.add(off) as *const u16)),
         KIND_FLOAT32 => *(base.add(off) as *const f32) as f64,
         KIND_FLOAT64 => *(base.add(off) as *const f64),
         KIND_BIGINT64 => *(base.add(off) as *const i64) as f64,
@@ -1863,7 +1874,7 @@ pub extern "C" fn js_typed_array_subarray(
 
 fn format_typed_value(kind: u8, v: f64) -> String {
     match kind {
-        KIND_FLOAT32 | KIND_FLOAT64 => {
+        KIND_FLOAT16 | KIND_FLOAT32 | KIND_FLOAT64 => {
             // Match Node: integer-valued floats render with no decimal,
             // others render via Rust's default Debug for f64.
             if v.is_nan() {

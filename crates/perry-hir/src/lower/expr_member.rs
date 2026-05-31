@@ -32,14 +32,19 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     // flag never leaks past this member, and only touch it when our own
     // detection fires (a method-call receiver sets the flag via `lower_call`
     // instead, and that must survive into the bare `ns[dynamicKey]` lowering).
+    let prev_unresolved_ident_as_global = ctx.unresolved_ident_as_global;
+    ctx.unresolved_ident_as_global = true;
     let suppress_for_obj = stdlib_ns_subnamespace_static_access(ctx, member);
     if !suppress_for_obj {
-        return lower_member_inner(ctx, member);
+        let result = lower_member_inner(ctx, member);
+        ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
+        return result;
     }
     let prev_suppress = ctx.suppress_stdlib_dispatch_guard_once;
     ctx.suppress_stdlib_dispatch_guard_once = true;
     let result = lower_member_inner(ctx, member);
     ctx.suppress_stdlib_dispatch_guard_once = prev_suppress;
+    ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
     result
 }
 
@@ -187,15 +192,22 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // runtime's `node:dgram`/network stack handles it) —
                     // the literal mirrors what we actually link in.
                     "features" => return Ok(process_features_literal()),
-                    // #1400: process.sourceMapsEnabled — boolean indicating
-                    // whether the runtime's source-map support is on. Perry
-                    // compiles AOT and doesn't ship a source-map resolver,
-                    // so the value is always false. Without this arm the
-                    // bare read returned a 0 sentinel — falsy in a boolean
-                    // context but `typeof` was `"number"`, so libraries
-                    // doing `typeof process.sourceMapsEnabled === "boolean"`
-                    // bailed out (e.g. some Vitest stack-trace formatters).
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #1400 / #3108: process.sourceMapsEnabled — live boolean
+                    // reflecting setSourceMapsEnabled(). Perry compiles AOT
+                    // and ships no source-map resolver, so the flag drives
+                    // nothing observable, but it round-trips through the
+                    // setter (starting `false`) so `typeof ... === "boolean"`
+                    // holds and toggles are observable. Lower to a 0-arg
+                    // native getter that reads the runtime flag.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     // #1412: `process.moduleLoadList` is Node's list of
                     // built-in modules already loaded into the
                     // interpreter. Perry AOT-compiles every reachable
@@ -384,7 +396,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ]));
                     }
                     "features" => return Ok(process_features_literal()),
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #3108: live boolean toggle — see the matching arm above.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     "finalization" => {
                         return Ok(Expr::Object(vec![
@@ -662,6 +683,39 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 };
                 if let Some(v) = val {
                     return Ok(Expr::Number(v));
+                }
+            }
+        }
+    }
+
+    // #2902: `<TypedArray>.BYTES_PER_ELEMENT` static property — fold to the
+    // element byte width. Works for all the global typed-array constructors
+    // (Int8Array..Float64Array, including Float16Array=2). Only fires when the
+    // name is a real global typed-array ctor not shadowed by a local binding.
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        let obj_name = obj_ident.sym.as_ref();
+        if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+            if prop_ident.sym.as_ref() == "BYTES_PER_ELEMENT" {
+                if let Some(kind) = crate::ir::typed_array_kind_for_name(obj_name) {
+                    let shadowed = ctx.lookup_local(obj_name).is_some()
+                        || ctx.lookup_func(obj_name).is_some()
+                        || ctx.lookup_imported_func(obj_name).is_some()
+                        || ctx.lookup_class(obj_name).is_some();
+                    if !shadowed {
+                        let bytes = match kind {
+                            crate::ir::TYPED_ARRAY_KIND_INT8
+                            | crate::ir::TYPED_ARRAY_KIND_UINT8
+                            | crate::ir::TYPED_ARRAY_KIND_UINT8_CLAMPED => 1.0,
+                            crate::ir::TYPED_ARRAY_KIND_INT16
+                            | crate::ir::TYPED_ARRAY_KIND_UINT16
+                            | crate::ir::TYPED_ARRAY_KIND_FLOAT16 => 2.0,
+                            crate::ir::TYPED_ARRAY_KIND_INT32
+                            | crate::ir::TYPED_ARRAY_KIND_UINT32
+                            | crate::ir::TYPED_ARRAY_KIND_FLOAT32 => 4.0,
+                            _ => 8.0, // Float64 / BigInt64 / BigUint64
+                        };
+                        return Ok(Expr::Number(bytes));
+                    }
                 }
             }
         }
@@ -1235,7 +1289,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             && crate::analysis::is_builtin_global_value_name(property)
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                if obj_ident.sym.as_ref() == property.as_str() {
+                if obj_ident.sym.as_ref() == property.as_str() && property != "globalThis" {
                     // #2060 / #2142 / #2145: `<Ctor>.prototype` and
                     // `<Ctor>.__proto__` must keep reading the constructor
                     // closure's real proto / static-prototype. Each built-in

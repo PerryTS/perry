@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2076 entries across 96 modules.
+Total: 2125 entries across 99 modules.
 
 ## Modules
 
@@ -38,6 +38,7 @@ Total: 2076 entries across 96 modules.
 - [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`fs`](#fs)
+- [`fs/promises`](#fs-promises)
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
@@ -85,6 +86,7 @@ Total: 2076 entries across 96 modules.
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`stream`](#stream)
+- [`stream/consumers`](#stream-consumers)
 - [`stream/promises`](#stream-promises)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
@@ -99,6 +101,7 @@ Total: 2076 entries across 96 modules.
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
+- [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
 - [`zlib`](#zlib)
@@ -1166,6 +1169,42 @@ Total: 2076 entries across 96 modules.
 - `constants`
 - `promises`
 
+## `fs/promises`
+
+### Methods
+
+- `access` — module
+- `appendFile` — module
+- `chmod` — module
+- `chown` — module
+- `copyFile` — module
+- `cp` — module
+- `glob` — module
+- `lchmod` — module
+- `lchown` — module
+- `link` — module
+- `lstat` — module
+- `lutimes` — module
+- `mkdir` — module
+- `mkdtemp` — module
+- `open` — module
+- `opendir` — module
+- `readFile` — module
+- `readdir` — module
+- `readlink` — module
+- `realpath` — module
+- `rename` — module
+- `rm` — module
+- `rmdir` — module
+- `stat` — module
+- `statfs` — module
+- `symlink` — module
+- `truncate` — module
+- `unlink` — module
+- `utimes` — module
+- `watch` — module
+- `writeFile` — module
+
 ## `http`
 
 ### Classes
@@ -1312,6 +1351,9 @@ Total: 2076 entries across 96 modules.
 - `address` — instance *(class: `Http2SecureServer`)*
 - `close` — instance *(class: `Http2SecureServer`)*
 - `createSecureServer` — module
+- `getDefaultSettings` — module
+- `getPackedSettings` — module
+- `getUnpackedSettings` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
 - `on` — instance *(class: `Http2SecureServer`)*
 
@@ -2226,11 +2268,13 @@ Total: 2076 entries across 96 modules.
 - `removeListener` — module
 - `resourceUsage` — module
 - `setMaxListeners` — module
+- `setSourceMapsEnabled` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
 - `setgroups` — module
 - `setuid` — module
+- `sourceMapsEnabled` — module
 - `threadCpuUsage` — module
 - `umask` — module
 - `uptime` — module
@@ -2445,6 +2489,17 @@ Total: 2076 entries across 96 modules.
 - `promises`
 - `promises`
 - `prototype`
+
+## `stream/consumers`
+
+### Methods
+
+- `arrayBuffer` — module
+- `blob` — module
+- `buffer` — module
+- `bytes` — module
+- `json` — module
+- `text` — module
 
 ## `stream/promises`
 
@@ -2729,6 +2784,24 @@ Total: 2076 entries across 96 modules.
 - `isJSON` — module
 - `isURL` — module
 - `isUUID` — module
+
+## `wasi`
+
+### Classes
+
+- `WASI`
+
+### Methods
+
+- `WASI` — module
+- `finalizeBindings` — instance *(class: `WASI`)*
+- `getImportObject` — instance *(class: `WASI`)*
+- `initialize` — instance *(class: `WASI`)*
+- `start` — instance *(class: `WASI`)*
+
+### Properties
+
+- `wasiImport`
 
 ## `worker_threads`
 

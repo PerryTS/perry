@@ -295,7 +295,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             .insert(binding.id.sym.as_ref().to_string());
                     }
                 }
-                let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable)?;
+                let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
                 // `var` is function-scoped: mark each defined local so
                 // `pop_block_scope` preserves it when leaving an inner block.
                 if is_var {
@@ -381,7 +381,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         ast::Stmt::Decl(ast::Decl::Using(using_decl)) => {
             // `using` / `await using` — lower as const bindings.
             for decl in &using_decl.decls {
-                let stmts = lower_var_decl_with_destructuring(ctx, decl, false)?;
+                let stmts = lower_var_decl_with_destructuring(ctx, decl, false, false)?;
                 result.extend(stmts);
             }
         }
@@ -1327,7 +1327,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     "Uint8Array" | "Int8Array" | "Uint8ClampedArray"
                     | "Uint16Array" | "Int16Array"
                     | "Uint32Array" | "Int32Array"
-                    | "Float32Array" | "Float64Array"
+                    | "Float16Array" | "Float32Array" | "Float64Array"
                 )
             );
             // #321: when the receiver's static type can NOT be proven to

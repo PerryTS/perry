@@ -14,8 +14,7 @@
 //! …) is a follow-up — splitting them all in a single PR would
 //! balloon the diff and the borrow-checker dance is non-trivial.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -413,7 +412,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             // Fill in default arguments if callee is a known function
             let mut args = args;
             if let Expr::FuncRef(func_id) = &callee_expr {
-                if let Some((defaults, param_ids, rest_idx, has_synth_args)) =
+                if let Some((defaults, _param_ids, rest_idx, has_synth_args)) =
                     ctx.lookup_func_defaults(*func_id)
                 {
                     // Refs #653 followup to v0.5.789's #645 fix: stop the
@@ -446,48 +445,31 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         // fixed-param padding and the body's default-fill
                         // statements substitute user defaults.
                     } else {
-                        let defaults = defaults.to_vec();
-                        let param_ids = param_ids.to_vec();
                         let num_provided = args.len();
                         let fill_end = match rest_idx {
                             Some(i) => i,
                             None => defaults.len(),
                         };
-                        // Build substitution map: callee param LocalId -> actual arg expression
-                        // For provided args, map to the caller's arg expression
-                        // For defaulted args, map to the expanded default (built incrementally)
-                        let mut param_map: Vec<(LocalId, Expr)> = Vec::new();
-                        for i in 0..param_ids.len().min(num_provided) {
-                            param_map.push((param_ids[i], args[i].clone()));
-                        }
-                        // Fill in missing arguments with their defaults, substituting
-                        // any parameter references to use the caller's scope.
+                        // Fill missing fixed-parameter slots with `undefined`.
+                        // The callee body already starts with default-param
+                        // checks, so default expressions must execute there,
+                        // in parameter order and inside the function's abrupt
+                        // completion boundary. This matters for async
+                        // functions: `async function f(x = throws()) {}` must
+                        // return a rejected Promise, not throw while building
+                        // the call arguments.
                         //
                         // Refs #645 deeper followup / #488 drizzle-sqlite: push
                         // something for EVERY slot from num_provided..defaults.len(),
                         // even when defaults[i] is None — otherwise a later Some
                         // default lands at the wrong positional slot. Drizzle's
-                        // tableBase(name, columns, extraConfig, schema?, baseName=name)
-                        // is the load-bearing repro: 3-arg call, slot 3 (schema)
-                        // has None default and slot 4 (baseName) has Some(name).
-                        // The pre-fix loop skipped slot 3 and pushed baseName's
-                        // default into slot 3 — so schema got the table name and
-                        // rendered SQL became `"users"."users"` instead of `"users"`.
-                        for i in num_provided..fill_end {
-                            let substituted = if let Some(default_expr) = &defaults[i] {
-                                LoweringContext::substitute_param_refs_in_default(
-                                    default_expr,
-                                    &param_map,
-                                )
-                            } else {
-                                Expr::Undefined
-                            };
-                            // Add this expanded default to the map so later defaults
-                            // can reference it (e.g., c = b where b was also defaulted)
-                            if i < param_ids.len() {
-                                param_map.push((param_ids[i], substituted.clone()));
-                            }
-                            args.push(substituted);
+                        // tableBase(name, columns, extraConfig, schema?,
+                        // baseName=name) is the load-bearing repro: 3-arg
+                        // call, slot 3 (schema) has None default and slot 4
+                        // (baseName) has Some(name). If slot 3 is skipped,
+                        // baseName receives the wrong positional value.
+                        for _ in num_provided..fill_end {
+                            args.push(Expr::Undefined);
                         }
                     } // end of !has_synth_args branch
                 }

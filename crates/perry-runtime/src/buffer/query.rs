@@ -1,5 +1,69 @@
 use super::*;
 
+/// FFI helper: return a pointer to the raw bytes of a `Buffer` or
+/// `TypedArray` value (NaN-boxed bits passed as `f64`), writing the byte
+/// length through `out_len`. Returns null (and sets `*out_len = 0`) for any
+/// value that is neither a Buffer nor a TypedArray.
+///
+/// Used by out-of-crate FFI callers (`perry-ext-http-server`'s
+/// `getUnpackedSettings`) that must read a *program-allocated* Buffer's
+/// bytes. Going through this extern symbol ensures the Buffer-registry
+/// lookup runs in the same runtime copy that allocated the Buffer (via the
+/// `js_buffer_alloc` extern), avoiding the staticlib thread-local
+/// divergence that direct `is_registered_buffer` calls from an ext crate
+/// would hit.
+///
+/// # Safety
+/// `out_len` must be a valid writable `*mut u32` or null. The returned
+/// pointer borrows the live allocation and is valid only until the next GC.
+#[no_mangle]
+pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
+    bits: f64,
+    out_len: *mut u32,
+) -> *const u8 {
+    if !out_len.is_null() {
+        *out_len = 0;
+    }
+    let raw = bits.to_bits();
+    // Buffer? (registry lookup via the canonical extern dispatch)
+    if js_buffer_is_buffer(raw as i64) == 1 {
+        let addr = if (raw >> 48) != 0 {
+            raw & 0x0000_FFFF_FFFF_FFFF
+        } else {
+            raw
+        } as usize;
+        let buf = addr as *const BufferHeader;
+        if !buf.is_null() {
+            if !out_len.is_null() {
+                *out_len = (*buf).length;
+            }
+            return buffer_data(buf);
+        }
+    }
+    // TypedArray? (Uint8Array etc. backing bytes)
+    let addr = if (raw >> 48) >= 0x7FF8 {
+        (raw & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        raw as usize
+    };
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *const crate::typedarray::TypedArrayHeader;
+        if let Some(bytes) = crate::typedarray::typed_array_bytes(ta) {
+            if !out_len.is_null() {
+                *out_len = bytes.len() as u32;
+            }
+            return bytes.as_ptr();
+        }
+    }
+    std::ptr::null()
+}
+
+// Referenced only from the prebuilt `perry-ext-http-server` archive, so the
+// auto-optimize LTO pass would otherwise dead-strip it. Pin it.
+#[used]
+static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u32) -> *const u8 =
+    js_value_buffer_or_typedarray_data;
+
 /// Check if an object is a Buffer (using the buffer registry)
 #[no_mangle]
 pub extern "C" fn js_buffer_is_buffer(ptr: i64) -> i32 {

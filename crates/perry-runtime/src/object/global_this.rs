@@ -131,6 +131,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Int16Array",
     "Uint32Array",
     "Int32Array",
+    "Float16Array",
     "Float32Array",
     "Float64Array",
     "Uint8ClampedArray",
@@ -791,6 +792,11 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(false, false, false),
+    );
     // #2060: the four reflectable `length`/`byteLength`/`byteOffset`/`buffer`
     // accessor descriptors are own properties of `%TypedArray%.prototype` per
     // spec, NOT of the per-kind proto. Pre-#2145 they were installed on each
@@ -877,6 +883,9 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         // on the constructor closure so rebound usage like
         // `const O = Object; O.keys(x)` dispatches through the real helpers.
         install_builtin_constructor_statics(name, closure_ptr);
+        if name == "Number" {
+            install_number_static_data_properties(closure_ptr);
+        }
         if matches!(
             name,
             "Blob" | "File" | "EvalError" | "URIError" | "Uint8Array"
@@ -894,6 +903,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if !proto_obj.is_null() {
             let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
             js_object_set_field_by_name(closure_ptr as *mut ObjectHeader, proto_key, proto_value);
+            super::set_builtin_property_attrs(
+                closure_ptr as usize,
+                "prototype".to_string(),
+                super::PropertyAttrs::new(false, false, false),
+            );
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
             // ClosureHeader-backed thunks that read their receiver from
@@ -918,6 +932,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                         | "Uint16Array"
                         | "Int32Array"
                         | "Uint32Array"
+                        | "Float16Array"
                         | "Float32Array"
                         | "Float64Array"
                         | "BigInt64Array"
@@ -1238,6 +1253,31 @@ fn install_constructor_static(
         name.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
+}
+
+fn install_number_static_data_properties(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    let props = [
+        ("NaN", f64::NAN),
+        ("POSITIVE_INFINITY", f64::INFINITY),
+        ("NEGATIVE_INFINITY", f64::NEG_INFINITY),
+        ("MAX_VALUE", f64::MAX),
+        ("MIN_VALUE", f64::MIN_POSITIVE),
+        ("EPSILON", f64::EPSILON),
+        ("MAX_SAFE_INTEGER", 9007199254740991.0),
+        ("MIN_SAFE_INTEGER", -9007199254740991.0),
+    ];
+    for (name, value) in props {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+        super::set_builtin_property_attrs(
+            ctor as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(false, false, false),
+        );
+    }
 }
 
 /// #2889: install the common static methods on the `Object` / `Array`
@@ -1704,8 +1744,8 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         // `getOwnPropertyDescriptor(Int8Array.prototype, "length")` =
         // `undefined`).
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-        | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
-        | "BigUint64Array" => {
+        | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[

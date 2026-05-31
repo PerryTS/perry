@@ -48,6 +48,7 @@ impl LoweringContext {
             enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
+            immutable_locals: HashSet::new(),
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
             imported_functions: Vec::new(),
@@ -57,6 +58,7 @@ impl LoweringContext {
             type_param_scopes: Vec::new(),
             type_param_constraints: Vec::new(),
             native_instances: Vec::new(),
+            current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
             extern_func_types: Vec::new(),
@@ -71,6 +73,7 @@ impl LoweringContext {
             pre_registered_module_vars: HashSet::new(),
             module_level_ids: HashSet::new(),
             scope_depth: 0,
+            scope_local_marks: Vec::new(),
             inside_block_scope: 0,
             namespace_vars: Vec::new(),
             current_namespace: None,
@@ -78,6 +81,7 @@ impl LoweringContext {
             uses_fetch: false,
             uses_webassembly: false,
             suppress_stdlib_dispatch_guard_once: false,
+            unresolved_ident_as_global: false,
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
@@ -216,6 +220,14 @@ impl LoweringContext {
         let id = self.next_local_id;
         self.next_local_id += 1;
         id
+    }
+
+    pub(crate) fn mark_local_immutable(&mut self, id: LocalId) {
+        self.immutable_locals.insert(id);
+    }
+
+    pub(crate) fn is_local_immutable(&self, id: LocalId) -> bool {
+        self.immutable_locals.contains(&id)
     }
 
     pub(crate) fn fresh_func(&mut self) -> FuncId {
@@ -808,105 +820,6 @@ impl LoweringContext {
             })
     }
 
-    /// Substitute parameter references in a default expression.
-    /// Replaces LocalGet(callee_param_id) with the corresponding caller argument expression.
-    pub(crate) fn substitute_param_refs_in_default(
-        expr: &Expr,
-        param_map: &[(LocalId, Expr)],
-    ) -> Expr {
-        match expr {
-            Expr::LocalGet(id) => {
-                // Check if this LocalGet references one of the callee's parameters
-                for (param_id, replacement) in param_map {
-                    if id == param_id {
-                        return replacement.clone();
-                    }
-                }
-                // Not a parameter reference - keep as-is
-                expr.clone()
-            }
-            Expr::Array(elements) => Expr::Array(
-                elements
-                    .iter()
-                    .map(|e| Self::substitute_param_refs_in_default(e, param_map))
-                    .collect(),
-            ),
-            Expr::Object(fields) => Expr::Object(
-                fields
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.clone(),
-                            Self::substitute_param_refs_in_default(v, param_map),
-                        )
-                    })
-                    .collect(),
-            ),
-            Expr::Binary { op, left, right } => Expr::Binary {
-                op: *op,
-                left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
-                right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
-            },
-            Expr::Compare { op, left, right } => Expr::Compare {
-                op: *op,
-                left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
-                right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
-            },
-            Expr::Logical { op, left, right } => Expr::Logical {
-                op: *op,
-                left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
-                right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
-            },
-            Expr::Unary { op, operand } => Expr::Unary {
-                op: *op,
-                operand: Box::new(Self::substitute_param_refs_in_default(operand, param_map)),
-            },
-            Expr::Call {
-                callee,
-                args,
-                type_args,
-            } => Expr::Call {
-                callee: Box::new(Self::substitute_param_refs_in_default(callee, param_map)),
-                args: args
-                    .iter()
-                    .map(|a| Self::substitute_param_refs_in_default(a, param_map))
-                    .collect(),
-                type_args: type_args.clone(),
-            },
-            Expr::Conditional {
-                condition,
-                then_expr,
-                else_expr,
-            } => Expr::Conditional {
-                condition: Box::new(Self::substitute_param_refs_in_default(condition, param_map)),
-                then_expr: Box::new(Self::substitute_param_refs_in_default(then_expr, param_map)),
-                else_expr: Box::new(Self::substitute_param_refs_in_default(else_expr, param_map)),
-            },
-            Expr::PropertyGet { object, property } => Expr::PropertyGet {
-                object: Box::new(Self::substitute_param_refs_in_default(object, param_map)),
-                property: property.clone(),
-            },
-            Expr::IndexGet { object, index } => Expr::IndexGet {
-                object: Box::new(Self::substitute_param_refs_in_default(object, param_map)),
-                index: Box::new(Self::substitute_param_refs_in_default(index, param_map)),
-            },
-            Expr::New {
-                class_name,
-                args,
-                type_args,
-            } => Expr::New {
-                class_name: class_name.clone(),
-                args: args
-                    .iter()
-                    .map(|a| Self::substitute_param_refs_in_default(a, param_map))
-                    .collect(),
-                type_args: type_args.clone(),
-            },
-            // Leaf expressions that don't contain LocalGet - return as-is
-            _ => expr.clone(),
-        }
-    }
-
     pub(crate) fn lookup_imported_func(&self, name: &str) -> Option<&str> {
         self.imported_functions_index
             .get(name)
@@ -1112,9 +1025,11 @@ impl LoweringContext {
 
     pub(crate) fn enter_scope(&mut self) -> (usize, usize, usize) {
         // Function/closure boundary: new locals are no longer module-level.
+        let local_mark = self.locals.len();
         self.scope_depth += 1;
+        self.scope_local_marks.push(local_mark);
         (
-            self.locals.len(),
+            local_mark,
             self.native_instances.len(),
             self.functions.len(),
         )
@@ -1123,6 +1038,7 @@ impl LoweringContext {
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
+        self.scope_local_marks.pop();
         self.locals.truncate(mark.0);
         self.native_instances.truncate(mark.1);
         // Remove index entries for functions being truncated, then restore any

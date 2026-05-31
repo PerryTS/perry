@@ -472,7 +472,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "loadEnvFile") => {
-            crate::process::js_process_load_env_file(optional_path_str_ptr(0));
+            crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -517,6 +517,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
+
+        // ── wasi module ──
+        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
@@ -1266,9 +1269,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
         // ── url module (module-level functions return NaN-boxed JS values) ──
-        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
-        ("url", "fileURLToPathBuffer") => crate::url::js_url_file_url_to_path_buffer(arg(0)),
-        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
+        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("url", "fileURLToPathBuffer") => {
+            crate::url::js_url_file_url_to_path_buffer(arg(0), arg(1))
+        }
+        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),

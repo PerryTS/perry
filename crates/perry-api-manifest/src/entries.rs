@@ -104,6 +104,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "querystring",
     "cluster",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
     "process",
@@ -142,7 +143,9 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
 pub const NODE_SUBMODULES: &[&str] = &[
+    "fs/promises",
     "stream/promises",
+    "stream/consumers",
     "readline/promises",
     "punycode.ucs2",
     "sys",
@@ -186,6 +189,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/tui",
     "perry/background",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
 ];
@@ -2773,7 +2777,38 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
     method("process", "getBuiltinModule", false, None),
-    method("process", "loadEnvFile", false, None),
+    method_sig(
+        "process",
+        "loadEnvFile",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "path",
+            ty: TypeSpec::Any,
+            optional: true,
+        }],
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "process",
+        "sourceMapsEnabled",
+        false,
+        None,
+        &[],
+        TypeSpec::Bool,
+    ),
+    method_sig(
+        "process",
+        "setSourceMapsEnabled",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "enabled",
+            ty: TypeSpec::Bool,
+            optional: false,
+        }],
+        TypeSpec::Void,
+    ),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
     method("process", "threadCpuUsage", false, None),
@@ -2992,6 +3027,43 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "watch", false, None),
     property("fs", "promises"),
     property("fs", "constants"),
+    // --- node:fs/promises direct submodule (#2728). Only the named exports
+    // Perry actually backs with runtime thunks (see
+    // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
+    // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
+    // intentionally omitted — they are tracked separately (#2133). The parent
+    // `fs.promises` namespace above still resolves to the same surface.
+    method("fs/promises", "access", false, None),
+    method("fs/promises", "appendFile", false, None),
+    method("fs/promises", "chmod", false, None),
+    method("fs/promises", "chown", false, None),
+    method("fs/promises", "copyFile", false, None),
+    method("fs/promises", "cp", false, None),
+    method("fs/promises", "glob", false, None),
+    method("fs/promises", "lchmod", false, None),
+    method("fs/promises", "lchown", false, None),
+    method("fs/promises", "link", false, None),
+    method("fs/promises", "lstat", false, None),
+    method("fs/promises", "lutimes", false, None),
+    method("fs/promises", "mkdir", false, None),
+    method("fs/promises", "mkdtemp", false, None),
+    method("fs/promises", "open", false, None),
+    method("fs/promises", "opendir", false, None),
+    method("fs/promises", "readFile", false, None),
+    method("fs/promises", "readdir", false, None),
+    method("fs/promises", "readlink", false, None),
+    method("fs/promises", "realpath", false, None),
+    method("fs/promises", "rename", false, None),
+    method("fs/promises", "rm", false, None),
+    method("fs/promises", "rmdir", false, None),
+    method("fs/promises", "stat", false, None),
+    method("fs/promises", "statfs", false, None),
+    method("fs/promises", "symlink", false, None),
+    method("fs/promises", "truncate", false, None),
+    method("fs/promises", "unlink", false, None),
+    method("fs/promises", "utimes", false, None),
+    method("fs/promises", "watch", false, None),
+    method("fs/promises", "writeFile", false, None),
     // --- console (Node global console exposed as node:console too). ---
     class("console", "Console"),
     method("console", "log", false, None),
@@ -3257,6 +3329,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("stream", "promises"),
     method("stream/promises", "pipeline", false, None),
     method("stream/promises", "finished", false, None),
+    // Direct `node:stream/consumers` submodule exports.
+    method("stream/consumers", "arrayBuffer", false, None),
+    method("stream/consumers", "blob", false, None),
+    method("stream/consumers", "buffer", false, None),
+    method("stream/consumers", "bytes", false, None),
+    method("stream/consumers", "json", false, None),
+    method("stream/consumers", "text", false, None),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does
@@ -3412,6 +3491,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("tty", "removeListener", true, Some("WriteStream")),
     method("tty", "off", true, Some("WriteStream")),
     method("tty", "removeAllListeners", true, Some("WriteStream")),
+    // --- wasi ---
+    class("wasi", "WASI"),
+    method("wasi", "WASI", false, None),
+    method("wasi", "getImportObject", true, Some("WASI")),
+    method("wasi", "start", true, Some("WASI")),
+    method("wasi", "initialize", true, Some("WASI")),
+    method("wasi", "finalizeBindings", true, Some("WASI")),
+    property("wasi", "wasiImport"),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     method("perf_hooks", "now", false, None),
     method("perf_hooks", "mark", false, None),
@@ -4082,6 +4169,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "close", true, Some("Http2SecureServer")),
     method("http2", "on", true, Some("Http2SecureServer")),
     method("http2", "address", true, Some("Http2SecureServer")),
+    // --- node:http2 settings helpers (issue #3168) ---
+    method("http2", "getDefaultSettings", false, None),
+    method("http2", "getPackedSettings", false, None),
+    method("http2", "getUnpackedSettings", false, None),
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

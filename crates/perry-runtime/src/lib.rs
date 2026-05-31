@@ -64,7 +64,6 @@ pub mod node_submodules;
 pub mod node_test;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
 pub mod node_v8;
-mod process_env_file;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
 pub use node_submodules::js_zlib_resolve_level;
@@ -85,8 +84,10 @@ pub mod text;
 pub mod timer;
 pub mod typed_feedback;
 pub mod typedarray;
+pub mod typedarray_half;
 pub mod url;
 pub mod value;
+pub mod wasi;
 /// WebAssembly host shims (issue #76). Forward-declares the
 /// `perry_wasm_host_*` C ABI; the wasmi-backed implementation lives in
 /// the separate `perry-wasm-host` crate and is linked in only when the

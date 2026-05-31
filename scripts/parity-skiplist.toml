@@ -39,7 +39,6 @@
 "v8" = "V8-specific introspection (heap snapshots, cached data, serialization). Inapplicable."
 "domain" = "Deprecated since Node 4; not implementing legacy error-routing system."
 "punycode" = "Deprecated since Node 7; userland alternatives exist."
-"wasi" = "WASI sandbox runtime; orthogonal to native AOT compilation."
 
 # Out-of-scope test surface.
 "test/reporters" = "Test-runner reporter API; covered transitively by node:test if pursued."
@@ -73,6 +72,10 @@
 "process.exit([code])" = "Terminates the process; would short-circuit the rest of the parity test."
 "process.abort()" = "SIGABRT; would terminate the parity test."
 "process.kill(pid[, signal])" = "Sends signals; not deterministic in a parity diff."
+
+"wasi.start(instance)" = "WASI lifecycle execution requires running WebAssembly instances; constructor/import-object shape is covered separately."
+"wasi.initialize(instance)" = "WASI lifecycle execution requires running WebAssembly instances; constructor/import-object shape is covered separately."
+"wasi.finalizeBindings(instance[, options])" = "WASI lifecycle execution requires running WebAssembly instances; constructor/import-object shape is covered separately."
 
 "os.uptime()" = "Host uptime — non-deterministic value."
 "os.loadavg()" = "Load averages — non-deterministic value."

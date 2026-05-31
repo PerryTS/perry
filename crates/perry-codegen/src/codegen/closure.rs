@@ -338,8 +338,13 @@ pub(super) fn compile_closure(
         buffer_alias_base,
     };
 
-    stmt::lower_stmts(&mut ctx, body)
-        .with_context(|| format!("lowering closure body func_id={}", func_id))?;
+    if is_async {
+        stmt::lower_async_rejecting_stmts(&mut ctx, body)
+            .with_context(|| format!("lowering async closure body func_id={}", func_id))?;
+    } else {
+        stmt::lower_stmts(&mut ctx, body)
+            .with_context(|| format!("lowering closure body func_id={}", func_id))?;
+    }
 
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

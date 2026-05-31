@@ -474,12 +474,30 @@ pub(super) fn compile_method(
         }
     }
 
-    stmt::lower_stmts(&mut ctx, &method.body)
-        .with_context(|| format!("lowering body of method '{}::{}'", class.name, method.name))?;
+    if method.is_async {
+        stmt::lower_async_rejecting_stmts(&mut ctx, &method.body).with_context(|| {
+            format!(
+                "lowering async body of method '{}::{}'",
+                class.name, method.name
+            )
+        })?;
+    } else {
+        stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
+            format!("lowering body of method '{}::{}'", class.name, method.name)
+        })?;
+    }
 
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        ctx.block().ret(DOUBLE, &undef);
+        if method.is_async {
+            let handle = ctx
+                .block()
+                .call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
+            let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
+            ctx.block().ret(DOUBLE, &boxed);
+        } else {
+            ctx.block().ret(DOUBLE, &undef);
+        }
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
@@ -710,8 +728,14 @@ pub(super) fn compile_static_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
-    stmt::lower_stmts(&mut ctx, &f.body)
-        .with_context(|| format!("lowering body of static '{}::{}'", class_name, f.name))?;
+    if f.is_async {
+        stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
+            format!("lowering async body of static '{}::{}'", class_name, f.name)
+        })?;
+    } else {
+        stmt::lower_stmts(&mut ctx, &f.body)
+            .with_context(|| format!("lowering body of static '{}::{}'", class_name, f.name))?;
+    }
 
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

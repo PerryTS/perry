@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2076 entries across 96 modules
+// Coverage: 2125 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1452,6 +1452,71 @@ declare module "fs" {
   export function writevSync(...args: any[]): any;
 }
 
+declare module "fs/promises" {
+  /** stdlib */
+  export function access(...args: any[]): any;
+  /** stdlib */
+  export function appendFile(...args: any[]): any;
+  /** stdlib */
+  export function chmod(...args: any[]): any;
+  /** stdlib */
+  export function chown(...args: any[]): any;
+  /** stdlib */
+  export function copyFile(...args: any[]): any;
+  /** stdlib */
+  export function cp(...args: any[]): any;
+  /** stdlib */
+  export function glob(...args: any[]): any;
+  /** stdlib */
+  export function lchmod(...args: any[]): any;
+  /** stdlib */
+  export function lchown(...args: any[]): any;
+  /** stdlib */
+  export function link(...args: any[]): any;
+  /** stdlib */
+  export function lstat(...args: any[]): any;
+  /** stdlib */
+  export function lutimes(...args: any[]): any;
+  /** stdlib */
+  export function mkdir(...args: any[]): any;
+  /** stdlib */
+  export function mkdtemp(...args: any[]): any;
+  /** stdlib */
+  export function open(...args: any[]): any;
+  /** stdlib */
+  export function opendir(...args: any[]): any;
+  /** stdlib */
+  export function readFile(...args: any[]): any;
+  /** stdlib */
+  export function readdir(...args: any[]): any;
+  /** stdlib */
+  export function readlink(...args: any[]): any;
+  /** stdlib */
+  export function realpath(...args: any[]): any;
+  /** stdlib */
+  export function rename(...args: any[]): any;
+  /** stdlib */
+  export function rm(...args: any[]): any;
+  /** stdlib */
+  export function rmdir(...args: any[]): any;
+  /** stdlib */
+  export function stat(...args: any[]): any;
+  /** stdlib */
+  export function statfs(...args: any[]): any;
+  /** stdlib */
+  export function symlink(...args: any[]): any;
+  /** stdlib */
+  export function truncate(...args: any[]): any;
+  /** stdlib */
+  export function unlink(...args: any[]): any;
+  /** stdlib */
+  export function utimes(...args: any[]): any;
+  /** stdlib */
+  export function watch(...args: any[]): any;
+  /** stdlib */
+  export function writeFile(...args: any[]): any;
+}
+
 declare module "http" {
   /** stdlib */
   export class Agent { [key: string]: any; }
@@ -1496,6 +1561,12 @@ declare module "http2" {
   export const constants: any;
   /** stdlib */
   export function createSecureServer(...args: any[]): any;
+  /** stdlib */
+  export function getDefaultSettings(...args: any[]): any;
+  /** stdlib */
+  export function getPackedSettings(...args: any[]): any;
+  /** stdlib */
+  export function getUnpackedSettings(...args: any[]): any;
 }
 
 declare module "https" {
@@ -2672,7 +2743,7 @@ declare module "process" {
   /** stdlib */
   export function listeners(...args: any[]): any;
   /** stdlib */
-  export function loadEnvFile(...args: any[]): any;
+  export function loadEnvFile(path?: any): void;
   /** stdlib */
   export function memoryUsage(...args: any[]): any;
   /** stdlib */
@@ -2698,6 +2769,8 @@ declare module "process" {
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
   /** stdlib */
+  export function setSourceMapsEnabled(enabled: boolean): void;
+  /** stdlib */
   export function setegid(...args: any[]): any;
   /** stdlib */
   export function seteuid(...args: any[]): any;
@@ -2707,6 +2780,8 @@ declare module "process" {
   export function setgroups(...args: any[]): any;
   /** stdlib */
   export function setuid(...args: any[]): any;
+  /** stdlib */
+  export function sourceMapsEnabled(): boolean;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
@@ -2855,6 +2930,21 @@ declare module "stream" {
   export function setDefaultHighWaterMark(...args: any[]): any;
   /** stdlib */
   export function toWeb(...args: any[]): any;
+}
+
+declare module "stream/consumers" {
+  /** stdlib */
+  export function arrayBuffer(...args: any[]): any;
+  /** stdlib */
+  export function blob(...args: any[]): any;
+  /** stdlib */
+  export function buffer(...args: any[]): any;
+  /** stdlib */
+  export function bytes(...args: any[]): any;
+  /** stdlib */
+  export function json(...args: any[]): any;
+  /** stdlib */
+  export function text(...args: any[]): any;
 }
 
 declare module "stream/promises" {
@@ -3205,6 +3295,15 @@ declare module "validator" {
   export function isURL(s: string): boolean;
   /** stdlib */
   export function isUUID(s: string): boolean;
+}
+
+declare module "wasi" {
+  /** stdlib */
+  export class WASI { [key: string]: any; }
+  /** stdlib */
+  export const wasiImport: any;
+  /** stdlib */
+  export function WASI(...args: any[]): any;
 }
 
 declare module "worker_threads" {

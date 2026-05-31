@@ -15,11 +15,10 @@
 // (or a host that already has one) wins. Test262Error comes from sta.js, which
 // is concatenated ahead of this file.
 
-globalThis.print =
-  globalThis.print ||
-  function (s) {
-    console.log(String(s));
-  };
+function print(s) {
+  console.log(String(s));
+}
+globalThis.print = globalThis.print || print;
 
 globalThis.$DONOTEVALUATE =
   globalThis.$DONOTEVALUATE ||
