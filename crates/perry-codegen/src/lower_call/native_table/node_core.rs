@@ -299,6 +299,20 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
+    // #3004 — `os.userInfo(options)` with a dynamic options object (variable,
+    // function return, computed-key). The runtime inspects `options.encoding`
+    // and returns Buffer text fields only on an exact `"buffer"` match. The
+    // static-literal `{ encoding: "buffer" }` form is lowered separately to
+    // `OsUserInfoBuffer`; this table entry handles everything else.
+    NativeModSig {
+        module: "os",
+        has_receiver: false,
+        method: "userInfo",
+        class_filter: None,
+        runtime: "js_os_user_info_options",
+        args: &[NA_JSV],
+        ret: NR_PTR,
+    },
     // ========== Node process EventEmitter ==========
     NativeModSig {
         module: "process",

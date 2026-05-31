@@ -905,7 +905,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             JSValue::pointer(crate::os::js_os_network_interfaces() as *const u8).bits(),
         ),
         ("os", "userInfo") => {
-            f64::from_bits(JSValue::pointer(crate::os::js_os_user_info() as *const u8).bits())
+            // #3004 — honor a runtime `options.encoding === "buffer"` value
+            // (variable / function-return / computed-key options object).
+            let opts_bits = arg(0).to_bits() as i64;
+            f64::from_bits(
+                JSValue::pointer(crate::os::js_os_user_info_options(opts_bits) as *const u8).bits(),
+            )
         }
         ("os", "getPriority") => crate::os::js_os_get_priority(arg(0)),
         ("os", "setPriority") => crate::os::js_os_set_priority(arg(0), arg(1)),

@@ -1264,6 +1264,33 @@ mod tests {
         f64::from_bits(JSValue::string_ptr(ptr).bits())
     }
 
+    fn string_header_value(ptr: *mut crate::StringHeader) -> f64 {
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    }
+
+    fn promise_reason_error(value: f64) -> *mut crate::error::ErrorHeader {
+        let promise = promise_ptr(value);
+        assert_eq!(crate::promise::js_promise_state(promise), 2);
+        crate::value::js_nanbox_get_pointer(crate::promise::js_promise_reason(promise))
+            as *mut crate::error::ErrorHeader
+    }
+
+    fn assert_rejected_node_error(value: f64, code: &str, message: &str) {
+        let err = promise_reason_error(value);
+        let name = string_from_value(string_header_value(crate::error::js_error_get_name(err)))
+            .expect("error name should be a string");
+        let actual_message =
+            string_from_value(string_header_value(crate::error::js_error_get_message(err)))
+                .expect("error message should be a string");
+        let actual_code =
+            crate::node_submodules::error_code_for_message(crate::error::js_error_get_message(err))
+                .expect("error should have a registered Node code");
+
+        assert_eq!(name, "TypeError");
+        assert_eq!(actual_code, code);
+        assert_eq!(actual_message, message);
+    }
+
     #[test]
     fn stream_parent_promises_property_exposes_namespace() {
         let value = unsafe {
@@ -1462,6 +1489,36 @@ mod tests {
     }
 
     #[test]
+    fn stream_promises_finished_rejects_invalid_inputs() {
+        let number_promise = thunk_streamP_finished(std::ptr::null(), 123.0, undefined_value());
+        assert_rejected_node_error(
+            number_promise,
+            "ERR_INVALID_ARG_TYPE",
+            "The \"stream\" argument must be an instance of ReadableStream, WritableStream, or Stream. Received type number (123)",
+        );
+
+        let string_promise =
+            thunk_streamP_finished(std::ptr::null(), string_value("x"), undefined_value());
+        assert_rejected_node_error(
+            string_promise,
+            "ERR_INVALID_ARG_TYPE",
+            "The \"stream\" argument must be an instance of ReadableStream, WritableStream, or Stream. Received type string ('x')",
+        );
+
+        let object = js_object_alloc(0, 0);
+        let object_promise = thunk_streamP_finished(
+            std::ptr::null(),
+            boxed_ptr(object as *const u8),
+            undefined_value(),
+        );
+        assert_rejected_node_error(
+            object_promise,
+            "ERR_INVALID_ARG_TYPE",
+            "The \"stream\" argument must be an instance of ReadableStream, WritableStream, or Stream. Received an instance of Object",
+        );
+    }
+
+    #[test]
     fn stream_promises_finished_rejects_hidden_stream_error() {
         let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
         let err = abort_error_value();
@@ -1496,6 +1553,135 @@ mod tests {
             crate::promise::js_promise_reason(promise).to_bits(),
             err.to_bits()
         );
+    }
+
+    fn set_stream_bool_property(stream: f64, name: &[u8], value: bool) {
+        let obj = object_ptr_from_value(stream).expect("stream object");
+        js_object_set_field_by_name(
+            obj,
+            js_string_from_bytes(name.as_ptr(), name.len() as u32),
+            f64::from_bits(if value {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        );
+    }
+
+    fn emit_stream_lifecycle_event(stream: f64, name: &str) {
+        let handle = object_ptr_from_value(stream).expect("stream object") as i64;
+        let _ = crate::node_stream::js_node_stream_method_emit(
+            handle,
+            string_value(name),
+            undefined_value(),
+        );
+    }
+
+    fn finished_bool_option(name: &[u8], value: bool) -> f64 {
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(name.as_ptr(), name.len() as u32),
+            f64::from_bits(if value {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        );
+        boxed_ptr(opts as *const u8)
+    }
+
+    fn assert_promise_resolved_undefined(promise: *mut crate::promise::Promise) {
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_resolves_for_resumed_readable_from() {
+        let mut arr = crate::array::js_array_alloc(1);
+        arr = crate::array::js_array_push_f64(arr, string_value("x"));
+        let stream = crate::node_stream::js_node_stream_readable_from(boxed_ptr(arr as *const u8));
+        let handle = object_ptr_from_value(stream).expect("stream object") as i64;
+        let _ = crate::node_stream::js_node_stream_method_resume(handle);
+
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        let _ = crate::promise::js_promise_run_microtasks();
+
+        assert_promise_resolved_undefined(promise);
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_default_waits_after_writable_finish_only() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"writableFinished", true);
+        emit_stream_lifecycle_event(stream, "finish");
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"readableEnded", true);
+        emit_stream_lifecycle_event(stream, "end");
+
+        assert_promise_resolved_undefined(promise);
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_default_waits_after_readable_end_only() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"readableEnded", true);
+        emit_stream_lifecycle_event(stream, "end");
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"writableFinished", true);
+        emit_stream_lifecycle_event(stream, "finish");
+
+        assert_promise_resolved_undefined(promise);
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_readable_false_resolves_after_writable_finish() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let options = finished_bool_option(b"readable", false);
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, options);
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"writableFinished", true);
+        emit_stream_lifecycle_event(stream, "finish");
+
+        assert_promise_resolved_undefined(promise);
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_writable_false_resolves_after_readable_end() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let options = finished_bool_option(b"writable", false);
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, options);
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"readableEnded", true);
+        emit_stream_lifecycle_event(stream, "end");
+
+        assert_promise_resolved_undefined(promise);
     }
 
     thread_local! {
@@ -1556,6 +1742,58 @@ mod tests {
         PIPELINE_CAPTURED.with(|captured| {
             assert_eq!(captured.borrow().join(""), "await-works");
         });
+    }
+
+    #[test]
+    fn stream_promises_pipeline_rejects_missing_streams() {
+        let direct_promise = thunk_streamP_pipeline(
+            std::ptr::null(),
+            undefined_value(),
+            undefined_value(),
+            undefined_value(),
+        );
+        assert_rejected_node_error(
+            direct_promise,
+            "ERR_MISSING_ARGS",
+            "The \"streams\" argument must be specified",
+        );
+
+        let empty_rest = crate::array::js_array_alloc(0);
+        let rest_promise = thunk_streamP_pipeline(
+            std::ptr::null(),
+            123.0,
+            undefined_value(),
+            boxed_ptr(empty_rest as *const u8),
+        );
+        assert_rejected_node_error(
+            rest_promise,
+            "ERR_MISSING_ARGS",
+            "The \"streams\" argument must be specified",
+        );
+    }
+
+    #[test]
+    fn stream_promises_pipeline_rejects_invalid_source_body() {
+        let direct_promise =
+            thunk_streamP_pipeline(std::ptr::null(), 123.0, 456.0, undefined_value());
+        assert_rejected_node_error(
+            direct_promise,
+            "ERR_INVALID_ARG_TYPE",
+            "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or { readable, writable } pair. Received type number (123)",
+        );
+
+        let empty_rest = crate::array::js_array_alloc(0);
+        let rest_promise = thunk_streamP_pipeline(
+            std::ptr::null(),
+            123.0,
+            456.0,
+            boxed_ptr(empty_rest as *const u8),
+        );
+        assert_rejected_node_error(
+            rest_promise,
+            "ERR_INVALID_ARG_TYPE",
+            "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or { readable, writable } pair. Received type number (123)",
+        );
     }
 
     #[test]
