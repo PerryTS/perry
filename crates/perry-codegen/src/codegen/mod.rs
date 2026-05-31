@@ -1385,7 +1385,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 let init_value = if let Some(cv) = cross_module.compile_time_constants.get(id) {
                     format!("{:.1}", cv)
                 } else {
-                    "0.0".to_string()
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
                 // Use default (external) linkage for ALL module globals.
                 // `internal` linkage lets clang -O3 assume the global is

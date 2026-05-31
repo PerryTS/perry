@@ -22,6 +22,85 @@ use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
+pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: helper_name.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    }
+}
+
+fn is_known_global_identifier_name(name: &str) -> bool {
+    matches!(
+        name,
+        "console"
+            | "process"
+            | "globalThis"
+            | "Buffer"
+            | "Date"
+            | "JSON"
+            | "Math"
+            | "Object"
+            | "Array"
+            | "String"
+            | "Number"
+            | "Boolean"
+            | "Function"
+            | "Error"
+            | "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "AggregateError"
+            | "Promise"
+            | "Map"
+            | "Set"
+            | "RegExp"
+            | "Symbol"
+            | "WeakMap"
+            | "WeakSet"
+            | "WeakRef"
+            | "FinalizationRegistry"
+            | "DisposableStack"
+            | "AsyncDisposableStack"
+            | "SuppressedError"
+            | "Proxy"
+            | "Reflect"
+            | "Uint8Array"
+            | "Int8Array"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float16Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "TextEncoder"
+            | "TextDecoder"
+            | "URL"
+            | "URLSearchParams"
+            | "AbortController"
+            | "FormData"
+            | "File"
+            | "Headers"
+            | "fetch"
+            | "crypto"
+            | "performance"
+            | "queueMicrotask"
+            | "structuredClone"
+            | "atob"
+            | "btoa"
+            | "BigInt"
+            | "WebAssembly"
+    ) || is_builtin_global_value_name(name)
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -42,6 +121,14 @@ pub(crate) fn lower_expr_assignment(
                 // the RHS for side effects. Refs #420.
                 Ok(*value)
             } else {
+                if ctx.current_strict {
+                    return Ok(Expr::Sequence(vec![
+                        *value,
+                        throw_reference_error_expr(
+                            "js_throw_reference_error_unresolved_assignment",
+                        ),
+                    ]));
+                }
                 eprintln!(
                     "  Warning: Assignment to undeclared variable '{}', creating implicit local",
                     name
@@ -243,69 +330,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // GlobalGet(0) is a sentinel: codegen routes by name from the
                 // parent PropertyGet/Call/Member context. Bare uses lower to
                 // 0.0 (perry-codegen/src/expr.rs Expr::GlobalGet arm).
-                if name != "console"
-                    && name != "process"
-                    && name != "globalThis"
-                    && name != "Buffer"
-                    && name != "Date"
-                    && name != "JSON"
-                    && name != "Math"
-                    && name != "Object"
-                    && name != "Array"
-                    && name != "String"
-                    && name != "Number"
-                    && name != "Boolean"
-                    && name != "Function"
-                    && name != "Error"
-                    && name != "TypeError"
-                    && name != "RangeError"
-                    && name != "SyntaxError"
-                    && name != "ReferenceError"
-                    && name != "EvalError"
-                    && name != "URIError"
-                    && name != "AggregateError"
-                    && name != "Promise"
-                    && name != "Map"
-                    && name != "Set"
-                    && name != "RegExp"
-                    && name != "Symbol"
-                    && name != "WeakMap"
-                    && name != "WeakSet"
-                    && name != "WeakRef"
-                    && name != "FinalizationRegistry"
-                    && name != "DisposableStack"
-                    && name != "AsyncDisposableStack"
-                    && name != "SuppressedError"
-                    && name != "Proxy"
-                    && name != "Reflect"
-                    && name != "Uint8Array"
-                    && name != "Int8Array"
-                    && name != "Int16Array"
-                    && name != "Uint16Array"
-                    && name != "Int32Array"
-                    && name != "Uint32Array"
-                    && name != "Float16Array"
-                    && name != "Float32Array"
-                    && name != "Float64Array"
-                    && name != "TextEncoder"
-                    && name != "TextDecoder"
-                    && name != "URL"
-                    && name != "URLSearchParams"
-                    && name != "AbortController"
-                    && name != "FormData"
-                    && name != "File"
-                    && name != "Headers"
-                    && name != "fetch"
-                    && name != "crypto"
-                    && name != "performance"
-                    && name != "queueMicrotask"
-                    && name != "structuredClone"
-                    && name != "atob"
-                    && name != "btoa"
-                    && name != "BigInt"
-                    && name != "WebAssembly"
-                    && !is_builtin_global_value_name(&name)
-                {
+                let known_global = is_known_global_identifier_name(&name);
+                if !known_global && !ctx.unresolved_ident_as_global {
+                    return Ok(throw_reference_error_expr(
+                        "js_throw_reference_error_unresolved_get",
+                    ));
+                }
+                if !known_global {
                     eprintln!(
                         "  Warning: unknown identifier '{}' — assuming global; member access will dispatch by name at runtime, bare reads lower to 0",
                         name
@@ -643,6 +674,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 return Ok(Expr::String("function".to_string()));
                             }
                         }
+                    }
+                    if ctx.lookup_local(n).is_none()
+                        && ctx.lookup_func(n).is_none()
+                        && ctx.lookup_native_module(n).is_none()
+                        && ctx.lookup_imported_func(n).is_none()
+                        && ctx.lookup_class(n).is_none()
+                        && !is_builtin_function(n)
+                        && !is_known_global_identifier_name(n)
+                        && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
+                    {
+                        return Ok(Expr::String("undefined".to_string()));
                     }
                 }
                 // #1395: `typeof process.memoryUsage.rss` is a nested member
