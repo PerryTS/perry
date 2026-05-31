@@ -127,7 +127,7 @@ fn live_filehandle_fd_or_ebadf(
     Ok(fd)
 }
 
-fn close_filehandle_fd(fd: i32, handle: f64) {
+pub(crate) fn close_filehandle_fd(fd: i32, handle: f64) {
     if fd >= 0 && crate::fs::fd_is_registered(fd) {
         let _ = js_fs_close_sync(fd as f64);
     }
@@ -498,13 +498,25 @@ pub(crate) extern "C" fn filehandle_create_read_stream_impl(
     closure: *const ClosureHeader,
     options: f64,
 ) -> f64 {
-    let fd = filehandle_fd(closure);
+    let fallback_fd = filehandle_fd(closure);
+    let handle = filehandle_object(closure).unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let fd = filehandle_field_fd(handle).unwrap_or(fallback_fd);
     if let Some(path) = path_for_fd(fd) {
         let s = js_string_from_bytes(path.as_ptr(), path.len() as u32);
-        js_fs_create_read_stream(crate::value::js_nanbox_string(s as i64), options)
+        js_fs_create_read_stream_from_filehandle(
+            crate::value::js_nanbox_string(s as i64),
+            fd,
+            handle,
+            options,
+        )
     } else {
         let s = js_string_from_bytes(b"".as_ptr(), 0);
-        js_fs_create_read_stream(crate::value::js_nanbox_string(s as i64), options)
+        js_fs_create_read_stream_from_filehandle(
+            crate::value::js_nanbox_string(s as i64),
+            fd,
+            handle,
+            options,
+        )
     }
 }
 
@@ -512,13 +524,25 @@ pub(crate) extern "C" fn filehandle_create_write_stream_impl(
     closure: *const ClosureHeader,
     options: f64,
 ) -> f64 {
-    let fd = filehandle_fd(closure);
+    let fallback_fd = filehandle_fd(closure);
+    let handle = filehandle_object(closure).unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let fd = filehandle_field_fd(handle).unwrap_or(fallback_fd);
     if let Some(path) = path_for_fd(fd) {
         let s = js_string_from_bytes(path.as_ptr(), path.len() as u32);
-        js_fs_create_write_stream(crate::value::js_nanbox_string(s as i64), options)
+        js_fs_create_write_stream_from_filehandle(
+            crate::value::js_nanbox_string(s as i64),
+            fd,
+            handle,
+            options,
+        )
     } else {
         let s = js_string_from_bytes(b"".as_ptr(), 0);
-        js_fs_create_write_stream(crate::value::js_nanbox_string(s as i64), options)
+        js_fs_create_write_stream_from_filehandle(
+            crate::value::js_nanbox_string(s as i64),
+            fd,
+            handle,
+            options,
+        )
     }
 }
 
@@ -688,11 +712,19 @@ fn build_filehandle_object(fd: i32) -> f64 {
     );
     set(
         "createReadStream",
-        make_filehandle_method(fd, filehandle_create_read_stream_impl as *const u8),
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            filehandle_create_read_stream_impl as *const u8,
+        ),
     );
     set(
         "createWriteStream",
-        make_filehandle_method(fd, filehandle_create_write_stream_impl as *const u8),
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            filehandle_create_write_stream_impl as *const u8,
+        ),
     );
     set(
         "readLines",
