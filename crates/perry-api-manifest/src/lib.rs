@@ -367,7 +367,6 @@ fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
                 | "setMaxListeners"
         ),
         "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
-        "worker_threads" => name == "getWorkerData",
         "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
         "http2" => name == "Http2SecureServer",
         "child_process" => name == "Stream",
@@ -519,7 +518,6 @@ mod tests {
             ("node:process", "on"),
             ("node:process", "emit"),
             ("node:url", "createObjectURL"),
-            ("node:worker_threads", "getWorkerData"),
             ("node:https", "ClientRequest"),
             ("node:http2", "Http2SecureServer"),
             ("node:child_process", "Stream"),
@@ -890,7 +888,6 @@ mod tests {
                 &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
             ),
             ("url", &["createObjectURL", "revokeObjectURL"][..]),
-            ("worker_threads", &["getWorkerData"][..]),
             (
                 "https",
                 &["ClientRequest", "IncomingMessage", "ServerResponse"][..],

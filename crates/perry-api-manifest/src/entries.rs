@@ -2484,22 +2484,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     internal_method_sig(
         "worker_threads",
-        "getWorkerData",
-        false,
-        None,
-        &[],
-        TypeSpec::Any,
-    ),
-    internal_method_sig(
-        "worker_threads",
-        "workerData",
-        false,
-        None,
-        &[],
-        TypeSpec::Any,
-    ),
-    internal_method_sig(
-        "worker_threads",
         "parentPort",
         false,
         None,

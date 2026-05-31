@@ -270,13 +270,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 if module_name == "worker_threads" {
                     if let Some(method) = method_name {
                         if method == "workerData" {
-                            // workerData is a property-like import that calls a getter function
-                            return Ok(Expr::NativeMethodCall {
-                                module: "worker_threads".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: "workerData".to_string(),
-                                args: Vec::new(),
+                            return Ok(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef(
+                                    "worker_threads".to_string(),
+                                )),
+                                property: "workerData".to_string(),
                             });
                         }
                         if method == "parentPort" {
