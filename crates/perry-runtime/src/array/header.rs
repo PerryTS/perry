@@ -400,6 +400,25 @@ unsafe fn clear_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
     }
 }
 
+pub(crate) unsafe fn mark_array_as_arguments_object(arr: *const ArrayHeader) {
+    if let Some(header) = array_gc_header(arr) {
+        (*header)._reserved |= crate::gc::GC_ARRAY_ARGUMENTS_OBJECT;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_mark_arguments_object(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    unsafe {
+        mark_array_as_arguments_object(arr as *const ArrayHeader);
+    }
+    arr
+}
+
+pub(crate) unsafe fn array_has_arguments_object_flag(arr: *const ArrayHeader) -> bool {
+    array_gc_header(arr)
+        .is_some_and(|header| (*header)._reserved & crate::gc::GC_ARRAY_ARGUMENTS_OBJECT != 0)
+}
+
 unsafe fn rebuild_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
     if arr.is_null() {
         return false;

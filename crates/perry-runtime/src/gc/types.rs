@@ -774,6 +774,10 @@ pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.
 pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+/// Array was synthesized for a function's `arguments` binding. This is only
+/// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
+/// distinguish Perry's internal `arguments` arrays from user rest arrays.
+pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
 
 pub(super) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(super) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;

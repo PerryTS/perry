@@ -12,7 +12,9 @@ use super::*;
 mod array_buffer;
 mod boxed_primitives;
 mod collection_equality;
-pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
+pub use boxed_primitives::{
+    js_boxed_bigint_new, js_boxed_symbol_new, scan_boxed_primitive_payload_roots_mut,
+};
 mod collections;
 mod identity_equality;
 mod prototype_equality;

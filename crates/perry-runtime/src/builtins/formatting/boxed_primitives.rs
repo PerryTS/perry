@@ -8,6 +8,8 @@ thread_local! {
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
 
 pub(super) unsafe fn boxed_primitive_base_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
@@ -43,7 +45,11 @@ unsafe fn boxed_primitive_payload_for_object(
     let class_id = (*obj_ptr).class_id;
     if !matches!(
         class_id,
-        CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN
+        CLASS_ID_BOXED_NUMBER
+            | CLASS_ID_BOXED_STRING
+            | CLASS_ID_BOXED_BOOLEAN
+            | CLASS_ID_BOXED_BIGINT
+            | CLASS_ID_BOXED_SYMBOL
     ) {
         return None;
     }
@@ -133,5 +139,19 @@ pub extern "C" fn js_boxed_boolean_new(value: f64) -> f64 {
     let boxed =
         f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value) != 0).bits());
     register_boxed_primitive_payload(obj, boxed);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_boxed_bigint_new(value: f64) -> f64 {
+    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_BIGINT, 0);
+    register_boxed_primitive_payload(obj, value);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_boxed_symbol_new(value: f64) -> f64 {
+    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_SYMBOL, 0);
+    register_boxed_primitive_payload(obj, value);
     crate::value::js_nanbox_pointer(obj as i64)
 }
