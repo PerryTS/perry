@@ -155,16 +155,13 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:dgram
 
-**Total APIs: 28** · Perry covers: 18 · Gap: 10
+**Total APIs: 28** · Perry covers: 27 · Gap: 1
 
 Selected highlights (full list in `runtime-parity.md`):
 
-- Deterministic loopback coverage: `createSocket`, `bind`, `address`, `send`, `message`, `connect`, `remoteAddress`, `disconnect`, `close`, `ref` / `unref`, buffer-size and send-queue getters.
-- Remaining gaps: real host UDP IO, multicast/source-specific membership behavior, socket option side effects, and `socket[Symbol.asyncDispose]()`.
-- `socket.disconnect()`
-- `socket.dropMembership(multicastAddress[, multicastInterface])`
-- `socket.dropSourceSpecificMembership(sourceAddress, groupAddress[, multicastInterface])`
-- … and 16 more
+- Deterministic loopback coverage: `createSocket`, `bind`, `address`, `send`, `message`, `connect`, `remoteAddress`, `disconnect`, `close`, `ref` / `unref`, buffer-size and send-queue getters, socket option validation/returns, and multicast/source-specific membership validation/returns.
+- Remaining gaps: real host UDP IO, OS-level multicast membership side effects, host socket option side effects, and `socket[Symbol.asyncDispose]()`.
+- `socket[Symbol.asyncDispose]()`
 
 ### node:dns/promises
 
