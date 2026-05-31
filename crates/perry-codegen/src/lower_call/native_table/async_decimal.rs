@@ -3,19 +3,20 @@ use super::*;
 pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
     // ========== async_hooks.AsyncLocalStorage ==========
     // `new AsyncLocalStorage()` is dispatched by `lower_builtin_new`; the rows
-    // below cover the instance methods. `run(store, cb)` and `exit(cb)` pass
-    // the callback as a full NaN-boxed value (NA_F64) so the runtime can
-    // reject a non-callable callback with a `TypeError` (#3092) before
-    // mutating the async context; it extracts the closure pointer and invokes
-    // `js_closure_call0` internally. Pre-fix every method silently no-op'd
-    // through the unknown-method sentinel.
+    // below cover the instance methods. `run(store, cb, ...args)` and
+    // `exit(cb, ...args)` pass the callback as a full NaN-boxed value (NA_F64)
+    // so the runtime can reject a non-callable callback with a `TypeError`
+    // (#3092) before mutating the async context, plus a trailing `NA_VARARGS`
+    // slot that packs the `...args` into a JS array forwarded to the callback
+    // via `js_closure_call_array` (#3093). Pre-fix every method silently
+    // no-op'd through the unknown-method sentinel.
     NativeModSig {
         module: "async_hooks",
         has_receiver: true,
         method: "run",
         class_filter: None,
         runtime: "js_async_local_storage_run",
-        args: &[NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -42,7 +43,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         method: "exit",
         class_filter: None,
         runtime: "js_async_local_storage_exit",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {

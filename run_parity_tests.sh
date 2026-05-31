@@ -272,6 +272,9 @@ for raw in sys.stdin:
         # stderr after the script body, while Perry writes the equivalent
         # warning eagerly at the call site.
         sed -E '/^(\(node:[0-9]+\) )?Warning: (Count for .* does not exist|No such label .* for console\.(timeLog|timeEnd)\(\)|Label .* already exists for console\.time\(\))/d' | \
+        # Normalize Node-style process warning prefixes. The warning text is
+        # semantically relevant, but the pid is not stable across runs.
+        sed -E 's/^\(node:[0-9]+\) /\(node:<pid>\) /g' | \
         # Normalize console.trace output: strip stack frame lines so only
         # the "Trace: <message>" header survives for comparison.
         # Node.js emits "    at <symbol> (<location>)" JS stack frames;
