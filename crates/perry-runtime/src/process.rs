@@ -328,23 +328,151 @@ pub extern "C" fn js_process_umask() -> f64 {
     }
 }
 
-/// process.umask(mask) -> number. Sets the file-mode creation mask to
-/// `mask` (coerced to integer) and returns the previous value.
+/// process.umask(mask) -> number. Validates and parses `mask` the way Node's
+/// `process.umask` (`parseMode`) does, sets the file-mode creation mask, and
+/// returns the previous value (#2920).
+///
+/// Node accepts either a 32-bit unsigned integer or an octal string:
+/// - a non-number / non-string (`null`, object, boolean, …) throws
+///   `TypeError [ERR_INVALID_ARG_TYPE]` ("must be of type number"); `null`
+///   reports as `Received undefined` to match Node's `parseMode`;
+/// - an octal string (`"077"`) is parsed via radix-8 `parseInt`; a string that
+///   is not all-octal-digits (empty, `"abc"`, `"8"`, `"0xff"`, leading/trailing
+///   whitespace) throws `TypeError [ERR_INVALID_ARG_VALUE]`;
+/// - a non-integer / `NaN` / `Infinity` number throws
+///   `RangeError [ERR_OUT_OF_RANGE]` ("must be an integer");
+/// - a value `< 0` or `> 4294967295` (either form) throws
+///   `RangeError [ERR_OUT_OF_RANGE]` ("must be >= 0 && <= 4294967295").
+///
+/// An explicit `undefined` is handled at the call site as the read-only
+/// no-argument form (so `js_process_umask` is called instead), matching Node's
+/// `umask(undefined)` no-op-returns-current behavior.
 #[no_mangle]
 pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
+    // An explicit `undefined` argument is the read-only form (Node:
+    // `umask(undefined)` returns the current mask without changing it).
+    if JSValue::from_bits(mask.to_bits()).is_undefined() {
+        return js_process_umask();
+    }
+    let parsed = parse_umask_mask(mask);
     #[cfg(unix)]
     unsafe {
-        let m = if mask.is_nan() || mask.is_infinite() {
-            0
-        } else {
-            mask as libc::mode_t
-        };
-        libc::umask(m) as f64
+        libc::umask(parsed as libc::mode_t) as f64
     }
     #[cfg(not(unix))]
     {
-        let _ = mask;
+        let _ = parsed;
         0.0
+    }
+}
+
+/// Node's `parseMode("mask", value)` for `process.umask`. Diverges via
+/// `js_throw` on an invalid value; otherwise returns the validated 32-bit
+/// unsigned mask.
+fn parse_umask_mask(mask: f64) -> u32 {
+    use crate::fs::validate::{
+        describe_received, is_numeric, throw_range_error_named, throw_type_error_with_code,
+    };
+    let jv = JSValue::from_bits(mask.to_bits());
+
+    if jv.is_any_string() {
+        let s = read_js_string_lossy(mask);
+        // Node parses the string with radix 8 (`parseInt(str, 8)`) but only
+        // after asserting the whole string is octal digits — leading/trailing
+        // whitespace, prefixes, empty, or non-octal chars are rejected.
+        let valid = !s.is_empty() && s.bytes().all(|b| (b'0'..=b'7').contains(&b));
+        let parsed = if valid {
+            u64::from_str_radix(&s, 8).ok()
+        } else {
+            None
+        };
+        match parsed {
+            Some(n) if n <= u32::MAX as u64 => return n as u32,
+            Some(n) => {
+                let message = format!(
+                    "The value of \"mask\" is out of range. It must be >= 0 && <= 4294967295. Received {}",
+                    n
+                );
+                throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+            }
+            None => {
+                let message = format!(
+                    "The argument 'mask' must be a 32-bit unsigned integer or an octal string. Received '{}'",
+                    s
+                );
+                throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+            }
+        }
+    }
+
+    if !is_numeric(jv) {
+        // Node's `parseMode` treats `null` like a missing value here, so its
+        // ERR_INVALID_ARG_TYPE renders `Received undefined`.
+        let received = if jv.is_null() {
+            "undefined".to_string()
+        } else {
+            describe_received(mask)
+        };
+        let message = format!(
+            "The \"mask\" argument must be of type number. Received {}",
+            received
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !(n.is_finite() && n.fract() == 0.0) {
+        let message = format!(
+            "The value of \"mask\" is out of range. It must be an integer. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    if n < 0.0 || n > u32::MAX as f64 {
+        let message = format!(
+            "The value of \"mask\" is out of range. It must be >= 0 && <= 4294967295. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    n as u32
+}
+
+/// Render a number the way Node prints the `Received …` clause of an
+/// `ERR_OUT_OF_RANGE` message (no `type number (...)` wrapper).
+fn format_out_of_range_number(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if n.fract() == 0.0 && n.abs() < 1e21 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
+    }
+}
+
+/// Read a JS string (heap `StringHeader` or inline SSO) into a Rust `String`.
+fn read_js_string_lossy(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
 }
 
@@ -413,11 +541,66 @@ fn unix_id_arg(value: f64) -> Option<u32> {
     None
 }
 
+/// Node-compatible argument validation for the POSIX credential setters
+/// (`setuid`/`seteuid`/`setgid`/`setegid`, #2919). Node's `validateId`:
+/// the `id` argument must be a number *or* a string (username/group-name);
+/// anything else throws `TypeError [ERR_INVALID_ARG_TYPE]`. A numeric `id`
+/// must be a non-negative integer `<= 4294967295`; a non-integer throws
+/// `RangeError [ERR_OUT_OF_RANGE]` ("must be an integer") and an out-of-range
+/// value throws ("must be >= 0 && <= 4294967295"). Diverges via `js_throw` on
+/// a bad value.
+///
+/// Returns `Some(u32)` for a valid numeric id (the syscall is then attempted),
+/// `None` for a valid string id (the username form is not yet resolved — that
+/// remains a no-op pending `getpwnam_r` plumbing, but it no longer *throws*).
+fn validate_credential_id(value: f64) -> Option<u32> {
+    use crate::fs::validate::{
+        describe_received, is_numeric, throw_range_error_named, throw_type_error_with_code,
+    };
+    let jv = JSValue::from_bits(value.to_bits());
+
+    // A string is a valid type (username / group-name form); accept without
+    // resolving it (no-op, preserving prior behavior).
+    if jv.is_any_string() {
+        return None;
+    }
+
+    if !is_numeric(jv) {
+        let message = format!(
+            "The \"id\" argument must be one of type number or string. Received {}",
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !(n.is_finite() && n.fract() == 0.0) {
+        let message = format!(
+            "The value of \"id\" is out of range. It must be an integer. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    if n < 0.0 || n > u32::MAX as f64 {
+        let message = format!(
+            "The value of \"id\" is out of range. It must be >= 0 && <= 4294967295. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    Some(n as u32)
+}
+
 #[no_mangle]
 pub extern "C" fn js_process_setuid(uid: f64) {
+    let id = validate_credential_id(uid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(uid) {
+        if let Some(id) = id {
             unsafe {
                 libc::setuid(id as libc::uid_t);
             }
@@ -425,15 +608,16 @@ pub extern "C" fn js_process_setuid(uid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = uid;
+        let _ = id;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_seteuid(uid: f64) {
+    let id = validate_credential_id(uid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(uid) {
+        if let Some(id) = id {
             unsafe {
                 libc::seteuid(id as libc::uid_t);
             }
@@ -441,15 +625,16 @@ pub extern "C" fn js_process_seteuid(uid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = uid;
+        let _ = id;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_setgid(gid: f64) {
+    let id = validate_credential_id(gid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(gid) {
+        if let Some(id) = id {
             unsafe {
                 libc::setgid(id as libc::gid_t);
             }
@@ -457,15 +642,16 @@ pub extern "C" fn js_process_setgid(gid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = gid;
+        let _ = id;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_setegid(gid: f64) {
+    let id = validate_credential_id(gid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(gid) {
+        if let Some(id) = id {
             unsafe {
                 libc::setegid(id as libc::gid_t);
             }
@@ -473,7 +659,7 @@ pub extern "C" fn js_process_setegid(gid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = gid;
+        let _ = id;
     }
 }
 

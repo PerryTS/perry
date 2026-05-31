@@ -1182,6 +1182,27 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // #2846: the receiver may be a Proxy value that arrived through a generic
+    // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
+    // Proxies are encoded as small fake pointers; deref-ing one as an
+    // ObjectHeader would read unmapped memory. Route to the proxy get dispatch,
+    // which forwards to the target (or throws on a revoked proxy) — matching
+    // Node. `js_proxy_is_proxy` validates the value is a *registered* proxy so a
+    // real heap object whose address happens to be small isn't misrouted.
+    {
+        // Proxy ids live in [0x50000, 0x100000); `js_proxy_is_proxy` confirms
+        // it is a *registered* proxy before we route to the proxy getter.
+        let addr = obj as u64;
+        if (0x50000..0x100000).contains(&addr) && !key.is_null() {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                let v = crate::proxy::js_proxy_get(boxed, key_f64);
+                return JSValue::from_bits(v.to_bits());
+            }
+        }
+    }
     // #2128: a plain JS number value (a finite double or canonical NaN —
     // anything `JSValue::is_number` returns true for *minus* the raw-I64
     // pointer convention where top16 == 0) reaches this generic property-get
@@ -2285,6 +2306,16 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
 
+        if (*obj).class_id == crate::tty::CLASS_ID_TTY_WRITE_STREAM && !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let property_name =
+                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+            if let Some(value) = crate::tty::tty_write_stream_dimension(property_name) {
+                return JSValue::from_bits(value.to_bits());
+            }
+        }
+
         // Refs #420 / #618 followup: `instance.constructor` returns the
         // class ref. Pre-fix this fell through to the keys_array lookup
         // which never finds "constructor" (the class itself isn't stored
@@ -2430,6 +2461,15 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                 }
             }
+            // #2820: a keyless object (`{}`, `Object.create(...)`) may still
+            // carry an explicit `Object.setPrototypeOf` prototype — walk it so
+            // inherited reads resolve.
+            if !key.is_null() {
+                if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                {
+                    return v;
+                }
+            }
             return JSValue::undefined();
         }
 
@@ -2438,6 +2478,15 @@ pub extern "C" fn js_object_get_field_by_name(
         // 16 may contain garbage. An invalid upper 16-bit value catches this case defensively.
         let keys_ptr = keys as usize;
         if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+            // #2820: an object with no own keys (`{}`) may still have an
+            // explicit `Object.setPrototypeOf` prototype — walk it before
+            // giving up so inherited reads resolve.
+            if !key.is_null() {
+                if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                {
+                    return v;
+                }
+            }
             return JSValue::undefined();
         }
 
@@ -2706,6 +2755,15 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
 
+        // #2820: before giving up, walk an explicit `Object.setPrototypeOf`
+        // prototype chain recorded for this object so inherited property reads
+        // (`obj.x` where `x` is an own property of the set prototype) resolve.
+        if !key.is_null() {
+            if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key) {
+                return v;
+            }
+        }
+
         // Key not found
         JSValue::undefined()
     }
@@ -2818,6 +2876,20 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // dispatch to the per-module accessor instead of silently
     // returning undefined.
     if (obj as usize) > 0 && (obj as usize) < 0x100000 {
+        // #2846: a revocable Proxy is encoded as a small fake pointer in the
+        // proxy-id range (also `< 0x100000`). A generic `proxy.key` read funnels
+        // here via the IC-miss path; route it to the proxy get dispatch (which
+        // forwards to the target, or throws on a revoked proxy) before the
+        // handle-dispatch fallback. `js_proxy_is_proxy` validates the value is a
+        // registered proxy so real small handles aren't misrouted.
+        {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | ((obj as u64) & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                return crate::proxy::js_proxy_get(boxed, key_f64);
+            }
+        }
         // #1213: Timeout/Immediate handle methods (ref/unref/hasRef/refresh/
         // close) read as bound-method function values so `typeof t.ref ===
         // "function"` holds (the call form already works via

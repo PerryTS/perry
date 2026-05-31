@@ -232,6 +232,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
 
     // --- Proxy / Reflect ---
     module.declare_function("js_proxy_new", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_proxy_revocable", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_proxy_revoke", VOID, &[DOUBLE]);
     module.declare_function("js_proxy_is_revoked", I32, &[DOUBLE]);
     module.declare_function("js_proxy_is_proxy", I32, &[DOUBLE]);

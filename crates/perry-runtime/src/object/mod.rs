@@ -44,6 +44,7 @@ mod native_module_dispatch;
 mod native_module_stream;
 mod object_ops;
 mod polymorphic_index;
+pub(crate) mod prototype_chain;
 mod reflect_support;
 mod util_types;
 pub use alloc::*;
