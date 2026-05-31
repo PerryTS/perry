@@ -138,7 +138,7 @@ pub(crate) fn lower_module_decl(
                                 if is_node_core && imported == "default" {
                                     (source.clone(), None)
                                 } else if source == "util" && imported == "types" {
-                                    ("util/types".to_string(), None)
+                                    ("util.types".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };

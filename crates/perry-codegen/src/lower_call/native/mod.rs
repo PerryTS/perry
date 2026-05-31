@@ -104,9 +104,10 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
-    // Node util.types predicate calls lower to the canonical receiver-less
-    // NativeMethodCall { module: "util/types", class_name: None, ... }.
-    if module == "util/types" && class_name.is_none() && object.is_none() {
+    // Node util.types predicate calls lower to a receiver-less
+    // NativeMethodCall with either the direct `util/types` key or the
+    // object-valued `util.types` namespace key.
+    if matches!(module, "util/types" | "util.types") && class_name.is_none() && object.is_none() {
         if method == "isAsyncFunction" {
             if let Some(is_async) = args
                 .first()
@@ -126,11 +127,14 @@ pub(crate) fn lower_native_method_call(
             ));
         }
         let runtime = match method {
+            "isArgumentsObject" => Some("js_util_types_is_arguments_object"),
             "isPromise" => Some("js_util_types_is_promise"),
+            "isBigIntObject" => Some("js_util_types_is_big_int_object"),
             "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
             "isSharedArrayBuffer" => Some("js_util_types_is_shared_array_buffer"),
             "isAnyArrayBuffer" => Some("js_util_types_is_any_array_buffer"),
             "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
+            "isDataView" => Some("js_util_types_is_data_view"),
             "isTypedArray" => Some("js_util_types_is_typed_array"),
             "isUint8Array" => Some("js_util_types_is_uint8_array"),
             "isInt8Array" => Some("js_util_types_is_int8_array"),
@@ -138,6 +142,7 @@ pub(crate) fn lower_native_method_call(
             "isUint16Array" => Some("js_util_types_is_uint16_array"),
             "isInt32Array" => Some("js_util_types_is_int32_array"),
             "isUint32Array" => Some("js_util_types_is_uint32_array"),
+            "isFloat16Array" => Some("js_util_types_is_float16_array"),
             "isFloat32Array" => Some("js_util_types_is_float32_array"),
             "isFloat64Array" => Some("js_util_types_is_float64_array"),
             "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
@@ -146,20 +151,25 @@ pub(crate) fn lower_native_method_call(
             "isMap" => Some("js_util_types_is_map"),
             "isMapIterator" => Some("js_util_types_is_map_iterator"),
             "isProxy" => Some("js_util_types_is_proxy"),
+            "isExternal" => Some("js_util_types_is_external"),
+            "isModuleNamespaceObject" => Some("js_util_types_is_module_namespace_object"),
             "isSet" => Some("js_util_types_is_set"),
             "isSetIterator" => Some("js_util_types_is_set_iterator"),
+            "isWeakMap" => Some("js_util_types_is_weak_map"),
+            "isWeakSet" => Some("js_util_types_is_weak_set"),
             "isDate" => Some("js_util_types_is_date"),
             "isRegExp" => Some("js_util_types_is_reg_exp"),
             "isAsyncFunction" => Some("js_util_types_is_async_function"),
             "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
             "isGeneratorObject" => Some("js_util_types_is_generator_object"),
             "isNativeError" => Some("js_util_types_is_native_error"),
-            // #3678: predicate tail.
-            "isDataView" => Some("js_util_types_is_data_view"),
-            "isFloat16Array" => Some("js_util_types_is_float16_array"),
-            "isWeakMap" => Some("js_util_types_is_weak_map"),
-            "isWeakSet" => Some("js_util_types_is_weak_set"),
-            "isExternal" => Some("js_util_types_is_external"),
+            "isKeyObject" => Some("js_util_types_is_key_object"),
+            "isCryptoKey" => Some("js_util_types_is_crypto_key"),
+            "isNumberObject" => Some("js_util_types_is_number_object"),
+            "isStringObject" => Some("js_util_types_is_string_object"),
+            "isBooleanObject" => Some("js_util_types_is_boolean_object"),
+            "isSymbolObject" => Some("js_util_types_is_symbol_object"),
+            "isBoxedPrimitive" => Some("js_util_types_is_boxed_primitive"),
             _ => None,
         };
         if let Some(runtime) = runtime {

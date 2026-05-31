@@ -329,7 +329,7 @@ pub fn closure_length(closure: *const ClosureHeader) -> Option<u32> {
 /// Build a JS array from a slice of NaN-boxed f64 values and return it
 /// NaN-boxed as a pointer. Used by the rest-bundling helper below.
 #[inline(always)]
-pub unsafe fn build_rest_array(values: &[f64]) -> f64 {
+pub unsafe fn build_rest_array(values: &[f64], arguments_object: bool) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handles: Vec<_> = values
         .iter()
@@ -339,6 +339,9 @@ pub unsafe fn build_rest_array(values: &[f64]) -> f64 {
     let mut cur = arr;
     for handle in value_handles.iter() {
         cur = crate::array::js_array_push_f64(cur, handle.get_nanbox_f64());
+    }
+    if arguments_object {
+        crate::array::mark_array_as_arguments_object(cur as *const crate::array::ArrayHeader);
     }
     f64::from_bits(crate::value::JSValue::pointer(cur as *mut u8).bits())
 }
@@ -391,7 +394,7 @@ pub unsafe fn dispatch_rest_bundled(
     } else {
         &[]
     };
-    let rest_double = build_rest_array(rest_slice);
+    let rest_double = build_rest_array(rest_slice, synthetic_arguments);
 
     // Read fixed args, padding with undefined when caller under-supplied.
     macro_rules! a {

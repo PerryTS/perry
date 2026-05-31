@@ -1914,6 +1914,11 @@ pub fn try_lower_extern_func_call(
             let blk = ctx.block();
             current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
         }
+        if has_synthetic_args {
+            current = ctx
+                .block()
+                .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
+        }
         let rest_box = nanbox_pointer_inline(ctx.block(), &current);
         lowered.push(rest_box);
     } else {

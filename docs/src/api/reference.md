@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2234 entries across 99 modules.
+Total: 2245 entries across 99 modules.
 
 ## Modules
 
@@ -1577,6 +1577,8 @@ Total: 2234 entries across 99 modules.
 
 - `builtinModules`
 - `constants`
+- `wrap`
+- `wrapper`
 
 ## `moment`
 
@@ -2697,9 +2699,11 @@ Total: 2234 entries across 99 modules.
 
 - `URL`
 - `URLSearchParams`
+- `Url`
 
 ### Methods
 
+- `Url` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
 - `fileURLToPath` — module
@@ -2708,6 +2712,7 @@ Total: 2234 entries across 99 modules.
 - `parse` — module
 - `pathToFileURL` — module
 - `resolve` — module
+- `resolveObject` — module
 - `urlToHttpOptions` — module
 
 ## `util`
@@ -2755,13 +2760,16 @@ Total: 2234 entries across 99 modules.
 ### Methods
 
 - `isAnyArrayBuffer` — module
+- `isArgumentsObject` — module
 - `isArrayBuffer` — module
 - `isArrayBufferView` — module
 - `isAsyncFunction` — module
 - `isBigInt64Array` — module
+- `isBigIntObject` — module
 - `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
+- `isCryptoKey` — module
 - `isDataView` — module
 - `isDate` — module
 - `isExternal` — module
@@ -2773,8 +2781,10 @@ Total: 2234 entries across 99 modules.
 - `isInt16Array` — module
 - `isInt32Array` — module
 - `isInt8Array` — module
+- `isKeyObject` — module
 - `isMap` — module
 - `isMapIterator` — module
+- `isModuleNamespaceObject` — module
 - `isNativeError` — module
 - `isNumberObject` — module
 - `isPromise` — module
@@ -2784,6 +2794,7 @@ Total: 2234 entries across 99 modules.
 - `isSetIterator` — module
 - `isSharedArrayBuffer` — module
 - `isStringObject` — module
+- `isSymbolObject` — module
 - `isTypedArray` — module
 - `isUint16Array` — module
 - `isUint32Array` — module
