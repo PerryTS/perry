@@ -1436,6 +1436,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            if !mutable {
+                ctx.mark_local_immutable(id);
+            }
             // Issue #886: detect `let/const/var <name> = Object.<staticMethod>`
             // from the raw AST so a subsequent indirect call `<name>(args)`
             // can route to the dedicated HIR variant the literal
@@ -1703,6 +1706,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            if !mutable {
+                ctx.mark_local_immutable(id);
+            }
             result.push(Stmt::Let {
                 id,
                 name,
