@@ -1839,34 +1839,34 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:tty
 
-**Gap APIs: 18** · Already covered: 1
+**Gap APIs: 2** · Already covered: 17
 
 #### Missing from Perry
 
-- `new tty.ReadStream(fd[, options])`
-- `readStream.isRaw`
-- `readStream.isTTY`
 - `readStream.fd`
-- `readStream.setRawMode(mode)`
-- `new tty.WriteStream(fd)`
-- `writeStream.isTTY`
 - `writeStream.fd`
-- `writeStream.columns`
-- `writeStream.rows`
-- `writeStream.clearLine(dir[, callback])`
-- `writeStream.clearScreenDown([callback])`
-- `writeStream.cursorTo(x[, y][, callback])`
-- `writeStream.moveCursor(dx, dy[, callback])`
-- `writeStream.getWindowSize()`
-- `writeStream.getColorDepth([env])`
-- `writeStream.hasColors([count][, env])`
-- `'resize'`
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
 | `tty.isatty(fd)` | `manifest:tty.isatty` |
+| `new tty.ReadStream(fd[, options])` | `manifest:tty.ReadStream`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `readStream.isRaw` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `readStream.isTTY` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `readStream.setRawMode(mode)` | `manifest:tty.setRawMode`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `new tty.WriteStream(fd)` | `manifest:tty.WriteStream`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.isTTY` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.columns` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.rows` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.clearLine(dir[, callback])` | `manifest:tty.clearLine`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.clearScreenDown([callback])` | `manifest:tty.clearScreenDown`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.cursorTo(x[, y][, callback])` | `manifest:tty.cursorTo`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.moveCursor(dx, dy[, callback])` | `manifest:tty.moveCursor`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.getWindowSize()` | `manifest:tty.getWindowSize`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.getColorDepth([env])` | `manifest:tty.getColorDepth`; `test-parity/node-suite/tty/classes/color-depth-env.ts` |
+| `writeStream.hasColors([count][, env])` | `manifest:tty.hasColors`; `test-parity/node-suite/tty/classes/has-colors-with-count.ts` |
+| `'resize'` | `manifest:tty.on`; `test-parity/fixtures/tty-pty-smoke.ts` |
 
 ### node:https
 

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1837 entries across 89 modules
+// Coverage: 1854 entries across 89 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2674,6 +2674,10 @@ declare module "tty" {
   export class ReadStream { [key: string]: any; }
   /** stdlib */
   export class WriteStream { [key: string]: any; }
+  /** stdlib */
+  export function ReadStream(...args: any[]): any;
+  /** stdlib */
+  export function WriteStream(...args: any[]): any;
   /** stdlib */
   export function isatty(...args: any[]): any;
 }
