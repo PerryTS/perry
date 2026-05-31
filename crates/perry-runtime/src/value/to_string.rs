@@ -89,6 +89,54 @@ enum MethodOutcome {
     Absent,
 }
 
+pub(crate) enum OrdinaryToPrimitiveOutcome {
+    Primitive(f64),
+    DefaultString,
+    TypeError,
+}
+
+/// `OrdinaryToPrimitive(O, "number"|"default")` for addition. The method
+/// order is `valueOf` then `toString`; Perry synthesizes the usual inherited
+/// defaults for boxed primitives, arrays, and plain objects because those
+/// built-ins are not stored as ordinary fields on every object.
+pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
+    value: f64,
+) -> OrdinaryToPrimitiveOutcome {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+
+    match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
+        MethodOutcome::Primitive(p) => return OrdinaryToPrimitiveOutcome::Primitive(p),
+        MethodOutcome::NonPrimitive => {}
+        MethodOutcome::Absent => {
+            if let Some((_class_id, payload)) =
+                crate::builtins::boxed_primitive_payload(value_handle.get_nanbox_f64())
+            {
+                return OrdinaryToPrimitiveOutcome::Primitive(payload);
+            }
+        }
+    }
+
+    match call_method_for_primitive(&scope, &value_handle, b"toString") {
+        MethodOutcome::Primitive(p) => OrdinaryToPrimitiveOutcome::Primitive(p),
+        MethodOutcome::NonPrimitive => OrdinaryToPrimitiveOutcome::TypeError,
+        MethodOutcome::Absent => {
+            let value = value_handle.get_nanbox_f64();
+            const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+            if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_BITS {
+                let arr_ptr =
+                    JSValue::from_bits(value.to_bits()).as_pointer::<crate::array::ArrayHeader>();
+                let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
+                let joined = crate::array::js_array_join(arr_ptr, comma);
+                return OrdinaryToPrimitiveOutcome::Primitive(crate::value::js_nanbox_string(
+                    joined as i64,
+                ));
+            }
+            OrdinaryToPrimitiveOutcome::DefaultString
+        }
+    }
+}
+
 /// Resolve `obj[method_name]` (own + prototype chain) and, if it is a
 /// callable closure, invoke it with `this = obj` (no args). Returns whether
 /// the result was a primitive, a non-primitive, or whether the method was

@@ -14,6 +14,13 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn is_cjs_style_native_default_import(module_name: &str) -> bool {
+    matches!(
+        module_name,
+        "async_hooks" | "events" | "os" | "path" | "querystring" | "sys" | "url" | "util"
+    )
+}
+
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -114,6 +121,19 @@ pub(crate) fn lower_module_decl(
                             })
                             .unwrap_or_else(|| local.clone());
                         if is_native {
+                            let is_node_core = perry_api_manifest::is_node_core_module(&source);
+                            if is_node_core
+                                && !perry_api_manifest::module_has_public_named_export(
+                                    &source, &imported,
+                                )
+                            {
+                                crate::lower_bail!(
+                                    named.span,
+                                    "The requested module '{}' does not provide an export named '{}'",
+                                    raw_source,
+                                    imported
+                                );
+                            }
                             // Register as native module function with the original method name
                             // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4.
                             //
@@ -122,8 +142,10 @@ pub(crate) fn lower_module_decl(
                             // `import { types } from "node:util"; types.isX()` uses the same
                             // dispatch as `node:util/types` and `util.types.isX()`.
                             let (native_module, native_method) =
-                                if source == "util" && imported == "types" {
-                                    ("util/types".to_string(), None)
+                                if is_node_core && imported == "default" {
+                                    (source.clone(), None)
+                                } else if source == "util" && imported == "types" {
+                                    ("util.types".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
@@ -211,8 +233,22 @@ pub(crate) fn lower_module_decl(
                         let local = default.local.sym.to_string();
                         if is_native {
                             // Default import of native module (e.g., import mysql from 'mysql2/promise')
-                            // Default exports don't have a method name
-                            ctx.register_native_module(local.clone(), source.clone(), None);
+                            // CommonJS-shaped Node builtins expose an actual
+                            // `default` binding; node:test does too for its
+                            // registration function. Other native modules keep
+                            // the historical namespace-object default.
+                            let native_method = if source == "test"
+                                || is_cjs_style_native_default_import(&source)
+                            {
+                                Some("default".to_string())
+                            } else {
+                                None
+                            };
+                            ctx.register_native_module(
+                                local.clone(),
+                                source.clone(),
+                                native_method,
+                            );
                         } else {
                             // Default import from JS module — register so calls resolve to
                             // ExternFuncRef. Use the LOCAL name as the original-name marker
@@ -339,7 +375,7 @@ pub(crate) fn lower_module_decl(
                         rest_idx,
                         has_synth_args,
                     ));
-                    module.functions.push(func);
+                    push_function_decl_dedup(module, func);
                     // Track in exports
                     module.exports.push(Export::Named {
                         local: func_name.clone(),
@@ -766,6 +802,12 @@ pub(crate) fn lower_module_decl(
                                                     "async_hooks",
                                                     "AsyncLocalStorage" | "AsyncResource"
                                                 ) | ("dns" | "dns/promises", "Resolver")
+                                                    | (
+                                                        "sqlite",
+                                                        "DatabaseSync"
+                                                            | "Session"
+                                                            | "StatementSync"
+                                                    )
                                             );
                                             if is_known_native_class {
                                                 ctx.register_native_instance(
@@ -823,6 +865,15 @@ pub(crate) fn lower_module_decl(
                                                             ) => Some("PoolConnection"),
                                                             ("better-sqlite3", "prepare") => {
                                                                 Some("Statement")
+                                                            }
+                                                            ("sqlite", "prepare") => {
+                                                                Some("StatementSync")
+                                                            }
+                                                            ("sqlite", "createTagStore") => {
+                                                                Some("SQLTagStore")
+                                                            }
+                                                            ("sqlite", "createSession") => {
+                                                                Some("Session")
                                                             }
                                                             _ => None,
                                                         };
@@ -1366,7 +1417,7 @@ pub(crate) fn lower_module_decl(
                                 rest_idx,
                                 has_synth_args,
                             ));
-                            module.functions.push(func);
+                            push_function_decl_dedup(module, func);
                             // Register under both names: callable locally as
                             // `<ident>` (some modules also `export { foo }`
                             // or call themselves by name) AND as the
@@ -1445,7 +1496,7 @@ pub(crate) fn lower_module_decl(
                             rest_idx,
                             has_synth_args,
                         ));
-                        module.functions.push(func);
+                        push_function_decl_dedup(module, func);
                         // Both the named export entry (so the importer's
                         // namespace populator sees `default`) and the
                         // `exported_functions` registry (so codegen's

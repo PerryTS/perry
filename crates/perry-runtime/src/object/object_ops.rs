@@ -517,6 +517,20 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
+        // #3655: functions/closures carry built-in own `name`/`length`
+        // (and `prototype` for constructors) plus any user-attached props.
+        // Route them here instead of through `extract_obj_ptr`/`own_key_present`,
+        // which would read `keys_array` off a closure (out of bounds).
+        if obj_js.is_pointer() {
+            let ptr = obj_js.as_pointer::<u8>() as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                let present = super::has_own_helpers::str_from_string_header(key_str)
+                    .map(|k| super::has_own_helpers::closure_own_key_present(ptr, k))
+                    .unwrap_or(false);
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) < 0x10000 {
             return f64::from_bits(TAG_FALSE);
@@ -579,11 +593,29 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             return f64::from_bits(if is_length { TAG_FALSE } else { TAG_TRUE });
         }
 
+        // #3655: functions/closures. Built-in `name`/`length`/`prototype` are
+        // non-enumerable; user-attached props default to enumerable.
+        if obj_jv.is_pointer() {
+            let ptr = obj_jv.as_pointer::<u8>() as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
+                    return f64::from_bits(TAG_FALSE);
+                };
+                if !super::has_own_helpers::closure_own_key_present(ptr, key_name) {
+                    return f64::from_bits(TAG_FALSE);
+                }
+                if matches!(key_name, "name" | "length" | "prototype") {
+                    return f64::from_bits(TAG_FALSE);
+                }
+                let enumerable = super::get_property_attrs(ptr, key_name)
+                    .map(|attrs| attrs.enumerable())
+                    .unwrap_or(true);
+                return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
+            }
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) < 0x10000 || !is_valid_obj_ptr(obj as *const u8) {
-            return f64::from_bits(TAG_FALSE);
-        }
-        if !own_key_present(obj, key_str) {
             return f64::from_bits(TAG_FALSE);
         }
         let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -592,6 +624,20 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             Ok(s) => s,
             Err(_) => return f64::from_bits(TAG_FALSE),
         };
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(module_name) = read_native_module_name(obj) {
+                return f64::from_bits(
+                    if native_module_has_enumerable_key(&module_name, key_name) {
+                        TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    },
+                );
+            }
+        }
+        if !own_key_present(obj, key_str) {
+            return f64::from_bits(TAG_FALSE);
+        }
         let enumerable = super::get_property_attrs(obj as usize, key_name)
             .map(|attrs| attrs.enumerable())
             .unwrap_or(true);
@@ -610,7 +656,15 @@ pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
         jsval.as_pointer::<ObjectHeader>() as *mut ObjectHeader
     } else {
         let bits = value.to_bits();
-        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+        // Raw-I64-pointer fallback (module-level array/object vars store the
+        // untagged pointer directly). Every GC allocation is `align.max(8)`-
+        // aligned, so a real object pointer always has its low 3 bits clear.
+        // Requiring alignment here rejects non-object values whose raw bits
+        // merely *land* in the address range — e.g. a native-module namespace
+        // sentinel (`require('buffer')`) reaching a generic object op like
+        // `hasOwnProperty`. Without it, callers deref `[ptr-8]` for the
+        // GcHeader on a misaligned garbage address → SIGBUS (#3527).
+        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 && bits & 0x7 == 0 {
             bits as *mut ObjectHeader
         } else {
             ptr::null_mut()
@@ -1115,7 +1169,12 @@ pub(crate) unsafe fn own_key_present(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> bool {
-    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
+    // Every GC allocation is `align.max(8)`-aligned, so a real object pointer
+    // has its low 3 bits clear. Rejecting misaligned `obj` keeps a non-object
+    // value (e.g. a native-module namespace sentinel reaching `hasOwnProperty`
+    // via a caller that didn't route through `extract_obj_ptr`) from being
+    // dereferenced as an ObjectHeader. (#3527)
+    if obj.is_null() || (obj as usize) < 0x10000 || (obj as usize) & 0x7 != 0 || key.is_null() {
         return false;
     }
     let keys = (*obj).keys_array;
@@ -1123,7 +1182,11 @@ pub(crate) unsafe fn own_key_present(
         return false;
     }
     let keys_ptr = keys as usize;
-    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+    // Same alignment invariant for the keys_array pointer: when `obj` is not a
+    // genuine object its `keys_array` field holds garbage that may land in the
+    // address range yet be misaligned. Without this guard the `[keys-8]`
+    // GcHeader read below SIGBUSes on that garbage. (#3527)
+    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || keys_ptr & 0x7 != 0 {
         return false;
     }
     // Validate keys_array GC header
@@ -1325,112 +1388,6 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
 /// Object.freeze(obj) — sets the frozen flag and drops `writable` +
 /// `configurable` on every existing key so per-key descriptor lookups report
 /// the post-freeze state. Returns the object.
-#[no_mangle]
-pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
-            let gc = gc_header_for(obj);
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_FROZEN
-                | crate::gc::OBJ_FLAG_SEALED
-                | crate::gc::OBJ_FLAG_NO_EXTEND;
-            // Drop writable + configurable for every existing key.
-            mark_all_keys(
-                obj, /*drop_writable=*/ true, false, /*drop_configurable=*/ true,
-            );
-        }
-    }
-    obj_value
-}
-
-/// Object.seal(obj) — sets the sealed flag and drops `configurable` on every
-/// existing key. Writable is preserved (sealed ≠ frozen). Returns the object.
-#[no_mangle]
-pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
-            let gc = gc_header_for(obj);
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
-            // Drop configurable for every existing key (but leave writable intact).
-            mark_all_keys(
-                obj, /*drop_writable=*/ false, false, /*drop_configurable=*/ true,
-            );
-        }
-    }
-    obj_value
-}
-
-/// Object.preventExtensions(obj) — sets the no-extend flag. Returns the object.
-#[no_mangle]
-pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
-            let gc = gc_header_for(obj);
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_NO_EXTEND;
-        }
-    }
-    obj_value
-}
-
-/// Object.isFrozen(obj) — returns NaN-boxed boolean.
-#[no_mangle]
-pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) <= 0x10000 {
-            return f64::from_bits(TAG_TRUE); // non-objects are vacuously frozen
-        }
-        let gc = gc_header_for(obj);
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        }
-    }
-}
-
-/// Object.isSealed(obj) — returns NaN-boxed boolean.
-#[no_mangle]
-pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) <= 0x10000 {
-            return f64::from_bits(TAG_TRUE); // non-objects are vacuously sealed
-        }
-        let gc = gc_header_for(obj);
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_SEALED != 0 {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        }
-    }
-}
-
-/// Object.isExtensible(obj) — returns NaN-boxed boolean.
-#[no_mangle]
-pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    unsafe {
-        let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) <= 0x10000 {
-            return f64::from_bits(TAG_FALSE); // non-objects are not extensible
-        }
-        let gc = gc_header_for(obj);
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
-            f64::from_bits(TAG_FALSE)
-        } else {
-            f64::from_bits(TAG_TRUE)
-        }
-    }
-}
-
 fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<f64> {
     if obj.is_null() {
         return None;
@@ -1955,6 +1912,37 @@ mod sso_tests_1781 {
             assert!(
                 !own_key_present(obj, incoming_other),
                 "absent key 'tag' must not match"
+            );
+        }
+    }
+
+    /// #3527: a non-object value reaching `own_key_present` must return
+    /// `false`, never SIGBUS. Two shapes seen compiling Express: (a) a
+    /// misaligned receiver pointer, and (b) a real-looking object whose
+    /// `keys_array` field holds misaligned garbage (the value read from a
+    /// native-module namespace sentinel mis-treated as an object). Both are
+    /// rejected by the low-3-bits alignment guard — every genuine GC pointer
+    /// is `align.max(8)`-aligned.
+    #[test]
+    fn own_key_present_rejects_misaligned_pointers() {
+        unsafe {
+            let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+
+            // (a) misaligned receiver — would deref `[obj-8]`/`(*obj).keys_array`
+            // on garbage without the guard.
+            let misaligned_obj = 0x2800_0203usize as *mut ObjectHeader;
+            assert!(
+                !own_key_present(misaligned_obj, key),
+                "misaligned receiver must return false, not crash"
+            );
+
+            // (b) aligned real object, but its keys_array points at misaligned
+            // garbage — the exact Express crash shape.
+            let obj = super::super::alloc::js_object_alloc(0, 4);
+            (*obj).keys_array = 0x2800_0203usize as *mut _;
+            assert!(
+                !own_key_present(obj, key),
+                "misaligned keys_array must return false, not crash"
             );
         }
     }

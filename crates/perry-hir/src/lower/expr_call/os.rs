@@ -2,47 +2,84 @@ use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
 
-pub(super) fn user_info_expr_for_call(call: &ast::CallExpr) -> Expr {
-    if first_arg_has_buffer_encoding(call) {
-        Expr::OsUserInfoBuffer
-    } else {
-        Expr::OsUserInfo
+/// Lower an `os.userInfo(...)` call. `args` are the already-lowered call
+/// arguments (consumed for the dynamic path).
+///
+/// Three cases (#3004):
+/// - statically-visible object literal `{ encoding: "buffer" }` → the
+///   `OsUserInfoBuffer` fast path (no runtime options inspection);
+/// - no arguments, or a statically-visible options literal that does NOT
+///   request the buffer encoding → the plain `OsUserInfo` string path;
+/// - anything dynamic (a variable, function return, computed-key object, or
+///   spread) → a generic `NativeMethodCall` that carries the argument through
+///   to runtime dispatch, where `options.encoding` is inspected at runtime.
+pub(super) fn user_info_expr_for_call(call: &ast::CallExpr, args: Vec<Expr>) -> Expr {
+    match static_encoding_decision(call) {
+        Some(true) => Expr::OsUserInfoBuffer,
+        Some(false) => Expr::OsUserInfo,
+        None => Expr::NativeMethodCall {
+            module: "os".to_string(),
+            class_name: None,
+            object: None,
+            method: "userInfo".to_string(),
+            args,
+        },
     }
 }
 
-fn first_arg_has_buffer_encoding(call: &ast::CallExpr) -> bool {
+/// Decide the encoding statically when possible.
+/// - `Some(true)`  — literal `{ encoding: "buffer" }` (with a non-computed key).
+/// - `Some(false)` — no arguments, or a fully-literal options object whose
+///   `encoding` is statically known not to be `"buffer"`.
+/// - `None`        — the options value is dynamic; defer to runtime dispatch.
+fn static_encoding_decision(call: &ast::CallExpr) -> Option<bool> {
     let Some(first) = call.args.first() else {
-        return false;
+        // No options argument → always strings.
+        return Some(false);
     };
     if first.spread.is_some() {
-        return false;
+        return None;
     }
     let ast::Expr::Object(obj) = unwrap_ts_wrappers(first.expr.as_ref()) else {
-        return false;
+        // Variable / call result / non-literal → inspect at runtime.
+        return None;
     };
 
-    obj.props.iter().any(|prop| {
-        let ast::PropOrSpread::Prop(prop) = prop else {
-            return false;
-        };
-        let ast::Prop::KeyValue(kv) = prop.as_ref() else {
-            return false;
-        };
-        prop_name_is(&kv.key, "encoding") && string_literal_is(kv.value.as_ref(), "buffer")
-    })
+    // A spread inside the literal, or a computed/non-literal `encoding` value,
+    // can change the effective encoding at runtime → defer.
+    for prop in &obj.props {
+        match prop {
+            ast::PropOrSpread::Spread(_) => return None,
+            ast::PropOrSpread::Prop(prop) => {
+                let ast::Prop::KeyValue(kv) = prop.as_ref() else {
+                    continue;
+                };
+                // A computed key (e.g. `{ ["encoding"]: "buffer" }`) is not
+                // statically resolvable here — defer to runtime so the actual
+                // `options.encoding` is inspected.
+                if matches!(kv.key, ast::PropName::Computed(_)) {
+                    return None;
+                }
+                if !prop_name_is(&kv.key, "encoding") {
+                    continue;
+                }
+                // Non-string-literal value → cannot decide statically.
+                return match unwrap_ts_wrappers(kv.value.as_ref()) {
+                    ast::Expr::Lit(ast::Lit::Str(s)) => Some(s.value.as_str() == Some("buffer")),
+                    _ => None,
+                };
+            }
+        }
+    }
+
+    // Literal object with no `encoding` key → strings.
+    Some(false)
 }
 
 fn prop_name_is(name: &ast::PropName, expected: &str) -> bool {
     match name {
         ast::PropName::Ident(ident) => ident.sym == expected,
         ast::PropName::Str(s) => s.value.as_str() == Some(expected),
-        _ => false,
-    }
-}
-
-fn string_literal_is(expr: &ast::Expr, expected: &str) -> bool {
-    match unwrap_ts_wrappers(expr) {
-        ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str() == Some(expected),
         _ => false,
     }
 }

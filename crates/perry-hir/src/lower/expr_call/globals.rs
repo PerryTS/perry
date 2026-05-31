@@ -190,7 +190,16 @@ pub(super) fn try_global_builtins(
             }
             "structuredClone" => {
                 if !args.is_empty() {
-                    return Ok(Ok(Expr::StructuredClone(Box::new(args.remove(0)))));
+                    let value = args.remove(0);
+                    let options = if !args.is_empty() {
+                        args.remove(0)
+                    } else {
+                        Expr::Undefined
+                    };
+                    return Ok(Ok(Expr::StructuredClone {
+                        value: Box::new(value),
+                        options: Box::new(options),
+                    }));
                 } else {
                     return Err(anyhow!("structuredClone requires one argument"));
                 }
@@ -831,7 +840,7 @@ pub(super) fn try_global_builtins(
                     "version" => return Ok(Ok(Expr::OsVersion)),
                     "cpus" => return Ok(Ok(Expr::OsCpus)),
                     "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                    "userInfo" => return Ok(Ok(user_info_expr_for_call(call))),
+                    "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                     "getPriority" | "setPriority" => {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "os".to_string(),

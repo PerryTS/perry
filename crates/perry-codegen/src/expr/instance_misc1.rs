@@ -95,6 +95,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // in the runtime (see crates/perry-runtime/src/error.rs). Map
             // them by name here so `e instanceof TypeError` works even
             // though there's no user class definition.
+            let imported_from_fs = ctx
+                .imported_class_sources
+                .get(ty)
+                .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
+                .unwrap_or(false);
             let cid = match ty.as_str() {
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
@@ -153,12 +158,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "TransformStream" => 0xFFFF0062u32,
                 // node:perf_hooks entry classes. Runtime classifies the
                 // shaped entry objects returned by performance.mark/measure.
+                "Performance" => 0xFFFF0087u32,
                 "PerformanceEntry" => 0xFFFF0080u32,
                 "PerformanceMark" => 0xFFFF0081u32,
                 "PerformanceMeasure" => 0xFFFF0082u32,
+                "PerformanceObserverEntryList" => 0xFFFF0088u32,
+                "PerformanceResourceTiming" => 0xFFFF0086u32,
                 "Console" => 0xFFFF0083u32,
+                // node:fs constructor exports. Keep these ids in sync with
+                // perry-runtime/src/fs/mod.rs and instanceof.rs.
+                "fs.Dir" => 0xFFFF0086u32,
+                "Dir" if imported_from_fs => 0xFFFF0086u32,
+                "fs.Dirent" => 0xFFFF0087u32,
+                "Dirent" if imported_from_fs => 0xFFFF0087u32,
+                "fs.ReadStream" | "fs.FileReadStream" => 0xFFFF0088u32,
+                "ReadStream" | "FileReadStream" if imported_from_fs => 0xFFFF0088u32,
+                "fs.WriteStream" | "fs.FileWriteStream" => 0xFFFF0089u32,
+                "WriteStream" | "FileWriteStream" if imported_from_fs => 0xFFFF0089u32,
+                "fs.Stats" => 0xFFFF008Au32,
+                "Stats" if imported_from_fs => 0xFFFF008Au32,
+                "fs.Utf8Stream" => 0xFFFF008Bu32,
+                "Utf8Stream" if imported_from_fs => 0xFFFF008Bu32,
                 "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
+                "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
                 "WASI" | "wasi.WASI" => 0xFFFF00B2u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
@@ -316,7 +339,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
-                    Ok(double_literal(1.0))
+                    Ok(ctx
+                        .block()
+                        .bitcast_i64_to_double(crate::nanbox::TAG_TRUE_I64))
                 }
             }
         }
@@ -925,12 +950,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
+                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
                     let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                        _ => blk.fadd(&old, "1.0"),
+                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                        _ => blk.fadd(&old_num, "1.0"),
                     };
                     blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old });
+                    return Ok(if *prefix { new } else { old_num });
                 }
             }
             if let Expr::This = object.as_ref() {
@@ -943,12 +969,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
+                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
                     let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                        _ => blk.fadd(&old, "1.0"),
+                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                        _ => blk.fadd(&old_num, "1.0"),
                     };
                     blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old });
+                    return Ok(if *prefix { new } else { old_num });
                 }
             }
             let obj_box = lower_expr(ctx, object)?;
@@ -965,15 +992,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_get_field_by_name_f64",
                 &[(I64, &obj_handle), (I64, &key_handle)],
             );
+            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
             let new = match op {
-                BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                _ => blk.fadd(&old, "1.0"),
+                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                _ => blk.fadd(&old_num, "1.0"),
             };
             blk.call_void(
                 "js_object_set_field_by_name",
                 &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
             );
-            Ok(if *prefix { new } else { old })
+            Ok(if *prefix { new } else { old_num })
         }
 
         // -------- arr[idx]++ / arr[idx]-- / ++arr[idx] / --arr[idx] --------
@@ -1001,16 +1029,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_dyn_index_get",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
             );
+            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
             let new = match op {
-                BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                _ => blk.fadd(&old, "1.0"),
+                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                _ => blk.fadd(&old_num, "1.0"),
             };
             blk.call(
                 DOUBLE,
                 "js_dyn_index_set",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
             );
-            Ok(if *prefix { new } else { old })
+            Ok(if *prefix { new } else { old_num })
         }
 
         // -------- path.basename --------

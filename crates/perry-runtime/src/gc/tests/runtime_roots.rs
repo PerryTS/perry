@@ -1690,7 +1690,7 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
 }
 
 #[test]
-fn test_queued_microtask_previous_context_survives_hook_gc() {
+fn test_next_tick_previous_context_survives_hook_gc() {
     const ALS_HANDLE: i64 = -8_502;
 
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
@@ -1706,9 +1706,9 @@ fn test_queued_microtask_previous_context_survives_hook_gc() {
 
     crate::async_context::clear_store(ALS_HANDLE);
     let callback = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
-    crate::builtins::js_queue_microtask(callback as i64);
+    crate::builtins::js_queue_next_tick(callback as i64);
 
-    let previous = test_string_value(b"microtask-previous-context");
+    let previous = test_string_value(b"nexttick-previous-context");
     let previous_original = (previous.to_bits() & POINTER_MASK) as usize;
     crate::async_context::enter_with(ALS_HANDLE, previous);
 
@@ -1716,12 +1716,12 @@ fn test_queued_microtask_previous_context_survives_hook_gc() {
     crate::builtins::js_drain_queued_microtasks();
     drain_scheduled_minor_gc(
         before,
-        "queued microtask before hook should trigger copied-minor GC",
+        "nextTick before hook should trigger copied-minor GC",
     );
 
     let restored = crate::async_context::get_store(ALS_HANDLE)
-        .expect("queued microtask should restore previous AsyncLocalStorage context");
-    assert_moved_string_value(restored, previous_original, b"microtask-previous-context");
+        .expect("nextTick should restore previous AsyncLocalStorage context");
+    assert_moved_string_value(restored, previous_original, b"nexttick-previous-context");
     crate::async_context::clear_store(ALS_HANDLE);
 }
 

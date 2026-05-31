@@ -92,7 +92,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         ("kill", cp_cast1(cp_method_kill)),
         ("ref", cp_cast0(cp_method_this0)),
         ("unref", cp_cast0(cp_method_this0)),
-        ("send", cp_cast2(cp_method_send)),
+        ("send", cp_cast4(cp_method_send)),
         ("disconnect", cp_cast0(cp_method_disconnect)),
     ];
     // Distinct shape band from spawn's ChildProcess (which carries no send/disconnect).

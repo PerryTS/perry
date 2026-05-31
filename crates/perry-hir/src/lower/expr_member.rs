@@ -32,14 +32,19 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     // flag never leaks past this member, and only touch it when our own
     // detection fires (a method-call receiver sets the flag via `lower_call`
     // instead, and that must survive into the bare `ns[dynamicKey]` lowering).
+    let prev_unresolved_ident_as_global = ctx.unresolved_ident_as_global;
+    ctx.unresolved_ident_as_global = true;
     let suppress_for_obj = stdlib_ns_subnamespace_static_access(ctx, member);
     if !suppress_for_obj {
-        return lower_member_inner(ctx, member);
+        let result = lower_member_inner(ctx, member);
+        ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
+        return result;
     }
     let prev_suppress = ctx.suppress_stdlib_dispatch_guard_once;
     ctx.suppress_stdlib_dispatch_guard_once = true;
     let result = lower_member_inner(ctx, member);
     ctx.suppress_stdlib_dispatch_guard_once = prev_suppress;
+    ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
     result
 }
 
@@ -187,15 +192,22 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // runtime's `node:dgram`/network stack handles it) —
                     // the literal mirrors what we actually link in.
                     "features" => return Ok(process_features_literal()),
-                    // #1400: process.sourceMapsEnabled — boolean indicating
-                    // whether the runtime's source-map support is on. Perry
-                    // compiles AOT and doesn't ship a source-map resolver,
-                    // so the value is always false. Without this arm the
-                    // bare read returned a 0 sentinel — falsy in a boolean
-                    // context but `typeof` was `"number"`, so libraries
-                    // doing `typeof process.sourceMapsEnabled === "boolean"`
-                    // bailed out (e.g. some Vitest stack-trace formatters).
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #1400 / #3108: process.sourceMapsEnabled — live boolean
+                    // reflecting setSourceMapsEnabled(). Perry compiles AOT
+                    // and ships no source-map resolver, so the flag drives
+                    // nothing observable, but it round-trips through the
+                    // setter (starting `false`) so `typeof ... === "boolean"`
+                    // holds and toggles are observable. Lower to a 0-arg
+                    // native getter that reads the runtime flag.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     // #1412: `process.moduleLoadList` is Node's list of
                     // built-in modules already loaded into the
                     // interpreter. Perry AOT-compiles every reachable
@@ -384,7 +396,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ]));
                     }
                     "features" => return Ok(process_features_literal()),
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #3108: live boolean toggle — see the matching arm above.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     "finalization" => {
                         return Ok(Expr::Object(vec![
@@ -940,12 +961,33 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     // Fall through — let the regular member access path
                     // below handle the user-declared subclass field.
+                } else if matches!(module_name.as_str(), "util" | "sys")
+                    && matches!(class_name.as_str(), "MIMEType" | "MIMEParams")
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "stream" && is_classic_stream_method_name(&property_name) {
                     // Classic Node streams materialize core stream and
                     // EventEmitter methods as closure-valued fields on the
                     // stream object. A bare method read (`r.read`, `r.on`)
                     // must return that callable value, not invoke the native
                     // receiver method with no args.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "net"
+                    && matches!(class_name.as_str(), "Socket" | "Stream")
+                    && is_net_socket_method_name(&property_name)
+                {
+                    // `new net.Socket().write` / `net.Stream().destroy` are
+                    // method-value reads, not zero-arg native calls. Keep the
+                    // PropertyGet shape so runtime handle-property dispatch
+                    // can bind a callable to the socket handle.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -959,6 +1001,43 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // zero-arg native getter. The call form still lowers
                     // through NativeMethodCall; bare reads stay as PropertyGet
                     // so runtime lookup can return a bound callable.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "Agent"
+                    && matches!(
+                        property_name.as_str(),
+                        "keepSocketAlive" | "reuseSocket" | "getName" | "destroy" | "close"
+                    )
+                {
+                    // A bare read of an Agent method (`typeof a.getName`)
+                    // should produce a callable bound-method value, not invoke
+                    // the native method with zero arguments.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && matches!(class_name.as_str(), "HttpServer" | "HttpsServer")
+                    && matches!(
+                        property_name.as_str(),
+                        "listen"
+                            | "close"
+                            | "closeAllConnections"
+                            | "closeIdleConnections"
+                            | "on"
+                            | "addListener"
+                            | "address"
+                            | "setTimeout"
+                    )
+                {
+                    // Bare reads of HTTP/HTTPS server method values
+                    // (`typeof server.listen`) return a callable bound method
+                    // rather than invoking the native method with zero args.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1002,10 +1081,102 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "sqlite"
+                    && class_name == "DatabaseSync"
+                    && matches!(
+                        property_name.as_str(),
+                        "open"
+                            | "close"
+                            | "exec"
+                            | "prepare"
+                            | "function"
+                            | "aggregate"
+                            | "enableDefensive"
+                            | "setAuthorizer"
+                            | "createTagStore"
+                            | "createSession"
+                            | "applyChangeset"
+                            | "enableLoadExtension"
+                            | "loadExtension"
+                            | "location"
+                    )
+                {
+                    // `node:sqlite` DatabaseSync methods are callable fields.
+                    // Bare reads like `typeof db.close` must not invoke the
+                    // lifecycle method as a zero-arg getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "Session"
+                    && matches!(property_name.as_str(), "changeset" | "patchset" | "close")
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "SQLTagStore"
+                    && matches!(
+                        property_name.as_str(),
+                        "run" | "get" | "all" | "iterate" | "clear"
+                    )
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "StatementSync"
+                    && matches!(
+                        property_name.as_str(),
+                        "run"
+                            | "get"
+                            | "all"
+                            | "iterate"
+                            | "columns"
+                            | "setReadBigInts"
+                            | "setReturnArrays"
+                            | "setAllowBareNamedParameters"
+                            | "setAllowUnknownNamedParameters"
+                    )
+                {
+                    // `node:sqlite` StatementSync methods are callable fields.
+                    // Getter properties such as `sourceSQL` and `expandedSQL`
+                    // keep the native getter path below.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "Headers" && is_headers_method_name(&property_name) {
                     // A bare Fetch Headers method read (`headers.entries`) is a
                     // function value, not a zero-arg native call. The call form
                     // (`headers.entries()`) is handled by expr_call lowering.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "worker_threads"
+                    && class_name == "MessageChannel"
+                    && matches!(property_name.as_str(), "port1" | "port2")
+                {
+                    // #3157: `new MessageChannel()` returns a real heap object
+                    // `{ port1, port2 }`. Reading `chan.port1` must be a plain
+                    // object field load (returning the port object, whose
+                    // methods are closure-valued fields) — NOT a zero-arg
+                    // native getter, which would discard the same-process
+                    // paired-port delivery. The port objects themselves are not
+                    // registered native instances, so `port.postMessage(...)` /
+                    // `port.on(...)` already lower as ordinary object-method
+                    // calls (invoking the bound closures). parentPort stays on
+                    // the native-receiver dispatch path (it's a singleton
+                    // handle, not a real object).
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1038,6 +1209,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "http"
+                    && class_name == "IncomingMessage"
+                    && is_http_incoming_message_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "http"
+                    && class_name == "IncomingMessage"
+                    && is_http_incoming_message_runtime_property_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else {
                     // Issue #577 — `req.method` / `res.statusCode` etc.
                     // get rewritten to `__get_<name>` so the property
@@ -1049,9 +1238,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // falls back to the existing bare-method-name
                     // dispatch (covers `request.headers` on fastify
                     // and similar).
-                    let property_name = if module_name == "http" {
+                    let property_name = if matches!(module_name.as_str(), "http" | "https") {
                         match (class_name.as_str(), property_name.as_str()) {
-                            ("IncomingMessage", "method")
+                            ("ClientRequest", "method")
+                            | ("ClientRequest", "protocol")
+                            | ("ClientRequest", "host")
+                            | ("ClientRequest", "path")
+                            | ("Agent", "createConnection")
+                            | ("Agent", "createSocket")
+                            | ("IncomingMessage", "method")
                             | ("IncomingMessage", "url")
                             | ("IncomingMessage", "httpVersion")
                             | ("IncomingMessage", "complete")
@@ -1085,7 +1280,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("HttpServer", "requestTimeout")
                             | ("HttpServer", "timeout")
                             | ("HttpServer", "maxHeadersCount")
-                            | ("HttpServer", "maxRequestsPerSocket") => {
+                            | ("HttpServer", "maxRequestsPerSocket")
+                            | ("HttpsServer", "headersTimeout")
+                            | ("HttpsServer", "keepAliveTimeout")
+                            | ("HttpsServer", "requestTimeout")
+                            | ("HttpsServer", "timeout")
+                            | ("HttpsServer", "maxHeadersCount")
+                            | ("HttpsServer", "maxRequestsPerSocket") => {
                                 format!("__get_{}", property_name)
                             }
                             _ => property_name,
@@ -1093,7 +1294,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     } else {
                         property_name
                     };
-                    let class_filter = if module_name == "http" {
+                    let class_filter = if matches!(module_name.as_str(), "http" | "https") {
                         Some(class_name.clone())
                     } else {
                         None
@@ -1268,7 +1469,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             && crate::analysis::is_builtin_global_value_name(property)
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                if obj_ident.sym.as_ref() == property.as_str() {
+                if obj_ident.sym.as_ref() == property.as_str() && property != "globalThis" {
                     // #2060 / #2142 / #2145: `<Ctor>.prototype` and
                     // `<Ctor>.__proto__` must keep reading the constructor
                     // closure's real proto / static-prototype. Each built-in
@@ -1288,7 +1489,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
-                    if !outer_is_prototype_or_proto {
+                    if !outer_is_prototype_or_proto && property != "crypto" {
                         object_expr = Expr::GlobalGet(0);
                     }
                 }
@@ -1899,10 +2100,36 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
     )
 }
 
+fn is_http_incoming_message_method_name(prop: &str) -> bool {
+    matches!(prop, "setEncoding")
+}
+
+fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {
+    matches!(prop, "rawHeaders")
+}
+
 fn is_dns_resolver_method_name(prop: &str) -> bool {
     matches!(
         prop,
-        "cancel" | "getServers" | "setServers" | "setLocalAddress"
+        "cancel"
+            | "getServers"
+            | "setServers"
+            | "setLocalAddress"
+            | "resolve"
+            | "resolve4"
+            | "resolve6"
+            | "resolveAny"
+            | "resolveCaa"
+            | "resolveCname"
+            | "resolveMx"
+            | "resolveNaptr"
+            | "resolveNs"
+            | "resolvePtr"
+            | "resolveSoa"
+            | "resolveSrv"
+            | "resolveTlsa"
+            | "resolveTxt"
+            | "reverse"
     )
 }
 

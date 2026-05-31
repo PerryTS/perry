@@ -35,6 +35,12 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                     visitor.visit_nanbox_f64_slot(value);
                     scan_snapshot_roots_mut(context, visitor);
                 }
+                Task::Microtask {
+                    callback, context, ..
+                } => {
+                    visitor.visit_raw_const_ptr_slot(callback);
+                    scan_snapshot_roots_mut(context, visitor);
+                }
                 Task::AsyncStep(cb, value, next, _, context) => {
                     visitor.visit_raw_const_ptr_slot(cb);
                     visitor.visit_raw_mut_ptr_slot(next);
@@ -256,6 +262,9 @@ fn scan_task_step(
         | Task::AsyncStep(cb, value, next, _, context) => {
             scan_task_slot_inline(cb, value, next, context, visitor, state, remaining)
         }
+        Task::Microtask {
+            callback, context, ..
+        } => scan_task_slot_microtask(callback, context, visitor, state, remaining),
     }
 }
 
@@ -340,6 +349,29 @@ fn scan_task_slot_inline(
             _ => false,
         };
         state.slot += 1;
+    }
+    crate::async_context::scan_snapshot_roots_mut_step(
+        context,
+        visitor,
+        &mut state.context_entry,
+        &mut state.context_store,
+        remaining,
+    )
+}
+
+fn scan_task_slot_microtask(
+    callback: &mut *const crate::closure::ClosureHeader,
+    context: &mut AsyncContextSnapshot,
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut PromiseRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    if state.slot == 0 {
+        if !consume_root_work(remaining) {
+            return false;
+        }
+        visitor.visit_raw_const_ptr_slot(callback);
+        state.slot = 1;
     }
     crate::async_context::scan_snapshot_roots_mut_step(
         context,

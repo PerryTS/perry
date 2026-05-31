@@ -2,6 +2,62 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1047 — fix(node): expose net.Stream / timers.promises / zlib.codes namespace aliases
+
+External contributor PR #3509 (Andrew DiZenzo), rebased onto current `main` and merged with the metadata folded in. Closes #2689, #2682, #2688.
+
+- **`net.Stream`** — exposed as the `net.Socket` alias: manifest method/class entries, namespace-property resolution (`net.Stream` → `bound_native_callable_export_value("net", "Socket")`), and dynamic `instanceof` now matches a live socket handle for both `net.Socket` and `net.Stream` via `net_socket_handle_probe`.
+- **`timers.promises` + `node:timers/promises`** — `timers.promises` parent-namespace property plus the `timers/promises` subpath shape (`setTimeout`/`setImmediate`/`setInterval`/`scheduler`) routed through the runtime `node_submodules` table. Added `timers` and `timers/promises` to `NODE_SUBMODULES` so `is_known_module` recognizes them (the `known_modules_consistent_with_manifest` unit test gates this).
+- **`zlib.codes`** — Node-compatible forward + reverse return-code table (`Z_OK` ↔ `0`, …) via `zlib_codes_object()`.
+
+Rebase conflict resolution dropped the PR's duplicate `is_net_socket_method_name` (main already added a fuller copy) and kept main's larger `NODE_SUBMODULES` / native-module namespace-key lists. Regenerated `docs/src/api/reference.md` + `docs/api/perry.d.ts` from the manifest.
+
+## v0.5.1046 — fix(stdlib): compile node:domain without bundled-events
+
+**Hotfix — main default-feature build was broken.** `crates/perry-stdlib/src/domain.rs` (added by #3535) called `crate::events::{is_event_emitter_handle, js_event_emitter_get_domain, js_event_emitter_set_domain}` unconditionally at six sites, but `mod events` is `#[cfg(feature = "bundled-events")]`-gated (since v0.5.546, so the well-known bindings table can flip `import 'events'` to `perry-ext-events`). `mod domain` itself is **not** feature-gated, so any build with `bundled-events` off — notably the auto-optimize compile path the `compiler-output-regression` CI gate exercises — failed with `error[E0433]: cannot find 'events' in 'crate'`. `cargo-test` masked it because the test build pulls `full` (which includes `bundled-events`).
+
+Fix: route all six call sites through three small feature-gated shims (`ee_is_event_emitter_handle`, `ee_get_domain`, `ee_set_domain`). With `bundled-events` on they delegate to `crate::events::*` as before; with it off they degrade to inert no-ops (`false`/`0`/`()`), so the domain↔EventEmitter integration is simply absent in that build (where events lives in `perry-ext-events`). Verified both feature configurations compile cleanly.
+
+## v0.5.1045 — fix(runtime): brand-check collection prototype methods (#3662)
+
+`Set`/`Map`/`WeakSet`/`WeakMap` prototype methods reached as plain values —
+`Set.prototype.add.call(x, v)`, `Reflect.apply(Map.prototype.get, m, [k])`,
+method extraction, etc. — resolved to a shared no-op thunk
+(`global_this_builtin_noop_thunk`). The reflective path therefore did nothing
+and never performed the spec-mandated `this` brand check, so calling these
+methods on an incompatible receiver produced no exception. This was the
+largest single behavioral cluster in the #3662 parity sweep
+("Expected a … to be thrown but no exception was thrown at all").
+
+`populate_builtin_prototype_methods` now installs real per-method thunks for
+the four collection prototypes (`set_proto_*`, `map_proto_*`,
+`weakset_proto_*`, `weakmap_proto_*`). Each thunk:
+
+1. reads the `IMPLICIT_THIS` receiver (set by the `.call`/`.apply`/`.bind`
+   dispatch),
+2. brand-checks it — a registered `Set`/`Map` heap pointer, or the reserved
+   `CLASS_ID_WEAKMAP`/`CLASS_ID_WEAKSET` `class_id` — and throws a `TypeError`
+   ("Method `<proto>`.`<method>` called on incompatible receiver") on a
+   mismatched or primitive receiver, and
+3. otherwise dispatches to the existing runtime helper (`js_set_add`,
+   `js_map_get`, `js_weakmap_set`, …), so reflective collection calls now also
+   *work* on a correct receiver (previously they silently returned
+   `undefined`).
+
+The fast direct-call path (`s.add(v)`) is lowered straight to `js_set_add` by
+codegen and never touches these thunks, so it is unaffected — verified
+byte-identical against Node in both the `PERRY_NO_AUTO_OPTIMIZE` and
+auto-optimize build paths.
+
+New receiver-resolution helpers: `set::set_ptr_from_receiver_bits`,
+`map::map_ptr_from_receiver_bits`, `weakref::weak_class_id_from_receiver`
+(the latter pre-filters on `GcHeader.obj_type == GC_TYPE_OBJECT` before
+reading `class_id`, so a `Set`/`Map` pointer or primitive resolves to `None`
+without an out-of-bounds read). Covered by
+`test-files/test_gap_3662_collection_brand_check.ts`. The broader #3662
+cluster (Function.prototype apply/bind/hasInstance not-callable checks and the
+node-core fs/buffer/process/zlib arg-validation cases) remains open.
+
 ## v0.5.1044 — fix(fs): deliver EBADF to callback for bad fd in close/fsync/fdatasync/fchmod (#3332)
 
 The callback forms of `fs.close`, `fs.fsync`, `fs.fdatasync`, and `fs.fchmod`

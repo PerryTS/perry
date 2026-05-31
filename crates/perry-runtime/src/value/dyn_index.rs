@@ -3,11 +3,10 @@
 use super::*;
 
 /// Tag-aware dynamic index dispatch for `obj[key]` where `obj` has unknown
-/// static type. Issue #514. Strings → js_string_char_at; everything else
-/// uses the same `raw_ptr + 8 + idx*8` direct-read offset hack the existing
-/// IndexGet fallback uses (which happens to be load-bearing for
-/// Object-with-numeric-keys + TypedArrays). LAZY_ARRAY / FORWARDED arrays
-/// route through `js_array_get_f64` to chase the materialized chain.
+/// static type. Issue #514. Strings → js_string_char_at; objects stringify
+/// numeric keys (`obj[0]` is `obj["0"]`), while arrays/buffers keep numeric
+/// element reads. LAZY_ARRAY / FORWARDED arrays route through
+/// `js_array_get_f64` to chase the materialized chain.
 #[no_mangle]
 pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     let bits = value.to_bits();
@@ -82,9 +81,6 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     } else {
         index as i32
     };
-    if idx_i32 < 0 {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
     // Registry-backed Buffer (`Buffer.from(...)`, `js_buffer_alloc`, the
     // `'data'`-event chunk an http/net listener receives). These carry NO
     // GcHeader (see `crates/perry-runtime/src/buffer.rs` — "Buffers carry
@@ -100,6 +96,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // way the working accessors do (`js_buffer_get` → `buffer_data()`).
     // Node semantics: in-range → the byte (0..255); out-of-range → undefined.
     if crate::buffer::is_registered_buffer(raw_ptr) {
+        if idx_i32 < 0 {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
         let buf = raw_ptr as *const crate::buffer::BufferHeader;
         let len = unsafe { (*buf).length };
         if (idx_i32 as u32) >= len {
@@ -117,6 +116,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             || (gc_flags & crate::gc::GC_FLAG_FORWARDED) != 0
         {
+            if idx_i32 < 0 {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
             let arr = raw_ptr as *const crate::array::ArrayHeader;
             return crate::array::js_array_get_f64(arr, idx_i32 as u32);
         }
@@ -131,12 +133,30 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         // `undefined`. The narrow gate (GC_TYPE_ARRAY) keeps object
         // numeric-key fast path unchanged.
         if obj_type == crate::gc::GC_TYPE_ARRAY {
+            if idx_i32 < 0 {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
             let arr = raw_ptr as *const crate::array::ArrayHeader;
             let length = unsafe { (*arr).length };
             if (idx_i32 as u32) >= length {
                 return f64::from_bits(TAG_UNDEFINED);
             }
         }
+        if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+            let s = if index == (idx_i32 as f64) {
+                idx_i32.to_string()
+            } else {
+                format!("{}", index)
+            };
+            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            return crate::object::js_object_get_field_by_name_f64(
+                raw_ptr as *const crate::object::ObjectHeader,
+                key,
+            );
+        }
+    }
+    if idx_i32 < 0 {
+        return f64::from_bits(TAG_UNDEFINED);
     }
     let elem_addr = raw_ptr.wrapping_add(8 + (idx_i32 as usize) * 8);
     let v = unsafe { *(elem_addr as *const f64) };

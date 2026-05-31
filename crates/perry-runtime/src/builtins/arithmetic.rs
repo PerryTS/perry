@@ -82,6 +82,15 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     if a.is_null() || a.is_undefined() || b.is_null() || b.is_undefined() {
         return JSValue::bool(false);
     }
+    // Boxed primitives compare via their wrapped primitive value under
+    // abstract equality (`new Number(5) == 5`, and sloppy primitive accessors
+    // return boxed receivers).
+    if let Some((_, payload)) = boxed_primitive_payload(f64::from_bits(a.bits())) {
+        return js_loose_eq(JSValue::from_bits(payload.to_bits()), b);
+    }
+    if let Some((_, payload)) = boxed_primitive_payload(f64::from_bits(b.bits())) {
+        return js_loose_eq(a, JSValue::from_bits(payload.to_bits()));
+    }
     // Both strings (heap STRING_TAG and/or inline SHORT_STRING_TAG):
     // content compare. The previous `is_string() && is_string()` test
     // missed any SSO operand — `JSON.parse(...).foo == "perry"` returned

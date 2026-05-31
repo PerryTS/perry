@@ -16,6 +16,22 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
+fn new_callee_name<'a>(ctx: &LoweringContext, new_expr: &'a ast::NewExpr) -> Option<&'a str> {
+    match new_expr.callee.as_ref() {
+        ast::Expr::Ident(class_ident) => Some(class_ident.sym.as_ref()),
+        ast::Expr::Member(member)
+            if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "globalThis")
+                && ctx.lookup_local("globalThis").is_none() =>
+        {
+            match &member.prop {
+                ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.as_ref()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn try_url_date_weakref_instance(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -29,8 +45,8 @@ pub(super) fn try_url_date_weakref_instance(
         // Object.prototype.toString printing `"[object Object]"`.
         // Refs #575.
         if let ast::Expr::New(new_expr) = member.obj.as_ref() {
-            if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
-                if class_ident.sym.as_ref() == "URLSearchParams" {
+            if let Some(class_name) = new_callee_name(ctx, new_expr) {
+                if class_name == "URLSearchParams" {
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                         let method_name = method_ident.sym.as_ref();
                         let recv = lower_expr(ctx, &member.obj)?;

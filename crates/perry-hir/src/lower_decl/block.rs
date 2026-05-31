@@ -17,6 +17,127 @@ pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
     lower_stmts_using_aware(ctx, &block.stmts)
 }
 
+fn collect_var_binding_names_from_pat(pat: &ast::Pat, out: &mut Vec<String>) {
+    match pat {
+        ast::Pat::Ident(ident) => out.push(ident.id.sym.to_string()),
+        ast::Pat::Array(arr) => {
+            for elem in arr.elems.iter().flatten() {
+                collect_var_binding_names_from_pat(elem, out);
+            }
+        }
+        ast::Pat::Object(obj) => {
+            for prop in &obj.props {
+                match prop {
+                    ast::ObjectPatProp::Assign(assign) => out.push(assign.key.sym.to_string()),
+                    ast::ObjectPatProp::KeyValue(kv) => {
+                        collect_var_binding_names_from_pat(&kv.value, out)
+                    }
+                    ast::ObjectPatProp::Rest(rest) => {
+                        collect_var_binding_names_from_pat(&rest.arg, out)
+                    }
+                }
+            }
+        }
+        ast::Pat::Assign(assign) => collect_var_binding_names_from_pat(&assign.left, out),
+        ast::Pat::Rest(rest) => collect_var_binding_names_from_pat(&rest.arg, out),
+        _ => {}
+    }
+}
+
+fn collect_var_binding_names_from_var_decl(var_decl: &ast::VarDecl, out: &mut Vec<String>) {
+    if var_decl.kind != ast::VarDeclKind::Var {
+        return;
+    }
+    for decl in &var_decl.decls {
+        collect_var_binding_names_from_pat(&decl.name, out);
+    }
+}
+
+fn collect_var_binding_names_from_stmt(stmt: &ast::Stmt, out: &mut Vec<String>) {
+    match stmt {
+        ast::Stmt::Block(block) => {
+            for stmt in &block.stmts {
+                collect_var_binding_names_from_stmt(stmt, out);
+            }
+        }
+        ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
+            collect_var_binding_names_from_var_decl(var_decl, out);
+        }
+        // Nested function/class bodies have their own var environments.
+        ast::Stmt::Decl(ast::Decl::Fn(_)) | ast::Stmt::Decl(ast::Decl::Class(_)) => {}
+        ast::Stmt::If(if_stmt) => {
+            collect_var_binding_names_from_stmt(&if_stmt.cons, out);
+            if let Some(alt) = &if_stmt.alt {
+                collect_var_binding_names_from_stmt(alt, out);
+            }
+        }
+        ast::Stmt::While(while_stmt) => collect_var_binding_names_from_stmt(&while_stmt.body, out),
+        ast::Stmt::DoWhile(do_while) => collect_var_binding_names_from_stmt(&do_while.body, out),
+        ast::Stmt::For(for_stmt) => {
+            if let Some(ast::VarDeclOrExpr::VarDecl(var_decl)) = &for_stmt.init {
+                collect_var_binding_names_from_var_decl(var_decl, out);
+            }
+            collect_var_binding_names_from_stmt(&for_stmt.body, out);
+        }
+        ast::Stmt::ForIn(for_in) => {
+            if let ast::ForHead::VarDecl(var_decl) = &for_in.left {
+                collect_var_binding_names_from_var_decl(var_decl, out);
+            }
+            collect_var_binding_names_from_stmt(&for_in.body, out);
+        }
+        ast::Stmt::ForOf(for_of) => {
+            if let ast::ForHead::VarDecl(var_decl) = &for_of.left {
+                collect_var_binding_names_from_var_decl(var_decl, out);
+            }
+            collect_var_binding_names_from_stmt(&for_of.body, out);
+        }
+        ast::Stmt::Labeled(labeled) => collect_var_binding_names_from_stmt(&labeled.body, out),
+        ast::Stmt::Switch(switch_stmt) => {
+            for case in &switch_stmt.cases {
+                for stmt in &case.cons {
+                    collect_var_binding_names_from_stmt(stmt, out);
+                }
+            }
+        }
+        ast::Stmt::Try(try_stmt) => {
+            for stmt in &try_stmt.block.stmts {
+                collect_var_binding_names_from_stmt(stmt, out);
+            }
+            if let Some(handler) = &try_stmt.handler {
+                for stmt in &handler.body.stmts {
+                    collect_var_binding_names_from_stmt(stmt, out);
+                }
+            }
+            if let Some(finalizer) = &try_stmt.finalizer {
+                for stmt in &finalizer.stmts {
+                    collect_var_binding_names_from_stmt(stmt, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn predefine_var_bindings_in_function_body(ctx: &mut LoweringContext, block: &ast::BlockStmt) {
+    let mut names = Vec::new();
+    for stmt in &block.stmts {
+        collect_var_binding_names_from_stmt(stmt, &mut names);
+    }
+    names.sort();
+    names.dedup();
+
+    let scope_start = ctx.scope_local_marks.last().copied().unwrap_or(0);
+    for name in names {
+        let existing_current_scope = ctx.locals[scope_start..]
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == &name)
+            .map(|(_, id, _)| *id);
+        let local_id = existing_current_scope.unwrap_or_else(|| ctx.define_local(name, Type::Any));
+        ctx.var_hoisted_ids.insert(local_id);
+    }
+}
+
 /// Lower a function-body block, with support for ECMAScript function-decl
 /// hoisting (issue #569). Pre-defines locals for every non-generator
 /// `function name() {...}` at the block's top level so forward-reference
@@ -38,6 +159,11 @@ pub fn lower_fn_body_block_stmt(
     block: &ast::BlockStmt,
 ) -> Result<Vec<Stmt>> {
     use std::collections::HashSet;
+
+    let parent_strict = ctx.current_strict;
+    ctx.current_strict =
+        parent_strict || crate::lower::stmt_list_starts_with_use_strict_directive(&block.stmts);
+    predefine_var_bindings_in_function_body(ctx, block);
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
     // any earlier statement resolve via `lookup_local`. Generator and
@@ -62,9 +188,16 @@ pub fn lower_fn_body_block_stmt(
 
     // Phase 2: lower the body. The inner FnDecl arm in `lower_body_stmt`
     // calls `lookup_local(name)` and reuses our pre-defined id.
-    let body = lower_block_stmt(ctx, block)?;
+    let body = match lower_block_stmt(ctx, block) {
+        Ok(body) => body,
+        Err(err) => {
+            ctx.current_strict = parent_strict;
+            return Err(err);
+        }
+    };
 
     if hoisted_id_set.is_empty() {
+        ctx.current_strict = parent_strict;
         return Ok(body);
     }
 
@@ -97,6 +230,7 @@ pub fn lower_fn_body_block_stmt(
     }
     result.extend(hoisted_lets);
     result.extend(other);
+    ctx.current_strict = parent_strict;
     Ok(result)
 }
 
@@ -340,7 +474,7 @@ pub fn lower_stmts_using_aware(
                 // method dispatch (`receiver_class_name` returns the class name
                 // for `Type::Named` locals; without inference it stays `Any`
                 // and the call goes nowhere on missing-method).
-                let stmts = lower_var_decl_with_destructuring(ctx, decl, false)?;
+                let stmts = lower_var_decl_with_destructuring(ctx, decl, false, false)?;
                 for s in &stmts {
                     if let Stmt::Let { id, .. } = s {
                         binding_ids.push(*id);

@@ -14,8 +14,7 @@
 //! …) is a follow-up — splitting them all in a single PR would
 //! balloon the diff and the borrow-checker dance is non-trivial.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -69,8 +68,9 @@ use module_class_static::try_module_class_static;
 use module_static::try_module_static_methods;
 use native_module::try_native_module_methods;
 use nested_namespace::{
-    try_path_subnamespace, try_process_hrtime_bigint, try_process_memory_usage_rss,
-    try_punycode_ucs2_namespace, try_util_types_namespace, try_web_crypto_subtle,
+    try_dns_promises_namespace, try_path_subnamespace, try_process_hrtime_bigint,
+    try_process_memory_usage_rss, try_punycode_ucs2_namespace, try_util_types_namespace,
+    try_web_crypto_subtle,
 };
 use post_args_dispatch::{
     try_object_has_own_call, try_object_prototype_call, try_object_static_alias_call,
@@ -82,6 +82,21 @@ use static_and_instance::try_static_method_and_instance;
 use textencoder::try_textencoder_decoder;
 use url_date_instance::try_url_date_weakref_instance;
 use wasm_exports::try_wasm_instance_exports;
+
+fn unwrap_call_callee_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::TsAs(x) => cur = &x.expr,
+            ast::Expr::TsNonNull(x) => cur = &x.expr,
+            ast::Expr::TsSatisfies(x) => cur = &x.expr,
+            ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+            ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+            ast::Expr::Paren(x) => cur = &x.expr,
+            _ => return cur,
+        }
+    }
+}
 
 /// Issue #1132 — scope the native-instance param tags that
 /// `lower_call_inner`'s pre-scans register (createServer's
@@ -218,6 +233,28 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         .map(|arg| lower_expr(ctx, &arg.expr))
         .collect::<Result<Vec<_>>>()?;
 
+    if !has_spread {
+        if let ast::Callee::Expr(callee_expr) = &call.callee {
+            if let ast::Expr::Ident(ident) = unwrap_call_callee_ts_wrappers(callee_expr.as_ref()) {
+                if let Some((module_name, Some(method_name))) =
+                    ctx.lookup_native_module(ident.sym.as_ref())
+                {
+                    if module_name.strip_prefix("node:").unwrap_or(module_name) == "sqlite"
+                        && method_name == "DatabaseSync"
+                    {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "sqlite".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "DatabaseSync".to_string(),
+                            args,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // #1723: `<stdlib-ns>[dynamicKey].method(args)` — a method call whose
     // receiver is a dynamic stdlib SUB-namespace selection (`path.win32` /
     // `path.posix`) and whose method is a source-visible static name. The
@@ -311,6 +348,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                 Err(a) => a,
             };
             args = match try_util_types_namespace(ctx, expr, args)? {
+                Ok(e) => return Ok(e),
+                Err(a) => a,
+            };
+            args = match try_dns_promises_namespace(ctx, expr, args)? {
                 Ok(e) => return Ok(e),
                 Err(a) => a,
             };
@@ -413,7 +454,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             // Fill in default arguments if callee is a known function
             let mut args = args;
             if let Expr::FuncRef(func_id) = &callee_expr {
-                if let Some((defaults, param_ids, rest_idx, has_synth_args)) =
+                if let Some((defaults, _param_ids, rest_idx, has_synth_args)) =
                     ctx.lookup_func_defaults(*func_id)
                 {
                     // Refs #653 followup to v0.5.789's #645 fix: stop the
@@ -446,48 +487,31 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         // fixed-param padding and the body's default-fill
                         // statements substitute user defaults.
                     } else {
-                        let defaults = defaults.to_vec();
-                        let param_ids = param_ids.to_vec();
                         let num_provided = args.len();
                         let fill_end = match rest_idx {
                             Some(i) => i,
                             None => defaults.len(),
                         };
-                        // Build substitution map: callee param LocalId -> actual arg expression
-                        // For provided args, map to the caller's arg expression
-                        // For defaulted args, map to the expanded default (built incrementally)
-                        let mut param_map: Vec<(LocalId, Expr)> = Vec::new();
-                        for i in 0..param_ids.len().min(num_provided) {
-                            param_map.push((param_ids[i], args[i].clone()));
-                        }
-                        // Fill in missing arguments with their defaults, substituting
-                        // any parameter references to use the caller's scope.
+                        // Fill missing fixed-parameter slots with `undefined`.
+                        // The callee body already starts with default-param
+                        // checks, so default expressions must execute there,
+                        // in parameter order and inside the function's abrupt
+                        // completion boundary. This matters for async
+                        // functions: `async function f(x = throws()) {}` must
+                        // return a rejected Promise, not throw while building
+                        // the call arguments.
                         //
                         // Refs #645 deeper followup / #488 drizzle-sqlite: push
                         // something for EVERY slot from num_provided..defaults.len(),
                         // even when defaults[i] is None — otherwise a later Some
                         // default lands at the wrong positional slot. Drizzle's
-                        // tableBase(name, columns, extraConfig, schema?, baseName=name)
-                        // is the load-bearing repro: 3-arg call, slot 3 (schema)
-                        // has None default and slot 4 (baseName) has Some(name).
-                        // The pre-fix loop skipped slot 3 and pushed baseName's
-                        // default into slot 3 — so schema got the table name and
-                        // rendered SQL became `"users"."users"` instead of `"users"`.
-                        for i in num_provided..fill_end {
-                            let substituted = if let Some(default_expr) = &defaults[i] {
-                                LoweringContext::substitute_param_refs_in_default(
-                                    default_expr,
-                                    &param_map,
-                                )
-                            } else {
-                                Expr::Undefined
-                            };
-                            // Add this expanded default to the map so later defaults
-                            // can reference it (e.g., c = b where b was also defaulted)
-                            if i < param_ids.len() {
-                                param_map.push((param_ids[i], substituted.clone()));
-                            }
-                            args.push(substituted);
+                        // tableBase(name, columns, extraConfig, schema?,
+                        // baseName=name) is the load-bearing repro: 3-arg
+                        // call, slot 3 (schema) has None default and slot 4
+                        // (baseName) has Some(name). If slot 3 is skipped,
+                        // baseName receives the wrong positional value.
+                        for _ in num_provided..fill_end {
+                            args.push(Expr::Undefined);
                         }
                     } // end of !has_synth_args branch
                 }

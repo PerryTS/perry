@@ -302,13 +302,26 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "AbortController"
             | "AbortSignal"
             | "EventTarget"
+            | "Crypto"
+            | "CryptoKey"
+            | "SubtleCrypto"
             | "FormData"
             | "Blob"
             | "File"
             | "Headers"
             | "Request"
             | "Response"
+            | "MessageChannel"
+            | "MessagePort"
+            | "BroadcastChannel"
             | "FinalizationRegistry"
+            | "Performance"
+            | "PerformanceEntry"
+            | "PerformanceMark"
+            | "PerformanceMeasure"
+            | "PerformanceObserver"
+            | "PerformanceObserverEntryList"
+            | "PerformanceResourceTiming"
             // #2875: TC39 explicit-resource-management global constructors.
             | "DisposableStack"
             | "AsyncDisposableStack"
@@ -343,6 +356,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "performance"
             | "process"
             | "navigator"
+            | "crypto"
     )
 }
 
@@ -363,6 +377,7 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
                 | "performance"
                 | "process"
                 | "navigator"
+                | "crypto"
         )
 }
 

@@ -291,13 +291,14 @@ pub(crate) fn lower_string_method(
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let needle_handle = unbox_str_handle(blk, &needle_box);
-            if needle_is_regex && repl_is_function {
+            if repl_is_function {
                 // repl_box is a NaN-boxed closure pointer (double).
-                // The regex callback helpers take the callback as f64.
-                let runtime_fn = if property == "replaceAll" {
-                    "js_string_replace_all_regex_fn"
-                } else {
-                    "js_string_replace_regex_fn"
+                // The callback helpers take the callback as f64.
+                let runtime_fn = match (needle_is_regex, property) {
+                    (true, "replaceAll") => "js_string_replace_all_regex_fn",
+                    (true, _) => "js_string_replace_regex_fn",
+                    (false, "replaceAll") => "js_string_replace_all_string_fn",
+                    (false, _) => "js_string_replace_string_fn",
                 };
                 let result = blk.call(
                     I64,

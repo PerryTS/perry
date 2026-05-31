@@ -276,6 +276,8 @@ pub(crate) struct FnCtx<'a> {
     /// `Stmt::Return(value)` wraps `value` in `js_promise_resolved`
     /// before returning, so callers can `await` the result.
     pub is_async_fn: bool,
+    /// Whether `this` reads should preserve exact strict-mode receiver values.
+    pub is_strict_fn: bool,
     /// Static class fields: `(class_name, field_name) → llvm global
     /// symbol`. Built once in `compile_module`. Used by
     /// `Expr::StaticFieldGet/Set` to load/store the global.
@@ -1443,6 +1445,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathLog1p(..)
         | Expr::MathRandom
         | Expr::WebAssemblyValidate(..)
+        | Expr::WebAssemblyCompile(..)
+        | Expr::WebAssemblyModuleNew(..)
+        | Expr::WebAssemblyModuleExports(..)
+        | Expr::WebAssemblyModuleImports(..)
+        | Expr::WebAssemblyModuleCustomSections { .. }
         | Expr::WebAssemblyInstantiate(..)
         | Expr::WebAssemblyCallExport { .. }
         | Expr::JsonStringifyFull(..)
@@ -1814,7 +1821,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessPid
         | Expr::ProcessPpid
         | Expr::ProcessArgv
-        | Expr::StructuredClone(..)
+        | Expr::StructuredClone { .. }
         | Expr::WeakRefNew(..) => env_clones::lower(ctx, expr),
         Expr::FsUnlinkSync(..) | Expr::Await(..) => fs_await::lower(ctx, expr),
         Expr::StaticFieldGet { .. }

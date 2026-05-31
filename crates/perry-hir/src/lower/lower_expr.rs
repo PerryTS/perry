@@ -22,6 +22,101 @@ use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
+pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: helper_name.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    }
+}
+
+fn is_known_global_identifier_name(name: &str) -> bool {
+    matches!(
+        name,
+        "console"
+            | "process"
+            | "globalThis"
+            | "Buffer"
+            | "Date"
+            | "JSON"
+            | "Math"
+            | "Object"
+            | "Array"
+            | "String"
+            | "Number"
+            | "Boolean"
+            | "Function"
+            | "Error"
+            | "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "AggregateError"
+            | "Promise"
+            | "Map"
+            | "Set"
+            | "RegExp"
+            | "Symbol"
+            | "WeakMap"
+            | "WeakSet"
+            | "WeakRef"
+            | "FinalizationRegistry"
+            | "DisposableStack"
+            | "AsyncDisposableStack"
+            | "SuppressedError"
+            | "Proxy"
+            | "Reflect"
+            | "Uint8Array"
+            | "Int8Array"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float16Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "TextEncoder"
+            | "TextDecoder"
+            | "URL"
+            | "URLSearchParams"
+            | "AbortController"
+            | "FormData"
+            | "File"
+            | "Headers"
+            | "fetch"
+            | "crypto"
+            | "performance"
+            | "queueMicrotask"
+            | "structuredClone"
+            | "atob"
+            | "btoa"
+            | "BigInt"
+            | "WebAssembly"
+            // #3527: `eval` as a VALUE (not a call). Libraries build intrinsic
+            // tables that reference it bare — get-intrinsic's
+            // `'%eval%': eval` — and would otherwise throw `ReferenceError:
+            // identifier is not defined` at module init. `eval(...)` *calls*
+            // keep their dedicated eval-surface classification in
+            // `expr_call::intrinsics` (which matches the callee name before the
+            // callee is lowered through this arm), so this only affects the
+            // value read, which lowers to the `GlobalGet(0)` sentinel.
+            | "eval"
+    ) || is_builtin_global_value_name(name)
+}
+
+fn is_cjs_style_native_default_import(module_name: &str) -> bool {
+    matches!(
+        module_name,
+        "async_hooks" | "events" | "os" | "path" | "querystring" | "sys" | "url" | "util"
+    )
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -42,6 +137,14 @@ pub(crate) fn lower_expr_assignment(
                 // the RHS for side effects. Refs #420.
                 Ok(*value)
             } else {
+                if ctx.current_strict {
+                    return Ok(Expr::Sequence(vec![
+                        *value,
+                        throw_reference_error_expr(
+                            "js_throw_reference_error_unresolved_assignment",
+                        ),
+                    ]));
+                }
                 eprintln!(
                     "  Warning: Assignment to undeclared variable '{}', creating implicit local",
                     name
@@ -186,6 +289,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         property: method.to_string(),
                     });
                 }
+                if ctx.lookup_builtin_module_alias(&name).is_none()
+                    && is_cjs_style_native_default_import(module_name)
+                {
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+                        property: "default".to_string(),
+                    });
+                }
                 // Native module reference (e.g., mysql from 'mysql2/promise')
                 Ok(Expr::NativeModuleRef(module_name.to_string()))
             } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
@@ -243,69 +354,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // GlobalGet(0) is a sentinel: codegen routes by name from the
                 // parent PropertyGet/Call/Member context. Bare uses lower to
                 // 0.0 (perry-codegen/src/expr.rs Expr::GlobalGet arm).
-                if name != "console"
-                    && name != "process"
-                    && name != "globalThis"
-                    && name != "Buffer"
-                    && name != "Date"
-                    && name != "JSON"
-                    && name != "Math"
-                    && name != "Object"
-                    && name != "Array"
-                    && name != "String"
-                    && name != "Number"
-                    && name != "Boolean"
-                    && name != "Function"
-                    && name != "Error"
-                    && name != "TypeError"
-                    && name != "RangeError"
-                    && name != "SyntaxError"
-                    && name != "ReferenceError"
-                    && name != "EvalError"
-                    && name != "URIError"
-                    && name != "AggregateError"
-                    && name != "Promise"
-                    && name != "Map"
-                    && name != "Set"
-                    && name != "RegExp"
-                    && name != "Symbol"
-                    && name != "WeakMap"
-                    && name != "WeakSet"
-                    && name != "WeakRef"
-                    && name != "FinalizationRegistry"
-                    && name != "DisposableStack"
-                    && name != "AsyncDisposableStack"
-                    && name != "SuppressedError"
-                    && name != "Proxy"
-                    && name != "Reflect"
-                    && name != "Uint8Array"
-                    && name != "Int8Array"
-                    && name != "Int16Array"
-                    && name != "Uint16Array"
-                    && name != "Int32Array"
-                    && name != "Uint32Array"
-                    && name != "Float16Array"
-                    && name != "Float32Array"
-                    && name != "Float64Array"
-                    && name != "TextEncoder"
-                    && name != "TextDecoder"
-                    && name != "URL"
-                    && name != "URLSearchParams"
-                    && name != "AbortController"
-                    && name != "FormData"
-                    && name != "File"
-                    && name != "Headers"
-                    && name != "fetch"
-                    && name != "crypto"
-                    && name != "performance"
-                    && name != "queueMicrotask"
-                    && name != "structuredClone"
-                    && name != "atob"
-                    && name != "btoa"
-                    && name != "BigInt"
-                    && name != "WebAssembly"
-                    && !is_builtin_global_value_name(&name)
-                {
+                let known_global = is_known_global_identifier_name(&name);
+                if !known_global && !ctx.unresolved_ident_as_global {
+                    return Ok(throw_reference_error_expr(
+                        "js_throw_reference_error_unresolved_get",
+                    ));
+                }
+                if !known_global {
                     eprintln!(
                         "  Warning: unknown identifier '{}' — assuming global; member access will dispatch by name at runtime, bare reads lower to 0",
                         name
@@ -400,28 +455,47 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // falls through to `class_id = 0` — every dynamic
                 // instanceof returns false. Drizzle's `is(value, type)`
                 // chain depends on this. Refs #420 / #618 followup.
-                let ty_expr = if let ast::Expr::Ident(ident) = bin.right.as_ref() {
-                    let name = ident.sym.as_ref();
-                    // A local holding a class ref (drizzle's `is(value, type)`),
-                    // OR a top-level ES5 function constructor (`function Foo(){…}`
-                    // used as `x instanceof Foo`). The latter has no class entry,
-                    // so without a dynamic value codegen resolves `ty = "Foo"` to
-                    // class_id 0 and instanceof always returns false — which makes
-                    // the ubiquitous `if (!(this instanceof Foo)) return new Foo()`
-                    // guard recurse forever. Lower the function to its value and
-                    // route through `js_instanceof_dynamic`, which derives the same
-                    // `synthetic_class_id_for_function` that `new Foo()` stamps onto
-                    // the instance (see js_new_function_construct).
-                    if ctx.lookup_local(name).is_some() || ctx.lookup_func(name).is_some() {
-                        match lower_expr(ctx, &bin.right) {
-                            Ok(e) => Some(Box::new(e)),
-                            Err(_) => None,
+                let ty_expr = match bin.right.as_ref() {
+                    ast::Expr::Ident(ident) => {
+                        let name = ident.sym.as_ref();
+                        // A local holding a class ref (drizzle's `is(value, type)`),
+                        // OR a top-level ES5 function constructor (`function Foo(){…}`
+                        // used as `x instanceof Foo`). The latter has no class entry,
+                        // so without a dynamic value codegen resolves `ty = "Foo"` to
+                        // class_id 0 and instanceof always returns false — which makes
+                        // the ubiquitous `if (!(this instanceof Foo)) return new Foo()`
+                        // guard recurse forever. Lower the function to its value and
+                        // route through `js_instanceof_dynamic`, which derives the same
+                        // `synthetic_class_id_for_function` that `new Foo()` stamps onto
+                        // the instance (see js_new_function_construct).
+                        if ctx.lookup_local(name).is_some() || ctx.lookup_func(name).is_some() {
+                            match lower_expr(ctx, &bin.right) {
+                                Ok(e) => Some(Box::new(e)),
+                                Err(_) => None,
+                            }
+                        } else {
+                            None
                         }
-                    } else {
-                        None
                     }
-                } else {
-                    None
+                    ast::Expr::Member(member) => {
+                        let native_module = if let ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+                        {
+                            let obj_name = obj_ident.sym.as_ref();
+                            ctx.lookup_builtin_module_alias(obj_name).is_some()
+                                || matches!(ctx.lookup_native_module(obj_name), Some((_, None)))
+                        } else {
+                            false
+                        };
+                        if native_module {
+                            match lower_expr(ctx, &bin.right) {
+                                Ok(e) => Some(Box::new(e)),
+                                Err(_) => None,
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
                 };
                 return Ok(Expr::InstanceOf { expr, ty, ty_expr });
             }
@@ -643,6 +717,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 return Ok(Expr::String("function".to_string()));
                             }
                         }
+                    }
+                    if ctx.lookup_local(n).is_none()
+                        && ctx.lookup_func(n).is_none()
+                        && ctx.lookup_native_module(n).is_none()
+                        && ctx.lookup_imported_func(n).is_none()
+                        && ctx.lookup_class(n).is_none()
+                        && !is_builtin_function(n)
+                        && !is_known_global_identifier_name(n)
+                        && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
+                    {
+                        return Ok(Expr::String("undefined".to_string()));
                     }
                 }
                 // #1395: `typeof process.memoryUsage.rss` is a nested member
@@ -952,6 +1037,33 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            if unary.op == ast::UnaryOp::Delete {
+                if let ast::Expr::Member(member) = unary.arg.as_ref() {
+                    if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                        (member.obj.as_ref(), &member.prop)
+                    {
+                        let obj_name = obj.sym.as_ref();
+                        let prop_name = prop.sym.as_ref();
+                        if obj_name == "Number"
+                            && ctx.lookup_local(obj_name).is_none()
+                            && ctx.lookup_func(obj_name).is_none()
+                            && matches!(
+                                prop_name,
+                                "NaN"
+                                    | "POSITIVE_INFINITY"
+                                    | "NEGATIVE_INFINITY"
+                                    | "MAX_VALUE"
+                                    | "MIN_VALUE"
+                                    | "EPSILON"
+                                    | "MAX_SAFE_INTEGER"
+                                    | "MIN_SAFE_INTEGER"
+                            )
+                        {
+                            return Ok(Expr::Bool(false));
                         }
                     }
                 }
@@ -1800,6 +1912,7 @@ pub(crate) fn try_desugar_reactive_text(
             enclosing_class: None,
             is_async: false,
             is_generator: false,
+            is_strict: ctx.current_strict,
         };
 
         outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
@@ -1838,6 +1951,7 @@ pub(crate) fn try_desugar_reactive_text(
         enclosing_class: None,
         is_async: false,
         is_generator: false,
+        is_strict: ctx.current_strict,
     };
 
     Ok(Some(Expr::Call {

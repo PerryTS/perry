@@ -81,6 +81,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
                         .unwrap_or("");
 
+                    // #3655: a `delete`d configurable slot is no longer own.
+                    if crate::closure::closure_is_key_deleted(ptr, name) {
+                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    }
+
                     // (value, writable, configurable). `name`/`length` are the
                     // built-in own data slots; anything else falls back to the
                     // user-attached dynamic-property side table.
@@ -106,7 +111,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                                 // proto methods (shared func_ptr can't carry it).
                                 len
                             } else {
-                                crate::closure::closure_arity(
+                                crate::closure::closure_length(
                                     ptr as *const crate::closure::ClosureHeader,
                                 )
                                 .unwrap_or(0)
@@ -195,6 +200,55 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
 
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let (Some(module_name), Some(key_name)) =
+                (read_native_module_name(obj), key_rust.as_deref())
+            {
+                if native_module_has_enumerable_key(&module_name, key_name) {
+                    if module_name == "fs" {
+                        match key_name {
+                            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream"
+                            | "Utf8Stream" => {
+                                let get =
+                                    super::native_module::fs_namespace_descriptor_getter_value(
+                                        key_name,
+                                    );
+                                let set =
+                                    super::native_module::fs_namespace_descriptor_setter_value(
+                                        key_name,
+                                    );
+                                return build_accessor_descriptor(get, set, true, true);
+                            }
+                            "promises" => {
+                                let get =
+                                    super::native_module::fs_namespace_descriptor_getter_value(
+                                        key_name,
+                                    );
+                                return build_accessor_descriptor(
+                                    get,
+                                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                                    true,
+                                    true,
+                                );
+                            }
+                            "constants" => {
+                                let value = js_object_get_field_by_name(obj, key_str);
+                                return build_data_descriptor(
+                                    f64::from_bits(value.bits()),
+                                    false,
+                                    true,
+                                    false,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    let value = js_object_get_field_by_name(obj, key_str);
+                    return build_data_descriptor(f64::from_bits(value.bits()), true, true, true);
+                }
+            }
+        }
+
         // Check whether the key is actually present on the object. A property can
         // legitimately hold `undefined`, and accessor descriptors have no value slot,
         // so we check the keys_array directly instead of relying on "value != undefined".
@@ -277,6 +331,28 @@ unsafe fn build_data_descriptor(
     // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
     *fields = value;
     *fields.add(1) = bf(writable);
+    *fields.add(2) = bf(enumerable);
+    *fields.add(3) = bf(configurable);
+    super::rebuild_object_field_layout(desc, 4);
+    f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
+}
+
+unsafe fn build_accessor_descriptor(
+    get: f64,
+    set: f64,
+    enumerable: bool,
+    configurable: bool,
+) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let bf = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
+    let packed = b"get\0set\0enumerable\0configurable";
+    let desc = js_object_alloc_with_shape(0x0D_E5_C1, 4, packed.as_ptr(), packed.len() as u32);
+    let header_size = std::mem::size_of::<ObjectHeader>();
+    let fields = (desc as *mut u8).add(header_size) as *mut f64;
+    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
+    *fields = get;
+    *fields.add(1) = set;
     *fields.add(2) = bf(enumerable);
     *fields.add(3) = bf(configurable);
     super::rebuild_object_field_layout(desc, 4);
@@ -386,6 +462,45 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 }
                 let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                 crate::array::js_array_push(result, JSValue::string_ptr(lk));
+                return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
+            }
+        }
+
+        // #3655: functions/closures. Own keys are `length`, `name`, then any
+        // user-attached props, then `prototype` (constructors) — matching V8's
+        // ordering. All honor `delete`. Reading `keys_array` off a closure
+        // (below) would be out of bounds.
+        if obj_jv.is_pointer() {
+            let ptr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                let mut names: Vec<String> = Vec::new();
+                if !crate::closure::closure_is_key_deleted(ptr, "length") {
+                    names.push("length".to_string());
+                }
+                if !crate::closure::closure_is_key_deleted(ptr, "name") {
+                    names.push("name".to_string());
+                }
+                let has_prototype = crate::closure::closure_has_own_dynamic_prop(ptr, "prototype")
+                    && !crate::closure::closure_is_key_deleted(ptr, "prototype");
+                // User-attached props (snapshot is already sorted); the
+                // built-in slots are emitted explicitly so skip them here.
+                for (name, _) in crate::closure::closure_dynamic_props_snapshot(ptr) {
+                    if matches!(name.as_str(), "length" | "name" | "prototype") {
+                        continue;
+                    }
+                    if crate::closure::closure_is_key_deleted(ptr, &name) {
+                        continue;
+                    }
+                    names.push(name);
+                }
+                if has_prototype {
+                    names.push("prototype".to_string());
+                }
+                let result = crate::array::js_array_alloc(names.len() as u32);
+                for name in names {
+                    let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::array::js_array_push(result, JSValue::string_ptr(s));
+                }
                 return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
             }
         }

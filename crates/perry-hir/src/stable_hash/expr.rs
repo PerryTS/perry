@@ -236,7 +236,7 @@ impl SH for Expr {
             Expr::DecodeURI(e) => { tag(h, 184); e.as_ref().hash(h); }
             Expr::EncodeURIComponent(e) => { tag(h, 185); e.as_ref().hash(h); }
             Expr::DecodeURIComponent(e) => { tag(h, 186); e.as_ref().hash(h); }
-            Expr::StructuredClone(e) => { tag(h, 187); e.as_ref().hash(h); }
+            Expr::StructuredClone { value, options } => { tag(h, 187); value.as_ref().hash(h); options.as_ref().hash(h); }
             Expr::QueueMicrotask(e) => { tag(h, 188); e.as_ref().hash(h); }
             Expr::IterResultSet(e, b) => { tag(h, 189); e.as_ref().hash(h); b.hash(h); }
             Expr::IterResultGetValue => tag(h, 190),
@@ -491,7 +491,7 @@ impl SH for Expr {
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
             Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
-            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, enclosing_class, is_async, is_generator, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); enclosing_class.hash(h); is_async.hash(h); is_generator.hash(h); }
+            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, enclosing_class, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); enclosing_class.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } }
             Expr::RegExpTest { regex, string } => { tag(h, 384); regex.as_ref().hash(h); string.as_ref().hash(h); }
@@ -582,6 +582,11 @@ impl SH for Expr {
             Expr::RegisterFunctionPrototypeMethod { func, method_name, value, } => { tag(h, 464); func.as_ref().hash(h); method_name.hash(h); value.as_ref().hash(h); }
             Expr::GetFunctionPrototypeMethod { func, method_name } => { tag(h, 1465); func.as_ref().hash(h); method_name.hash(h); }
             Expr::WebAssemblyValidate(bytes) => { tag(h, 12027); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyCompile(bytes) => { tag(h, 12050); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyModuleNew(bytes) => { tag(h, 12051); bytes.as_ref().hash(h); }
+            Expr::WebAssemblyModuleExports(module) => { tag(h, 12052); module.as_ref().hash(h); }
+            Expr::WebAssemblyModuleImports(module) => { tag(h, 12053); module.as_ref().hash(h); }
+            Expr::WebAssemblyModuleCustomSections { module, name } => { tag(h, 12054); module.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::WebAssemblyInstantiate(bytes) => { tag(h, 12028); bytes.as_ref().hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
             Expr::DynamicImport { paths, arg } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); }

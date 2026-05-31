@@ -15,9 +15,10 @@ pub use super::class_handles::{
     handle_property_set_dispatch, js_register_event_emitter_handle_probe,
     js_register_event_emitter_on, js_register_handle_method_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
-    js_register_stream_handle_kind_probe, js_register_stream_handle_probe,
-    stream_handle_kind_probe, stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn,
-    HandleMethodDispatchFn, HandlePropertyDispatchFn, HandlePropertySetDispatchFn,
+    js_register_net_socket_handle_probe, js_register_stream_handle_kind_probe,
+    js_register_stream_handle_probe, net_socket_handle_probe, stream_handle_kind_probe,
+    stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn, HandleMethodDispatchFn,
+    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, NetSocketHandleProbeFn,
     StreamHandleKindProbeFn, StreamHandleProbeFn,
 };
 use super::*;
@@ -154,6 +155,74 @@ pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
         .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
 }
 
+fn global_object_prototype_bits() -> Option<u64> {
+    let object_ctor = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_bits = object_ctor.to_bits();
+    if (ctor_bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return None;
+    }
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_bits = proto.to_bits();
+    if (proto_bits >> 48) == 0x7FFD {
+        Some(proto_bits)
+    } else {
+        None
+    }
+}
+
+fn ensure_function_prototype_object(func_value: f64, class_id: u32) -> *mut ObjectHeader {
+    if class_id == 0 {
+        return std::ptr::null_mut();
+    }
+    let existing = class_prototype_object(class_id);
+    if !existing.is_null() {
+        return existing;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return proto;
+    }
+
+    let constructor_key =
+        crate::string::js_string_from_bytes(b"constructor".as_ptr(), "constructor".len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, func_value);
+    set_builtin_property_attrs(
+        proto as usize,
+        "constructor".to_string(),
+        PropertyAttrs::new(true, false, true),
+    );
+
+    if let Some(object_proto_bits) = global_object_prototype_bits() {
+        super::prototype_chain::object_set_static_prototype(proto as usize, object_proto_bits);
+    }
+
+    class_prototype_object_root_store(class_id, proto);
+
+    let func_bits = func_value.to_bits();
+    if (func_bits >> 48) == 0x7FFD {
+        let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+        if func_ptr != 0 {
+            crate::closure::closure_set_dynamic_prop(
+                func_ptr,
+                "prototype",
+                crate::value::js_nanbox_pointer(proto as i64),
+            );
+            set_builtin_property_attrs(
+                func_ptr,
+                "prototype".to_string(),
+                PropertyAttrs::new(true, false, false),
+            );
+        }
+    }
+
+    proto
+}
+
 /// Synthetic class id allocator for prototype-object classes. High bit
 /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
 /// (which start from 1 and grow by module). u32 wraparound is not a
@@ -220,6 +289,15 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
                 // Update the prototype object (allow re-pointing)
                 // without changing the class_id.
                 class_prototype_object_root_store(existing, proto_ptr);
+                let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+                if func_ptr != 0 {
+                    crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+                    set_builtin_property_attrs(
+                        func_ptr,
+                        "prototype".to_string(),
+                        PropertyAttrs::new(true, false, false),
+                    );
+                }
                 crate::typed_feedback::invalidate_method_change(existing);
                 return existing;
             }
@@ -234,6 +312,15 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         write.as_mut().unwrap().insert(func_bits, new_cid);
     }
     class_prototype_object_root_store(new_cid, proto_ptr);
+    let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+    if func_ptr != 0 {
+        crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+        set_builtin_property_attrs(
+            func_ptr,
+            "prototype".to_string(),
+            PropertyAttrs::new(true, false, false),
+        );
+    }
     // Register the synthetic id so REGISTERED_CLASS_IDS-gated paths
     // (e.g., the #687 ClassRef-as-receiver short-circuit) recognize it.
     unsafe { js_register_class_id(new_cid) };
@@ -379,6 +466,18 @@ pub(crate) fn function_class_id(value: f64) -> u32 {
         }
     }
     0
+}
+
+pub(crate) fn function_value_for_class_id(class_id: u32) -> Option<f64> {
+    if class_id == 0 {
+        return None;
+    }
+    FUNCTION_CLASS_IDS.read().ok().and_then(|guard| {
+        guard.as_ref().and_then(|map| {
+            map.iter()
+                .find_map(|(&bits, &cid)| (cid == class_id).then_some(f64::from_bits(bits)))
+        })
+    })
 }
 
 /// Register a class id so `js_value_typeof` can distinguish class refs
@@ -531,8 +630,17 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             return None;
         }
         let func_ptr = (*ptr).func_ptr as usize;
-        let noop_thunk = global_this_builtin_noop_thunk as *const u8 as usize;
-        if func_ptr != noop_thunk {
+        let is_global_builtin_func = func_ptr
+            == global_this_builtin_noop_thunk as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_message_channel_constructor_call_error as *const u8
+                    as usize
+            || func_ptr
+                == crate::messaging::js_message_port_constructor_call_error as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
+                    as usize;
+        if !is_global_builtin_func {
             return None;
         }
     }
@@ -553,6 +661,21 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         }
     }
     None
+}
+
+fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(options.to_bits());
+    if !jsval.is_pointer() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let obj = jsval.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(obj, key);
+    let value_f64 = f64::from_bits(value.bits());
+    f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
 }
 
 #[no_mangle]
@@ -758,6 +881,24 @@ pub unsafe extern "C" fn js_get_function_prototype_method(
     }
     match lookup_prototype_method(cid, name) {
         Some(v) => v,
+        None if matches!(
+            name,
+            "toString"
+                | "valueOf"
+                | "hasOwnProperty"
+                | "isPrototypeOf"
+                | "propertyIsEnumerable"
+                | "toLocaleString"
+        ) =>
+        {
+            let proto = ensure_function_prototype_object(func_value, cid);
+            if proto.is_null() {
+                return undef;
+            }
+            let receiver = crate::value::js_nanbox_pointer(proto as i64);
+            let method = js_class_method_bind(receiver, name_ptr, name_len);
+            f64::from_bits(method.to_bits())
+        }
         None => undef,
     }
 }
@@ -841,6 +982,19 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_len: usize,
 ) -> f64 {
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
+        if module == "sqlite"
+            && matches!(
+                method.as_str(),
+                "DatabaseSync" | "Session" | "StatementSync"
+            )
+        {
+            let ptr =
+                crate::value::JS_NATIVE_SQLITE_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeSqliteDispatchFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len, 1);
+            }
+        }
         if module == "tty" && matches!(method.as_str(), "ReadStream" | "WriteStream") {
             let fd = if !args_ptr.is_null() && args_len > 0 {
                 *args_ptr
@@ -852,6 +1006,44 @@ pub unsafe extern "C" fn js_new_function_construct(
             } else {
                 crate::tty::js_tty_write_stream_new(fd)
             };
+        }
+        if module == "fs" && method == "Utf8Stream" {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::fs::js_fs_utf8_stream_new(options);
+        }
+        if module == "fs"
+            && matches!(
+                method.as_str(),
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+            )
+        {
+            let path = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let options = if !args_ptr.is_null() && args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return if matches!(method.as_str(), "ReadStream" | "FileReadStream") {
+                crate::fs::js_fs_create_read_stream(path, options)
+            } else {
+                crate::fs::js_fs_create_write_stream(path, options)
+            };
+        }
+        if module == "tls" && method == "SecureContext" {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::tls::js_tls_secure_context_new(options);
         }
         if module == "wasi" && method == "WASI" {
             let options = if !args_ptr.is_null() && args_len > 0 {
@@ -916,8 +1108,11 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return crate::value::js_nanbox_pointer(arr as i64);
             }
             "Object" => {
-                let obj = js_object_alloc(0, 0);
-                return crate::value::js_nanbox_pointer(obj as i64);
+                let value = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::js_object_coerce(value);
             }
             // #2889: `new (rebound Error subclass)(msg)` through a global
             // constructor value. Mirrors the bare `new TypeError(msg)`
@@ -991,6 +1186,59 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
             "TextEncoderStream" | "TextDecoderStream" => {
                 return js_text_encoding_stream_new();
+            }
+            "MessageChannel" => {
+                return crate::messaging::js_message_channel_new();
+            }
+            "MessagePort" => {
+                return crate::messaging::js_message_port_constructor_error();
+            }
+            "BroadcastChannel" => {
+                let name = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::messaging::js_broadcast_channel_new(name);
+            }
+            "URL" => {
+                let input = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let input_ptr = crate::url::js_url_coerce_string(input);
+                let url = if let Some(base) = args.get(1).copied() {
+                    let base_ptr = crate::url::js_url_coerce_string(base);
+                    crate::url::js_url_new_with_base(input_ptr, base_ptr)
+                } else {
+                    crate::url::js_url_new(input_ptr)
+                };
+                return crate::value::js_nanbox_pointer(url as i64);
+            }
+            "URLSearchParams" => {
+                let params = if let Some(init) = args.first().copied() {
+                    crate::url::js_url_search_params_new_any(init)
+                } else {
+                    crate::url::js_url_search_params_new_empty()
+                };
+                return crate::value::js_nanbox_pointer(params as i64);
+            }
+            "TextEncoder" => {
+                let encoder = crate::text::js_text_encoder_new();
+                return crate::value::js_nanbox_pointer(encoder);
+            }
+            "TextDecoder" => {
+                let label = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let fatal = text_decoder_bool_option(options, "fatal");
+                let ignore_bom = text_decoder_bool_option(options, "ignoreBOM");
+                let decoder = crate::text::js_text_decoder_new(label, fatal, ignore_bom);
+                return crate::value::js_nanbox_pointer(decoder);
             }
             _ => {}
         }
@@ -1067,6 +1315,13 @@ pub unsafe extern "C" fn js_new_function_construct(
     // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
     let obj_ptr = js_object_alloc(cid, 0);
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
+    let proto = ensure_function_prototype_object(func_value, cid);
+    if !proto.is_null() {
+        super::prototype_chain::object_set_static_prototype(
+            obj_ptr as usize,
+            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+        );
+    }
     // Only run the constructor body when the callee is recognised as
     // a closure shape. The codegen LocalGet path widens the route to
     // any local-resolved callee, so we have to gate the
