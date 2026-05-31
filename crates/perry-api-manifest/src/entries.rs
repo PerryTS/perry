@@ -143,9 +143,11 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
 pub const NODE_SUBMODULES: &[&str] = &[
+    "diagnostics_channel",
     "fs/promises",
     "stream/promises",
     "stream/consumers",
+    "stream/web",
     "readline/promises",
     "punycode.ucs2",
     "sys",
@@ -990,6 +992,20 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_str("p0"), p_any("p1"), p_str("p2"), p_any("p3")],
         TypeSpec::Any,
     ),
+    method("tls", "getCiphers", false, None),
+    method("tls", "getCACertificates", false, None),
+    method("tls", "setDefaultCACertificates", false, None),
+    method("tls", "checkServerIdentity", false, None),
+    method("tls", "createSecureContext", false, None),
+    class("tls", "SecureContext"),
+    method("tls", "SecureContext", false, None),
+    property("tls", "DEFAULT_ECDH_CURVE"),
+    property("tls", "DEFAULT_MAX_VERSION"),
+    property("tls", "DEFAULT_MIN_VERSION"),
+    property("tls", "DEFAULT_CIPHERS"),
+    property("tls", "rootCertificates"),
+    property("tls", "CLIENT_RENEG_LIMIT"),
+    property("tls", "CLIENT_RENEG_WINDOW"),
     method_sig("events", "EventEmitter", false, None, &[], TypeSpec::Any),
     method("events", "on", true, None),
     method("events", "emit", true, None),
@@ -2943,6 +2959,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("test", "fn", false, Some("mock")),
     method("test", "property", false, Some("mock")),
     property("test", "snapshot"),
+    // node:test/reporters — reporter constructors exposed by the runtime
+    // submodule. Formatting behavior remains covered by the node:test suite.
+    property("test/reporters", "default"),
+    method("test/reporters", "spec", false, None),
+    method("test/reporters", "tap", false, None),
+    method("test/reporters", "dot", false, None),
+    method("test/reporters", "junit", false, None),
+    method("test/reporters", "lcov", false, None),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "cwd", false, None),
@@ -3225,12 +3249,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "watch", false, None),
     property("fs", "promises"),
     property("fs", "constants"),
+    // --- node:diagnostics_channel direct submodule.
+    property("diagnostics_channel", "default"),
+    class("diagnostics_channel", "Channel"),
+    method("diagnostics_channel", "channel", false, None),
+    method("diagnostics_channel", "hasSubscribers", false, None),
+    method("diagnostics_channel", "subscribe", false, None),
+    method("diagnostics_channel", "tracingChannel", false, None),
+    method("diagnostics_channel", "unsubscribe", false, None),
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
     // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
     // intentionally omitted — they are tracked separately (#2133). The parent
     // `fs.promises` namespace above still resolves to the same surface.
+    property("fs/promises", "default"),
+    property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
     method("fs/promises", "appendFile", false, None),
     method("fs/promises", "chmod", false, None),
@@ -3536,12 +3570,34 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream/promises", "pipeline", false, None),
     method("stream/promises", "finished", false, None),
     // Direct `node:stream/consumers` submodule exports.
+    property("stream/consumers", "default"),
     method("stream/consumers", "arrayBuffer", false, None),
     method("stream/consumers", "blob", false, None),
     method("stream/consumers", "buffer", false, None),
     method("stream/consumers", "bytes", false, None),
     method("stream/consumers", "json", false, None),
     method("stream/consumers", "text", false, None),
+    // Direct `node:stream/web` submodule exports. The constructors are backed
+    // by Perry's Web Streams runtime; remaining semantic gaps stay tracked by
+    // the stream/web parity issues.
+    property("stream/web", "default"),
+    class("stream/web", "ReadableStream"),
+    class("stream/web", "ReadableStreamDefaultReader"),
+    class("stream/web", "ReadableStreamBYOBReader"),
+    class("stream/web", "ReadableStreamBYOBRequest"),
+    class("stream/web", "ReadableByteStreamController"),
+    class("stream/web", "ReadableStreamDefaultController"),
+    class("stream/web", "TransformStream"),
+    class("stream/web", "TransformStreamDefaultController"),
+    class("stream/web", "WritableStream"),
+    class("stream/web", "WritableStreamDefaultWriter"),
+    class("stream/web", "WritableStreamDefaultController"),
+    class("stream/web", "ByteLengthQueuingStrategy"),
+    class("stream/web", "CountQueuingStrategy"),
+    class("stream/web", "TextEncoderStream"),
+    class("stream/web", "TextDecoderStream"),
+    class("stream/web", "CompressionStream"),
+    class("stream/web", "DecompressionStream"),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does

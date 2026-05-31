@@ -566,6 +566,16 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
+        // ── tls module helpers ──
+        ("tls", "getCiphers") => crate::tls::js_tls_get_ciphers(),
+        ("tls", "getCACertificates") => crate::tls::js_tls_get_ca_certificates(arg(0)),
+        ("tls", "setDefaultCACertificates") => {
+            crate::tls::js_tls_set_default_ca_certificates(arg(0))
+        }
+        ("tls", "checkServerIdentity") => crate::tls::js_tls_check_server_identity(arg(0), arg(1)),
+        ("tls", "createSecureContext") => crate::tls::js_tls_create_secure_context(arg(0)),
+        ("tls", "SecureContext") => crate::tls::js_tls_secure_context_new(arg(0)),
+
         // ── wasi module ──
         ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 

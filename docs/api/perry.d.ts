@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2289 entries across 99 modules
+// Coverage: 2337 entries across 102 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -965,6 +965,24 @@ declare module "dgram" {
   export function createSocket(...args: any[]): any;
 }
 
+declare module "diagnostics_channel" {
+  /** stdlib */
+  export class Channel { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function channel(...args: any[]): any;
+  /** stdlib */
+  export function hasSubscribers(...args: any[]): any;
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+  /** stdlib */
+  export function tracingChannel(...args: any[]): any;
+  /** stdlib */
+  export function unsubscribe(...args: any[]): any;
+}
+
 declare module "dns" {
   /** stdlib */
   export class Resolver { [key: string]: any; }
@@ -1485,6 +1503,11 @@ declare module "fs" {
 }
 
 declare module "fs/promises" {
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function access(...args: any[]): any;
   /** stdlib */
@@ -2902,6 +2925,9 @@ declare module "stream" {
 
 declare module "stream/consumers" {
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export function arrayBuffer(...args: any[]): any;
   /** stdlib */
   export function blob(...args: any[]): any;
@@ -2920,6 +2946,46 @@ declare module "stream/promises" {
   export function finished(...args: any[]): any;
   /** stdlib */
   export function pipeline(...args: any[]): any;
+}
+
+declare module "stream/web" {
+  /** stdlib */
+  export class ByteLengthQueuingStrategy { [key: string]: any; }
+  /** stdlib */
+  export class CompressionStream { [key: string]: any; }
+  /** stdlib */
+  export class CountQueuingStrategy { [key: string]: any; }
+  /** stdlib */
+  export class DecompressionStream { [key: string]: any; }
+  /** stdlib */
+  export class ReadableByteStreamController { [key: string]: any; }
+  /** stdlib */
+  export class ReadableStream { [key: string]: any; }
+  /** stdlib */
+  export class ReadableStreamBYOBReader { [key: string]: any; }
+  /** stdlib */
+  export class ReadableStreamBYOBRequest { [key: string]: any; }
+  /** stdlib */
+  export class ReadableStreamDefaultController { [key: string]: any; }
+  /** stdlib */
+  export class ReadableStreamDefaultReader { [key: string]: any; }
+  /** stdlib */
+  export class TextDecoderStream { [key: string]: any; }
+  /** stdlib */
+  export class TextEncoderStream { [key: string]: any; }
+  /** stdlib */
+  export class TransformStream { [key: string]: any; }
+  /** stdlib */
+  export class TransformStreamDefaultController { [key: string]: any; }
+  /** stdlib */
+  export class WritableStream { [key: string]: any; }
+  /** stdlib */
+  export class WritableStreamDefaultController { [key: string]: any; }
+  /** stdlib */
+  export class WritableStreamDefaultWriter { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
 }
 
 declare module "streams" {
@@ -3036,9 +3102,53 @@ declare module "test" {
   export function todo(...args: any[]): any;
 }
 
+declare module "test/reporters" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function dot(...args: any[]): any;
+  /** stdlib */
+  export function junit(...args: any[]): any;
+  /** stdlib */
+  export function lcov(...args: any[]): any;
+  /** stdlib */
+  export function spec(...args: any[]): any;
+  /** stdlib */
+  export function tap(...args: any[]): any;
+}
+
 declare module "tls" {
   /** stdlib */
+  export class SecureContext { [key: string]: any; }
+  /** stdlib */
+  export const CLIENT_RENEG_LIMIT: any;
+  /** stdlib */
+  export const CLIENT_RENEG_WINDOW: any;
+  /** stdlib */
+  export const DEFAULT_CIPHERS: any;
+  /** stdlib */
+  export const DEFAULT_ECDH_CURVE: any;
+  /** stdlib */
+  export const DEFAULT_MAX_VERSION: any;
+  /** stdlib */
+  export const DEFAULT_MIN_VERSION: any;
+  /** stdlib */
+  export const rootCertificates: any;
+  /** stdlib */
+  export function SecureContext(...args: any[]): any;
+  /** stdlib */
+  export function checkServerIdentity(...args: any[]): any;
+  /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
+  /** stdlib */
+  export function createSecureContext(...args: any[]): any;
+  /** stdlib */
+  export function getCACertificates(...args: any[]): any;
+  /** stdlib */
+  export function getCiphers(...args: any[]): any;
+  /** stdlib */
+  export function setDefaultCACertificates(...args: any[]): any;
 }
 
 declare module "tty" {

@@ -946,6 +946,14 @@ pub unsafe extern "C" fn js_new_function_construct(
                 crate::tty::js_tty_write_stream_new(fd)
             };
         }
+        if module == "tls" && method == "SecureContext" {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::tls::js_tls_secure_context_new(options);
+        }
         if module == "wasi" && method == "WASI" {
             let options = if !args_ptr.is_null() && args_len > 0 {
                 *args_ptr

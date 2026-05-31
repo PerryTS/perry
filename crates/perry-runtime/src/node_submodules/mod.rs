@@ -602,10 +602,6 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn2(thunk_diag_unsubscribe),
             },
             ExportSpec {
-                name: "publish",
-                thunk: ExportThunk::Fn1(thunk_diag_noop),
-            },
-            ExportSpec {
                 name: "hasSubscribers",
                 thunk: ExportThunk::Fn1(thunk_diag_has_subscribers),
             },
@@ -731,6 +727,12 @@ thread_local! {
     /// pointer — populated once per submodule on first namespace use.
     static NAMESPACE_SINGLETONS: RefCell<std::collections::HashMap<usize, *mut ObjectHeader>> =
         RefCell::new(std::collections::HashMap::new());
+
+    /// Map from submod_key_ptr to the cached CommonJS-style default
+    /// object for submodules whose `namespace.default` is not the
+    /// namespace object itself.
+    static DEFAULT_OBJECT_SINGLETONS: RefCell<std::collections::HashMap<usize, *mut ObjectHeader>> =
+        RefCell::new(std::collections::HashMap::new());
 }
 
 // We also need a process-wide "any singleton allocated?" flag so the
@@ -780,7 +782,6 @@ fn sys_util_export_value(name: &str) -> Option<f64> {
 fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
     let value = match submod_key {
         "test" => test::test_special_export_value(name),
-        "test_reporters" => test::test_reporters_special_export_value(name),
         _ => None,
     };
     if value.is_some() {
@@ -841,6 +842,75 @@ fn export_rest_fixed_arity(submod_key: &str, export_name: &str) -> Option<u32> {
     }
 }
 
+fn submodule_has_default_object(submod_key: &str) -> bool {
+    matches!(
+        submod_key,
+        "diagnostics_channel"
+            | "fs_promises"
+            | "stream_consumers"
+            | "stream_web"
+            | "test_reporters"
+    )
+}
+
+fn fs_promises_constants_value() -> f64 {
+    unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"fs".as_ptr(),
+            "fs".len(),
+            b"constants".as_ptr(),
+            "constants".len(),
+        )
+    }
+}
+
+fn set_named_value(obj: *mut ObjectHeader, name: &str, value: f64) {
+    let name_bytes = name.as_bytes();
+    let name_header = js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+    unsafe {
+        crate::object::js_object_set_field_by_name(obj, name_header, value);
+    }
+}
+
+fn submodule_export_value(submod: &'static SubmoduleSpec, spec: &'static ExportSpec) -> f64 {
+    if submod.key == "sys" {
+        return sys_util_export_value(spec.name).unwrap_or_else(|| {
+            let closure_ptr = ensure_export_singleton(submod, spec);
+            f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
+        });
+    }
+    if let Some(value) = special_export_value(submod.key, spec.name) {
+        return value;
+    }
+    let closure_ptr = ensure_export_singleton(submod, spec);
+    f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
+}
+
+fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64> {
+    if !submodule_has_default_object(submod.key) {
+        return None;
+    }
+    let key = submod.key.as_ptr() as usize;
+    if let Some(cached) = DEFAULT_OBJECT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
+        return Some(f64::from_bits(JSValue::pointer(cached as *const u8).bits()));
+    }
+
+    let extra_fields = u32::from(submod.key == "fs_promises");
+    let obj = js_object_alloc(0, submod.exports.len() as u32 + extra_fields);
+    for spec in submod.exports {
+        set_named_value(obj, spec.name, submodule_export_value(submod, spec));
+    }
+    if submod.key == "fs_promises" {
+        set_named_value(obj, "constants", fs_promises_constants_value());
+    }
+
+    DEFAULT_OBJECT_SINGLETONS.with(|m| {
+        m.borrow_mut().insert(key, obj);
+    });
+    ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
+    Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
+}
+
 pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {
     let js_value = JSValue::from_bits(value.to_bits());
     if !js_value.is_pointer() {
@@ -865,7 +935,9 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     // Allocate a fresh object with one inline slot per known export;
     // the dynamic-property path in `js_object_set_field_by_name` will
     // grow it if needed.
-    let field_count = submod.exports.len() as u32;
+    let field_count = submod.exports.len() as u32
+        + u32::from(submod.key == "fs_promises")
+        + u32::from(submodule_has_default_object(submod.key));
     let obj = js_object_alloc(0, field_count);
     // Populate fields. Each export's value is the singleton closure
     // pointer NaN-boxed as POINTER. We route through
@@ -874,22 +946,10 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     // produce — that's what `js_object_keys` / spread / Reflect.ownKeys
     // walks at runtime.
     for spec in submod.exports {
-        let value_f64 = if submod.key == "sys" {
-            sys_util_export_value(spec.name).unwrap_or_else(|| {
-                let closure_ptr = ensure_export_singleton(submod, spec);
-                f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
-            })
-        } else if let Some(value) = special_export_value(submod.key, spec.name) {
-            value
-        } else {
-            let closure_ptr = ensure_export_singleton(submod, spec);
-            f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
-        };
-        unsafe {
-            let name_bytes = spec.name.as_bytes();
-            let name_header = js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, name_header, value_f64);
-        }
+        set_named_value(obj, spec.name, submodule_export_value(submod, spec));
+    }
+    if submod.key == "fs_promises" {
+        set_named_value(obj, "constants", fs_promises_constants_value());
     }
     if submod.key == "stream_promises" {
         let value = value_from_ptr(obj as *const u8);
@@ -916,9 +976,8 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             f64::from_bits(JSValue::pointer(default_obj as *const u8).bits()),
         );
     }
-    if submod.key == "test_reporters" {
-        let value = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-        test::populate_reporters_default(obj, value);
+    if let Some(default_value) = submodule_default_object_value(submod) {
+        set_named_value(obj, "default", default_value);
     }
     NAMESPACE_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, obj);
@@ -945,6 +1004,11 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
         }
     });
     NAMESPACE_SINGLETONS.with(|m| {
+        for obj_ptr in m.borrow_mut().values_mut() {
+            visitor.visit_raw_mut_ptr_slot(obj_ptr);
+        }
+    });
+    DEFAULT_OBJECT_SINGLETONS.with(|m| {
         for obj_ptr in m.borrow_mut().values_mut() {
             visitor.visit_raw_mut_ptr_slot(obj_ptr);
         }
@@ -1069,6 +1133,9 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         let obj = ensure_namespace_singleton(submod);
         return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     }
+    if submod.key == "fs_promises" && name == "constants" {
+        return fs_promises_constants_value();
+    }
     if submod.key == "trace_events" && name == "default" {
         let obj = ensure_namespace_singleton(submod);
         let name_header = js_string_from_bytes(b"default".as_ptr(), 7);
@@ -1076,8 +1143,14 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         return value;
     }
     if submod.key == "test_reporters" && name == "default" {
-        let obj = ensure_namespace_singleton(submod);
-        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+        if let Some(value) = submodule_default_object_value(submod) {
+            return value;
+        }
+    }
+    if name == "default" {
+        if let Some(value) = submodule_default_object_value(submod) {
+            return value;
+        }
     }
     if let Some(value) = special_export_value(submod.key, name) {
         return value;
@@ -1135,6 +1208,9 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
         let obj = ensure_namespace_singleton(submod);
         return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     }
+    if submod.key == "fs_promises" && name == "constants" {
+        return fs_promises_constants_value();
+    }
     if submod.key == "trace_events" && name == "default" {
         let obj = ensure_namespace_singleton(submod);
         let name_header = js_string_from_bytes(b"default".as_ptr(), 7);
@@ -1142,8 +1218,14 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
         return value;
     }
     if submod.key == "test_reporters" && name == "default" {
-        let obj = ensure_namespace_singleton(submod);
-        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+        if let Some(value) = submodule_default_object_value(submod) {
+            return value;
+        }
+    }
+    if name == "default" {
+        if let Some(value) = submodule_default_object_value(submod) {
+            return value;
+        }
     }
     if let Some(value) = special_export_value(submod.key, name) {
         return value;
@@ -1216,9 +1298,11 @@ mod tests {
             "readline_promises",
             "stream_promises",
             "stream_consumers",
+            "stream_web",
             "sys",
             "diagnostics_channel",
             "trace_events",
+            "test_reporters",
         ] {
             assert!(
                 find_submodule(key).is_some(),
@@ -1330,6 +1414,44 @@ mod tests {
         assert!(get_object_property(ns_value, b"writeFile").is_some());
         assert!(get_object_property(ns_value, b"chmod").is_some());
         assert!(get_object_property(ns_value, b"stat").is_some());
+    }
+
+    #[test]
+    fn fs_promises_constants_reuses_fs_constants_namespace() {
+        let fs_constants = unsafe {
+            crate::object::js_native_module_property_by_name(
+                b"fs".as_ptr(),
+                "fs".len(),
+                b"constants".as_ptr(),
+                "constants".len(),
+            )
+        };
+        let named_constants = unsafe {
+            js_node_submodule_export_as_function(
+                b"fs_promises".as_ptr(),
+                "fs_promises".len() as u32,
+                b"constants".as_ptr(),
+                "constants".len() as u32,
+            )
+        };
+        let namespace_constants = unsafe {
+            js_node_submodule_namespace_member(
+                b"fs_promises".as_ptr(),
+                "fs_promises".len() as u32,
+                b"constants".as_ptr(),
+                "constants".len() as u32,
+            )
+        };
+        let namespace = unsafe {
+            js_node_submodule_namespace(b"fs_promises".as_ptr(), "fs_promises".len() as u32)
+        };
+        let ns = object_ptr_from_value(namespace).expect("fs/promises namespace should be object");
+        let object_constants =
+            get_object_property(boxed_ptr(ns as *const u8), b"constants").unwrap();
+
+        assert_eq!(named_constants.to_bits(), fs_constants.to_bits());
+        assert_eq!(namespace_constants.to_bits(), fs_constants.to_bits());
+        assert_eq!(object_constants.to_bits(), fs_constants.to_bits());
     }
 
     #[test]

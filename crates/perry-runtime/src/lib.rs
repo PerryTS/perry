@@ -136,6 +136,7 @@ pub mod stdlib_stubs;
 /// derived from `build.rs`'s dispatch-table walk.
 pub mod stub_diag;
 pub mod thread;
+pub mod tls;
 /// TTY support (#347 Phase 3): tty.isatty, process.std{in,out,err}.isTTY,
 /// process.stdout.columns/.rows, SIGWINCH 'resize' event handler. Lives
 /// in runtime (not stdlib) because it's a thin libc wrapper with no
