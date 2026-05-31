@@ -1580,7 +1580,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_on",
         // NA_JSV (#3072): pass the full NaN-boxed listener so the runtime can
         // validate it is callable and throw ERR_INVALID_ARG_TYPE otherwise.
-        args: &[NA_STR, NA_JSV],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1589,7 +1590,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "emit",
         class_filter: None,
         runtime: "js_event_emitter_emit",
-        args: &[NA_STR, NA_VARARGS],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1599,7 +1601,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
         // NA_JSV (#3072): validate the listener is callable before removal.
-        args: &[NA_STR, NA_JSV],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1608,7 +1611,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "removeAllListeners",
         class_filter: None,
         runtime: "js_event_emitter_remove_all_listeners",
-        args: &[NA_STR],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME],
         ret: NR_PTR,
     },
     // EventEmitter additions (#850) — `once` / `addListener` (alias for
@@ -1623,7 +1627,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_once",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1633,7 +1638,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_on",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1643,7 +1649,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_prepend_listener",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1653,7 +1660,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_prepend_once_listener",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1663,7 +1671,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
         // NA_JSV (#3072): validate the listener is callable.
-        args: &[NA_STR, NA_JSV],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1672,7 +1681,11 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listenerCount",
         class_filter: None,
         runtime: "js_event_emitter_listener_count",
-        args: &[NA_STR, NA_PTR],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        // NA_PTR (#3029): pass the optional listener as an unboxed closure
+        // pointer so the runtime can filter the count by listener identity
+        // (matches the identity `on`/`once` store after validate).
+        args: &[NA_EVENT_NAME, NA_PTR],
         ret: NR_F64,
     },
     NativeModSig {
@@ -1681,7 +1694,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listeners",
         class_filter: None,
         runtime: "js_event_emitter_listeners",
-        args: &[NA_STR],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1690,7 +1704,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "rawListeners",
         class_filter: None,
         runtime: "js_event_emitter_raw_listeners",
-        args: &[NA_STR],
+        // NA_EVENT_NAME (#3028): coerce non-symbol event names to strings.
+        args: &[NA_EVENT_NAME],
         ret: NR_PTR,
     },
     NativeModSig {

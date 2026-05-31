@@ -114,6 +114,13 @@ pub fn lower_native_module_dispatch(
                 llvm_args.push((I64, ptr));
                 arg_types.push(I64);
             }
+            NativeArgKind::EventName => {
+                // #3028: coerce non-symbol event names to strings.
+                let blk = ctx.block();
+                let ptr = blk.call(I64, "js_event_name_to_key_ptr", &[(DOUBLE, &lowered)]);
+                llvm_args.push((I64, ptr));
+                arg_types.push(I64);
+            }
             NativeArgKind::PtrI64 => {
                 let blk = ctx.block();
                 let handle = unbox_to_i64(blk, &lowered);
@@ -142,7 +149,7 @@ pub fn lower_native_module_dispatch(
                 ));
                 arg_types.push(DOUBLE);
             }
-            NativeArgKind::StrPtr | NativeArgKind::PtrI64 => {
+            NativeArgKind::StrPtr | NativeArgKind::PtrI64 | NativeArgKind::EventName => {
                 llvm_args.push((I64, "0".to_string()));
                 arg_types.push(I64);
             }

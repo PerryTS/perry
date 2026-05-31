@@ -242,10 +242,15 @@ pub struct EventEmitterHandle {
     /// Per-event pending `events.once(em, name)` promises. Resolved on
     /// the next `emit(name, ...)` with the emitted args array.
     pending_once_promises: HashMap<String, Vec<PendingOnce>>,
-    /// `setMaxListeners` ceiling. Node's default is 10 but we don't warn
-    /// when the count exceeds it — `getMaxListeners()` just reads back
-    /// whatever was written.
+    /// `setMaxListeners` ceiling. Node's default is 10. When a single event's
+    /// listener count first exceeds this (and the limit is finite and > 0), a
+    /// `MaxListenersExceededWarning` is emitted (#2933). `getMaxListeners()`
+    /// reads it back.
     max_listeners: f64,
+    /// Per-event "already warned" set (#2933). Node sets a `warned` flag on the
+    /// per-event listener array so the leak warning fires at most once per
+    /// event. Cleared when the event is fully removed.
+    warned_events: std::collections::HashSet<String>,
     /// Constructor-level `{ captureRejections: true }` flag. When enabled,
     /// rejected promises returned from listeners are routed to `"error"`.
     capture_rejections: bool,
@@ -315,6 +320,7 @@ impl EventEmitterHandle {
             // Node's default is 10. We mirror it so `getMaxListeners()`
             // on a fresh emitter returns 10 (matching Node).
             max_listeners: 10.0,
+            warned_events: std::collections::HashSet::new(),
             capture_rejections: false,
         }
     }
@@ -332,6 +338,10 @@ impl EventEmitterHandle {
         };
         if drop_it {
             self.events.remove(name);
+            // #2933: a fully-removed event resets its leak-warning state, so a
+            // later re-grow past the limit warns again (matches Node, which
+            // drops the per-event array + its `warned` flag).
+            self.warned_events.remove(name);
             if let Some(pos) = self.event_order.iter().position(|s| s == name) {
                 self.event_order.remove(pos);
             }
@@ -365,7 +375,57 @@ impl EventEmitterHandle {
         } else {
             vec.push(listener);
         }
+        // #2933: emit `MaxListenersExceededWarning` once per event when the
+        // count first exceeds the (finite, > 0) limit. `Infinity`/`0` disable
+        // the warning, matching Node.
+        let max = self.max_listeners;
+        let len = vec.len();
+        if max.is_finite() && max > 0.0 && len as f64 > max && !self.warned_events.contains(name) {
+            self.warned_events.insert(name.to_string());
+            unsafe { emit_max_listeners_warning(len, name, max) };
+        }
     }
+}
+
+/// #2933: emit Node's `MaxListenersExceededWarning`. Routes through
+/// `process.emitWarning(message, options)` (`js_process_emit_warning`) rather
+/// than a dedicated runtime symbol: under the default auto-optimize
+/// whole-program-LLVM build, a fresh runtime `#[no_mangle]` reached only via a
+/// cross-crate Rust call from this crate gets internalized + dead-stripped (the
+/// call simply never fires), whereas `js_process_emit_warning` is referenced
+/// directly by codegen at every `process.emitWarning(...)` site and is always
+/// retained. The options object carries `type: "MaxListenersExceededWarning"`
+/// (the warning name) plus `count`/`eventName` metadata.
+unsafe fn emit_max_listeners_warning(count: usize, event_name: &str, max: f64) {
+    let msg = format!(
+        "Possible EventEmitter memory leak detected. {count} {event_name} listeners added to \
+         [EventEmitter]. MaxListeners is {}. Use emitter.setMaxListeners() to increase limit",
+        max as i64
+    );
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let msg_value = js_nanbox_string(msg_ptr as i64);
+
+    let options = js_object_alloc(0, 0);
+    set_object_string(options, "type", "MaxListenersExceededWarning");
+    set_object_value(options, "count", count_to_f64(count));
+    set_object_string(options, "eventName", event_name);
+    let options_value = js_nanbox_pointer(options as i64);
+
+    perry_runtime::process::js_process_emit_warning(msg_value, options_value, undefined_value());
+}
+
+fn count_to_f64(n: usize) -> f64 {
+    n as f64
+}
+
+unsafe fn set_object_string(obj: *mut ObjectHeader, key: &str, value: &str) {
+    let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    set_object_value(obj, key, js_nanbox_string(value_ptr as i64));
+}
+
+unsafe fn set_object_value(obj: *mut ObjectHeader, key: &str, value: f64) {
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    perry_runtime::js_object_set_field_by_name(obj, key_ptr as *const StringHeader, value);
 }
 
 /// Helper to extract string from StringHeader pointer
@@ -1045,6 +1105,8 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
                 .collect();
             emitter.events.clear();
             emitter.event_order.clear();
+            // #2933: a full clear resets every event's leak-warning state.
+            emitter.warned_events.clear();
             for (name, callback) in removed {
                 emitter.emit_meta_event("removeListener", &name, callback);
             }
@@ -1055,6 +1117,8 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
                 .map(|listeners| listeners.iter().map(|listener| listener.callback).collect())
                 .unwrap_or_default();
             emitter.events.remove(&event_name);
+            // #2933: reset this event's leak-warning state.
+            emitter.warned_events.remove(&event_name);
             if let Some(pos) = emitter.event_order.iter().position(|s| s == &event_name) {
                 emitter.event_order.remove(pos);
             }

@@ -42,6 +42,15 @@ pub(super) enum NativeArgKind {
     /// NaN-boxed string → extract raw i64 pointer via js_get_string_pointer_unified.
     /// Use for Rust signatures like `*const StringHeader`.
     StrPtr,
+    /// EventEmitter event name (#3028): coerce via `js_event_name_to_key_ptr`,
+    /// which keeps symbols as symbols and runs every other value (number,
+    /// `null`, `undefined`, object, boolean) through full JS `ToString` so the
+    /// stored event key matches Node (`ee.on(123)` → `"123"`, `ee.on(null)`
+    /// → `"null"`, `ee.on({})` → `"[object Object]"`). Unlike `StrPtr`, this
+    /// handles the NaN-boxed-tag and object cases that
+    /// `js_get_string_pointer_unified` mis-handles. Yields an i64
+    /// `*const StringHeader`.
+    EventName,
     /// NaN-boxed closure/pointer → unbox to i64 via the standard mask.
     PtrI64,
     /// Pass the NaN-boxed JSValue bits as-is (bitcast f64 → i64, no
@@ -113,6 +122,7 @@ pub(super) struct NativeModSig {
 // each sibling sub-module can reach them via `use super::*;`.
 pub(super) const NA_F64: NativeArgKind = NativeArgKind::F64;
 pub(super) const NA_STR: NativeArgKind = NativeArgKind::StrPtr;
+pub(super) const NA_EVENT_NAME: NativeArgKind = NativeArgKind::EventName;
 pub(super) const NA_PTR: NativeArgKind = NativeArgKind::PtrI64;
 pub(super) const NA_JSV: NativeArgKind = NativeArgKind::JsvalI64;
 pub(super) const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
@@ -210,6 +220,7 @@ fn arg_kind_tag(a: &NativeArgKind) -> &'static str {
     match a {
         NativeArgKind::F64 => "NA_F64",
         NativeArgKind::StrPtr => "NA_STR",
+        NativeArgKind::EventName => "NA_EVENT_NAME",
         NativeArgKind::PtrI64 => "NA_PTR",
         NativeArgKind::JsvalI64 => "NA_JSV",
         NativeArgKind::VarArgsAsArray => "NA_VARARGS",

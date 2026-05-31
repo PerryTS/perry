@@ -79,6 +79,16 @@ extern "C" {
     // TypeError [ERR_INVALID_ARG_TYPE]. Centralized in perry-runtime so the
     // stdlib and ext-events EventEmitter implementations stay byte-identical.
     fn js_validate_event_listener(listener_bits: i64, name_ptr: *const u8, name_len: u32) -> i64;
+    // #2933: MaxListenersExceededWarning routes through process.emitWarning.
+    fn js_process_emit_warning(warning: f64, type_name: f64, code: f64);
+    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
+    fn js_object_set_field_by_name(obj: *mut ObjectHeader, key: *const StringHeader, value: f64);
+}
+
+/// NaN-box a `*mut StringHeader` as a STRING-tagged JSValue f64.
+#[inline]
+fn nanbox_string_value(ptr: *mut StringHeader) -> f64 {
+    f64::from_bits(nanbox_string_bits(ptr))
 }
 
 /// #3072: validate an EventEmitter listener argument, returning the closure
@@ -121,6 +131,9 @@ pub struct EventEmitterHandle {
     event_order: Vec<String>,
     pending_once_promises: HashMap<String, Vec<PendingOnce>>,
     max_listeners: i32,
+    /// #2933: per-event "already warned" set. Node fires the leak warning at
+    /// most once per event; cleared when the event is fully removed.
+    warned_events: std::collections::HashSet<String>,
 }
 
 // SAFETY: `*mut Promise` is not Send/Sync by default, but the registry's
@@ -144,6 +157,7 @@ impl EventEmitterHandle {
             // Node's default — `getMaxListeners()` on a fresh emitter
             // returns 10.
             max_listeners: 10,
+            warned_events: std::collections::HashSet::new(),
         }
     }
 
@@ -160,6 +174,9 @@ impl EventEmitterHandle {
         };
         if drop_it {
             self.events.remove(name);
+            // #2933: a fully-removed event resets its leak-warning state so a
+            // later re-grow past the limit warns again (matches Node).
+            self.warned_events.remove(name);
             if let Some(pos) = self.event_order.iter().position(|s| s == name) {
                 self.event_order.remove(pos);
             }
@@ -168,6 +185,7 @@ impl EventEmitterHandle {
 
     fn add_listener(&mut self, name: &str, callback: i64, once: bool, prepend: bool) {
         self.note_event(name);
+        let max = self.max_listeners;
         let vec = self.events.entry(name.to_string()).or_default();
         let listener = Listener { callback, once };
         if prepend {
@@ -175,7 +193,50 @@ impl EventEmitterHandle {
         } else {
             vec.push(listener);
         }
+        // #2933: emit `MaxListenersExceededWarning` once per event when the
+        // count first exceeds the (positive, finite) limit. `setMaxListeners(0)`
+        // and `Infinity` (→ i32::MAX) disable the warning, matching Node.
+        let len = vec.len();
+        if max > 0 && len as i64 > max as i64 && !self.warned_events.contains(name) {
+            self.warned_events.insert(name.to_string());
+            unsafe { emit_max_listeners_warning(len, name, max) };
+        }
     }
+}
+
+/// #2933: emit Node's `MaxListenersExceededWarning` via
+/// `process.emitWarning(message, options)` (`js_process_emit_warning`). Using
+/// the same entry point user code uses keeps the symbol retained under the
+/// default auto-optimize whole-program build (it is referenced by codegen at
+/// every `process.emitWarning` site) — a fresh ext-crate `#[no_mangle]` reached
+/// only via a cross-crate Rust call would be dead-stripped. The options object
+/// carries `type: "MaxListenersExceededWarning"` (the warning name) plus
+/// `count`/`eventName` metadata.
+unsafe fn emit_max_listeners_warning(count: usize, event_name: &str, max: i32) {
+    let msg = format!(
+        "Possible EventEmitter memory leak detected. {count} {event_name} listeners added to \
+         [EventEmitter]. MaxListeners is {max}. Use emitter.setMaxListeners() to increase limit"
+    );
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let msg_value = nanbox_string_value(msg_ptr);
+
+    let options = js_object_alloc(0, 0);
+    set_object_string(options, "type", "MaxListenersExceededWarning");
+    set_object_value(options, "count", count as f64);
+    set_object_string(options, "eventName", event_name);
+    let options_value = nanbox_pointer_bits(options as i64);
+
+    js_process_emit_warning(msg_value, options_value, undefined_value());
+}
+
+unsafe fn set_object_string(obj: *mut ObjectHeader, key: &str, value: &str) {
+    let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    set_object_value(obj, key, nanbox_string_value(value_ptr));
+}
+
+unsafe fn set_object_value(obj: *mut ObjectHeader, key: &str, value: f64) {
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    js_object_set_field_by_name(obj, key_ptr as *const StringHeader, value);
 }
 
 static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -744,8 +805,13 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
         if event_name_ptr.is_null() {
             emitter.events.clear();
             emitter.event_order.clear();
+            // #2933: a full clear resets every event's leak-warning state.
+            emitter.warned_events.clear();
         } else if let Some(event_name) = read_str(event_name_ptr) {
             emitter.events.remove(&event_name);
+            // #2933: reset this event's leak-warning state so a later re-grow
+            // past the limit warns again (matches Node).
+            emitter.warned_events.remove(&event_name);
             if let Some(pos) = emitter.event_order.iter().position(|s| s == &event_name) {
                 emitter.event_order.remove(pos);
             }
@@ -763,12 +829,22 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
 pub unsafe extern "C" fn js_event_emitter_listener_count(
     handle: Handle,
     event_name_ptr: *const StringHeader,
+    callback_ptr: i64,
 ) -> f64 {
     let Some(event_name) = read_str(event_name_ptr) else {
         return 0.0;
     };
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         if let Some(listeners) = emitter.events.get(&event_name) {
+            // #3029: optional `listener` arg — count only entries whose stored
+            // callback identity matches. `callback_ptr == 0` means "no filter"
+            // (the codegen NA_PTR pad), so the total count is returned.
+            if callback_ptr != 0 {
+                return listeners
+                    .iter()
+                    .filter(|listener| listener.callback == callback_ptr)
+                    .count() as f64;
+            }
             return listeners.len() as f64;
         }
     }
@@ -1109,7 +1185,9 @@ pub unsafe extern "C" fn js_events_listener_count(
     handle: Handle,
     event_name_ptr: *const StringHeader,
 ) -> f64 {
-    js_event_emitter_listener_count(handle, event_name_ptr)
+    // Module-level `events.listenerCount` has no listener-filter arg — pass 0
+    // (no filter) so the total count is returned.
+    js_event_emitter_listener_count(handle, event_name_ptr, 0)
 }
 
 /// `events.getMaxListeners(emitter)` — alias.
@@ -1216,7 +1294,8 @@ mod tests {
     fn new_emitter_starts_empty() {
         let h = js_event_emitter_new();
         let event_name = alloc_string("foo");
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
+        let count =
+            unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _, 0) };
         assert_eq!(count, 0.0);
         drop_handle(h);
     }
@@ -1228,7 +1307,8 @@ mod tests {
         // Real closures — we never emit so the bodies aren't invoked.
         let _ = unsafe { js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener()) };
         let _ = unsafe { js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener()) };
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
+        let count =
+            unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _, 0) };
         assert_eq!(count, 2.0);
         drop_handle(h);
     }
@@ -1244,7 +1324,8 @@ mod tests {
             js_event_emitter_on(h, event_name.as_raw() as *const _, b);
             js_event_emitter_remove_listener(h, event_name.as_raw() as *const _, a);
         }
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
+        let count =
+            unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _, 0) };
         assert_eq!(count, 1.0);
         drop_handle(h);
     }
@@ -1258,7 +1339,8 @@ mod tests {
             js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener());
             js_event_emitter_remove_all_listeners(h, std::ptr::null());
         }
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
+        let count =
+            unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _, 0) };
         assert_eq!(count, 0.0);
         drop_handle(h);
     }
@@ -1317,6 +1399,7 @@ mod tests {
             event_order: vec!["ready".to_string()],
             pending_once_promises,
             max_listeners: 10,
+            warned_events: std::collections::HashSet::new(),
         });
 
         let _ = perry_runtime::gc::gc_collect_minor();

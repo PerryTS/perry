@@ -300,6 +300,43 @@ pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
     0
 }
 
+/// Coerce an EventEmitter event name to its storage-key `*const StringHeader`
+/// (returned as i64), matching Node's `node:events` semantics (#3028):
+///
+/// - **Symbols** keep symbol identity: the symbol pointer is returned so the
+///   stdlib `string_from_header` symbol-magic branch renders/stores it as a
+///   symbol key (preserving existing symbol-event behavior).
+/// - **Everything else** (number, `null`, `undefined`, object, boolean) is run
+///   through full JS `ToString`, so `ee.on(123)` / `ee.on(null)` / `ee.on({})`
+///   register under the string keys `"123"`, `"null"`, `"[object Object]"`.
+///
+/// `js_get_string_pointer_unified` alone is insufficient here: it coerces
+/// numbers but leaves `null`/`undefined` (NaN-boxed tags) and objects (which it
+/// mis-reads as raw string pointers) broken. Routing through
+/// `js_jsvalue_to_string` gives the correct stringification for every non-symbol
+/// value.
+#[no_mangle]
+pub extern "C" fn js_event_name_to_key_ptr(value: f64) -> i64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    // Preserve symbol identity (symbol pointers are NaN-boxed POINTER_TAG and
+    // registered in the symbol side-table). Pass the raw pointer through so the
+    // event-name consumer's symbol-magic branch handles it as today.
+    if jsval.is_pointer() {
+        let ptr = jsval.as_pointer::<u8>() as usize;
+        if ptr >= 0x10000 && crate::symbol::is_registered_symbol(ptr) {
+            return ptr as i64;
+        }
+    }
+    crate::value::js_jsvalue_to_string(value) as i64
+}
+
+/// `#[used]` keepalive anchor: `js_event_name_to_key_ptr` is emitted only from
+/// generated `.o` (the `NA_EVENT_NAME` native-arg coercion in codegen), so the
+/// default auto-optimize whole-program-LLVM rebuild would dead-strip it without
+/// an anchor (see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_EVENT_NAME_TO_KEY_PTR: extern "C" fn(f64) -> i64 = js_event_name_to_key_ptr;
+
 /// Check if a NaN-boxed f64 value represents a string.
 #[no_mangle]
 pub extern "C" fn js_nanbox_is_string(value: f64) -> i32 {
