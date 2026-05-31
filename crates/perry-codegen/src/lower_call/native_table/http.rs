@@ -1276,6 +1276,41 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_OBJ_FROM_JSON_STR,
     },
+    // ========== node:http2 settings helpers (issue #3168) ==========
+    // Pure pack/unpack functions implemented in perry-ext-http-server (so
+    // their Buffer alloc/recognition shares the program's runtime copy).
+    NativeModSig {
+        module: "http2",
+        has_receiver: false,
+        method: "getDefaultSettings",
+        class_filter: None,
+        runtime: "js_node_http2_get_default_settings",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
+    NativeModSig {
+        module: "http2",
+        has_receiver: false,
+        method: "getPackedSettings",
+        class_filter: None,
+        runtime: "js_node_http2_get_packed_settings",
+        // NA_JSV: pass the settings object's raw NaN-boxed bits (the runtime
+        // JSON-stringifies it); NR_PTR: return value is a Buffer pointer.
+        args: &[NA_JSV],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http2",
+        has_receiver: false,
+        method: "getUnpackedSettings",
+        class_filter: None,
+        runtime: "js_node_http2_get_unpacked_settings",
+        // NA_JSV: pass the Buffer's raw bits (runtime reads it via the
+        // buffer-registry shim); NR_OBJ_FROM_JSON_STR: returns a settings
+        // object reparsed from JSON.
+        args: &[NA_JSV],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
     // `@perryts/google-auth` is no longer bundled in perry-stdlib —
     // since v0.5.1015 the package is published as a standalone npm
     // module (https://github.com/PerryTS/google-auth). Codegen

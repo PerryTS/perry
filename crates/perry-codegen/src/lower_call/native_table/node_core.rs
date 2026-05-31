@@ -434,16 +434,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
-    // #2135 (Node process parity): process.loadEnvFile(path?) — HIR
-    // defaults the missing path to ".env" so this row always sees a
-    // single string argument.
+    // #2135 (Node process parity): process.loadEnvFile(path?) — pass the
+    // full JS value so runtime validation can accept strings, Buffers,
+    // file: URLs, and omitted/undefined/null defaults.
     NativeModSig {
         module: "process",
         has_receiver: false,
         method: "loadEnvFile",
         class_filter: None,
         runtime: "js_process_load_env_file",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_VOID,
     },
     // #2135 (Node process parity): process.getgroups() — Array<number>

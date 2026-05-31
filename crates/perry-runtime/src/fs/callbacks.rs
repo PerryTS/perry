@@ -692,8 +692,17 @@ pub extern "C" fn js_fs_rmdir_callback(path_value: f64, arg1: f64, arg2: f64) ->
 #[no_mangle]
 pub extern "C" fn js_fs_ftruncate_callback(fd_value: f64, len_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    let _ = js_fs_ftruncate_sync(fd_value, len_value);
-    call_cb0(last_callback(&[callback]));
+    // Node's `validateInt32(fd)` throws synchronously on a non-numeric fd; the
+    // "valid type but bad/closed descriptor" and syscall failures are delivered
+    // to the callback as the first arg (#2749).
+    crate::fs::validate::validate_fd(fd_value);
+    let cb = last_callback(&[callback]);
+    unsafe {
+        match crate::fs::js_fs_ftruncate_result(fd_value, len_value) {
+            Ok(()) => call_cb0(cb),
+            Err(err_val) => call_cb_err1(cb, err_val),
+        }
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -748,8 +757,19 @@ pub extern "C" fn js_fs_fchown_callback(
     callback: f64,
 ) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    let _ = js_fs_fchown_sync(fd_value, uid_value, gid_value);
-    call_cb0(last_callback(&[callback]));
+    // Node validates fd/uid/gid types synchronously (throwing on bad types),
+    // then delivers EBADF (closed fd) and syscall failures (e.g. EPERM) to the
+    // callback as the first argument (#2749).
+    crate::fs::validate::validate_fd(fd_value);
+    crate::fs::validate::validate_int32(uid_value, "uid", -1, u32::MAX as i64);
+    crate::fs::validate::validate_int32(gid_value, "gid", -1, u32::MAX as i64);
+    let cb = last_callback(&[callback]);
+    unsafe {
+        match crate::fs::js_fs_fchown_result(fd_value as i32, uid_value, gid_value) {
+            Ok(()) => call_cb0(cb),
+            Err(err_val) => call_cb_err1(cb, err_val),
+        }
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -800,8 +820,17 @@ pub extern "C" fn js_fs_futimes_callback(
     callback: f64,
 ) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    let _ = js_fs_futimes_sync(fd_value, atime_value, mtime_value);
-    call_cb0(last_callback(&[callback]));
+    // Node's `validateInt32(fd)` throws synchronously on a non-numeric fd; the
+    // bad/closed descriptor and syscall failures are delivered to the callback
+    // as the first argument (#2749).
+    crate::fs::validate::validate_fd(fd_value);
+    let cb = last_callback(&[callback]);
+    unsafe {
+        match crate::fs::js_fs_futimes_result(fd_value, atime_value, mtime_value) {
+            Ok(()) => call_cb0(cb),
+            Err(err_val) => call_cb_err1(cb, err_val),
+        }
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 

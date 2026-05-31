@@ -426,11 +426,28 @@ pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i6
 /// the same packed-u8 BufferHeader layout, so a single read path covers both.
 #[no_mangle]
 pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
-    let bits = value.to_bits();
+    // Pull the decoder state (encoding / fatal). Unknown handle → utf-8,
+    // non-fatal (matches the old stateless default).
+    let id = decoder_handle_id(handle);
+    let (encoding, fatal) = DECODER_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|s| (s.encoding, s.fatal))
+        .unwrap_or((DecoderEncoding::Utf8, false));
 
-    // Unbox the pointer. Accept both POINTER_TAG NaN-boxing and raw small
-    // pointer fallback (covers both `encoded` values and `new Uint8Array(...)`
-    // bitcast results).
+    // Node `TextDecoder.prototype.decode(input)` input contract:
+    //   - omitted / undefined → decode empty (returns "").
+    //   - null / arrays / numbers / strings / any non-buffer-source →
+    //     ERR_INVALID_ARG_TYPE.
+    //   - ArrayBuffer / SharedArrayBuffer / DataView / TypedArray view →
+    //     decode exactly the bytes in the relevant view range.
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() {
+        return js_string_from_bytes(std::ptr::null(), 0) as i64;
+    }
+
+    let bits = value.to_bits();
     let ptr_usize: usize = {
         const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
         const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -444,42 +461,47 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
         }
     };
 
-    // Pull the decoder state (encoding / fatal). Unknown handle → utf-8,
-    // non-fatal (matches the old stateless default).
-    let id = decoder_handle_id(handle);
-    let (encoding, fatal) = DECODER_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|s| (s.encoding, s.fatal))
-        .unwrap_or((DecoderEncoding::Utf8, false));
-
-    if ptr_usize == 0 || ptr_usize < 0x1000 {
-        // Empty or invalid — return empty string.
-        return js_string_from_bytes(std::ptr::null(), 0) as i64;
+    if ptr_usize < 0x1000 {
+        // null, numbers, booleans, small pointers — not a buffer source.
+        throw_invalid_decode_input();
     }
 
-    // The input may be a `TypedArrayHeader` (`Uint8Array.from(...)`) or a
-    // `BufferHeader` (`new Uint8Array([...])` / `encoder.encode(...)`).
-    // Both share a packed-u8 view; route TypedArray addrs through the
-    // typed-array accessor so the byte offset/length are correct.
+    // Route by concrete kind so the byte offset/length is honored and only
+    // genuine buffer sources are accepted.
     let bytes: &[u8] = unsafe {
         if crate::typedarray::lookup_typed_array_kind(ptr_usize).is_some() {
+            // TypedArray view (incl. Uint16Array, sliced subarray, etc.).
             match crate::typedarray::typed_array_bytes(
                 ptr_usize as *const crate::typedarray::TypedArrayHeader,
             ) {
                 Some(b) => b,
-                None => return js_string_from_bytes(std::ptr::null(), 0) as i64,
+                None => throw_invalid_decode_input(),
             }
-        } else {
+        } else if crate::buffer::is_data_view(ptr_usize)
+            || crate::buffer::is_any_array_buffer(ptr_usize)
+            || crate::buffer::is_registered_buffer(ptr_usize)
+        {
+            // DataView, (Shared)ArrayBuffer, or a registered Buffer/Uint8Array
+            // — all BufferHeader-backed with the bytes stored inline.
             let buf = ptr_usize as *const BufferHeader;
             let len = (*buf).length as usize;
             let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
             std::slice::from_raw_parts(data, len)
+        } else {
+            // Plain arrays, plain objects, strings — reject like Node.
+            throw_invalid_decode_input();
         }
     };
 
     decode_bytes(bytes, encoding, fatal)
+}
+
+fn throw_invalid_decode_input() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "The \"list\" argument must be an instance of SharedArrayBuffer, \
+         ArrayBuffer or ArrayBufferView.",
+        "ERR_INVALID_ARG_TYPE",
+    )
 }
 
 /// Decode `bytes` per `encoding`; returns a `*mut StringHeader` as i64.
