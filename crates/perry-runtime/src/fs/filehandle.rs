@@ -96,6 +96,37 @@ fn set_filehandle_field_fd(handle: f64, fd: i32) {
     );
 }
 
+/// Resolve the *live* fd for a FileHandle mutator. The closure captures the
+/// original fd at open time (capture 0) and, when available, the handle object
+/// (capture 1). After `close()`, `close_filehandle_fd` rewrites the handle's
+/// `fd` field to `-1` and removes it from the registry, but the closure still
+/// holds the stale numeric fd — so we re-read the live fd from the handle when
+/// present (#2752). Returns the live fd, which is `< 0` / unregistered once the
+/// handle has been closed.
+fn live_filehandle_fd(closure: *const ClosureHeader) -> i32 {
+    let fallback = filehandle_fd(closure);
+    match filehandle_object(closure) {
+        Some(handle) => filehandle_field_fd(handle).unwrap_or(fallback),
+        None => fallback,
+    }
+}
+
+/// `Err(EBADF rejection promise)` when the FileHandle is closed / its fd is no
+/// longer a live descriptor; `Ok(live_fd)` otherwise. Node rejects FileHandle
+/// mutators on a closed handle with `code: "EBADF"` and the matching `syscall`.
+fn live_filehandle_fd_or_ebadf(
+    closure: *const ClosureHeader,
+    syscall: &'static str,
+) -> Result<i32, f64> {
+    let fd = live_filehandle_fd(closure);
+    if fd < 0 || !crate::fs::fd_is_registered(fd) {
+        return Err(promise_rejected_fs(
+            crate::fs::validate::build_ebadf_error_value(syscall),
+        ));
+    }
+    Ok(fd)
+}
+
 fn close_filehandle_fd(fd: i32, handle: f64) {
     if fd >= 0 && crate::fs::fd_is_registered(fd) {
         let _ = js_fs_close_sync(fd as f64);
@@ -225,7 +256,11 @@ pub(crate) extern "C" fn filehandle_stat_impl(closure: *const ClosureHeader, opt
 }
 
 pub(crate) extern "C" fn filehandle_truncate_impl(closure: *const ClosureHeader, len: f64) -> f64 {
-    let _ = js_fs_ftruncate_sync(filehandle_fd(closure) as f64, len);
+    let fd = match live_filehandle_fd_or_ebadf(closure, "ftruncate") {
+        Ok(fd) => fd,
+        Err(rejection) => return rejection,
+    };
+    let _ = js_fs_ftruncate_sync(fd as f64, len);
     promise_undefined_fs()
 }
 
@@ -234,12 +269,20 @@ pub(crate) extern "C" fn filehandle_utimes_impl(
     atime: f64,
     mtime: f64,
 ) -> f64 {
-    let _ = js_fs_futimes_sync(filehandle_fd(closure) as f64, atime, mtime);
+    let fd = match live_filehandle_fd_or_ebadf(closure, "futimes") {
+        Ok(fd) => fd,
+        Err(rejection) => return rejection,
+    };
+    let _ = js_fs_futimes_sync(fd as f64, atime, mtime);
     promise_undefined_fs()
 }
 
 pub(crate) extern "C" fn filehandle_chmod_impl(closure: *const ClosureHeader, mode: f64) -> f64 {
-    let _ = js_fs_fchmod_sync(filehandle_fd(closure) as f64, mode);
+    let fd = match live_filehandle_fd_or_ebadf(closure, "fchmod") {
+        Ok(fd) => fd,
+        Err(rejection) => return rejection,
+    };
+    let _ = js_fs_fchmod_sync(fd as f64, mode);
     promise_undefined_fs()
 }
 
@@ -248,7 +291,11 @@ pub(crate) extern "C" fn filehandle_chown_impl(
     uid: f64,
     gid: f64,
 ) -> f64 {
-    let _ = crate::fs::fchown_sync_inner(filehandle_fd(closure), uid, gid);
+    let fd = match live_filehandle_fd_or_ebadf(closure, "fchown") {
+        Ok(fd) => fd,
+        Err(rejection) => return rejection,
+    };
+    let _ = crate::fs::fchown_sync_inner(fd, uid, gid);
     promise_undefined_fs()
 }
 
@@ -597,19 +644,19 @@ fn build_filehandle_object(fd: i32) -> f64 {
     );
     set(
         "truncate",
-        make_filehandle_method(fd, filehandle_truncate_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, filehandle_truncate_impl as *const u8),
     );
     set(
         "utimes",
-        make_filehandle_method(fd, filehandle_utimes_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, filehandle_utimes_impl as *const u8),
     );
     set(
         "chmod",
-        make_filehandle_method(fd, filehandle_chmod_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, filehandle_chmod_impl as *const u8),
     );
     set(
         "chown",
-        make_filehandle_method(fd, filehandle_chown_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, filehandle_chown_impl as *const u8),
     );
     set(
         "readFile",
