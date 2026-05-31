@@ -138,6 +138,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
     let module_name = match module_name {
         "path/posix" => "path.posix",
         "path/win32" => "path.win32",
+        "async_hooks.default" => "async_hooks",
+        "os.default" => "os",
+        "path.default" => "path",
+        "querystring.default" => "querystring",
+        "url.default" => "url",
+        "util.default" => "util",
         _ => module_name,
     };
     // Helper: get arg N as f64
