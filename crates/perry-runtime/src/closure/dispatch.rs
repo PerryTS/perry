@@ -108,7 +108,7 @@ pub unsafe extern "C" fn js_function_bind(
     js_closure_set_capture_ptr(bound, 2, bound_args_arr as i64);
 
     // Spec `.length` = max(0, target.length - boundArgs.length).
-    let target_len = crate::closure::closure_arity(target_closure).unwrap_or(0);
+    let target_len = crate::closure::closure_length(target_closure).unwrap_or(0);
     let bound_len = target_len.saturating_sub(bound_arg_count as u32);
     crate::object::set_builtin_closure_length(bound as usize, bound_len);
 

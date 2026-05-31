@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2157 entries across 99 modules
+// Coverage: 2159 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2769,7 +2769,7 @@ declare module "process" {
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
   /** stdlib */
-  export function setSourceMapsEnabled(...args: any[]): any;
+  export function setSourceMapsEnabled(enabled: boolean): void;
   /** stdlib */
   export function setegid(...args: any[]): any;
   /** stdlib */
@@ -2781,7 +2781,7 @@ declare module "process" {
   /** stdlib */
   export function setuid(...args: any[]): any;
   /** stdlib */
-  export function sourceMapsEnabled(...args: any[]): any;
+  export function sourceMapsEnabled(): boolean;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
