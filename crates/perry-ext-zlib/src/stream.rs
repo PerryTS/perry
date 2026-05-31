@@ -47,6 +47,11 @@ extern "C" {
     // values. Lives in perry-runtime (it owns the by-name object reader + the
     // throwing path). `js_zlib_resolve_level(undefined)` returns the default.
     pub(crate) fn js_zlib_resolve_level(opts: f64) -> i32;
+    // #3285: validate `.params(level, strategy)` args, returning the clamped
+    // flate2 level (`0..=9`). Throws `TypeError [ERR_INVALID_ARG_TYPE]` for a
+    // non-numeric arg and `RangeError [ERR_OUT_OF_RANGE]` for an out-of-range
+    // level/strategy, matching Node — the throwing path lives in perry-runtime.
+    pub(crate) fn js_zlib_validate_params(level: f64, strategy: f64) -> i32;
     fn js_native_call_method_str_key(
         object: f64,
         name_handle: i64,
@@ -319,18 +324,21 @@ impl CodecState {
 }
 
 fn make_codec_state(codec: Codec) -> Option<CodecState> {
+    make_codec_state_with_level(codec, Compression::default())
+}
+
+/// Build the streaming codec for `codec` at compression `level`. Only the
+/// deflate-family encoders (gzip/zlib/raw-deflate) honor `level`; decoders and
+/// brotli ignore it. Used by both `create_stream` (initial `{ level }`) and
+/// `stream_params` (#3285, mid-stream retune before any data is written).
+fn make_codec_state_with_level(codec: Codec, level: Compression) -> Option<CodecState> {
     use flate2::write;
     Some(match codec {
-        Codec::Gzip => CodecState::GzEnc(write::GzEncoder::new(Vec::new(), Compression::default())),
+        Codec::Gzip => CodecState::GzEnc(write::GzEncoder::new(Vec::new(), level)),
         Codec::Gunzip => CodecState::GzDec(write::GzDecoder::new(Vec::new())),
-        Codec::Deflate => {
-            CodecState::ZlibEnc(write::ZlibEncoder::new(Vec::new(), Compression::default()))
-        }
+        Codec::Deflate => CodecState::ZlibEnc(write::ZlibEncoder::new(Vec::new(), level)),
         Codec::Inflate => CodecState::ZlibDec(write::ZlibDecoder::new(Vec::new())),
-        Codec::DeflateRaw => CodecState::DeflateEnc(write::DeflateEncoder::new(
-            Vec::new(),
-            Compression::default(),
-        )),
+        Codec::DeflateRaw => CodecState::DeflateEnc(write::DeflateEncoder::new(Vec::new(), level)),
         Codec::InflateRaw => CodecState::DeflateDec(write::DeflateDecoder::new(Vec::new())),
         Codec::BrotliCompress => {
             CodecState::BrotliEnc(brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22))
@@ -353,6 +361,10 @@ struct ZlibStreamState {
     /// Only used by `createUnzip` (buffer-until-end auto-detect).
     input: Vec<u8>,
     ended: bool,
+    /// Set once any chunk has been fed. `.params()` can only rebuild the
+    /// encoder at a new level (flate2 has no mid-stream `deflateParams`) before
+    /// this flips; after data is written it validates + flushes only (#3285).
+    wrote_data: bool,
     /// `.pipe(dest)` destinations as NaN-boxed bits; 'data'/'end' forward here.
     pipes: Vec<u64>,
 }
@@ -415,7 +427,7 @@ fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
     }
 }
 
-fn create_stream(codec: Codec) -> i64 {
+fn create_stream(codec: Codec, level: Compression) -> i64 {
     ensure_gc_scanner_registered();
     let mut s = statics().lock().unwrap();
     let id = s.next_id;
@@ -424,9 +436,10 @@ fn create_stream(codec: Codec) -> i64 {
         id,
         ZlibStreamState {
             codec,
-            codec_state: make_codec_state(codec),
+            codec_state: make_codec_state_with_level(codec, level),
             input: Vec::new(),
             ended: false,
+            wrote_data: false,
             pipes: Vec::new(),
         },
     );
@@ -438,10 +451,13 @@ fn create_stream(codec: Codec) -> i64 {
 macro_rules! factory {
     ($name:ident, $codec:expr) => {
         /// # Safety
-        /// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+        /// FFI entry; `opts` is the NaN-boxed options object. Its `{ level }`
+        /// (if present) sets the initial compression level for deflate-family
+        /// encoders; an out-of-range `level` throws via `js_zlib_resolve_level`.
         #[no_mangle]
-        pub unsafe extern "C" fn $name(_opts: f64) -> i64 {
-            create_stream($codec)
+        pub unsafe extern "C" fn $name(opts: f64) -> i64 {
+            let level = Compression::new(js_zlib_resolve_level(opts) as u32);
+            create_stream($codec, level)
         }
     };
 }
@@ -514,19 +530,22 @@ unsafe fn event_name(value: f64) -> Option<String> {
 fn stream_write(handle: i64, bytes: &[u8]) {
     let mut g = statics().lock().unwrap();
     let event = match g.streams.get_mut(&handle) {
-        Some(s) if !s.ended => match s.codec_state.as_mut() {
-            Some(cs) => match cs.write_chunk(bytes) {
-                Ok(()) => {
-                    let out = cs.drain();
-                    (!out.is_empty()).then(|| ZlibEvent::Data(handle, out))
+        Some(s) if !s.ended => {
+            s.wrote_data = true;
+            match s.codec_state.as_mut() {
+                Some(cs) => match cs.write_chunk(bytes) {
+                    Ok(()) => {
+                        let out = cs.drain();
+                        (!out.is_empty()).then(|| ZlibEvent::Data(handle, out))
+                    }
+                    Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
+                },
+                None => {
+                    s.input.extend_from_slice(bytes);
+                    None
                 }
-                Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
-            },
-            None => {
-                s.input.extend_from_slice(bytes);
-                None
             }
-        },
+        }
         _ => return,
     };
     if let Some(ev) = event {
@@ -552,6 +571,42 @@ fn stream_flush(handle: i64, cb: i64) {
     };
     if !data.is_empty() {
         g.pending.push(ZlibEvent::Data(handle, data));
+    }
+    if cb != 0 {
+        g.pending.push(ZlibEvent::Callback(cb));
+    }
+    drop(g);
+    notify_main_thread();
+}
+
+/// `.params(level, strategy, cb?)` (#3285) — validate the args (throwing
+/// Node-compatible errors on bad input), retune subsequent compression, then
+/// queue the callback.
+///
+/// `js_zlib_validate_params` runs first and may `js_throw` (longjmp) — so it
+/// MUST run before we take the registry lock, or a thrown error would leave the
+/// mutex poisoned. flate2 exposes no mid-stream `deflateParams`, so retuning is
+/// modeled by rebuilding the encoder at the new level when no data has been
+/// written yet (the common case: `params()` before the first `write`). After
+/// data is written we only validate + flush, since the already-emitted bytes
+/// can't be relevelled. Decoders/brotli ignore the level (matching the encoder
+/// the codec was created with).
+unsafe fn stream_params(handle: i64, level: f64, strategy: f64, cb: i64) {
+    // Validates + clamps; diverges via js_throw on a bad level/strategy.
+    let clamped = js_zlib_validate_params(level, strategy);
+    let mut g = statics().lock().unwrap();
+    if let Some(s) = g.streams.get_mut(&handle) {
+        if !s.ended && !s.wrote_data {
+            s.codec_state = make_codec_state_with_level(s.codec, Compression::new(clamped as u32));
+        } else if !s.ended {
+            if let Some(cs) = s.codec_state.as_mut() {
+                let _ = cs.flush_codec();
+                let out = cs.drain();
+                if !out.is_empty() {
+                    g.pending.push(ZlibEvent::Data(handle, out));
+                }
+            }
+        }
     }
     if cb != 0 {
         g.pending.push(ZlibEvent::Callback(cb));
@@ -690,6 +745,20 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
                 .unwrap_or(0);
             stream_flush(handle, cb);
             f64::from_bits(UNDEFINED)
+        }
+        // `.params(level, strategy, cb)` — level/strategy are numeric, cb is the
+        // trailing POINTER_TAG arg. Validation may throw synchronously.
+        "params" => {
+            let level = args.first().copied().unwrap_or(f64::from_bits(UNDEFINED));
+            let strategy = args.get(1).copied().unwrap_or(f64::from_bits(UNDEFINED));
+            let cb = args
+                .iter()
+                .rev()
+                .find(|a| (a.to_bits() >> 48) == 0x7FFD)
+                .map(|a| (a.to_bits() & POINTER_MASK) as i64)
+                .unwrap_or(0);
+            stream_params(handle, level, strategy, cb);
+            self_ref
         }
         _ => f64::from_bits(UNDEFINED),
     }

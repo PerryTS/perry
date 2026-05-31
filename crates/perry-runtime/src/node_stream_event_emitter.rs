@@ -144,6 +144,9 @@ pub(super) extern "C" fn ns_remove_all_listeners1(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_on(stream_handle: i64, event: f64, cb: f64) -> f64 {
     let stream = super::stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_on_value(stream, event, cb, false) {
+        return result;
+    }
     add_stream_listener_for_event(stream, event, cb);
     stream
 }
@@ -151,6 +154,9 @@ pub extern "C" fn js_node_stream_method_on(stream_handle: i64, event: f64, cb: f
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_once(stream_handle: i64, event: f64, cb: f64) -> f64 {
     let stream = super::stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_on_value(stream, event, cb, true) {
+        return result;
+    }
     add_stream_listener_for_event_with_options(stream, event, cb, true, false);
     stream
 }
@@ -184,6 +190,9 @@ pub extern "C" fn js_node_stream_method_remove_listener(
     cb: f64,
 ) -> f64 {
     let stream = super::stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_off_value(stream, event, cb) {
+        return result;
+    }
     remove_stream_listener_for_event(stream, event, cb);
     stream
 }
@@ -199,6 +208,9 @@ pub extern "C" fn js_node_stream_method_remove_all_listeners(
     event: f64,
 ) -> f64 {
     let stream = super::stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_remove_all_value(stream, event) {
+        return result;
+    }
     remove_all_stream_listeners_for_event(stream, event);
     stream
 }
@@ -209,7 +221,11 @@ pub(super) extern "C" fn ns_listener_count(closure: *const ClosureHeader, event:
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_listener_count(stream_handle: i64, event: f64) -> f64 {
-    stream_listener_count_for_event(super::stream_value_from_handle(stream_handle), event) as f64
+    let stream = super::stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_listener_count_value(stream, event) {
+        return result;
+    }
+    stream_listener_count_for_event(stream, event) as f64
 }
 
 pub(super) extern "C" fn ns_event_names(closure: *const ClosureHeader) -> f64 {

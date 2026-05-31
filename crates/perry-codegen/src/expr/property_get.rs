@@ -639,6 +639,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &ctor_handle), (I64, &key_raw)],
                     ));
                 }
+                // #3527: `Object.hasOwn` read as a VALUE (not a direct call) —
+                // e.g. iconv-lite's merge-exports does
+                // `var hasOwn = typeof Object.hasOwn === "undefined" ? … :
+                // Object.hasOwn` then `hasOwn(obj, key)`. The ternary defeats
+                // the const-alias call-fold, so the value must be a real
+                // callable. Mirror the `Error.captureStackTrace` shape above:
+                // resolve the reified `Object` constructor closure and read the
+                // `hasOwn` static (installed by `install_builtin_constructor_statics`)
+                // off it, instead of falling through to the `0.0` sentinel.
+                if property == "hasOwn" {
+                    let object_idx = ctx.strings.intern("Object");
+                    let object_bytes_global =
+                        format!("@{}", ctx.strings.entry(object_idx).bytes_global);
+                    let object_len = "Object".len().to_string();
+                    let object_ctor = ctx.block().call(
+                        DOUBLE,
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &object_bytes_global), (I64, &object_len)],
+                    );
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let ctor_handle = unbox_to_i64(blk, &object_ctor);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &ctor_handle), (I64, &key_raw)],
+                    ));
+                }
                 if property == "f16round" {
                     let math_idx = ctx.strings.intern("Math");
                     let math_bytes_global =
@@ -725,6 +758,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         | "kill"
                         | "exit"
                         | "umask"
+                        | "setSourceMapsEnabled"
+                        | "hasUncaughtExceptionCaptureCallback"
+                        | "setUncaughtExceptionCaptureCallback"
+                        | "addUncaughtExceptionCaptureCallback"
                         | "threadCpuUsage"
                         | "availableMemory"
                         | "constrainedMemory"
@@ -1025,6 +1062,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // synthesized __get_<property> method instead of doing a
             // raw field load.
             if let Some(class_name) = receiver_class_name(ctx, object) {
+                if class_name == "Headers"
+                    && matches!(
+                        property.as_str(),
+                        "append"
+                            | "delete"
+                            | "entries"
+                            | "forEach"
+                            | "get"
+                            | "getSetCookie"
+                            | "has"
+                            | "keys"
+                            | "set"
+                            | "Symbol.iterator"
+                            | "@@iterator"
+                            | "values"
+                    )
+                {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(property);
+                    let entry = ctx.strings.entry(key_idx);
+                    let bytes_global = format!("@{}", entry.bytes_global);
+                    let len_str = entry.byte_len.to_string();
+                    let blk = ctx.block();
+                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_headers_method_value",
+                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
+                    ));
+                }
                 let getter_key = (class_name.clone(), format!("__get_{}", property));
                 if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
                     let recv_box = lower_expr(ctx, object)?;

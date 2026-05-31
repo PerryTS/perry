@@ -776,7 +776,7 @@ pub(crate) extern "C" fn dir_close_impl(closure: *const ClosureHeader, callback:
 pub(crate) unsafe fn build_dir_object(id: usize, path: &str) -> f64 {
     crate::closure::js_register_closure_arity(dir_read_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(dir_close_impl as *const u8, 1);
-    let obj = crate::object::js_object_alloc(0, 6);
+    let obj = crate::object::js_object_alloc(CLASS_ID_FS_DIR, 6);
     let set = |name: &str, v: f64| {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(obj, key, v);

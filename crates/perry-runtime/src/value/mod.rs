@@ -58,19 +58,20 @@ pub(crate) use tags::{
     STRING_TAG, TAG_FALSE, TAG_HOLE, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 pub use tags::{
-    JS_HANDLE_CALL_METHOD, JS_HANDLE_TYPEOF, JS_NATIVE_CRYPTO_DISPATCH, JS_NATIVE_HTTP_DISPATCH,
-    JS_NATIVE_MODULE_JS_LOADER, JS_NATIVE_QUERYSTRING_DISPATCH, JS_NATIVE_SQLITE_DISPATCH,
-    JS_NATIVE_ZLIB_DISPATCH, JS_NEW_FROM_HANDLE_V8, SHORT_STRING_MAX_LEN,
+    JS_HANDLE_CALL_METHOD, JS_HANDLE_TYPEOF, JS_NATIVE_CRYPTO_DISPATCH, JS_NATIVE_DOMAIN_DISPATCH,
+    JS_NATIVE_HTTP_DISPATCH, JS_NATIVE_MODULE_JS_LOADER, JS_NATIVE_QUERYSTRING_DISPATCH,
+    JS_NATIVE_SQLITE_DISPATCH, JS_NATIVE_ZLIB_DISPATCH, JS_NEW_FROM_HANDLE_V8,
+    SHORT_STRING_MAX_LEN,
 };
 
 // Crate-internal handle dispatch atomics + callback type aliases (read by
 // every dispatcher that needs to call back into perry-jsruntime).
 pub(crate) use tags::{
     JsHandleArrayGetFn, JsHandleArrayLengthFn, JsHandleCallMethodFn, JsHandleObjectGetPropertyFn,
-    JsHandleToStringFn, JsHandleTypeofFn, JsNativeCryptoDispatchFn, JsNativeHttpDispatchFn,
-    JsNativeModuleJsLoaderFn, JsNativeQuerystringDispatchFn, JsNativeSqliteDispatchFn,
-    JsNativeZlibDispatchFn, JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
-    JS_HANDLE_OBJECT_GET_PROPERTY, JS_HANDLE_TO_STRING,
+    JsHandleToStringFn, JsHandleTypeofFn, JsNativeCryptoDispatchFn, JsNativeDomainDispatchFn,
+    JsNativeHttpDispatchFn, JsNativeModuleJsLoaderFn, JsNativeQuerystringDispatchFn,
+    JsNativeSqliteDispatchFn, JsNativeZlibDispatchFn, JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET,
+    JS_HANDLE_ARRAY_LENGTH, JS_HANDLE_OBJECT_GET_PROPERTY, JS_HANDLE_TO_STRING,
 };
 
 // ----- JSValue type + impls -----
@@ -82,7 +83,7 @@ pub use handle::{
     is_js_handle, js_handle_array_get, js_handle_array_length, js_set_handle_array_get,
     js_set_handle_array_length, js_set_handle_call_method, js_set_handle_object_get_property,
     js_set_handle_to_string, js_set_handle_typeof, js_set_native_crypto_dispatch,
-    js_set_native_http_dispatch, js_set_native_module_js_loader,
+    js_set_native_domain_dispatch, js_set_native_http_dispatch, js_set_native_module_js_loader,
     js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_zlib_dispatch,
     js_set_new_from_handle_v8, native_module_try_js_property,
 };
@@ -105,7 +106,9 @@ pub use dynamic_arith::{
 pub use dyn_index::{js_dyn_index_get, js_dyn_index_set, js_is_undefined_or_bare_nan};
 
 // ----- to-string conversion helpers -----
-pub(crate) use to_string::coerce_validate_radix;
+pub(crate) use to_string::{
+    coerce_validate_radix, ordinary_to_primitive_number_for_add, OrdinaryToPrimitiveOutcome,
+};
 pub use to_string::{js_ensure_string_ptr, js_jsvalue_to_string, js_jsvalue_to_string_radix};
 
 // ----- Equality, comparison, SameValueZero, dynamic string equality -----

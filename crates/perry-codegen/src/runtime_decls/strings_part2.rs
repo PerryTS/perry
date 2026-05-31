@@ -122,6 +122,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_with", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_typed_array_find_last", DOUBLE, &[I64, I64]);
     module.declare_function("js_typed_array_find_last_index", DOUBLE, &[I64, I64]);
+    // #3148: TypedArray.prototype.set(source, offset?) / subarray(begin?, end?).
+    module.declare_function("js_typed_array_set_from", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_typed_array_subarray",
+        I64,
+        &[I64, I32, DOUBLE, I32, DOUBLE],
+    );
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
     // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).
@@ -272,6 +279,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_regexp_get_flags", I64, &[I64]);
     module.declare_function("js_string_replace_regex_named", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_all_regex_named", I64, &[I64, I64, I64]);
+    module.declare_function("js_string_replace_string_fn", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_string_replace_all_string_fn", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_replace_regex_fn", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_replace_all_regex_fn", I64, &[I64, I64, DOUBLE]);
     // structuredClone(v) — real deep copy, was stubbed as passthrough.
@@ -553,6 +562,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // after enqueueing onto a queue the pump drains; otherwise sleeps until
     // the next timer deadline (or 1s safety cap).
     module.declare_function("js_wait_for_event", VOID, &[]);
+    module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     module.declare_function("js_throw", VOID, &[DOUBLE]);
 
     // Exception handling (Phase G): setjmp/longjmp-based try/catch.
@@ -774,6 +784,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_headers_keys", DOUBLE, &[DOUBLE]);
     module.declare_function("js_headers_values", DOUBLE, &[DOUBLE]);
     module.declare_function("js_headers_entries", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_headers_init_from_value", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_headers_method_value", DOUBLE, &[DOUBLE, I64, I64]);
 
     // new Request(url_ptr, method_ptr, body_ptr, headers_handle_f64, metadata...) -> f64
     module.declare_function(

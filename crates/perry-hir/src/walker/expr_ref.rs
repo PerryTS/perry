@@ -223,6 +223,7 @@ where
         | Expr::NumberCoerce(v)
         | Expr::BigIntCoerce(v)
         | Expr::StringCoerce(v)
+        | Expr::ObjectCoerce(v)
         | Expr::BooleanCoerce(v)
         | Expr::IsNaN(v)
         | Expr::IsUndefinedOrBareNan(v)

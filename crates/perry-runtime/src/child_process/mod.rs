@@ -9,6 +9,19 @@ pub mod fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
 mod v8_serde;
 
+// #3137: reuse the codec for the public `node:v8` serialize/deserialize API.
+// #3680: class-based `v8.Serializer` / `v8.Deserializer` builders.
+pub(crate) use v8_serde::{
+    v8_class_deserializer_new, v8_class_deserializer_read_double,
+    v8_class_deserializer_read_header, v8_class_deserializer_read_raw_bytes,
+    v8_class_deserializer_read_uint32, v8_class_deserializer_read_uint64,
+    v8_class_deserializer_read_value, v8_class_serializer_new, v8_class_serializer_release,
+    v8_class_serializer_write_double, v8_class_serializer_write_header,
+    v8_class_serializer_write_raw_bytes, v8_class_serializer_write_uint32,
+    v8_class_serializer_write_uint64, v8_class_serializer_write_value, v8_deserialize,
+    v8_serialize,
+};
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::process::{Command, Stdio};
@@ -728,6 +741,15 @@ fn cp_register(target: f64, event: f64, cb: f64) {
 /// any fired. The listener array is re-read each iteration so a moving GC
 /// during a handler call can't strand us on a stale array pointer.
 fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
+    if event == "message"
+        && args
+            .first()
+            .copied()
+            .is_some_and(|msg| crate::cluster::consume_internal_message(target, msg))
+    {
+        return true;
+    }
+
     let key = cp_listener_key(event);
     let mut i: u32 = 0;
     let mut fired = false;

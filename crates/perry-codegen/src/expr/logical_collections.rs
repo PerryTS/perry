@@ -305,6 +305,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
 
+        // -------- Object(value) coercion (#3149) --------
+        // js_object_coerce takes and returns a NaN-boxed JSValue (DOUBLE):
+        // nullish/primitive -> fresh {}, existing object passes through.
+        Expr::ObjectCoerce(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_object_coerce", &[(DOUBLE, &v)]))
+        }
+
         // -------- Boolean(value) coercion --------
         // js_is_truthy is exactly the JS Boolean(value) coercion: it
         // returns 1 for truthy, 0 for falsy. We convert the i32 to

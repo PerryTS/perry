@@ -128,6 +128,7 @@ const STREAM_PIPE_NO_END_KEY: &[u8] = b"__perryStreamPipeNoEnd";
 const STREAM_PIPE_END_PENDING_KEY: &[u8] = b"__perryStreamPipeEndPending";
 const STREAM_AUTO_DESTROY_KEY: &[u8] = b"__perryStreamAutoDestroy";
 const STREAM_PIPELINE_CALLBACK_DONE_KEY: &[u8] = b"__perryStreamPipelineCallbackDone";
+const STREAM_COMPOSE_LIVE_PIPE_CONSUME_KEY: &[u8] = b"__perryStreamComposeLivePipeConsume";
 
 use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
@@ -179,7 +180,9 @@ fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHea
         return;
     };
     let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
-    unsafe { on(handle, event, listener as i64) };
+    let event_bits = crate::value::js_nanbox_string(event as i64).to_bits() as i64;
+    let listener_value = crate::value::js_nanbox_pointer(listener as i64);
+    unsafe { on(handle, event_bits, listener_value.to_bits() as i64) };
 }
 
 extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
@@ -507,6 +510,7 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
         mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) && !should_defer_initial_data_emit(stream) {
+            consume_readable_buffered_front_for_live_pipe(stream, chunk);
             emit_readable_data(stream, chunk);
         } else {
             buffer_pending_readable_chunk(stream, chunk);
@@ -668,6 +672,7 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
         mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) {
+            consume_readable_buffered_front_for_live_pipe(stream, chunk);
             emit_readable_data(stream, chunk);
         } else {
             unshift_pending_readable_chunk(stream, chunk);
@@ -694,15 +699,10 @@ extern "C" fn ns_unshift1(closure: *const ClosureHeader, chunk: f64) -> f64 {
 }
 
 /// `readable.compose(stream)` (#1539): the instance-method form of
-/// `stream.compose`. Retained-chunk Readables can eagerly compose through a
-/// single Transform/PassThrough so downstream iterator helpers still see a
-/// readable chunk snapshot; unsupported forms keep the historical shape stub.
+/// `stream.compose`, routed through the shared compose builder so the same
+/// data-flow and error handling paths cover module and prototype calls.
 extern "C" fn ns_compose1(closure: *const ClosureHeader, arg: f64) -> f64 {
-    let source = this_value(closure);
-    if let Some(composed) = compose_readable_snapshot(source, arg) {
-        return composed;
-    }
-    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+    build_node_stream_compose(vec![this_value(closure), arg])
 }
 
 extern "C" fn ns_pipe2(closure: *const ClosureHeader, dest: f64, options: f64) -> f64 {
@@ -1332,6 +1332,9 @@ fn stream_value_from_handle(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, arg) {
+        return result;
+    }
     let mut args = crate::array::js_array_alloc(0);
     if arg.to_bits() != TAG_UNDEFINED {
         args = crate::array::js_array_push_f64(args, arg);
@@ -1345,11 +1348,21 @@ pub extern "C" fn js_node_stream_method_emit_args(
     event: f64,
     args_ptr: i64,
 ) -> f64 {
-    emit_stream_event_from_array(
-        stream_value_from_handle(stream_handle),
-        event,
-        args_ptr as *const crate::array::ArrayHeader,
-    )
+    let stream = stream_value_from_handle(stream_handle);
+    let first_arg = if args_ptr == 0 {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        let args = args_ptr as *mut crate::array::ArrayHeader;
+        if crate::array::js_array_length(args) > 0 {
+            f64::from_bits(crate::array::js_array_get(args, 0).bits())
+        } else {
+            f64::from_bits(TAG_UNDEFINED)
+        }
+    };
+    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, first_arg) {
+        return result;
+    }
+    emit_stream_event_from_array(stream, event, args_ptr as *const crate::array::ArrayHeader)
 }
 
 /// `readable.push(chunk)` on a typed stream instance (#1539). Tracks the
@@ -1606,6 +1619,9 @@ pub extern "C" fn js_node_stream_method_write(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_write_value(stream, chunk) {
+        return result;
+    }
     write_writable_chunk(stream, chunk, enc, cb)
 }
 
@@ -1622,6 +1638,9 @@ pub extern "C" fn js_node_stream_method_write3(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+        return result;
+    }
     finish_stream_with_args(
         stream,
         chunk,
@@ -1639,6 +1658,9 @@ pub extern "C" fn js_node_stream_method_end3(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
+    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+        return result;
+    }
     finish_stream_with_args(stream, chunk, encoding, cb);
     stream
 }
@@ -1679,6 +1701,10 @@ pub use pipeline::*;
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
 pub use readwrite::*;
+
+#[path = "node_stream_compose_live.rs"]
+mod compose_live;
+pub use compose_live::*;
 
 #[path = "node_stream_json.rs"]
 mod json_stream;

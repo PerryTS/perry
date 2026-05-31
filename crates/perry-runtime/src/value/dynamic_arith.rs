@@ -47,6 +47,68 @@ unsafe fn both_bigint_or_throw(a: f64, b: f64) -> bool {
     }
 }
 
+#[cold]
+unsafe fn throw_add_type_error(message: &[u8]) -> ! {
+    let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+}
+
+#[inline]
+fn is_symbol_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let ptr = jsval.as_pointer::<u8>() as usize;
+    ptr >= 0x1000 && crate::symbol::is_registered_symbol(ptr)
+}
+
+#[inline]
+fn is_nonprimitive_object_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let ptr = jsval.as_pointer::<u8>() as usize;
+    ptr >= 0x1000 && !crate::symbol::is_registered_symbol(ptr)
+}
+
+unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() || is_symbol_value(value) {
+        return value;
+    }
+    let ptr = jsval.as_pointer::<u8>() as usize;
+    if ptr < 0x1000 {
+        return value;
+    }
+
+    let primitive = crate::symbol::js_to_primitive(value, 0);
+    if primitive.to_bits() != value.to_bits() {
+        if is_nonprimitive_object_value(primitive) {
+            throw_add_type_error(b"Cannot convert object to primitive value");
+        }
+        return primitive;
+    }
+
+    if crate::date::is_date_cell_addr(ptr) {
+        let s = crate::date::js_date_to_string(value);
+        return crate::value::js_nanbox_string(s as i64);
+    }
+
+    match crate::value::ordinary_to_primitive_number_for_add(value) {
+        crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
+        crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {
+            let s = js_jsvalue_to_string(value);
+            crate::value::js_nanbox_string(s as i64)
+        }
+        crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+            throw_add_type_error(b"Cannot convert object to primitive value")
+        }
+    }
+}
+
 type BigIntBinaryOp = extern "C" fn(
     *const crate::bigint::BigIntHeader,
     *const crate::bigint::BigIntHeader,
@@ -118,8 +180,18 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     let scope = crate::gc::RuntimeHandleScope::new();
     let a_handle = scope.root_nanbox_f64(a);
     let b_handle = scope.root_nanbox_f64(b);
-    let a_val = JSValue::from_bits(a_handle.get_nanbox_f64().to_bits());
-    let b_val = JSValue::from_bits(b_handle.get_nanbox_f64().to_bits());
+    let a_prim = to_primitive_default_for_add(a_handle.get_nanbox_f64());
+    let a_prim_handle = scope.root_nanbox_f64(a_prim);
+    let b_prim = to_primitive_default_for_add(b_handle.get_nanbox_f64());
+    let b_prim_handle = scope.root_nanbox_f64(b_prim);
+    let a_val = JSValue::from_bits(a_prim_handle.get_nanbox_f64().to_bits());
+    let b_val = JSValue::from_bits(b_prim_handle.get_nanbox_f64().to_bits());
+
+    if is_symbol_value(a_prim_handle.get_nanbox_f64())
+        || is_symbol_value(b_prim_handle.get_nanbox_f64())
+    {
+        throw_add_type_error(b"Cannot convert a Symbol value to a string");
+    }
 
     // String concat takes priority: either operand being a string forces
     // ToPrimitive on the other side via the spec's "if either is a string,
@@ -129,18 +201,22 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     // other operand to string via js_jsvalue_to_string when it ISN'T a
     // string.
     if a_val.is_any_string() || b_val.is_any_string() {
-        let a_str = if JSValue::from_bits(a_handle.get_nanbox_f64().to_bits()).is_any_string() {
-            js_get_string_pointer_unified(a_handle.get_nanbox_f64())
+        let a_str = if JSValue::from_bits(a_prim_handle.get_nanbox_f64().to_bits()).is_any_string()
+        {
+            js_get_string_pointer_unified(a_prim_handle.get_nanbox_f64())
                 as *const crate::string::StringHeader
         } else {
-            js_jsvalue_to_string(a_handle.get_nanbox_f64()) as *const crate::string::StringHeader
+            js_jsvalue_to_string(a_prim_handle.get_nanbox_f64())
+                as *const crate::string::StringHeader
         };
         let a_str_handle = scope.root_string_ptr(a_str);
-        let b_str = if JSValue::from_bits(b_handle.get_nanbox_f64().to_bits()).is_any_string() {
-            js_get_string_pointer_unified(b_handle.get_nanbox_f64())
+        let b_str = if JSValue::from_bits(b_prim_handle.get_nanbox_f64().to_bits()).is_any_string()
+        {
+            js_get_string_pointer_unified(b_prim_handle.get_nanbox_f64())
                 as *const crate::string::StringHeader
         } else {
-            js_jsvalue_to_string(b_handle.get_nanbox_f64()) as *const crate::string::StringHeader
+            js_jsvalue_to_string(b_prim_handle.get_nanbox_f64())
+                as *const crate::string::StringHeader
         };
         let b_str_handle = scope.root_string_ptr(b_str);
         let result = crate::string::js_string_concat(
@@ -153,11 +229,14 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     // BigInt: same as js_dynamic_add. Neither operand is a string here
     // (the concat branch above already handled that), so a mixed
     // BigInt/Number `+` throws TypeError just like Node.
-    if both_bigint_or_throw(a, b) {
+    if both_bigint_or_throw(
+        a_prim_handle.get_nanbox_f64(),
+        b_prim_handle.get_nanbox_f64(),
+    ) {
         return dynamic_bigint_binary_op_from_handles(
             &scope,
-            &a_handle,
-            &b_handle,
+            &a_prim_handle,
+            &b_prim_handle,
             crate::bigint::js_bigint_add,
         );
     }
@@ -165,14 +244,14 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     // Both numeric — coerce non-numbers (booleans, null, undefined) the
     // same way the static fallback path did.
     let a_num = if a_val.is_number() || a_val.is_int32() {
-        a_handle.get_nanbox_f64()
+        a_prim_handle.get_nanbox_f64()
     } else {
-        crate::builtins::js_number_coerce(a_handle.get_nanbox_f64())
+        crate::builtins::js_number_coerce(a_prim_handle.get_nanbox_f64())
     };
     let b_num = if b_val.is_number() || b_val.is_int32() {
-        b_handle.get_nanbox_f64()
+        b_prim_handle.get_nanbox_f64()
     } else {
-        crate::builtins::js_number_coerce(b_handle.get_nanbox_f64())
+        crate::builtins::js_number_coerce(b_prim_handle.get_nanbox_f64())
     };
     a_num + b_num
 }

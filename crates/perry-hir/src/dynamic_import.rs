@@ -1261,6 +1261,7 @@ mod tests {
             enclosing_class: None,
             is_async: true,
             is_generator: false,
+            is_strict: false,
         };
         m.init.push(Stmt::Expr(closure));
 
@@ -1303,6 +1304,7 @@ mod tests {
             enclosing_class: None,
             is_async: false,
             is_generator: false,
+            is_strict: false,
         };
         m.init.push(Stmt::Expr(closure));
         let consts = collect_module_const_locals(&m);
@@ -1432,6 +1434,7 @@ mod tests {
             enclosing_class: None,
             is_async: true,
             is_generator: false,
+            is_strict: false,
         };
         m.init.push(Stmt::Expr(closure));
         detect_top_level_await(&mut m);

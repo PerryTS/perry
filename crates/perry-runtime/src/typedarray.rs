@@ -17,6 +17,7 @@ use std::ptr;
 
 use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
+use crate::typedarray_half::{f16_bits_to_f64, f64_to_f16_bits};
 
 // Element kind tags. Match the order used by HIR/codegen.
 pub const KIND_INT8: u8 = 0;
@@ -32,6 +33,9 @@ pub const KIND_FLOAT64: u8 = 7;
 pub const KIND_UINT8_CLAMPED: u8 = 8;
 pub const KIND_BIGINT64: u8 = 9;
 pub const KIND_BIGUINT64: u8 = 10;
+/// Float16Array (#2902): IEEE-754 binary16 (half-precision) 2-byte elements.
+/// Stored as `u16` bit patterns; converted to/from f64 on read/write.
+pub const KIND_FLOAT16: u8 = 11;
 
 // Reserved class IDs for instanceof. Stay in the 0xFFFF00xx reserved range.
 pub const CLASS_ID_INT8_ARRAY: u32 = 0xFFFF0030;
@@ -45,12 +49,13 @@ pub const CLASS_ID_FLOAT64_ARRAY: u32 = 0xFFFF0037;
 pub const CLASS_ID_UINT8_CLAMPED_ARRAY: u32 = 0xFFFF0038;
 pub const CLASS_ID_BIGINT64_ARRAY: u32 = 0xFFFF0039;
 pub const CLASS_ID_BIGUINT64_ARRAY: u32 = 0xFFFF003A;
+pub const CLASS_ID_FLOAT16_ARRAY: u32 = 0xFFFF003B;
 
 #[inline]
 pub fn elem_size_for_kind(kind: u8) -> usize {
     match kind {
         KIND_INT8 | KIND_UINT8 | KIND_UINT8_CLAMPED => 1,
-        KIND_INT16 | KIND_UINT16 => 2,
+        KIND_INT16 | KIND_UINT16 | KIND_FLOAT16 => 2,
         KIND_INT32 | KIND_UINT32 | KIND_FLOAT32 => 4,
         KIND_FLOAT64 | KIND_BIGINT64 | KIND_BIGUINT64 => 8,
         _ => 8,
@@ -71,6 +76,7 @@ pub fn class_id_for_kind(kind: u8) -> u32 {
         KIND_UINT8_CLAMPED => CLASS_ID_UINT8_CLAMPED_ARRAY,
         KIND_BIGINT64 => CLASS_ID_BIGINT64_ARRAY,
         KIND_BIGUINT64 => CLASS_ID_BIGUINT64_ARRAY,
+        KIND_FLOAT16 => CLASS_ID_FLOAT16_ARRAY,
         _ => 0,
     }
 }
@@ -89,6 +95,7 @@ pub fn name_for_kind(kind: u8) -> &'static str {
         KIND_UINT8_CLAMPED => "Uint8ClampedArray",
         KIND_BIGINT64 => "BigInt64Array",
         KIND_BIGUINT64 => "BigUint64Array",
+        KIND_FLOAT16 => "Float16Array",
         _ => "TypedArray",
     }
 }
@@ -551,6 +558,9 @@ unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
             let v = value as i64 as u32;
             *(base.add(off) as *mut u32) = v;
         }
+        KIND_FLOAT16 => {
+            *(base.add(off) as *mut u16) = f64_to_f16_bits(value);
+        }
         KIND_FLOAT32 => {
             *(base.add(off) as *mut f32) = value as f32;
         }
@@ -580,6 +590,7 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
         KIND_UINT16 => *(base.add(off) as *const u16) as f64,
         KIND_INT32 => *(base.add(off) as *const i32) as f64,
         KIND_UINT32 => *(base.add(off) as *const u32) as f64,
+        KIND_FLOAT16 => f16_bits_to_f64(*(base.add(off) as *const u16)),
         KIND_FLOAT32 => *(base.add(off) as *const f32) as f64,
         KIND_FLOAT64 => *(base.add(off) as *const f64),
         KIND_BIGINT64 => *(base.add(off) as *const i64) as f64,
@@ -1672,9 +1683,198 @@ pub fn format_typed_array(ta: *const TypedArrayHeader) -> String {
     }
 }
 
+// #3148: %TypedArray%.prototype join / slice / reverse / fill / subarray.
+// (reduce/reduceRight/copyWithin/set_from/findIndex live above — added separately.)
+/// `ta.join(sep?)` — Number→String each element (Node formatting), joined by
+/// `sep` (default ","). Returns a heap StringHeader.
+#[no_mangle]
+pub extern "C" fn js_typed_array_join(
+    ta: *const TypedArrayHeader,
+    separator: *const crate::string::StringHeader,
+) -> *mut crate::string::StringHeader {
+    use crate::string::{js_string_from_bytes, StringHeader};
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return js_string_from_bytes(b"".as_ptr(), 0);
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        if len == 0 {
+            return js_string_from_bytes(ptr::null(), 0);
+        }
+        let kind = (*ta).kind;
+        let sep_str = if separator.is_null() {
+            ","
+        } else {
+            let sep_len = (*separator).byte_len as usize;
+            let sep_data = (separator as *const u8).add(std::mem::size_of::<StringHeader>());
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(sep_data, sep_len))
+        };
+        let mut result = String::new();
+        for i in 0..len {
+            if i > 0 {
+                result.push_str(sep_str);
+            }
+            result.push_str(&format_typed_value(kind, load_at(ta, i)));
+        }
+        let ret = js_string_from_bytes(result.as_ptr(), result.len() as u32);
+        std::hint::black_box(&result);
+        drop(result);
+        ret
+    }
+}
+
+/// `ta.join(sepValue)` — NaN-boxed-separator entry point mirroring
+/// `js_array_join_value`.
+#[no_mangle]
+pub extern "C" fn js_typed_array_join_value(
+    ta: *const TypedArrayHeader,
+    separator_value: f64,
+) -> *mut crate::string::StringHeader {
+    let separator = if separator_value.to_bits() == crate::value::TAG_UNDEFINED {
+        ptr::null()
+    } else {
+        crate::value::js_jsvalue_to_string(separator_value) as *const crate::string::StringHeader
+    };
+    js_typed_array_join(ta, separator)
+}
+
+/// `ta.slice(start, end?)` — returns a NEW same-kind TypedArray with the
+/// selected elements. Mirrors `js_array_slice` index normalization.
+#[no_mangle]
+pub extern "C" fn js_typed_array_slice(
+    ta: *const TypedArrayHeader,
+    start: i32,
+    end: i32,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() {
+        return typed_array_alloc(KIND_FLOAT64, 0);
+    }
+    unsafe {
+        let kind = (*ta).kind;
+        let len = (*ta).length as i32;
+        let start_idx = if start < 0 {
+            (len + start).max(0) as u32
+        } else {
+            (start as u32).min(len as u32)
+        };
+        let end_idx = if end == i32::MAX {
+            len as u32
+        } else if end < 0 {
+            (len + end).max(0) as u32
+        } else {
+            (end as u32).min(len as u32)
+        };
+        let slice_len = end_idx.saturating_sub(start_idx);
+        let out = typed_array_alloc(kind, slice_len);
+        for i in 0..slice_len as usize {
+            store_at(out, i, load_at(ta, start_idx as usize + i));
+        }
+        out
+    }
+}
+
+/// `ta.reverse()` — in-place reversal; returns the same typed array.
+#[no_mangle]
+pub extern "C" fn js_typed_array_reverse(ta: *mut TypedArrayHeader) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
+    if ta.is_null() {
+        return ta;
+    }
+    unsafe {
+        let len = (*ta).length as usize;
+        if len <= 1 {
+            return ta;
+        }
+        let mut i = 0usize;
+        let mut j = len - 1;
+        while i < j {
+            let a = load_at(ta, i);
+            let b = load_at(ta, j);
+            store_at(ta, i, b);
+            store_at(ta, j, a);
+            i += 1;
+            j -= 1;
+        }
+        ta
+    }
+}
+
+/// `ta.fill(value, start?, end?)` — in-place fill; returns the same typed
+/// array. `start`/`end` follow Array.prototype.fill index normalization; pass
+/// `has_start == 0` to fill the whole array.
+#[no_mangle]
+pub extern "C" fn js_typed_array_fill(
+    ta: *mut TypedArrayHeader,
+    value: f64,
+    has_start: i32,
+    start: f64,
+    has_end: i32,
+    end: f64,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
+    if ta.is_null() {
+        return ta;
+    }
+    unsafe {
+        let len = (*ta).length as isize;
+        let v = jsvalue_to_f64(value);
+        let norm = |x: f64, default: isize| -> isize {
+            let mut n = if x.is_nan() { default } else { x as isize };
+            if n < 0 {
+                n += len;
+            }
+            n.clamp(0, len)
+        };
+        let s = if has_start != 0 { norm(start, 0) } else { 0 };
+        let e = if has_end != 0 { norm(end, len) } else { len };
+        let mut i = s;
+        while i < e {
+            store_at(ta, i as usize, v);
+            i += 1;
+        }
+        ta
+    }
+}
+
+/// `ta.subarray(begin?, end?)` — returns a NEW same-kind TypedArray that
+/// COPIES the selected range. (Perry materializes rather than aliasing the
+/// backing store; observationally identical for reads and independent writes
+/// of the common cases #3148 targets.)
+#[no_mangle]
+pub extern "C" fn js_typed_array_subarray(
+    ta: *const TypedArrayHeader,
+    has_begin: i32,
+    begin: f64,
+    has_end: i32,
+    end: f64,
+) -> *mut TypedArrayHeader {
+    let ta = clean_ta_ptr(ta);
+    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+        return typed_array_alloc(KIND_FLOAT64, 0);
+    }
+    unsafe {
+        let len = (*ta).length as i32;
+        let norm = |has: i32, v: f64, default: i32| -> i32 {
+            if has == 0 || v.is_nan() {
+                return default;
+            }
+            let mut x = v as i32;
+            if x < 0 {
+                x += len;
+            }
+            x.clamp(0, len)
+        };
+        let b = norm(has_begin, begin, 0);
+        let e = norm(has_end, end, len);
+        js_typed_array_slice(ta, b, e)
+    }
+}
+
 fn format_typed_value(kind: u8, v: f64) -> String {
     match kind {
-        KIND_FLOAT32 | KIND_FLOAT64 => {
+        KIND_FLOAT16 | KIND_FLOAT32 | KIND_FLOAT64 => {
             // Match Node: integer-valued floats render with no decimal,
             // others render via Rust's default Debug for f64.
             if v.is_nan() {

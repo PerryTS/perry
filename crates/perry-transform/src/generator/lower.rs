@@ -441,6 +441,7 @@ pub fn transform_generator_function_with_extra_captures(
         mutable_captures: mutable_captures.clone(),
         captures_this,
         enclosing_class: enclosing_class.clone(),
+        is_strict: func.is_strict,
         is_async: false,
         is_generator: false,
     };
@@ -565,6 +566,7 @@ pub fn transform_generator_function_with_extra_captures(
         mutable_captures: mutable_captures.clone(),
         captures_this,
         enclosing_class: enclosing_class.clone(),
+        is_strict: func.is_strict,
         is_async: false,
         is_generator: false,
     };
@@ -614,6 +616,7 @@ pub fn transform_generator_function_with_extra_captures(
             next_func_id,
             captures_this,
             enclosing_class.clone(),
+            func.is_strict,
         );
         for s in wrapper_stmts {
             new_body.push(s);
@@ -641,6 +644,7 @@ pub fn transform_generator_function_with_extra_captures(
             mutable_captures: mutable_captures.clone(),
             captures_this,
             enclosing_class: enclosing_class.clone(),
+            is_strict: func.is_strict,
             is_async: false,
             is_generator: false,
         };
@@ -700,6 +704,7 @@ pub fn build_async_step_driver_direct(
     next_func_id: &mut u32,
     captures_this: bool,
     enclosing_class: Option<String>,
+    is_strict: bool,
 ) -> Vec<Stmt> {
     // When `throw_closure_expr` is None, the function had no awaiting
     // try/catch so the throw path is a plain rethrow — we inline it
@@ -905,6 +910,7 @@ pub fn build_async_step_driver_direct(
         mutable_captures: step_mut_captures,
         captures_this,
         enclosing_class: enclosing_class.clone(),
+        is_strict,
         is_async: false,
         is_generator: false,
     };

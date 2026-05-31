@@ -980,7 +980,9 @@ pub(super) fn drain_readable_from_events(stream: f64) {
         return;
     }
     let data_event = string_value(b"data");
+    let end_event = string_value(b"end");
     if stream_listener_count_for_event(stream, data_event) == 0
+        && stream_listener_count_for_event(stream, end_event) == 0
         && crate::array::js_array_length(
             raw_ptr_from_value(pipe_destinations(stream)) as *const crate::array::ArrayHeader
         ) == 0
@@ -1809,6 +1811,30 @@ pub(crate) fn js_node_stream_hidden_error_after_read(stream: f64) -> Option<f64>
 
 pub(crate) fn js_node_stream_hidden_error(stream: f64) -> Option<f64> {
     readable_hidden_error(stream)
+}
+
+pub(crate) fn js_node_stream_is_classic_stream(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_readable_flag_key()).is_some()
+        || get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_has_readable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_readable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_has_writable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_readable_side_done(stream: f64) -> bool {
+    !js_node_stream_has_readable_side(stream)
+        || stream_hidden_ended(stream)
+        || has_truthy_hidden(stream, hidden_end_emitted_key())
+}
+
+pub(crate) fn js_node_stream_writable_side_done(stream: f64) -> bool {
+    !js_node_stream_has_writable_side(stream)
+        || has_truthy_hidden(stream, hidden_finish_emitted_key())
 }
 
 #[cfg(test)]

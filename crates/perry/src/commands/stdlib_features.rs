@@ -30,7 +30,7 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // `node:stream/web` imports are normalized to `stream/web` before
         // the resolver records the known-submodule key `stream_web`; both
         // spellings need the same feature for auto-optimized stdlib builds.
-        "streams" | "stream/web" | "stream_web" => &["bundled-streams"],
+        "streams" | "stream/web" | "stream_web" | "fs/promises" => &["bundled-streams"],
 
         // ── HTTP client (reqwest) ─────────────────────────────────────
         // `http` / `https` / `http2` join the `http-client` umbrella since
@@ -72,6 +72,9 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // well-known flip can route to perry-ext-pg.
         "pg" => &["bundled-pg"],
         "better-sqlite3" => &["database-sqlite"],
+        // node:sqlite (#3183/#3184) shares the rusqlite-backed
+        // `database-sqlite` feature with better-sqlite3 — DatabaseSync /
+        // StatementSync route to the same `js_sqlite_*` runtime.
         "sqlite" => &["database-sqlite"],
         // tursodb (#424) lives in the external
         // `PerryTS/tursodb-bindings` repo (`bun add @perryts/tursodb`)
@@ -261,9 +264,11 @@ mod tests {
     fn stream_web_imports_enable_bundled_streams() {
         assert_eq!(module_to_features("stream/web"), &["bundled-streams"]);
         assert_eq!(module_to_features("stream_web"), &["bundled-streams"]);
+        assert_eq!(module_to_features("fs/promises"), &["bundled-streams"]);
 
         let mut imports = BTreeSet::new();
         imports.insert("stream_web".to_string());
+        imports.insert("fs/promises".to_string());
 
         let features = compute_required_features(&imports, false, false);
         assert!(features.contains("bundled-streams"));

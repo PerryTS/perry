@@ -1804,6 +1804,8 @@ pub enum Expr {
         /// calling the closure returns a `{next,return,throw}` generator, then
         /// clears the flag. Refs #321 (effect's `Effect.gen(function*(){...})`).
         is_generator: bool,
+        /// Whether this closure body is strict mode code.
+        is_strict: bool,
     },
 
     // RegExp operations
@@ -1966,6 +1968,9 @@ pub enum Expr {
     /// String(value) -> string
     /// Type coercion to string
     StringCoerce(Box<Expr>),
+    /// `Object(value)` plain-call coercion (#3149). Nullish/primitive → a fresh
+    /// `{}`; an existing object/array passes through unchanged.
+    ObjectCoerce(Box<Expr>),
     /// Boolean(value) -> boolean
     /// Type coercion to boolean via JS truthiness rules
     BooleanCoerce(Box<Expr>),

@@ -24,6 +24,9 @@ use super::*;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
+    // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
+    // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.
+    module.declare_function("js_object_coerce", DOUBLE, &[DOUBLE]);
     // #1789: stamp a class-expression's heap object as a class object
     // (object_type = OBJECT_TYPE_CLASS) so typeof → "function" and
     // new/instanceof read class_id from it.

@@ -492,6 +492,11 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // Process pending worker_threads messages (stdin reader)
     count += crate::worker_threads::js_worker_threads_process_pending();
 
+    // Drain same-process MessageChannel port inboxes (#3157) — dispatch queued
+    // `port.postMessage(v)` payloads to `port.on('message', cb)` listeners and
+    // fire `close` events for closed ports.
+    count += crate::worker_threads::js_worker_threads_channels_process_pending();
+
     // Process pending readline lines (#347 Phase 1) — drains the stdin
     // reader's queue and dispatches to question/line/close callbacks.
     count += crate::readline::js_readline_process_pending();
@@ -672,6 +677,11 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // reader is started and EOF hasn't been observed, so `rl.on('line')`
     // / `rl.question()` programs don't exit before the user types.
     if crate::readline::js_readline_has_active() != 0 {
+        return 1;
+    }
+    // Same-process MessageChannel ports (#3157) — keep the loop alive while a
+    // started port still has queued messages or a pending `close` event.
+    if crate::worker_threads::js_worker_threads_channels_has_pending() != 0 {
         return 1;
     }
     // Bundled-fastify — keep the loop alive while any FastifyServerHandle

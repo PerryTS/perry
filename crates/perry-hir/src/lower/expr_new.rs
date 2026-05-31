@@ -77,6 +77,7 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
     let helper = match name {
         "Symbol" => "js_throw_symbol_constructor_type_error",
         "BigInt" => "js_throw_bigint_constructor_type_error",
+        "Math" => "js_throw_math_constructor_type_error",
         _ => unreachable!(),
     };
     let throw_expr = Expr::Call {
@@ -174,6 +175,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            let is_url_module =
+                obj_name == "url" || ctx.lookup_builtin_module_alias(obj_name) == Some("url");
+            if is_url_module && prop_ident.sym.as_ref() == "Url" {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
             let dns_module =
                 if obj_name == "dns" || ctx.lookup_builtin_module_alias(obj_name) == Some("dns") {
                     Some("dns".to_string())
@@ -232,6 +244,41 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: None,
                     object: None,
                     method: "SourceMap".to_string(),
+                    args,
+                });
+            }
+            let is_util_module = obj_name == "util"
+                || obj_name == "sys"
+                || ctx.lookup_builtin_module_alias(obj_name) == Some("util")
+                || ctx.lookup_builtin_module_alias(obj_name) == Some("sys")
+                || ctx
+                    .lookup_native_module(obj_name)
+                    .map(|(module_name, method)| {
+                        method.is_none() && matches!(module_name, "util" | "sys")
+                    })
+                    .unwrap_or(false);
+            if is_util_module && matches!(prop_ident.sym.as_ref(), "MIMEType" | "MIMEParams") {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: if obj_name == "sys"
+                        || ctx.lookup_builtin_module_alias(obj_name) == Some("sys")
+                    {
+                        "sys".to_string()
+                    } else {
+                        "util".to_string()
+                    },
+                    class_name: None,
+                    object: None,
+                    method: prop_ident.sym.to_string(),
                     args,
                 });
             }
@@ -395,6 +442,79 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     match callee_expr {
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("url", Some("Url")))
+            ) {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
+
+            // #3157: `import { MessageChannel } from "worker_threads"` then
+            // `new MessageChannel()` — the bare-ident form must route to the
+            // same receiver-less worker_threads NativeMethodCall as the
+            // `new worker_threads.MessageChannel()` member form above, so the
+            // runtime `js_worker_threads_message_channel_new` allocates the
+            // real `{ port1, port2 }` object. Without this it falls through to
+            // the user-class `Expr::New` path and gets an empty object.
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("worker_threads", Some("MessageChannel")))
+                    | Some(("worker_threads", Some("BroadcastChannel")))
+            ) {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "worker_threads".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: class_name,
+                    args,
+                });
+            }
+
+            if matches!(class_name.as_str(), "MIMEType" | "MIMEParams") {
+                if let Some((module_name, Some(method_name))) =
+                    ctx.lookup_native_module(&class_name)
+                {
+                    if matches!(module_name, "util" | "sys")
+                        && matches!(method_name, "MIMEType" | "MIMEParams")
+                    {
+                        let module_name = module_name.to_string();
+                        let method_name = method_name.to_string();
+                        let args = new_expr
+                            .args
+                            .as_ref()
+                            .map(|args| {
+                                args.iter()
+                                    .map(|a| lower_expr(ctx, &a.expr))
+                                    .collect::<Result<Vec<_>>>()
+                            })
+                            .transpose()?
+                            .unwrap_or_default();
+                        return Ok(Expr::NativeMethodCall {
+                            module: module_name,
+                            class_name: None,
+                            object: None,
+                            method: method_name,
+                            args,
+                        });
+                    }
+                }
+            }
 
             // #1677 `new Function(...)` handling, when `Function` is not
             // shadowed. Phase 1 (#1679) first: when every argument is a
@@ -570,7 +690,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
-            if matches!(class_name.as_str(), "Symbol" | "BigInt") {
+            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1131,7 +1251,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Symbol" | "BigInt")
+                    && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }

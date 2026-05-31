@@ -236,6 +236,11 @@ pub(super) fn hidden_pipeline_callback_done_key() -> *mut crate::string::StringH
 }
 
 #[inline]
+pub(super) fn hidden_compose_live_pipe_consume_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_COMPOSE_LIVE_PIPE_CONSUME_KEY)
+}
+
+#[inline]
 pub(super) fn readable_flowing_key() -> *mut crate::string::StringHeader {
     hidden_key(b"readableFlowing")
 }

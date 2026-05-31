@@ -43,7 +43,7 @@ use super::*;
 //   - `channel(name)` mirrors the same shape with `hasSubscribers: false`
 //     and a `publish` no-op — same minimal "satisfies type probe" goal.
 //
-// Other entries (`subscribe`, `unsubscribe`, `publish`, `hasSubscribers`)
+// Other entries (`subscribe`, `unsubscribe`, `hasSubscribers`)
 // surface as no-op thrower thunks the same way the other submodules do —
 // real-tracing semantics are a follow-up under #793.
 
@@ -413,7 +413,11 @@ pub fn error_code_for_message(message_ptr: *const StringHeader) -> Option<&'stat
 thread_local! {
     pub(crate) static ERROR_MESSAGE_SYSCALLS: RefCell<HashMap<usize, &'static str>> =
         RefCell::new(HashMap::new());
+    pub(crate) static ERROR_MESSAGE_ERRNOS: RefCell<HashMap<usize, i32>> =
+        RefCell::new(HashMap::new());
     pub(crate) static ERROR_MESSAGE_PATHS: RefCell<HashMap<usize, String>> =
+        RefCell::new(HashMap::new());
+    pub(crate) static ERROR_MESSAGE_DESTS: RefCell<HashMap<usize, String>> =
         RefCell::new(HashMap::new());
 }
 
@@ -436,6 +440,24 @@ pub fn error_syscall_for_message(message_ptr: *const StringHeader) -> Option<&'s
     ERROR_MESSAGE_SYSCALLS.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
 }
 
+/// Attach a Node-style negative libuv errno to an Error keyed by its message
+/// StringHeader. Read back from the `.errno` getter in `field_get_set`.
+pub fn register_error_errno(message_ptr: *const StringHeader, errno: i32) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_ERRNOS.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, errno);
+    });
+}
+
+pub fn error_errno_for_message(message_ptr: *const StringHeader) -> Option<i32> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_ERRNOS.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+}
+
 /// Attach a Node-style `path` string to an Error keyed by its message
 /// StringHeader. The value is owned (paths are runtime data, not static).
 pub fn register_error_path(message_ptr: *const StringHeader, path: String) {
@@ -452,6 +474,25 @@ pub fn error_path_for_message(message_ptr: *const StringHeader) -> Option<String
         return None;
     }
     ERROR_MESSAGE_PATHS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
+}
+
+/// Attach a Node-style `dest` string to an Error keyed by its message
+/// StringHeader. Node sets `dest` on two-path fs errors (rename/copyFile/
+/// link/symlink) alongside `path`. Read back from the `.dest` getter.
+pub fn register_error_dest(message_ptr: *const StringHeader, dest: String) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_DESTS.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, dest);
+    });
+}
+
+pub fn error_dest_for_message(message_ptr: *const StringHeader) -> Option<String> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_DESTS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
 }
 
 /// A user-assigned own property value on an `Error` object. String values are

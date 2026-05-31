@@ -111,9 +111,19 @@ stop_tls_upgrade_server() {
 # if it exits 0 but with a different output we fall through to the expected-
 # file comparison (not a parity fail — the incompatibility is intentional).
 EXPECTED_DIR="$SCRIPT_DIR/test-parity/expected"
+EXPECTED_EXIT_DIR="$SCRIPT_DIR/test-parity/expected-exit"
 
 has_expected_output() {
     [[ -f "$EXPECTED_DIR/${1}.txt" ]]
+}
+
+expected_exit_code() {
+    local test_name=$1
+    if [[ -f "$EXPECTED_EXIT_DIR/${test_name}.txt" ]]; then
+        tr -d '[:space:]' < "$EXPECTED_EXIT_DIR/${test_name}.txt"
+    else
+        printf "0"
+    fi
 }
 
 # ── Counters ────────────────────────────────────────────────────────────────
@@ -241,6 +251,7 @@ for raw in sys.stdin:
         sed -E '/^\(node:[0-9]+\)( \[[^]]+\])? DeprecationWarning:/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
+        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: WASI is an experimental feature/d' | \
         sed -E 's/^\(node:[0-9]+\) (Timeout(Overflow|Negative|NaN)Warning:)/(node:<pid>) \1/' | \
         sed -E '/^Timeout duration was set to [0-9]+\.$/d' | \
         sed -E '/^\(Use `node --trace-deprecation/d' | \
@@ -435,6 +446,11 @@ for test_file in "${TEST_FILES[@]}"; do
     node_output_file="$OUTPUT_DIR/node/${safe_test_id}.txt"
     perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
     perry_binary="/tmp/perry_parity_$safe_test_id"
+    parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
+    test_argv=()
+    if [[ -n "$parity_argv_line" ]]; then
+        read -r -a test_argv <<< "$parity_argv_line"
+    fi
 
     # Check if test should be skipped
     if should_skip "$test_name"; then
@@ -459,7 +475,7 @@ for test_file in "${TEST_FILES[@]}"; do
     # rather than a `cmd | cap_output` pipeline.
     node_tmp=$(mktemp)
     run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
-        node --experimental-strip-types "$test_file" > "$node_tmp" 2>&1
+        node --experimental-strip-types "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"
@@ -523,7 +539,7 @@ for test_file in "${TEST_FILES[@]}"; do
 
     # Run Perry binary — same cap-via-tempfile protocol as Node above (#796).
     perry_tmp=$(mktemp)
-    run_with_timeout 10 "$perry_binary" > "$perry_tmp" 2>&1
+    run_with_timeout 10 "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"
@@ -536,9 +552,10 @@ for test_file in "${TEST_FILES[@]}"; do
     # instead of against Node.js.  This lets us verify Perry's behaviour
     # end-to-end without requiring Node.js to speak the same API.
     if has_expected_output "$test_name"; then
+        expected_exit=$(expected_exit_code "$test_name")
         expected_normalized=$(normalize_output "$(cat "$EXPECTED_DIR/${test_name}.txt")")
         perry_normalized=$(normalize_output "$perry_output")
-        if [[ "$perry_normalized" == "$expected_normalized" ]]; then
+        if [[ "$perry_exit" == "$expected_exit" && "$perry_normalized" == "$expected_normalized" ]]; then
             echo -e "${GREEN}PASS${NC}  $test_id (expected-output)"
             ((PARITY_PASS++))
             status="pass"
@@ -547,6 +564,8 @@ for test_file in "${TEST_FILES[@]}"; do
             ((PARITY_FAIL++))
             PARITY_FAILURES+=("$test_id")
             status="fail"
+            echo "       Expected exit: $expected_exit"
+            echo "       Perry exit:    $perry_exit"
             echo "       Expected: $(cat "$EXPECTED_DIR/${test_name}.txt" | head -1)"
             echo "       Perry:    $(echo "$perry_output" | head -1)"
         fi

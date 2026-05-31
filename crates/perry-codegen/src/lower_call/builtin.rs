@@ -57,6 +57,25 @@ pub(super) fn lower_builtin_new(
         return Ok(None);
     }
     match class_name {
+        "Utf8Stream"
+            if import_src
+                .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
+                .unwrap_or(false) =>
+        {
+            let options = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_fs_utf8_stream_new",
+                &[(DOUBLE, &options)],
+            )))
+        }
         "EvalError" | "URIError" => {
             let msg_box = if let Some(message) = args.first() {
                 lower_expr(ctx, message)?
@@ -821,15 +840,17 @@ pub(super) fn lower_builtin_new(
 
         "Headers" => {
             // new Headers(init?) — init can be an object literal or another
-            // Headers/array iterable. Only inline object literals are
-            // handled so far; anything else falls back to empty.
+            // Headers/array iterable.
             let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         let key_expr = Expr::String(k.clone());
                         let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
-                        let val_ptr = get_raw_string_ptr(ctx, vexpr)?;
+                        let value = lower_expr(ctx, vexpr)?;
+                        let val_ptr =
+                            ctx.block()
+                                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
                         ctx.block().call(
                             DOUBLE,
                             "js_headers_set",
@@ -837,7 +858,12 @@ pub(super) fn lower_builtin_new(
                         );
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[0])?;
+                    let init = lower_expr(ctx, &args[0])?;
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_headers_init_from_value",
+                        &[(DOUBLE, &h), (DOUBLE, &init)],
+                    );
                 }
             }
             Ok(Some(h))

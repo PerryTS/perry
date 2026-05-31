@@ -969,12 +969,8 @@ pub extern "C" fn js_node_stream_duplex_from_options(body: f64, _opts: f64) -> f
     node_stream_duplex_from_source_chunks(body)
 }
 
-/// #1539: `stream.compose(...streams)` chains a sequence of streams
-/// into one composite Duplex (data flows through them in order). Perry
-/// now handles Node's single-source fast path by returning a Duplex
-/// wrapper whose readable side drains the source snapshot, and the
-/// single-Transform stage form by returning the stage itself. Multi-stage
-/// composition remains tracked separately.
+/// #1539: `stream.compose(...streams)` chains a sequence of streams or
+/// callable stages into one composite Duplex.
 #[no_mangle]
 pub extern "C" fn js_node_stream_compose(args: *const crate::array::ArrayHeader) -> f64 {
     js_node_stream_compose_args(args)
@@ -983,22 +979,7 @@ pub extern "C" fn js_node_stream_compose(args: *const crate::array::ArrayHeader)
 /// Variadic `stream.compose(...)` entry used by bound native-module property
 /// reads and by direct named imports through codegen's packed varargs ABI.
 pub extern "C" fn js_node_stream_compose_args(args: *const crate::array::ArrayHeader) -> f64 {
-    let args = pipeline_args(args);
-    if args.is_empty() {
-        throw_pipeline_missing_streams();
-    }
-    if args.len() == 1 {
-        if is_transform_stream(args[0]) {
-            return args[0];
-        }
-        return node_stream_duplex_from_source_chunks(args[0]);
-    }
-    if args.len() == 2 {
-        if let Some(readable) = compose_readable_snapshot(args[0], args[1]) {
-            return node_stream_duplex_from_source_chunks(readable);
-        }
-    }
-    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+    build_node_stream_compose(pipeline_args(args))
 }
 
 pub(super) fn add_finished_once_listeners(

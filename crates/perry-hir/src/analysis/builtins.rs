@@ -63,6 +63,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Int16Array"
             | "Uint32Array"
             | "Int32Array"
+            | "Float16Array"
             | "Float32Array"
             | "Float64Array"
             | "BigInt64Array"
@@ -87,6 +88,13 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            | "Performance"
+            | "PerformanceEntry"
+            | "PerformanceMark"
+            | "PerformanceMeasure"
+            | "PerformanceObserver"
+            | "PerformanceObserverEntryList"
+            | "PerformanceResourceTiming"
             // #2875: TC39 explicit-resource-management globals.
             | "DisposableStack"
             | "AsyncDisposableStack"
@@ -133,8 +141,8 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
         "RegExp" | "Proxy" | "File" => 2,
         "Date" => 7,
         "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
-        | "Int32Array" | "Float32Array" | "Float64Array" | "BigInt64Array" | "BigUint64Array"
-        | "Uint8ClampedArray" => 3,
+        | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
+        | "BigUint64Array" | "Uint8ClampedArray" => 3,
         _ => return None,
     };
     Some(len)
@@ -238,8 +246,8 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
         "Date" => matches!(member, "now" | "UTC" | "parse"),
         "ArrayBuffer" => matches!(member, "isView"),
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-        | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
-        | "BigUint64Array" => matches!(member, "from" | "of"),
+        | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" => matches!(member, "from" | "of"),
         "Reflect" => matches!(
             member,
             "apply"

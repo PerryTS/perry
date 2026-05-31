@@ -34,6 +34,7 @@ pub mod buffer;
 pub mod builtins;
 pub mod child_process;
 pub mod closure;
+pub mod cluster;
 pub mod collection_iter;
 pub mod collection_iter_object;
 pub mod color_parse;
@@ -61,6 +62,8 @@ pub mod net_validate;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
+// #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
+pub mod node_v8;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
 pub use node_submodules::js_zlib_resolve_level;
@@ -72,6 +75,7 @@ pub mod pointer_event;
 pub mod process;
 pub mod promise;
 pub mod punycode;
+pub mod readline_helpers;
 pub mod regex;
 pub mod safe_area;
 pub mod set;
@@ -81,8 +85,10 @@ pub mod text;
 pub mod timer;
 pub mod typed_feedback;
 pub mod typedarray;
+pub mod typedarray_half;
 pub mod url;
 pub mod value;
+pub mod wasi;
 /// WebAssembly host shims (issue #76). Forward-declares the
 /// `perry_wasm_host_*` C ABI; the wasmi-backed implementation lives in
 /// the separate `perry-wasm-host` crate and is linked in only when the
@@ -130,6 +136,7 @@ pub mod stdlib_stubs;
 /// derived from `build.rs`'s dispatch-table walk.
 pub mod stub_diag;
 pub mod thread;
+pub mod tls;
 /// TTY support (#347 Phase 3): tty.isatty, process.std{in,out,err}.isTTY,
 /// process.stdout.columns/.rows, SIGWINCH 'resize' event handler. Lives
 /// in runtime (not stdlib) because it's a thin libc wrapper with no
@@ -155,6 +162,9 @@ mod ui_harmonyos_stubs;
 pub mod ui_text_registry;
 pub mod util_abort;
 pub mod util_call_sites;
+pub mod util_debuglog;
+pub mod util_diff;
+pub mod util_mime;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
@@ -208,9 +218,9 @@ pub use value::{
 pub use value::{
     js_set_handle_array_get, js_set_handle_array_length, js_set_handle_call_method,
     js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_typeof,
-    js_set_native_crypto_dispatch, js_set_native_http_dispatch, js_set_native_module_js_loader,
-    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_zlib_dispatch,
-    js_set_new_from_handle_v8,
+    js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_http_dispatch,
+    js_set_native_module_js_loader, js_set_native_querystring_dispatch,
+    js_set_native_sqlite_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions

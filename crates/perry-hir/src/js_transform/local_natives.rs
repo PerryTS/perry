@@ -1391,6 +1391,9 @@ pub fn detect_native_instance_creation_with_context(
         }
         Expr::New { class_name, .. } => {
             // new Database(...) → better-sqlite3 Database instance
+            // new DatabaseSync(...) → node:sqlite DatabaseSync instance
+            // (#3183); both reuse the rusqlite backend, tagged under
+            // distinct modules so NativeModSig dispatch routes correctly.
             match class_name.as_str() {
                 "Database" => Some(("better-sqlite3".to_string(), "Database".to_string())),
                 "DatabaseSync" => Some(("sqlite".to_string(), "DatabaseSync".to_string())),

@@ -57,6 +57,28 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "fs" {
+            let matched = match method.as_str() {
+                "Stats" => crate::fs::is_fs_stats_instance_value(value),
+                "Dir" => crate::fs::is_fs_dir_instance_value(value),
+                "Dirent" => crate::fs::is_fs_dirent_instance_value(value),
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+                | "Utf8Stream" => crate::fs::is_fs_stream_instance_value(value, method.as_str()),
+                _ => false,
+            };
+            if matched {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+        }
+        if module == "tls"
+            && method == "SecureContext"
+            && crate::tls::is_secure_context_instance(value)
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "console"
             && method == "Console"
             && crate::builtins::is_console_instance_value(value)
@@ -65,9 +87,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
+                "Performance" => crate::perf_hooks::CLASS_ID_PERFORMANCE,
                 "PerformanceEntry" => crate::perf_hooks::CLASS_ID_PERFORMANCE_ENTRY,
                 "PerformanceMark" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MARK,
                 "PerformanceMeasure" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MEASURE,
+                "PerformanceObserverEntryList" => {
+                    crate::perf_hooks::CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST
+                }
+                "PerformanceResourceTiming" => {
+                    crate::perf_hooks::CLASS_ID_PERFORMANCE_RESOURCE_TIMING
+                }
                 _ => 0,
             };
             if class_id != 0 {
@@ -238,6 +267,48 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_EVENT_EMITTER {
         return if is_event_emitter_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_STATS_EXPORT {
+        return if crate::fs::is_fs_stats_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_DIR {
+        return if crate::fs::is_fs_dir_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_DIRENT {
+        return if crate::fs::is_fs_dirent_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_READ_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "ReadStream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_WRITE_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "WriteStream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
             true_val
         } else {
             false_val
@@ -457,10 +528,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
-    // Typed arrays — Int8Array..Float64Array reserved IDs (0xFFFF0030..37).
+    // Typed arrays — Int8Array..Float16Array reserved IDs (0xFFFF0030..3B).
     // The pointer can arrive as either a NaN-boxed POINTER_TAG value or a
     // raw bitcast f64, so handle both forms.
-    if (0xFFFF0030..=0xFFFF0037).contains(&class_id) {
+    if (0xFFFF0030..=0xFFFF003B).contains(&class_id) {
         let addr = if jsval.is_pointer() {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
@@ -567,6 +638,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
 
         if gc_type == crate::gc::GC_TYPE_OBJECT {
+            if let Some(matches) =
+                crate::perf_hooks::is_perf_hooks_shape_instance_of(value, class_id)
+            {
+                return if matches { true_val } else { false_val };
+            }
             if let Some(matches) =
                 crate::perf_hooks::is_perf_entry_object_instance_of(obj_ptr, class_id)
             {
