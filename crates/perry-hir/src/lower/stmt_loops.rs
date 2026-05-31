@@ -122,6 +122,49 @@ fn is_filehandle_readlines_for_await_target(ctx: &LoweringContext, expr: &ast::E
     )
 }
 
+fn is_fs_promises_glob_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Call(call) = strip_for_of_expr_wrappers(expr) else {
+        return false;
+    };
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return false;
+    };
+    match strip_for_of_expr_wrappers(callee_expr.as_ref()) {
+        ast::Expr::Ident(ident) => {
+            ctx.lookup_native_module(ident.sym.as_ref())
+                .is_some_and(|(module, method)| {
+                    module.strip_prefix("node:").unwrap_or(module) == "fs/promises"
+                        && method == Some("glob")
+                })
+                || ctx.lookup_imported_func(ident.sym.as_ref()) == Some("glob")
+        }
+        ast::Expr::Member(member) => {
+            let ast::MemberProp::Ident(prop) = &member.prop else {
+                return false;
+            };
+            if prop.sym.as_ref() != "glob" {
+                return false;
+            }
+            match strip_for_of_expr_wrappers(&member.obj) {
+                ast::Expr::Ident(obj) => {
+                    ctx.lookup_native_module(obj.sym.as_ref())
+                        .is_some_and(|(module, method)| {
+                            method.is_none()
+                                && module.strip_prefix("node:").unwrap_or(module) == "fs/promises"
+                        })
+                        || ctx
+                            .lookup_builtin_module_alias(obj.sym.as_ref())
+                            .is_some_and(|module| {
+                                module.strip_prefix("node:").unwrap_or(module) == "fs/promises"
+                            })
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 fn async_iterator_method_call(iterable: Expr) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::IndexGet {
@@ -292,12 +335,15 @@ pub(crate) fn lower_stmt_for_of(
         for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
     let is_filehandle_readlines_for_await =
         for_of_stmt.is_await && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
+    let is_fs_promises_glob_for_await =
+        for_of_stmt.is_await && is_fs_promises_glob_for_await_target(ctx, &for_of_stmt.right);
 
     if is_generator_call
         || iter_from_class.is_some()
         || is_timer_promises_interval_call
         || is_node_readable_for_await
         || is_filehandle_readlines_for_await
+        || is_fs_promises_glob_for_await
     {
         // Lower to iterator protocol:
         //   let __iter = genFunc(...);                     // generator-fn path

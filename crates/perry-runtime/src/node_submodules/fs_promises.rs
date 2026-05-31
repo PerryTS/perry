@@ -410,10 +410,7 @@ pub(crate) extern "C" fn thunk_fs_promises_glob(
     pattern: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_value(|| {
-        let raw = crate::fs::js_fs_glob_sync_options(pattern, options);
-        f64::from_bits(JSValue::pointer(raw.to_bits() as *const u8).bits())
-    })
+    crate::fs::js_fs_promises_glob_iterator(pattern, options)
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_watch(
