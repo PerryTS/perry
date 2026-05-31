@@ -74,9 +74,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
+                "Performance" => crate::perf_hooks::CLASS_ID_PERFORMANCE,
                 "PerformanceEntry" => crate::perf_hooks::CLASS_ID_PERFORMANCE_ENTRY,
                 "PerformanceMark" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MARK,
                 "PerformanceMeasure" => crate::perf_hooks::CLASS_ID_PERFORMANCE_MEASURE,
+                "PerformanceObserverEntryList" => {
+                    crate::perf_hooks::CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST
+                }
+                "PerformanceResourceTiming" => {
+                    crate::perf_hooks::CLASS_ID_PERFORMANCE_RESOURCE_TIMING
+                }
                 _ => 0,
             };
             if class_id != 0 {
@@ -576,6 +583,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
 
         if gc_type == crate::gc::GC_TYPE_OBJECT {
+            if let Some(matches) =
+                crate::perf_hooks::is_perf_hooks_shape_instance_of(value, class_id)
+            {
+                return if matches { true_val } else { false_val };
+            }
             if let Some(matches) =
                 crate::perf_hooks::is_perf_entry_object_instance_of(obj_ptr, class_id)
             {

@@ -3874,6 +3874,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     internal_property("perf_hooks", "nodeTiming"),
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),
+    class("perf_hooks", "Performance"),
     class("perf_hooks", "PerformanceObserver"),
     // PerformanceObserver.supportedEntryTypes — static array of entry-type
     // names. Read inline (`PerformanceObserver.supportedEntryTypes.includes(...)`)
@@ -3882,6 +3883,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("perf_hooks", "PerformanceEntry"),
     class("perf_hooks", "PerformanceMark"),
     class("perf_hooks", "PerformanceMeasure"),
+    class("perf_hooks", "PerformanceObserverEntryList"),
+    class("perf_hooks", "PerformanceResourceTiming"),
     method("perf_hooks", "observe", true, Some("PerformanceObserver")),
     method(
         "perf_hooks",
