@@ -102,9 +102,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "ReferenceError" => 0xFFFF0012u32,
                 "SyntaxError" => 0xFFFF0013u32,
                 "AggregateError" => 0xFFFF0014u32,
-                // #2875: SuppressedError instances are ObjectHeaders stamped
-                // with this class id and registered as extending Error.
-                "SuppressedError" => 0xFFFF003Bu32,
                 "EvalError" | "globalThis.EvalError" => 0xFFFF0015u32,
                 "URIError" | "globalThis.URIError" => 0xFFFF0016u32,
                 // Uint8Array / Buffer — runtime detects these via a
@@ -330,15 +327,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let result = blk.call(I64, "js_array_from_value", &[(DOUBLE, &iter_box)]);
             Ok(nanbox_pointer_inline(blk, &result))
-        }
-
-        // #2874: `Iterator.from(x)` — wrap any iterable in a lazy
-        // iterator-helper object. `js_iterator_from` returns an already
-        // NaN-boxed pointer (f64), so return it directly.
-        Expr::IteratorFrom(iter) => {
-            let iter_box = lower_expr(ctx, iter)?;
-            let blk = ctx.block();
-            Ok(blk.call(DOUBLE, "js_iterator_from", &[(DOUBLE, &iter_box)]))
         }
 
         // Tagged-template strings literal — build cooked array, build raw
@@ -589,7 +577,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             if args.is_empty() {
                 let blk = ctx.block();
-                let cb_handle = unbox_to_i64(blk, &cb_box);
+                // #3046: validate the callback (non-callable → Node's
+                // `ERR_INVALID_ARG_TYPE` "callback" message) before queueing.
+                // `js_timer_validate_callback` always reports the "callback"
+                // argument name and returns the closure handle; idx 3 selects
+                // its generic-callback wording branch.
+                let cb_handle = blk.call(
+                    I64,
+                    "js_timer_validate_callback",
+                    &[(DOUBLE, &cb_box), (I32, "3")],
+                );
                 blk.call_void("js_queue_next_tick", &[(I64, &cb_handle)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
@@ -607,7 +604,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ptr_reg, n, buf
             ));
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #3046: same callback validation on the trailing-args path.
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, "3")],
+            );
             blk.call_void(
                 "js_queue_next_tick_args",
                 &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
