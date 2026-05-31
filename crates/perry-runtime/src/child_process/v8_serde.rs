@@ -666,6 +666,191 @@ pub(crate) fn v8_deserialize(buf: &[u8]) -> f64 {
 }
 
 // ============================================================
+// Class API: `new v8.Serializer()` / `new v8.Deserializer(buf)` (#3680)
+// ============================================================
+//
+// Node's `v8.Serializer` / `v8.Deserializer` (and the `Default*` subclasses)
+// expose a stateful builder around the same structured-clone codec used by
+// `v8.serialize` / `v8.deserialize`. We keep a per-thread registry of live
+// instances keyed by a monotonic id; the JS-visible value is a native-module
+// namespace object that carries that id in field[1] (mirrors the
+// `PerformanceObserver` instance pattern). GC suppression is *not* held across
+// calls (each method is a discrete JS call); instead each `write_value` /
+// `read_value` wraps its own suppression window so raw heap pointers held
+// during a single walk are never relocated.
+
+use std::cell::RefCell;
+
+thread_local! {
+    static SERIALIZERS: RefCell<Vec<Serializer>> = const { RefCell::new(Vec::new()) };
+    static DESERIALIZERS: RefCell<Vec<OwnedDeserializer>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A `Deserializer` that owns its buffer (the codec's `Deserializer` borrows
+/// `&[u8]`; the class API must keep the bytes alive across method calls).
+struct OwnedDeserializer {
+    buf: Vec<u8>,
+    pos: usize,
+    id_table: Vec<f64>,
+}
+
+impl OwnedDeserializer {
+    fn with<R>(&mut self, f: impl FnOnce(&mut Deserializer) -> R) -> R {
+        let mut de = Deserializer {
+            buf: &self.buf,
+            pos: self.pos,
+            id_table: std::mem::take(&mut self.id_table),
+        };
+        let r = f(&mut de);
+        self.pos = de.pos;
+        self.id_table = std::mem::take(&mut de.id_table);
+        r
+    }
+}
+
+/// Allocate a fresh `Serializer` and return its registry id.
+pub(crate) fn v8_class_serializer_new() -> usize {
+    SERIALIZERS.with(|s| {
+        let mut s = s.borrow_mut();
+        s.push(Serializer::new());
+        s.len() - 1
+    })
+}
+
+pub(crate) fn v8_class_serializer_write_header(id: usize) {
+    SERIALIZERS.with(|s| {
+        if let Some(ser) = s.borrow_mut().get_mut(id) {
+            ser.write_header();
+        }
+    });
+}
+
+pub(crate) fn v8_class_serializer_write_value(id: usize, value: f64) {
+    let _gc = GcSuppressGuard::new();
+    SERIALIZERS.with(|s| {
+        if let Some(ser) = s.borrow_mut().get_mut(id) {
+            ser.write_value(value);
+        }
+    });
+}
+
+pub(crate) fn v8_class_serializer_write_uint32(id: usize, value: u32) {
+    SERIALIZERS.with(|s| {
+        if let Some(ser) = s.borrow_mut().get_mut(id) {
+            ser.write_varint(value as u64);
+        }
+    });
+}
+
+pub(crate) fn v8_class_serializer_write_uint64(id: usize, hi: u32, lo: u32) {
+    SERIALIZERS.with(|s| {
+        if let Some(ser) = s.borrow_mut().get_mut(id) {
+            ser.write_varint(((hi as u64) << 32) | (lo as u64));
+        }
+    });
+}
+
+pub(crate) fn v8_class_serializer_write_double(id: usize, value: f64) {
+    SERIALIZERS.with(|s| {
+        if let Some(ser) = s.borrow_mut().get_mut(id) {
+            ser.write_double(value);
+        }
+    });
+}
+
+pub(crate) fn v8_class_serializer_write_raw_bytes(id: usize, bytes: &[u8]) {
+    SERIALIZERS.with(|s| {
+        if let Some(ser) = s.borrow_mut().get_mut(id) {
+            ser.out.extend_from_slice(bytes);
+        }
+    });
+}
+
+/// Take a snapshot of the serializer's accumulated bytes (Node's
+/// `releaseBuffer()` returns the buffer; we clone so further writes still work,
+/// matching Node closely enough for the public contract).
+pub(crate) fn v8_class_serializer_release(id: usize) -> Vec<u8> {
+    SERIALIZERS.with(|s| {
+        s.borrow()
+            .get(id)
+            .map(|ser| ser.out.clone())
+            .unwrap_or_default()
+    })
+}
+
+/// Allocate a fresh `Deserializer` over a copy of `bytes`; returns its id.
+pub(crate) fn v8_class_deserializer_new(bytes: Vec<u8>) -> usize {
+    DESERIALIZERS.with(|d| {
+        let mut d = d.borrow_mut();
+        d.push(OwnedDeserializer {
+            buf: bytes,
+            pos: 0,
+            id_table: Vec::new(),
+        });
+        d.len() - 1
+    })
+}
+
+pub(crate) fn v8_class_deserializer_read_header(id: usize) {
+    DESERIALIZERS.with(|d| {
+        if let Some(de) = d.borrow_mut().get_mut(id) {
+            de.with(|inner| inner.read_header());
+        }
+    });
+}
+
+pub(crate) fn v8_class_deserializer_read_value(id: usize) -> f64 {
+    let _gc = GcSuppressGuard::new();
+    DESERIALIZERS.with(|d| {
+        d.borrow_mut()
+            .get_mut(id)
+            .map(|de| de.with(|inner| inner.read_value().unwrap_or_else(cp_undefined)))
+            .unwrap_or_else(cp_undefined)
+    })
+}
+
+pub(crate) fn v8_class_deserializer_read_uint32(id: usize) -> u32 {
+    DESERIALIZERS.with(|d| {
+        d.borrow_mut()
+            .get_mut(id)
+            .map(|de| de.with(|inner| inner.read_varint().unwrap_or(0) as u32))
+            .unwrap_or(0)
+    })
+}
+
+/// Read a 64-bit value as Node does: `[hi, lo]` u32 pair.
+pub(crate) fn v8_class_deserializer_read_uint64(id: usize) -> (u32, u32) {
+    DESERIALIZERS.with(|d| {
+        d.borrow_mut()
+            .get_mut(id)
+            .map(|de| {
+                let v = de.with(|inner| inner.read_varint().unwrap_or(0));
+                ((v >> 32) as u32, (v & 0xFFFF_FFFF) as u32)
+            })
+            .unwrap_or((0, 0))
+    })
+}
+
+pub(crate) fn v8_class_deserializer_read_double(id: usize) -> f64 {
+    DESERIALIZERS.with(|d| {
+        d.borrow_mut()
+            .get_mut(id)
+            .map(|de| de.with(|inner| inner.read_double().unwrap_or(0.0)))
+            .unwrap_or(0.0)
+    })
+}
+
+/// Read `len` raw bytes from the deserializer's cursor.
+pub(crate) fn v8_class_deserializer_read_raw_bytes(id: usize, len: usize) -> Vec<u8> {
+    DESERIALIZERS.with(|d| {
+        d.borrow_mut()
+            .get_mut(id)
+            .map(|de| de.with(|inner| inner.read_raw(len).map(|s| s.to_vec()).unwrap_or_default()))
+            .unwrap_or_default()
+    })
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 
