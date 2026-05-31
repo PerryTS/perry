@@ -3013,6 +3013,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "formatWithOptions", false, None),
     method("util", "promisify", false, None),
     method("util", "callbackify", false, None),
+    method("util", "debuglog", false, None),
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method_sig(
@@ -3088,6 +3089,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),
     method("sys", "callbackify", false, None),
+    method("sys", "debuglog", false, None),
     method("sys", "deprecate", false, None),
     method("sys", "inherits", false, None),
     method_sig(

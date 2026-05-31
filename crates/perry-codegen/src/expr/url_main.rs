@@ -251,6 +251,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(ctx.block(), &params_obj))
         }
 
+        Expr::UrlSearchParamsMissingArgs {
+            params,
+            args,
+            name_and_value,
+        } => {
+            let _ = lower_expr(ctx, params)?;
+            for arg in args {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let kind = if *name_and_value { "2" } else { "1" };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_url_search_params_throw_missing_args",
+                &[(I32, kind)],
+            ))
+        }
+
         Expr::UrlSearchParamsGet { params, name } => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);

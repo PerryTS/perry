@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2001 entries across 95 modules.
+Total: 1996 entries across 94 modules.
 
 ## Modules
 
@@ -96,7 +96,6 @@ Total: 2001 entries across 95 modules.
 - [`util`](#util)
 - [`util/types`](#util-types)
 - [`uuid`](#uuid)
-- [`v8`](#v8)
 - [`validator`](#validator)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
@@ -2417,6 +2416,8 @@ Total: 2001 entries across 95 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
 - `deprecate` — module
 - `format` — module
 - `formatWithOptions` — module
@@ -2545,6 +2546,8 @@ Total: 2001 entries across 95 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
 - `deprecate` — module
 - `format` — module
 - `formatWithOptions` — module
@@ -2615,23 +2618,6 @@ Total: 2001 entries across 95 modules.
 - `v4` — module
 - `v7` — module
 - `validate` — module
-
-## `v8`
-
-### Classes
-
-- `GCProfiler`
-
-### Methods
-
-- `cachedDataVersionTag` — module
-- `deserialize` — module
-- `getHeapCodeStatistics` — module
-- `getHeapSpaceStatistics` — module
-- `getHeapStatistics` — module
-- `serialize` — module
-- `start` — instance *(class: `GCProfiler`)*
-- `stop` — instance *(class: `GCProfiler`)*
 
 ## `validator`
 

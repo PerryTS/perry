@@ -477,6 +477,7 @@ impl SH for Expr {
             Expr::UrlSetPassword { url, value } => { tag(h, 12022); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSetHref { url, value } => { tag(h, 12036); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSearchParamsNew(e) => { tag(h, 372); e.hash(h); }
+            Expr::UrlSearchParamsMissingArgs { params, args, name_and_value } => { tag(h, 12049); params.as_ref().hash(h); args.hash(h); name_and_value.hash(h); }
             Expr::UrlSearchParamsGet { params, name } => { tag(h, 373); params.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::UrlSearchParamsHas { params, name, value, } => { tag(h, 374); params.as_ref().hash(h); name.as_ref().hash(h); match value { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::UrlSearchParamsSet { params, name, value, } => { tag(h, 375); params.as_ref().hash(h); name.as_ref().hash(h); value.as_ref().hash(h); }

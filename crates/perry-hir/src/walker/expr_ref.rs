@@ -325,6 +325,12 @@ where
                 f(props);
             }
         }
+        Expr::UrlSearchParamsMissingArgs { params, args, .. } => {
+            f(params);
+            for arg in args {
+                f(arg);
+            }
+        }
         Expr::BufferConcatWithLength { list, total_length } => {
             f(list);
             f(total_length);

@@ -1713,6 +1713,12 @@ pub enum Expr {
     // URLSearchParams operations
     /// new URLSearchParams(init?)
     UrlSearchParamsNew(Option<Box<Expr>>),
+    /// URLSearchParams method call missing required arguments.
+    UrlSearchParamsMissingArgs {
+        params: Box<Expr>,
+        args: Vec<Expr>,
+        name_and_value: bool,
+    },
     /// params.get(name) -> string | null
     UrlSearchParamsGet {
         params: Box<Expr>,
