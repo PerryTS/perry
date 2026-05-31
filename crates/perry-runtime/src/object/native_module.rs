@@ -1055,6 +1055,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         // #1533: node:stream `promises` namespace exports.
         ("stream/promises", "pipeline")
             | ("stream/promises", "finished")
+            | (
+                "readline",
+                "clearLine"
+                    | "clearScreenDown"
+                    | "cursorTo"
+                    | "moveCursor"
+                    | "emitKeypressEvents",
+            )
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")

@@ -7,7 +7,7 @@
 //! the stream/promises, stream/consumers, and blob modules build their
 //! resolved/rejected Promises through them.
 
-use crate::closure::ClosureHeader;
+use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::value::JSValue;
 
 pub(crate) fn promise_value(value: f64) -> f64 {
@@ -350,7 +350,57 @@ pub(crate) extern "C" fn thunk_fs_promises_access(
     }
 }
 
-thunk!(thunk_readline_createInterface, "node:readline/promises.createInterface is not yet implemented in Perry (tracked by issue #793).");
+extern "C" fn readline_promises_close(_closure: *const ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn readline_promises_question(
+    _closure: *const ClosureHeader,
+    _query: f64,
+    _options: f64,
+) -> f64 {
+    promise_undefined()
+}
+
+fn readline_promises_method0(func: extern "C" fn(*const ClosureHeader) -> f64) -> f64 {
+    js_register_closure_arity(func as *const u8, 0);
+    let closure = js_closure_alloc(func as *const u8, 0);
+    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
+fn readline_promises_method2(func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> f64 {
+    js_register_closure_arity(func as *const u8, 2);
+    let closure = js_closure_alloc(func as *const u8, 0);
+    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
+fn set_readline_promises_field(
+    obj: *mut crate::object::ObjectHeader,
+    name: &'static [u8],
+    value: f64,
+) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+pub(crate) extern "C" fn thunk_readline_createInterface(
+    _closure: *const ClosureHeader,
+    _opts: f64,
+) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    set_readline_promises_field(
+        obj,
+        b"close",
+        readline_promises_method0(readline_promises_close),
+    );
+    set_readline_promises_field(
+        obj,
+        b"question",
+        readline_promises_method2(readline_promises_question),
+    );
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
 thunk!(
     thunk_readline_Interface,
     "node:readline/promises.Interface is not yet implemented in Perry (tracked by issue #793)."

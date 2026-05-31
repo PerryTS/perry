@@ -42,6 +42,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                     {
                                         ("mongodb", "connect") => Some("MongoClient"),
                                         ("pg", "connect") => Some("Client"),
+                                        ("readline", "createInterface") => Some("Interface"),
                                         _ => Some("Instance"),
                                     };
                                     if let Some(class_name) = class_name {

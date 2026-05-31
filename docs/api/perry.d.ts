@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2059 entries across 95 modules
+// Coverage: 2107 entries across 97 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1452,6 +1452,71 @@ declare module "fs" {
   export function writevSync(...args: any[]): any;
 }
 
+declare module "fs/promises" {
+  /** stdlib */
+  export function access(...args: any[]): any;
+  /** stdlib */
+  export function appendFile(...args: any[]): any;
+  /** stdlib */
+  export function chmod(...args: any[]): any;
+  /** stdlib */
+  export function chown(...args: any[]): any;
+  /** stdlib */
+  export function copyFile(...args: any[]): any;
+  /** stdlib */
+  export function cp(...args: any[]): any;
+  /** stdlib */
+  export function glob(...args: any[]): any;
+  /** stdlib */
+  export function lchmod(...args: any[]): any;
+  /** stdlib */
+  export function lchown(...args: any[]): any;
+  /** stdlib */
+  export function link(...args: any[]): any;
+  /** stdlib */
+  export function lstat(...args: any[]): any;
+  /** stdlib */
+  export function lutimes(...args: any[]): any;
+  /** stdlib */
+  export function mkdir(...args: any[]): any;
+  /** stdlib */
+  export function mkdtemp(...args: any[]): any;
+  /** stdlib */
+  export function open(...args: any[]): any;
+  /** stdlib */
+  export function opendir(...args: any[]): any;
+  /** stdlib */
+  export function readFile(...args: any[]): any;
+  /** stdlib */
+  export function readdir(...args: any[]): any;
+  /** stdlib */
+  export function readlink(...args: any[]): any;
+  /** stdlib */
+  export function realpath(...args: any[]): any;
+  /** stdlib */
+  export function rename(...args: any[]): any;
+  /** stdlib */
+  export function rm(...args: any[]): any;
+  /** stdlib */
+  export function rmdir(...args: any[]): any;
+  /** stdlib */
+  export function stat(...args: any[]): any;
+  /** stdlib */
+  export function statfs(...args: any[]): any;
+  /** stdlib */
+  export function symlink(...args: any[]): any;
+  /** stdlib */
+  export function truncate(...args: any[]): any;
+  /** stdlib */
+  export function unlink(...args: any[]): any;
+  /** stdlib */
+  export function utimes(...args: any[]): any;
+  /** stdlib */
+  export function watch(...args: any[]): any;
+  /** stdlib */
+  export function writeFile(...args: any[]): any;
+}
+
 declare module "http" {
   /** stdlib */
   export class Agent { [key: string]: any; }
@@ -2672,7 +2737,7 @@ declare module "process" {
   /** stdlib */
   export function listeners(...args: any[]): any;
   /** stdlib */
-  export function loadEnvFile(...args: any[]): any;
+  export function loadEnvFile(path?: any): void;
   /** stdlib */
   export function memoryUsage(...args: any[]): any;
   /** stdlib */
@@ -2762,6 +2827,25 @@ declare module "rate-limiter-flexible" {
 }
 
 declare module "readline" {
+  /** stdlib */
+  export function clearLine(...args: any[]): any;
+  /** stdlib */
+  export function clearScreenDown(...args: any[]): any;
+  /** stdlib */
+  export function createInterface(p0: any): any;
+  /** stdlib */
+  export function cursorTo(...args: any[]): any;
+  /** stdlib */
+  export function emitKeypressEvents(...args: any[]): any;
+  /** stdlib */
+  export function moveCursor(...args: any[]): any;
+}
+
+declare module "readline/promises" {
+  /** stdlib */
+  export class Interface { [key: string]: any; }
+  /** stdlib */
+  export class Readline { [key: string]: any; }
   /** stdlib */
   export function createInterface(p0: any): any;
 }

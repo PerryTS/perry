@@ -76,6 +76,10 @@ pub fn describe_received(value: f64) -> String {
     if jv.is_bigint() {
         return format!("type bigint ({}n)", bigint_decimal(value));
     }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        let ptr = unsafe { crate::symbol::js_symbol_to_string(value) } as *const StringHeader;
+        return format!("type symbol ({})", string_header_to_string(ptr));
+    }
     if is_numeric(jv) {
         let n = if jv.is_int32() {
             jv.as_int32() as f64
@@ -101,11 +105,7 @@ pub fn describe_received(value: f64) -> String {
     "an unsupported value".to_string()
 }
 
-/// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
-/// `String`. Used by `describe_received` to render a `Received type string
-/// ('…')` clause.
-fn read_js_string(value: f64) -> String {
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+fn string_header_to_string(ptr: *const StringHeader) -> String {
     if ptr.is_null() {
         return String::new();
     }
@@ -114,6 +114,14 @@ fn read_js_string(value: f64) -> String {
         let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
+}
+
+/// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
+/// `String`. Used by `describe_received` to render a `Received type string
+/// ('…')` clause.
+fn read_js_string(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    string_header_to_string(ptr)
 }
 
 /// Render a string the way Node's `determineSpecificType` does for the
