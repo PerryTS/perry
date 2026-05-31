@@ -1178,6 +1178,7 @@ Total: 2408 entries across 104 modules.
 ### Classes
 
 - `Blob`
+- `FormData`
 - `Headers`
 - `Request`
 - `Response`
@@ -1845,6 +1846,7 @@ Total: 2408 entries across 104 modules.
 ### Classes
 
 - `Blob`
+- `FormData`
 - `Headers`
 - `Request`
 - `Response`
