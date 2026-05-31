@@ -1835,6 +1835,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         }
         ("tls", "checkServerIdentity") => Some(2),
         ("tls", "SecureContext") => Some(1),
+        // #3726: `crypto.Cipheriv` / `crypto.Decipheriv` constructor exports —
+        // `(cipher, key, iv, options)` arity matches Node's length 4.
+        ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
@@ -3245,6 +3248,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "getRandomValues")
             | ("crypto", "createCipheriv")
             | ("crypto", "createDecipheriv")
+            // #3726: the constructor exports behind the factories read as
+            // callable functions so `typeof crypto.Cipheriv === "function"`.
+            | ("crypto", "Cipheriv")
+            | ("crypto", "Decipheriv")
             | ("crypto", "createSecretKey")
             | ("crypto.Certificate", "verifySpkac")
             | ("crypto.Certificate", "exportPublicKey")
