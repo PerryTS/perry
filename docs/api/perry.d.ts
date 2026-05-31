@@ -1679,6 +1679,8 @@ declare module "http2" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export const sensitiveHeaders: any;
+  /** stdlib */
   export function createSecureServer(...args: any[]): any;
   /** stdlib */
   export function getDefaultSettings(...args: any[]): any;
