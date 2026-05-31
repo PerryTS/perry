@@ -87,6 +87,7 @@ pub mod typedarray;
 pub mod url;
 pub mod v8;
 pub mod value;
+pub mod wasi;
 /// WebAssembly host shims (issue #76). Forward-declares the
 /// `perry_wasm_host_*` C ABI; the wasmi-backed implementation lives in
 /// the separate `perry-wasm-host` crate and is linked in only when the
