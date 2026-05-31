@@ -224,7 +224,7 @@ fn function_length(value: f64) -> u32 {
     if let Some(len) = crate::object::builtin_closure_length(closure as usize) {
         return len;
     }
-    crate::closure::closure_arity(closure).unwrap_or(0)
+    crate::closure::closure_length(closure).unwrap_or(0)
 }
 
 /// `util.deprecate(fn, msg, code)` — returns a wrapper named `deprecated` that
