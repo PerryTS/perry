@@ -2053,6 +2053,28 @@ pub extern "C" fn js_object_get_field_by_name(
                             crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
                         return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                     }
+                    // #3716: reading `f.bind` / `f.call` / `f.apply` *as a value*
+                    // off any function must yield a real callable, not
+                    // `undefined`. Reify it into a BOUND_METHOD closure bound to
+                    // this function as receiver; invoking it routes back through
+                    // `js_native_call_method(f, "<method>", …)`. This is what makes
+                    // the "uncurry-this" idiom
+                    // `Function.prototype.call.bind(method)` work — reading `.bind`
+                    // off the reified `Function.prototype.call` previously read
+                    // back `undefined`, so the bound function was never produced.
+                    let reified: Option<&'static [u8]> = match name_str {
+                        "bind" => Some(b"bind"),
+                        "call" => Some(b"call"),
+                        "apply" => Some(b"apply"),
+                        _ => None,
+                    };
+                    if let Some(method) = reified {
+                        let receiver =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        return JSValue::from_bits(
+                            crate::closure::reify_function_method_value(receiver, method).to_bits(),
+                        );
+                    }
                     return JSValue::from_bits(val.to_bits());
                 }
             }
