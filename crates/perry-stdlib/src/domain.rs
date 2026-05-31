@@ -10,6 +10,43 @@ use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::Once;
 
+// `events` is feature-gated behind `bundled-events`; when the well-known
+// bindings table routes `import 'events'` to perry-ext-events the in-tree
+// module is configured out (and the default auto-optimize build compiles
+// without it). The domain<->EventEmitter integration degrades to inert
+// no-ops in that build — these shims keep `mod domain` (which is NOT
+// feature-gated) compiling either way.
+#[cfg(feature = "bundled-events")]
+#[inline]
+fn ee_is_event_emitter_handle(handle: Handle) -> bool {
+    crate::events::is_event_emitter_handle(handle)
+}
+#[cfg(not(feature = "bundled-events"))]
+#[inline]
+fn ee_is_event_emitter_handle(_handle: Handle) -> bool {
+    false
+}
+
+#[cfg(feature = "bundled-events")]
+#[inline]
+fn ee_get_domain(handle: Handle) -> Handle {
+    crate::events::js_event_emitter_get_domain(handle)
+}
+#[cfg(not(feature = "bundled-events"))]
+#[inline]
+fn ee_get_domain(_handle: Handle) -> Handle {
+    0
+}
+
+#[cfg(feature = "bundled-events")]
+#[inline]
+fn ee_set_domain(handle: Handle, domain: Handle) {
+    let _ = crate::events::js_event_emitter_set_domain(handle, domain);
+}
+#[cfg(not(feature = "bundled-events"))]
+#[inline]
+fn ee_set_domain(_handle: Handle, _domain: Handle) {}
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
@@ -323,8 +360,8 @@ pub unsafe extern "C" fn js_domain_add(handle: Handle, member: f64) -> Handle {
         }
     }
     let member_handle = handle_from_value(member);
-    if crate::events::is_event_emitter_handle(member_handle) {
-        let _ = crate::events::js_event_emitter_set_domain(member_handle, handle);
+    if ee_is_event_emitter_handle(member_handle) {
+        ee_set_domain(member_handle, handle);
     }
     handle
 }
@@ -337,10 +374,8 @@ pub unsafe extern "C" fn js_domain_remove(handle: Handle, member: f64) -> Handle
             .retain(|candidate| candidate.to_bits() != member.to_bits());
     }
     let member_handle = handle_from_value(member);
-    if crate::events::is_event_emitter_handle(member_handle)
-        && crate::events::js_event_emitter_get_domain(member_handle) == handle
-    {
-        let _ = crate::events::js_event_emitter_set_domain(member_handle, 0);
+    if ee_is_event_emitter_handle(member_handle) && ee_get_domain(member_handle) == handle {
+        ee_set_domain(member_handle, 0);
     }
     handle
 }
@@ -432,8 +467,8 @@ pub unsafe fn dispatch_domain_method(handle: Handle, method: &str, args: &[f64])
 }
 
 pub fn dispatch_domain_property(handle: Handle, property: &str) -> Option<f64> {
-    if crate::events::is_event_emitter_handle(handle) && property == "domain" {
-        let domain = crate::events::js_event_emitter_get_domain(handle);
+    if ee_is_event_emitter_handle(handle) && property == "domain" {
+        let domain = ee_get_domain(handle);
         return Some(if domain == 0 {
             null()
         } else {
