@@ -1300,7 +1300,21 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // that hir.functions already produced a wrapper entry for.
     let registered_fn_ids: std::collections::HashSet<perry_types::FuncId> =
         hir.functions.iter().map(|f| f.id).collect();
+    // #3527: only register a display name for a `perry_closure_*` symbol when
+    // that closure was actually materialized as an LLVM global (i.e. it is in
+    // the `closures` set compiled above via `compile_closure`). `hir.closure_display_names`
+    // can hold stale entries for closures that were never emitted — e.g.
+    // `module.exports = function named(){}` records a display name for a fid that
+    // CJS export lowering replaces with a different, materialized fid. Registering
+    // a name for the stale fid emits a `js_register_function_name` call referencing
+    // an undefined `@perry_closure_*` global, which makes `clang -c` fail with
+    // "use of undefined value" (regression class of #318/#343).
+    let materialized_closure_ids: std::collections::HashSet<perry_types::FuncId> =
+        closures.iter().map(|(id, _)| *id).collect();
     for (func_id, display) in &hir.closure_display_names {
+        if !materialized_closure_ids.contains(func_id) {
+            continue;
+        }
         if display.is_empty() || named_inline_closure_ids.contains(func_id) {
             continue;
         }
