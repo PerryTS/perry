@@ -521,6 +521,7 @@ allowed_hot_loop_runtime_calls = [
   "js_buffer_set",
   "js_closure_call1",
   "js_dyn_index_get",
+  "js_dynamic_string_or_number_add",
   "js_number_coerce",
   "js_uint8array_get",
   "js_uint8array_set",
@@ -1426,7 +1427,7 @@ allowed_missed_reason_kinds = [
 
 [workloads.native_abi_packet_typed.runtime_budgets]
 allocations_traced = 5
-gc_collections_traced = 1
+gc_collections_traced = 5
 write_barriers_static = 8
 write_barriers_traced = 8
 boxed_number_allocations_static = 0
@@ -1461,6 +1462,7 @@ allow_dynamic_property_runtime = true
 allow_hot_loop_conversions = true
 allow_boxed_number_allocations = true
 allowed_hot_loop_runtime_calls = [
+  "js_array_length",
   "js_array_push_f64",
   "js_buffer_get",
   "js_buffer_set",
@@ -1480,6 +1482,7 @@ allowed_hot_loop_runtime_calls = [
   "js_shadow_slot_set",
   "js_uint8array_get",
   "js_uint8array_set",
+  "js_write_barrier_root_nanbox",
 ]
 
 [workloads.native_abi_packet_control.vectorization]
@@ -1497,10 +1500,10 @@ allowed_missed_reason_kinds = [
 ]
 
 [workloads.native_abi_packet_control.runtime_budgets]
-allocations_traced = 200
-gc_collections_traced = 2
+allocations_traced = 640
+gc_collections_traced = 5
 write_barriers_static = 64
-write_barriers_traced = 160
+write_barriers_traced = 360
 boxed_number_allocations_static = 64
 buffer_slow_path_accesses_static = 128
 

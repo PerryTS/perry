@@ -980,7 +980,9 @@ pub(super) fn drain_readable_from_events(stream: f64) {
         return;
     }
     let data_event = string_value(b"data");
+    let end_event = string_value(b"end");
     if stream_listener_count_for_event(stream, data_event) == 0
+        && stream_listener_count_for_event(stream, end_event) == 0
         && crate::array::js_array_length(
             raw_ptr_from_value(pipe_destinations(stream)) as *const crate::array::ArrayHeader
         ) == 0

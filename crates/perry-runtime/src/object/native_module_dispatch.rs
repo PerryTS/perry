@@ -446,6 +446,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
         ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
         ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
@@ -462,6 +466,27 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
         ("process", "threadCpuUsage") => crate::process::js_process_thread_cpu_usage(arg(0)),
+        ("process", "availableMemory") => crate::process::js_process_available_memory(),
+        ("process", "constrainedMemory") => crate::process::js_process_constrained_memory(),
+        ("process", "resourceUsage") => crate::process::js_process_resource_usage(),
+        ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
+        ("process", "getuid") => crate::process::js_process_getuid(),
+        ("process", "geteuid") => crate::process::js_process_geteuid(),
+        ("process", "getgid") => crate::process::js_process_getgid(),
+        ("process", "getegid") => crate::process::js_process_getegid(),
+        ("process", "sourceMapsEnabled") => crate::process::js_process_source_maps_enabled(),
+        ("process", "setSourceMapsEnabled") => {
+            crate::process::js_process_set_source_maps_enabled(arg(0))
+        }
+        ("process", "hasUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_has_uncaught_exception_capture_callback()
+        }
+        ("process", "setUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_set_uncaught_exception_capture_callback(arg(0))
+        }
+        ("process", "addUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_add_uncaught_exception_capture_callback(arg(0))
+        }
         ("process", "nextTick") => {
             // Validate the callback and forward trailing args (#3046).
             unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
@@ -481,6 +506,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("process", "getgroups") => crate::process::js_process_getgroups(),
         ("process", "setuid") => {
             crate::process::js_process_setuid(arg(0));
@@ -509,6 +535,23 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "abort") => {
+            crate::process::js_process_abort();
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "umask") => {
+            let mask = arg(0);
+            let mask_value = JSValue::from_bits(mask.to_bits());
+            if mask_value.is_undefined() {
+                crate::process::js_process_umask()
+            } else {
+                crate::process::js_process_umask_set(mask)
+            }
+        }
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "hrtime") => crate::os::js_process_hrtime(arg(0)),
@@ -910,7 +953,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             JSValue::pointer(crate::os::js_os_network_interfaces() as *const u8).bits(),
         ),
         ("os", "userInfo") => {
-            f64::from_bits(JSValue::pointer(crate::os::js_os_user_info() as *const u8).bits())
+            // #3004 — honor a runtime `options.encoding === "buffer"` value
+            // (variable / function-return / computed-key options object).
+            let opts_bits = arg(0).to_bits() as i64;
+            f64::from_bits(
+                JSValue::pointer(crate::os::js_os_user_info_options(opts_bits) as *const u8).bits(),
+            )
         }
         ("os", "getPriority") => crate::os::js_os_get_priority(arg(0)),
         ("os", "setPriority") => crate::os::js_os_set_priority(arg(0), arg(1)),
@@ -1187,6 +1235,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util.types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util.types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util.types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util.types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util.types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
 
         // ── node:util/types direct module ──
         ("util/types", "isPromise") => {
@@ -1273,6 +1327,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util/types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util/types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util/types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util/types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util/types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
         // ── url module (module-level functions return NaN-boxed JS values) ──
         ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
         ("url", "fileURLToPathBuffer") => {
@@ -1381,6 +1441,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+
+        // ── node:dns / node:dns/promises configuration ──
+        ("dns", "getServers") => crate::dns::dns_get_servers_value(),
+        ("dns", "setServers") => crate::dns::dns_set_servers_value(arg(0)),
+        ("dns/promises", "getServers") => crate::dns::dns_promises_get_servers_value(),
+        ("dns/promises", "setServers") => crate::dns::dns_promises_set_servers_value(arg(0)),
+        ("dns" | "dns/promises", "getDefaultResultOrder") => {
+            crate::dns::dns_get_default_result_order_value()
+        }
+        ("dns" | "dns/promises", "setDefaultResultOrder") => {
+            crate::dns::dns_set_default_result_order_value(arg(0))
+        }
 
         // #2130: captured-then-called child_process methods (`const spawn =
         // require('child_process').spawn; spawn(...)`, Node's canonical test

@@ -831,7 +831,7 @@ pub(super) fn try_global_builtins(
                     "version" => return Ok(Ok(Expr::OsVersion)),
                     "cpus" => return Ok(Ok(Expr::OsCpus)),
                     "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                    "userInfo" => return Ok(Ok(user_info_expr_for_call(call))),
+                    "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                     "getPriority" | "setPriority" => {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "os".to_string(),

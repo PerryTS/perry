@@ -7,14 +7,32 @@ use super::*;
 
 /// Delete a field from an object by its string key name
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
-/// Note: In strict mode, this would return 0 for non-configurable properties,
-/// but we don't track configurability, so we always return 1.
 #[no_mangle]
 pub extern "C" fn js_object_delete_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
+    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
+        return 1;
+    }
     unsafe {
+        // #3655: `delete fn.name` / `delete fn.prototype` / `delete fn.userProp`.
+        // Functions/closures aren't `ObjectHeader`s — reading `keys_array` off
+        // one is out of bounds. Built-in slots (`name`/`length`/`prototype`)
+        // are `configurable: true`, so record the deletion in the closure
+        // deleted-key side table (consulted by hasOwnProperty/getOwnProperty*/
+        // value reads); user-attached props are dropped from the dynamic-prop
+        // table outright. Either way delete succeeds (returns 1).
+        if crate::closure::is_closure_ptr(obj as usize) {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                // Drop any user-attached own prop, and mark the key deleted so
+                // a synthesized built-in slot (`name`/`length`/`prototype`)
+                // stops reporting from the registries on later reads.
+                crate::closure::closure_delete_own_dynamic_prop(obj as usize, name);
+                crate::closure::closure_mark_key_deleted(obj as usize, name);
+            }
+            return 1;
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously
@@ -39,6 +57,18 @@ pub extern "C" fn js_object_delete_field(
             Some(i) => i,
             None => return 1, // Not found — delete succeeds vacuously
         };
+        let key_name = {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()
+        };
+        if let Some(name) = key_name {
+            if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                if !attrs.configurable() {
+                    return 0;
+                }
+            }
+        }
 
         // Proper delete: shift remaining keys + values down by one, then
         // shorten keys_array. Pre-fix this just set the value to
