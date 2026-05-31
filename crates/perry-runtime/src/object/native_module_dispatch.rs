@@ -529,7 +529,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "clearMarks") => crate::perf_hooks::js_perf_clear_marks(arg(0)),
         ("perf_hooks", "clearMeasures") => crate::perf_hooks::js_perf_clear_measures(arg(0)),
         ("perf_hooks", "eventLoopUtilization") => {
-            crate::perf_hooks::js_perf_event_loop_utilization(arg(0))
+            crate::perf_hooks::js_perf_event_loop_utilization(arg(0), arg(1))
         }
         ("perf_hooks", "toJSON") => crate::perf_hooks::js_perf_to_json(),
         ("perf_hooks", "clearResourceTimings") => {
