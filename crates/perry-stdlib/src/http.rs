@@ -188,6 +188,8 @@ pub struct IncomingMessageHandle {
     pub body: Vec<u8>,
     /// Event listeners: 'data', 'end', 'error' callbacks
     pub listeners: HashMap<String, Vec<i64>>,
+    /// Encoding requested through `res.setEncoding(enc)`.
+    pub encoding: Option<String>,
 }
 
 /// Helper to extract string from StringHeader pointer
@@ -930,6 +932,51 @@ pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle 
     handle
 }
 
+/// IncomingMessage.setEncoding(encoding) — store the requested text encoding
+/// for response data events and return the receiver for chaining.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_incoming_message_set_encoding(
+    handle: Handle,
+    encoding_ptr: *const StringHeader,
+) -> Handle {
+    let encoding = string_from_header(encoding_ptr).unwrap_or_else(|| "utf8".to_string());
+    let mut matched = false;
+    if let Some(res) = get_handle_mut::<IncomingMessageHandle>(handle) {
+        res.encoding = Some(encoding);
+        matched = true;
+    }
+    if matched {
+        return handle;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_client_incoming_message_is_handle(handle: i64) -> i32;
+            fn js_ext_http_client_incoming_message_set_encoding(
+                handle: i64,
+                encoding_ptr: *const StringHeader,
+            ) -> i64;
+        }
+        if js_ext_http_client_incoming_message_is_handle(handle) != 0 {
+            js_ext_http_client_incoming_message_set_encoding(handle, encoding_ptr);
+            return handle;
+        }
+    }
+
+    #[cfg(feature = "external-http-server-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+            fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
+        }
+        if js_ext_http_incoming_message_is_handle(handle) != 0 {
+            js_node_http_im_set_encoding(handle, encoding_ptr);
+        }
+    }
+    handle
+}
+
 /// IncomingMessage.statusCode — get response status code
 #[no_mangle]
 pub extern "C" fn js_http_status_code(handle: Handle) -> f64 {
@@ -966,6 +1013,21 @@ pub unsafe extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
         perry_runtime::js_object_set_keys(obj, keys_arr);
 
         return f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits());
+    }
+
+    #[cfg(feature = "external-http-server-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+            fn js_ext_http_incoming_message_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+        }
+        if js_ext_http_incoming_message_is_handle(handle) != 0 {
+            return js_ext_http_incoming_message_dispatch_property(handle, b"headers".as_ptr(), 7);
+        }
     }
 
     f64::from_bits(JSValue::undefined().bits())
@@ -1029,6 +1091,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                     headers: headers_map,
                     body,
                     listeners: HashMap::new(),
+                    encoding: None,
                 });
 
                 // Call the response callback with the IncomingMessage handle
@@ -1651,6 +1714,7 @@ mod tests {
             headers: HashMap::new(),
             body: Vec::new(),
             listeners: msg_listeners,
+            encoding: None,
         });
 
         let mut emitted = Vec::new();

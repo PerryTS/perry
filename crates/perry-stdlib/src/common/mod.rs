@@ -8,6 +8,7 @@ pub mod handle;
 #[cfg(feature = "async-runtime")]
 pub mod async_bridge;
 pub mod dispatch;
+pub(crate) mod dispatch_http;
 pub mod net_method_values;
 
 #[cfg(feature = "async-runtime")]
