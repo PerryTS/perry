@@ -43,14 +43,36 @@
 use crate::ensure_gc_scanner_registered;
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_string, get_handle_mut, iter_handles_of_mut, register_handle, GcRootVisitor, Handle,
-    JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
+    alloc_string, get_handle, get_handle_mut, iter_handles_of_mut, register_handle, GcRootVisitor,
+    Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+extern "C" {
+    fn js_class_method_bind(
+        instance: f64,
+        method_name_ptr: *const u8,
+        method_name_len: usize,
+    ) -> f64;
+}
+
+fn bool_f64(value: bool) -> f64 {
+    f64::from_bits(JsValue::from_bool(value).bits())
+}
+
+fn bind_agent_method(handle: Handle, name: &'static [u8]) -> i64 {
+    (bind_agent_method_value(handle, name).to_bits() & PTR_MASK) as i64
+}
+
+fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
+    let instance = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+    unsafe { js_class_method_bind(instance, name.as_ptr(), name.len()) }
+}
 
 // ------------------------------------------------------------------
 // AgentHandle
@@ -395,6 +417,43 @@ pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
             visitor.visit_i64_slot(&mut agent.create_socket);
         }
     });
+}
+
+#[no_mangle]
+pub extern "C" fn js_ext_http_agent_is_handle(handle: Handle) -> i32 {
+    if get_handle::<AgentHandle>(handle).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
+    handle: Handle,
+    property_ptr: *const u8,
+    property_len: usize,
+) -> f64 {
+    if property_ptr.is_null() || property_len == 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let property = String::from_utf8_lossy(std::slice::from_raw_parts(property_ptr, property_len));
+    match property.as_ref() {
+        "createConnection" => {
+            let raw = js_http_agent_create_connection(handle);
+            f64::from_bits(POINTER_TAG | (raw as u64 & PTR_MASK))
+        }
+        "createSocket" => {
+            let raw = js_http_agent_create_socket(handle);
+            f64::from_bits(POINTER_TAG | (raw as u64 & PTR_MASK))
+        }
+        "keepSocketAlive" => bind_agent_method_value(handle, b"keepSocketAlive"),
+        "reuseSocket" => bind_agent_method_value(handle, b"reuseSocket"),
+        "getName" => bind_agent_method_value(handle, b"getName"),
+        "destroy" => bind_agent_method_value(handle, b"destroy"),
+        "close" => bind_agent_method_value(handle, b"close"),
+        _ => f64::from_bits(TAG_UNDEFINED),
+    }
 }
 
 // ------------------------------------------------------------------
@@ -742,11 +801,7 @@ pub extern "C" fn js_http_agent_keep_alive_msecs(handle: Handle) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_keep_alive(handle: Handle) -> f64 {
-    if agent_field(handle, false, |a| a.keep_alive) {
-        1.0
-    } else {
-        0.0
-    }
+    bool_f64(agent_field(handle, false, |a| a.keep_alive))
 }
 
 #[no_mangle]
@@ -759,10 +814,15 @@ pub extern "C" fn js_http_agent_protocol(handle: Handle) -> *mut StringHeader {
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_destroyed(handle: Handle) -> f64 {
-    if agent_field(handle, false, |a| a.destroyed) {
-        1.0
-    } else {
-        0.0
+    bool_f64(agent_field(handle, false, |a| a.destroyed))
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_default_port(handle: Handle) -> f64 {
+    match agent_field(handle, Some("http:".to_string()), |a| a.protocol.clone()).as_deref() {
+        Some("https:") => 443.0,
+        Some("http:") => 80.0,
+        _ => 0.0,
     }
 }
 
@@ -888,12 +948,22 @@ pub extern "C" fn js_http_agent_set_create_socket(handle: Handle, closure_ptr: i
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_create_connection(handle: Handle) -> i64 {
-    agent_field(handle, 0i64, |a| a.create_connection)
+    let stored = agent_field(handle, 0i64, |a| a.create_connection);
+    if stored != 0 {
+        stored
+    } else {
+        bind_agent_method(handle, b"createConnection")
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_create_socket(handle: Handle) -> i64 {
-    agent_field(handle, 0i64, |a| a.create_socket)
+    let stored = agent_field(handle, 0i64, |a| a.create_socket);
+    if stored != 0 {
+        stored
+    } else {
+        bind_agent_method(handle, b"createSocket")
+    }
 }
 
 /// #2154 — if this agent has a `createConnection` override, build the

@@ -905,7 +905,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             JSValue::pointer(crate::os::js_os_network_interfaces() as *const u8).bits(),
         ),
         ("os", "userInfo") => {
-            f64::from_bits(JSValue::pointer(crate::os::js_os_user_info() as *const u8).bits())
+            // #3004 — honor a runtime `options.encoding === "buffer"` value
+            // (variable / function-return / computed-key options object).
+            let opts_bits = arg(0).to_bits() as i64;
+            f64::from_bits(
+                JSValue::pointer(crate::os::js_os_user_info_options(opts_bits) as *const u8).bits(),
+            )
         }
         ("os", "getPriority") => crate::os::js_os_get_priority(arg(0)),
         ("os", "setPriority") => crate::os::js_os_set_priority(arg(0), arg(1)),
@@ -1404,6 +1409,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+
+        // ── node:dns / node:dns/promises configuration ──
+        ("dns", "getServers") => crate::dns::dns_get_servers_value(),
+        ("dns", "setServers") => crate::dns::dns_set_servers_value(arg(0)),
+        ("dns/promises", "getServers") => crate::dns::dns_promises_get_servers_value(),
+        ("dns/promises", "setServers") => crate::dns::dns_promises_set_servers_value(arg(0)),
+        ("dns" | "dns/promises", "getDefaultResultOrder") => {
+            crate::dns::dns_get_default_result_order_value()
+        }
+        ("dns" | "dns/promises", "setDefaultResultOrder") => {
+            crate::dns::dns_set_default_result_order_value(arg(0))
+        }
 
         // #2130: captured-then-called child_process methods (`const spawn =
         // require('child_process').spawn; spawn(...)`, Node's canonical test
