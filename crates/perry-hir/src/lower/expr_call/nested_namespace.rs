@@ -349,6 +349,51 @@ pub(super) fn try_util_types_namespace(
     Ok(Err(args))
 }
 
+/// `dns.promises.<method>(args)` — sub-namespace dispatch for the promise DNS
+/// facade. Without this, the generic native-module call path can treat the
+/// final method as a top-level `dns.<method>` call and accidentally mutate the
+/// callback API's server list.
+pub(super) fn try_dns_promises_namespace(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+    args: Vec<Expr>,
+) -> Result<Result<Expr, Vec<Expr>>> {
+    if let ast::Expr::Member(outer_member) = expr {
+        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+            if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+                let root_name = root_ident.sym.as_ref();
+                let is_dns_root = root_name == "dns"
+                    || ctx.lookup_builtin_module_alias(root_name) == Some("dns")
+                    || ctx
+                        .lookup_native_module(root_name)
+                        .map(|(m, _)| m == "dns")
+                        .unwrap_or(false);
+                if is_dns_root {
+                    if let (ast::MemberProp::Ident(namespace), ast::MemberProp::Ident(method)) =
+                        (&inner_member.prop, &outer_member.prop)
+                    {
+                        if namespace.sym.as_ref() == "promises" {
+                            let method_name = method.sym.as_ref();
+                            if perry_api_manifest::module_has_symbol("dns/promises", method_name)
+                                .is_some()
+                            {
+                                return Ok(Ok(Expr::NativeMethodCall {
+                                    module: "dns/promises".to_string(),
+                                    class_name: None,
+                                    object: None,
+                                    method: method_name.to_string(),
+                                    args,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Err(args))
+}
+
 /// `punycode.ucs2.<method>(args)` (#2607) — sub-namespace dispatch for the
 /// deprecated `node:punycode` module's `ucs2` code-point helpers
 /// (`decode`/`encode`). Rewrites the namespace-access form to a

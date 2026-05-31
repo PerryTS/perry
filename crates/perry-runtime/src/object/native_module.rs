@@ -69,7 +69,6 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
 const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
-const DEFAULT_CORE_CIPHER_LIST: &str = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
@@ -163,6 +162,183 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
     }
 }
 
+// #3677: `Object.keys(zlib.constants)` enumeration. Node exposes the full
+// Z_*/BROTLI_*/ZSTD_* table as enumerable own keys (170 keys). Every key here
+// is backed by a value in `zlib_const` (the value-read dispatch), so
+// enumeration and direct reads agree. Order matches Node's insertion order.
+const ZLIB_CONSTANTS_KEYS: &[&[u8]] = &[
+    b"Z_NO_FLUSH",
+    b"Z_PARTIAL_FLUSH",
+    b"Z_SYNC_FLUSH",
+    b"Z_FULL_FLUSH",
+    b"Z_FINISH",
+    b"Z_BLOCK",
+    b"Z_OK",
+    b"Z_STREAM_END",
+    b"Z_NEED_DICT",
+    b"Z_ERRNO",
+    b"Z_STREAM_ERROR",
+    b"Z_DATA_ERROR",
+    b"Z_MEM_ERROR",
+    b"Z_BUF_ERROR",
+    b"Z_VERSION_ERROR",
+    b"Z_NO_COMPRESSION",
+    b"Z_BEST_SPEED",
+    b"Z_BEST_COMPRESSION",
+    b"Z_DEFAULT_COMPRESSION",
+    b"Z_FILTERED",
+    b"Z_HUFFMAN_ONLY",
+    b"Z_RLE",
+    b"Z_FIXED",
+    b"Z_DEFAULT_STRATEGY",
+    b"ZLIB_VERNUM",
+    b"DEFLATE",
+    b"INFLATE",
+    b"GZIP",
+    b"GUNZIP",
+    b"DEFLATERAW",
+    b"INFLATERAW",
+    b"UNZIP",
+    b"BROTLI_DECODE",
+    b"BROTLI_ENCODE",
+    b"ZSTD_DECOMPRESS",
+    b"ZSTD_COMPRESS",
+    b"Z_MIN_WINDOWBITS",
+    b"Z_MAX_WINDOWBITS",
+    b"Z_DEFAULT_WINDOWBITS",
+    b"Z_MIN_CHUNK",
+    b"Z_MAX_CHUNK",
+    b"Z_DEFAULT_CHUNK",
+    b"Z_MIN_MEMLEVEL",
+    b"Z_MAX_MEMLEVEL",
+    b"Z_DEFAULT_MEMLEVEL",
+    b"Z_MIN_LEVEL",
+    b"Z_MAX_LEVEL",
+    b"Z_DEFAULT_LEVEL",
+    b"BROTLI_OPERATION_PROCESS",
+    b"BROTLI_OPERATION_FLUSH",
+    b"BROTLI_OPERATION_FINISH",
+    b"BROTLI_OPERATION_EMIT_METADATA",
+    b"BROTLI_PARAM_MODE",
+    b"BROTLI_MODE_GENERIC",
+    b"BROTLI_MODE_TEXT",
+    b"BROTLI_MODE_FONT",
+    b"BROTLI_DEFAULT_MODE",
+    b"BROTLI_PARAM_QUALITY",
+    b"BROTLI_MIN_QUALITY",
+    b"BROTLI_MAX_QUALITY",
+    b"BROTLI_DEFAULT_QUALITY",
+    b"BROTLI_PARAM_LGWIN",
+    b"BROTLI_MIN_WINDOW_BITS",
+    b"BROTLI_MAX_WINDOW_BITS",
+    b"BROTLI_LARGE_MAX_WINDOW_BITS",
+    b"BROTLI_DEFAULT_WINDOW",
+    b"BROTLI_PARAM_LGBLOCK",
+    b"BROTLI_MIN_INPUT_BLOCK_BITS",
+    b"BROTLI_MAX_INPUT_BLOCK_BITS",
+    b"BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING",
+    b"BROTLI_PARAM_SIZE_HINT",
+    b"BROTLI_PARAM_LARGE_WINDOW",
+    b"BROTLI_PARAM_NPOSTFIX",
+    b"BROTLI_PARAM_NDIRECT",
+    b"BROTLI_DECODER_RESULT_ERROR",
+    b"BROTLI_DECODER_RESULT_SUCCESS",
+    b"BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT",
+    b"BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT",
+    b"BROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION",
+    b"BROTLI_DECODER_PARAM_LARGE_WINDOW",
+    b"BROTLI_DECODER_NO_ERROR",
+    b"BROTLI_DECODER_SUCCESS",
+    b"BROTLI_DECODER_NEEDS_MORE_INPUT",
+    b"BROTLI_DECODER_NEEDS_MORE_OUTPUT",
+    b"BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_NIBBLE",
+    b"BROTLI_DECODER_ERROR_FORMAT_RESERVED",
+    b"BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_META_NIBBLE",
+    b"BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_ALPHABET",
+    b"BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_SAME",
+    b"BROTLI_DECODER_ERROR_FORMAT_CL_SPACE",
+    b"BROTLI_DECODER_ERROR_FORMAT_HUFFMAN_SPACE",
+    b"BROTLI_DECODER_ERROR_FORMAT_CONTEXT_MAP_REPEAT",
+    b"BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_1",
+    b"BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_2",
+    b"BROTLI_DECODER_ERROR_FORMAT_TRANSFORM",
+    b"BROTLI_DECODER_ERROR_FORMAT_DICTIONARY",
+    b"BROTLI_DECODER_ERROR_FORMAT_WINDOW_BITS",
+    b"BROTLI_DECODER_ERROR_FORMAT_PADDING_1",
+    b"BROTLI_DECODER_ERROR_FORMAT_PADDING_2",
+    b"BROTLI_DECODER_ERROR_FORMAT_DISTANCE",
+    b"BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET",
+    b"BROTLI_DECODER_ERROR_INVALID_ARGUMENTS",
+    b"BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES",
+    b"BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS",
+    b"BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP",
+    b"BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1",
+    b"BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2",
+    b"BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES",
+    b"BROTLI_DECODER_ERROR_UNREACHABLE",
+    b"ZSTD_e_continue",
+    b"ZSTD_e_flush",
+    b"ZSTD_e_end",
+    b"ZSTD_fast",
+    b"ZSTD_dfast",
+    b"ZSTD_greedy",
+    b"ZSTD_lazy",
+    b"ZSTD_lazy2",
+    b"ZSTD_btlazy2",
+    b"ZSTD_btopt",
+    b"ZSTD_btultra",
+    b"ZSTD_btultra2",
+    b"ZSTD_c_compressionLevel",
+    b"ZSTD_c_windowLog",
+    b"ZSTD_c_hashLog",
+    b"ZSTD_c_chainLog",
+    b"ZSTD_c_searchLog",
+    b"ZSTD_c_minMatch",
+    b"ZSTD_c_targetLength",
+    b"ZSTD_c_strategy",
+    b"ZSTD_c_enableLongDistanceMatching",
+    b"ZSTD_c_ldmHashLog",
+    b"ZSTD_c_ldmMinMatch",
+    b"ZSTD_c_ldmBucketSizeLog",
+    b"ZSTD_c_ldmHashRateLog",
+    b"ZSTD_c_contentSizeFlag",
+    b"ZSTD_c_checksumFlag",
+    b"ZSTD_c_dictIDFlag",
+    b"ZSTD_c_nbWorkers",
+    b"ZSTD_c_jobSize",
+    b"ZSTD_c_overlapLog",
+    b"ZSTD_d_windowLogMax",
+    b"ZSTD_CLEVEL_DEFAULT",
+    b"ZSTD_error_no_error",
+    b"ZSTD_error_GENERIC",
+    b"ZSTD_error_prefix_unknown",
+    b"ZSTD_error_version_unsupported",
+    b"ZSTD_error_frameParameter_unsupported",
+    b"ZSTD_error_frameParameter_windowTooLarge",
+    b"ZSTD_error_corruption_detected",
+    b"ZSTD_error_checksum_wrong",
+    b"ZSTD_error_literals_headerWrong",
+    b"ZSTD_error_dictionary_corrupted",
+    b"ZSTD_error_dictionary_wrong",
+    b"ZSTD_error_dictionaryCreation_failed",
+    b"ZSTD_error_parameter_unsupported",
+    b"ZSTD_error_parameter_combination_unsupported",
+    b"ZSTD_error_parameter_outOfBound",
+    b"ZSTD_error_tableLog_tooLarge",
+    b"ZSTD_error_maxSymbolValue_tooLarge",
+    b"ZSTD_error_maxSymbolValue_tooSmall",
+    b"ZSTD_error_stabilityCondition_notRespected",
+    b"ZSTD_error_stage_wrong",
+    b"ZSTD_error_init_missing",
+    b"ZSTD_error_memory_allocation",
+    b"ZSTD_error_workSpace_tooSmall",
+    b"ZSTD_error_dstSize_tooSmall",
+    b"ZSTD_error_srcSize_wrong",
+    b"ZSTD_error_dstBuffer_null",
+    b"ZSTD_error_noForwardProgress_destFull",
+    b"ZSTD_error_noForwardProgress_inputEmpty",
+];
+
 const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"F_OK",
     b"R_OK",
@@ -172,51 +348,19 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"O_WRONLY",
     b"O_RDWR",
     b"O_NOFOLLOW",
-    b"O_NOCTTY",
-    b"O_DIRECTORY",
-    b"O_DIRECT",
-    b"O_NOATIME",
-    b"O_NONBLOCK",
-    b"O_SYNC",
-    b"O_DSYNC",
     b"O_CREAT",
     b"O_TRUNC",
     b"O_APPEND",
     b"O_EXCL",
-    b"UV_FS_O_FILEMAP",
-    b"UV_FS_SYMLINK_DIR",
-    b"UV_FS_SYMLINK_JUNCTION",
-    b"UV_FS_COPYFILE_EXCL",
-    b"UV_FS_COPYFILE_FICLONE",
-    b"UV_FS_COPYFILE_FICLONE_FORCE",
-    b"UV_DIRENT_UNKNOWN",
-    b"UV_DIRENT_FILE",
-    b"UV_DIRENT_DIR",
-    b"UV_DIRENT_LINK",
-    b"UV_DIRENT_FIFO",
-    b"UV_DIRENT_SOCKET",
-    b"UV_DIRENT_CHAR",
-    b"UV_DIRENT_BLOCK",
     b"COPYFILE_EXCL",
     b"COPYFILE_FICLONE",
     b"COPYFILE_FICLONE_FORCE",
-    b"S_IFMT",
-    b"S_IFREG",
-    b"S_IFDIR",
-    b"S_IFCHR",
-    b"S_IFBLK",
-    b"S_IFIFO",
-    b"S_IFLNK",
-    b"S_IFSOCK",
-    b"S_IRWXU",
     b"S_IRUSR",
     b"S_IWUSR",
     b"S_IXUSR",
-    b"S_IRWXG",
     b"S_IRGRP",
     b"S_IWGRP",
     b"S_IXGRP",
-    b"S_IRWXO",
     b"S_IROTH",
     b"S_IWOTH",
     b"S_IXOTH",
@@ -391,11 +535,72 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"TLS1_1_VERSION",
     b"TLS1_2_VERSION",
     b"TLS1_3_VERSION",
-    b"defaultCoreCipherList",
     b"POINT_CONVERSION_COMPRESSED",
     b"POINT_CONVERSION_UNCOMPRESSED",
     b"POINT_CONVERSION_HYBRID",
+    // #3683: POSIX file-flag, libuv, and default-cipher-metadata tail.
+    b"UV_DIRENT_UNKNOWN",
+    b"UV_DIRENT_FILE",
+    b"UV_DIRENT_DIR",
+    b"UV_DIRENT_LINK",
+    b"UV_DIRENT_FIFO",
+    b"UV_DIRENT_SOCKET",
+    b"UV_DIRENT_CHAR",
+    b"UV_DIRENT_BLOCK",
+    b"UV_FS_SYMLINK_DIR",
+    b"UV_FS_SYMLINK_JUNCTION",
+    b"UV_FS_O_FILEMAP",
+    b"UV_FS_COPYFILE_EXCL",
+    b"UV_FS_COPYFILE_FICLONE",
+    b"UV_FS_COPYFILE_FICLONE_FORCE",
+    b"S_IFMT",
+    b"S_IFREG",
+    b"S_IFDIR",
+    b"S_IFCHR",
+    b"S_IFBLK",
+    b"S_IFIFO",
+    b"S_IFLNK",
+    b"S_IFSOCK",
+    b"S_IRWXU",
+    b"S_IRWXG",
+    b"S_IRWXO",
+    b"O_DIRECTORY",
+    b"O_NOCTTY",
+    b"O_NONBLOCK",
+    b"O_SYNC",
+    b"O_DSYNC",
+    b"O_SYMLINK",
+    b"defaultCoreCipherList",
 ];
+
+// Linux-only open() flags: Node only enumerates these on platforms whose libc
+// defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
+// enumerable-key tail by target so `Object.keys(constants)` matches Node here.
+#[cfg(target_os = "linux")]
+fn deprecated_constants_keys() -> &'static [&'static [u8]] {
+    use std::sync::OnceLock;
+    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+    MERGED
+        .get_or_init(|| {
+            // Insert the Linux-only flags just before the trailing
+            // `defaultCoreCipherList` metadata entry, matching Node's order.
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 2);
+            for &k in DEPRECATED_CONSTANTS_KEYS {
+                if k == b"defaultCoreCipherList" {
+                    v.push(b"O_DIRECT");
+                    v.push(b"O_NOATIME");
+                }
+                v.push(k);
+            }
+            v
+        })
+        .as_slice()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn deprecated_constants_keys() -> &'static [&'static [u8]] {
+    DEPRECATED_CONSTANTS_KEYS
+}
 
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
@@ -422,10 +627,12 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"strict",
         ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        // #3677: zlib.constants enumerates the full Z_*/BROTLI_*/ZSTD_* table.
+        "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
         "path" | "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
-        "constants" => Some(DEPRECATED_CONSTANTS_KEYS),
+        "constants" => Some(deprecated_constants_keys()),
         "querystring" => Some(&[
             b"unescapeBuffer",
             b"unescape",
@@ -480,6 +687,30 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"setDefaultAutoSelectFamily",
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
+        ]),
+        "https" => Some(&[
+            b"Agent",
+            b"Server",
+            b"createServer",
+            b"get",
+            b"request",
+            b"globalAgent",
+        ]),
+        "events" => Some(&[
+            b"EventEmitter",
+            b"defaultMaxListeners",
+            b"usingDomains",
+            b"captureRejections",
+            b"captureRejectionSymbol",
+            b"errorMonitor",
+            b"init",
+            b"listenerCount",
+            b"on",
+            b"once",
+            b"addAbortListener",
+            b"getEventListeners",
+            b"getMaxListeners",
+            b"setMaxListeners",
         ]),
         _ => None,
     }
@@ -576,6 +807,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             )
         };
     }
+    if module_name == "dns" && property_name == "promises" {
+        crate::dns::dns_promises_init_servers_from_callback_if_unset();
+        let submodule = "dns/promises";
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    }
 
     if module_name == "util" && property_name == "debug" {
         return bound_native_callable_export_value("util", "debuglog");
@@ -641,6 +877,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     if module_name == "events" && property_name == "EventEmitter" {
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "usingDomains",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "init",
+            bound_native_callable_export_value("events", "init"),
+        );
     }
 
     if module_name == "util" && property_name == "promisify" {
@@ -681,6 +927,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "_createServerHandle") => Some(5),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        ("events", "init") => Some(0),
         ("wasi", "WASI") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
@@ -1205,6 +1452,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "fork")
             | ("events", "EventEmitter")
             | ("events", "on")
+            | ("events", "init")
             | ("stream", "compose")
             | ("stream", "duplexPair")
             | ("stream", "pipeline")
@@ -1510,6 +1758,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util.types", "isStringObject")
             | ("util.types", "isBooleanObject")
             | ("util.types", "isBoxedPrimitive")
+            // #3678: predicate tail.
+            | ("util.types", "isDataView")
+            | ("util.types", "isFloat16Array")
+            | ("util.types", "isWeakMap")
+            | ("util.types", "isWeakSet")
+            | ("util.types", "isExternal")
             | ("util/types", "isPromise")
             | ("timers", "setTimeout")
             | ("timers", "clearTimeout")
@@ -1551,6 +1805,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isStringObject")
             | ("util/types", "isBooleanObject")
             | ("util/types", "isBoxedPrimitive")
+            // #3678: predicate tail.
+            | ("util/types", "isDataView")
+            | ("util/types", "isFloat16Array")
+            | ("util/types", "isWeakMap")
+            | ("util/types", "isWeakSet")
+            | ("util/types", "isExternal")
             | ("url", "URL")
             | ("url", "URLSearchParams")
             | ("url", "fileURLToPath")
@@ -2083,104 +2343,6 @@ pub(crate) unsafe fn get_native_module_constant(
             0x800 as f64
         }
     };
-    let o_directory = {
-        #[cfg(target_os = "linux")]
-        {
-            Some(libc::O_DIRECTORY as f64)
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Some(0x100000 as f64)
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            None
-        }
-    };
-    let o_noctty = {
-        #[cfg(unix)]
-        {
-            Some(libc::O_NOCTTY as f64)
-        }
-        #[cfg(not(unix))]
-        {
-            None
-        }
-    };
-    let o_nonblock = {
-        #[cfg(unix)]
-        {
-            Some(libc::O_NONBLOCK as f64)
-        }
-        #[cfg(not(unix))]
-        {
-            None
-        }
-    };
-    let o_sync = {
-        #[cfg(unix)]
-        {
-            Some(libc::O_SYNC as f64)
-        }
-        #[cfg(not(unix))]
-        {
-            None
-        }
-    };
-    let o_dsync = {
-        #[cfg(target_os = "linux")]
-        {
-            Some(libc::O_DSYNC as f64)
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Some(0x400000 as f64)
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            None
-        }
-    };
-    let o_direct = {
-        #[cfg(target_os = "linux")]
-        {
-            Some(libc::O_DIRECT as f64)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            None
-        }
-    };
-    let o_noatime = {
-        #[cfg(target_os = "linux")]
-        {
-            Some(libc::O_NOATIME as f64)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            None
-        }
-    };
-    let o_symlink = {
-        #[cfg(target_os = "macos")]
-        {
-            Some(0x200000 as f64)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            None
-        }
-    };
-    let uv_fs_o_filemap = {
-        #[cfg(windows)]
-        {
-            0x2000_0000 as f64
-        }
-        #[cfg(not(windows))]
-        {
-            0.0
-        }
-    };
 
     // Helper for fs constants — shared between "fs" and "fs.constants" modules.
     // Using a nested match (module first, then property) instead of OR patterns
@@ -2196,58 +2358,130 @@ pub(crate) unsafe fn get_native_module_constant(
             "O_WRONLY" => Some(1.0),
             "O_RDWR" => Some(2.0),
             "O_NOFOLLOW" => Some(o_nofollow),
-            "O_NOCTTY" => o_noctty,
-            "O_DIRECTORY" => o_directory,
-            "O_DIRECT" => o_direct,
-            "O_NOATIME" => o_noatime,
-            "O_NONBLOCK" => o_nonblock,
-            "O_SYNC" => o_sync,
-            "O_DSYNC" => o_dsync,
-            "O_SYMLINK" => o_symlink,
             "O_CREAT" => Some(o_creat),
             "O_TRUNC" => Some(o_trunc),
             "O_APPEND" => Some(o_append),
             "O_EXCL" => Some(o_excl),
-            "UV_FS_O_FILEMAP" => Some(uv_fs_o_filemap),
-            "UV_FS_SYMLINK_DIR" => Some(1.0),
-            "UV_FS_SYMLINK_JUNCTION" => Some(2.0),
-            "UV_FS_COPYFILE_EXCL" => Some(1.0),
-            "UV_FS_COPYFILE_FICLONE" => Some(2.0),
-            "UV_FS_COPYFILE_FICLONE_FORCE" => Some(4.0),
-            "UV_DIRENT_UNKNOWN" => Some(0.0),
-            "UV_DIRENT_FILE" => Some(1.0),
-            "UV_DIRENT_DIR" => Some(2.0),
-            "UV_DIRENT_LINK" => Some(3.0),
-            "UV_DIRENT_FIFO" => Some(4.0),
-            "UV_DIRENT_SOCKET" => Some(5.0),
-            "UV_DIRENT_CHAR" => Some(6.0),
-            "UV_DIRENT_BLOCK" => Some(7.0),
             "COPYFILE_EXCL" => Some(1.0),
             "COPYFILE_FICLONE" => Some(2.0),
             "COPYFILE_FICLONE_FORCE" => Some(4.0),
-            "S_IFMT" => Some(0o170000 as f64),
-            "S_IFREG" => Some(0o100000 as f64),
-            "S_IFDIR" => Some(0o040000 as f64),
-            "S_IFCHR" => Some(0o020000 as f64),
-            "S_IFBLK" => Some(0o060000 as f64),
-            "S_IFIFO" => Some(0o010000 as f64),
-            "S_IFLNK" => Some(0o120000 as f64),
-            "S_IFSOCK" => Some(0o140000 as f64),
-            "S_IRWXU" => Some(0o700 as f64),
             "S_IRUSR" => Some(0o400 as f64),
             "S_IWUSR" => Some(0o200 as f64),
             "S_IXUSR" => Some(0o100 as f64),
-            "S_IRWXG" => Some(0o070 as f64),
             "S_IRGRP" => Some(0o040 as f64),
             "S_IWGRP" => Some(0o020 as f64),
             "S_IXGRP" => Some(0o010 as f64),
-            "S_IRWXO" => Some(0o007 as f64),
             "S_IROTH" => Some(0o004 as f64),
             "S_IWOTH" => Some(0o002 as f64),
             "S_IXOTH" => Some(0o001 as f64),
             _ => None,
         }
     };
+
+    // #3683: POSIX file-mode/open flags, libuv dirent/symlink/copyfile flags.
+    // libuv (UV_*) values are platform-independent. S_IF* file-type masks are
+    // POSIX-standard (identical on Linux/macOS). The O_* flags are OS-specific,
+    // so use `libc::` on Unix for host-accurate parity with Node; the literal
+    // fallbacks mirror macOS values (where Perry's primary target runs).
+    let fs_const_tail = |prop: &str| -> Option<f64> {
+        let v: Option<i64> = match prop {
+            // libuv dirent types (uv.h `uv_dirent_type_t`).
+            "UV_DIRENT_UNKNOWN" => Some(0),
+            "UV_DIRENT_FILE" => Some(1),
+            "UV_DIRENT_DIR" => Some(2),
+            "UV_DIRENT_LINK" => Some(3),
+            "UV_DIRENT_FIFO" => Some(4),
+            "UV_DIRENT_SOCKET" => Some(5),
+            "UV_DIRENT_CHAR" => Some(6),
+            "UV_DIRENT_BLOCK" => Some(7),
+            // libuv symlink flags.
+            "UV_FS_SYMLINK_DIR" => Some(1),
+            "UV_FS_SYMLINK_JUNCTION" => Some(2),
+            // libuv copyfile flags (Node mirrors these onto fs.constants
+            // COPYFILE_* too).
+            "UV_FS_COPYFILE_EXCL" => Some(1),
+            "UV_FS_COPYFILE_FICLONE" => Some(2),
+            "UV_FS_COPYFILE_FICLONE_FORCE" => Some(4),
+            // libuv filemap open flag (Windows-only; 0 elsewhere, matching Node).
+            #[cfg(windows)]
+            "UV_FS_O_FILEMAP" => Some(0x2000_0000),
+            #[cfg(not(windows))]
+            "UV_FS_O_FILEMAP" => Some(0),
+            // POSIX combined rwx permission masks (stable across platforms).
+            "S_IRWXU" => Some(0o700),
+            "S_IRWXG" => Some(0o070),
+            "S_IRWXO" => Some(0o007),
+            // POSIX file-type masks (S_IFMT family) — stable across Linux/macOS.
+            #[cfg(unix)]
+            "S_IFMT" => Some(libc::S_IFMT as i64),
+            #[cfg(unix)]
+            "S_IFREG" => Some(libc::S_IFREG as i64),
+            #[cfg(unix)]
+            "S_IFDIR" => Some(libc::S_IFDIR as i64),
+            #[cfg(unix)]
+            "S_IFCHR" => Some(libc::S_IFCHR as i64),
+            #[cfg(unix)]
+            "S_IFBLK" => Some(libc::S_IFBLK as i64),
+            #[cfg(unix)]
+            "S_IFIFO" => Some(libc::S_IFIFO as i64),
+            #[cfg(unix)]
+            "S_IFLNK" => Some(libc::S_IFLNK as i64),
+            #[cfg(unix)]
+            "S_IFSOCK" => Some(libc::S_IFSOCK as i64),
+            #[cfg(not(unix))]
+            "S_IFMT" => Some(0xF000),
+            #[cfg(not(unix))]
+            "S_IFREG" => Some(0x8000),
+            #[cfg(not(unix))]
+            "S_IFDIR" => Some(0x4000),
+            #[cfg(not(unix))]
+            "S_IFCHR" => Some(0x2000),
+            #[cfg(not(unix))]
+            "S_IFBLK" => Some(0x6000),
+            #[cfg(not(unix))]
+            "S_IFIFO" => Some(0x1000),
+            #[cfg(not(unix))]
+            "S_IFLNK" => Some(0xA000),
+            #[cfg(not(unix))]
+            "S_IFSOCK" => Some(0xC000),
+            // OS-specific open() flags.
+            #[cfg(unix)]
+            "O_DIRECTORY" => Some(libc::O_DIRECTORY as i64),
+            #[cfg(unix)]
+            "O_NOCTTY" => Some(libc::O_NOCTTY as i64),
+            #[cfg(unix)]
+            "O_NONBLOCK" => Some(libc::O_NONBLOCK as i64),
+            #[cfg(unix)]
+            "O_SYNC" => Some(libc::O_SYNC as i64),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            "O_DSYNC" => Some(0x400000),
+            #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+            "O_DSYNC" => Some(libc::O_DSYNC as i64),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            "O_SYMLINK" => Some(0x200000),
+            // Linux-only open() flags (Node returns undefined for these on
+            // platforms that lack them).
+            #[cfg(target_os = "linux")]
+            "O_DIRECT" => Some(libc::O_DIRECT as i64),
+            #[cfg(target_os = "linux")]
+            "O_NOATIME" => Some(libc::O_NOATIME as i64),
+            #[cfg(not(unix))]
+            "O_DIRECTORY" => Some(0x10000),
+            #[cfg(not(unix))]
+            "O_NOCTTY" => Some(0),
+            #[cfg(not(unix))]
+            "O_NONBLOCK" => Some(0x800),
+            #[cfg(not(unix))]
+            "O_SYNC" => Some(0x101000),
+            _ => None,
+        };
+        v.map(|n| n as f64)
+    };
+
+    // #3683: `constants.defaultCoreCipherList` — OpenSSL's built-in default
+    // TLS cipher list string Node exposes (informational metadata, not a
+    // behavioral toggle). Matches Node's compiled-in default.
+    const DEFAULT_CORE_CIPHER_LIST: &str = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
 
     // Issue #649: `os.constants.signals.SIGINT`, `os.constants.errno.ENOENT`,
     // `os.constants.priority.PRIORITY_NORMAL`, `os.constants.dlopen.RTLD_LAZY`
@@ -2659,6 +2893,68 @@ pub(crate) unsafe fn get_native_module_constant(
             "ZSTD_CLEVEL_DEFAULT" => 3,
             "ZSTD_MINCLEVEL" => -131072,
             "ZSTD_MAXCLEVEL" => 22,
+            // #3677: Brotli decoder result/error codes Node exposes on
+            // `zlib.constants` (the BrotliDecoderResult / BrotliDecoderErrorCode
+            // enums). Required so `Object.keys(zlib.constants)` enumeration
+            // matches Node's full set and every enumerated key reads its value.
+            "BROTLI_DECODER_NO_ERROR" => 0,
+            "BROTLI_DECODER_SUCCESS" => 1,
+            "BROTLI_DECODER_NEEDS_MORE_INPUT" => 2,
+            "BROTLI_DECODER_NEEDS_MORE_OUTPUT" => 3,
+            "BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_NIBBLE" => -1,
+            "BROTLI_DECODER_ERROR_FORMAT_RESERVED" => -2,
+            "BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_META_NIBBLE" => -3,
+            "BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_ALPHABET" => -4,
+            "BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_SAME" => -5,
+            "BROTLI_DECODER_ERROR_FORMAT_CL_SPACE" => -6,
+            "BROTLI_DECODER_ERROR_FORMAT_HUFFMAN_SPACE" => -7,
+            "BROTLI_DECODER_ERROR_FORMAT_CONTEXT_MAP_REPEAT" => -8,
+            "BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_1" => -9,
+            "BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_2" => -10,
+            "BROTLI_DECODER_ERROR_FORMAT_TRANSFORM" => -11,
+            "BROTLI_DECODER_ERROR_FORMAT_DICTIONARY" => -12,
+            "BROTLI_DECODER_ERROR_FORMAT_WINDOW_BITS" => -13,
+            "BROTLI_DECODER_ERROR_FORMAT_PADDING_1" => -14,
+            "BROTLI_DECODER_ERROR_FORMAT_PADDING_2" => -15,
+            "BROTLI_DECODER_ERROR_FORMAT_DISTANCE" => -16,
+            "BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET" => -19,
+            "BROTLI_DECODER_ERROR_INVALID_ARGUMENTS" => -20,
+            "BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES" => -21,
+            "BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS" => -22,
+            "BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP" => -25,
+            "BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1" => -26,
+            "BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2" => -27,
+            "BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES" => -30,
+            "BROTLI_DECODER_ERROR_UNREACHABLE" => -31,
+            // #3677: Zstd error codes (ZSTD_ErrorCode enum) Node exposes.
+            "ZSTD_error_no_error" => 0,
+            "ZSTD_error_GENERIC" => 1,
+            "ZSTD_error_prefix_unknown" => 10,
+            "ZSTD_error_version_unsupported" => 12,
+            "ZSTD_error_frameParameter_unsupported" => 14,
+            "ZSTD_error_frameParameter_windowTooLarge" => 16,
+            "ZSTD_error_corruption_detected" => 20,
+            "ZSTD_error_checksum_wrong" => 22,
+            "ZSTD_error_literals_headerWrong" => 24,
+            "ZSTD_error_dictionary_corrupted" => 30,
+            "ZSTD_error_dictionary_wrong" => 32,
+            "ZSTD_error_dictionaryCreation_failed" => 34,
+            "ZSTD_error_parameter_unsupported" => 40,
+            "ZSTD_error_parameter_combination_unsupported" => 41,
+            "ZSTD_error_parameter_outOfBound" => 42,
+            "ZSTD_error_tableLog_tooLarge" => 44,
+            "ZSTD_error_maxSymbolValue_tooLarge" => 46,
+            "ZSTD_error_maxSymbolValue_tooSmall" => 48,
+            "ZSTD_error_stabilityCondition_notRespected" => 50,
+            "ZSTD_error_stage_wrong" => 60,
+            "ZSTD_error_init_missing" => 62,
+            "ZSTD_error_memory_allocation" => 64,
+            "ZSTD_error_workSpace_tooSmall" => 66,
+            "ZSTD_error_dstSize_tooSmall" => 70,
+            "ZSTD_error_srcSize_wrong" => 72,
+            "ZSTD_error_dstBuffer_null" => 74,
+            "ZSTD_error_noForwardProgress_destFull" => 80,
+            "ZSTD_error_noForwardProgress_inputEmpty" => 82,
             _ => return None,
         };
         Some(v as f64)
@@ -2808,20 +3104,27 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "dns" => match property {
-            "promises" => Some(create_sub_namespace("dns/promises")),
+            "promises" => {
+                crate::dns::dns_promises_init_servers_from_callback_if_unset();
+                Some(create_sub_namespace("dns/promises"))
+            }
             _ => dns_lookup_flag_constant(property)
                 .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
         },
         "dns/promises" => dns_error_alias(property).map(|alias| str_val(alias)),
         "constants" => fs_const(property)
+            .or_else(|| fs_const_tail(property))
             .or_else(|| os_signal_const(property))
             .or_else(|| os_errno_const(property))
             .or_else(|| os_priority_const(property))
             .or_else(|| os_dlopen_const(property))
             .or_else(|| crypto_const(property))
-            .or_else(|| match property {
-                "defaultCoreCipherList" => Some(str_val(DEFAULT_CORE_CIPHER_LIST)),
-                _ => None,
+            .or_else(|| {
+                if property == "defaultCoreCipherList" {
+                    Some(str_val(DEFAULT_CORE_CIPHER_LIST))
+                } else {
+                    None
+                }
             }),
         "path" => match property {
             "sep" => {
@@ -2878,9 +3181,9 @@ pub(crate) unsafe fn get_native_module_constant(
                     "fs_promises".len() as u32,
                 )
             }),
-            _ => fs_const(property),
+            _ => fs_const(property).or_else(|| fs_const_tail(property)),
         },
-        "fs.constants" => fs_const(property),
+        "fs.constants" => fs_const(property).or_else(|| fs_const_tail(property)),
         "buffer" => match property {
             "Buffer" => Some(buffer_constructor_value()),
             "Blob" => Some(js_get_global_this_builtin_value(b"Blob".as_ptr(), 4)),
@@ -3002,17 +3305,16 @@ pub(crate) unsafe fn get_native_module_constant(
             "subtle" => Some(create_sub_namespace("crypto.subtle")),
             _ => None,
         },
-        "crypto.constants" => crypto_const(property).or_else(|| match property {
-            "defaultCoreCipherList" => Some(str_val(DEFAULT_CORE_CIPHER_LIST)),
-            _ => None,
-        }),
+        "crypto.constants" => crypto_const(property),
         "events" => match property {
             "defaultMaxListeners" => Some(10.0),
+            "usingDomains" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "errorMonitor" => Some(crate::symbol::js_symbol_for(str_val("events.errorMonitor"))),
             "captureRejectionSymbol" => {
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
+            "init" => Some(bound_native_callable_export_value("events", "init")),
             _ => None,
         },
         // node:worker_threads value-shaped exports. Perry doesn't spawn JS
@@ -3057,6 +3359,10 @@ pub(crate) unsafe fn get_native_module_constant(
         // pointer) and hand it back for every read.
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
+            _ => None,
+        },
+        "https" => match property {
+            "globalAgent" => Some(unsafe { https_global_agent_object() }),
             _ => None,
         },
         // node:http2 — `constants` is a sub-namespace object (the spec exposes
@@ -3195,6 +3501,46 @@ unsafe fn http_methods_array() -> f64 {
         Ordering::Relaxed,
     );
     value
+}
+
+unsafe fn https_global_agent_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("https.globalAgent").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    let field_names = [
+        "defaultPort",
+        "protocol",
+        "keepAlive",
+        "maxSockets",
+        "maxFreeSockets",
+    ];
+    let packed = field_names.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF12,
+        field_names.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    js_object_set_field(obj, 0, JSValue::number(443.0));
+    let protocol = crate::string::js_string_from_bytes(b"https:".as_ptr(), 6);
+    js_object_set_field(obj, 1, JSValue::string_ptr(protocol));
+    js_object_set_field(obj, 2, JSValue::bool(true));
+    js_object_set_field(obj, 3, JSValue::number(f64::INFINITY));
+    js_object_set_field(obj, 4, JSValue::number(256.0));
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("https.globalAgent".to_string(), result.to_bits());
+    });
+    result
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.

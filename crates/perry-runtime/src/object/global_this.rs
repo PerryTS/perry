@@ -165,6 +165,66 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Buffer",
 ];
 
+/// #3655: spec `length` (declared-parameter count) for each built-in
+/// constructor, so `Ctor.length` reads the right arity through the runtime
+/// value path (`const C = DataView; C.length === 1`) and
+/// `Object.getOwnPropertyDescriptor(Ctor, 'length').value` matches Node. The
+/// HIR also folds bare `Ctor.length` constants (`analysis::builtin_constructor_length`);
+/// these are the runtime fallback for rebound / passed-as-value constructors.
+/// Values verified against `node --experimental-strip-types`. Unlisted names
+/// fall through to the closure arity registry (0).
+pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
+    let len = match name {
+        "Symbol"
+        | "Map"
+        | "Set"
+        | "WeakMap"
+        | "WeakSet"
+        | "TextEncoder"
+        | "TextDecoder"
+        | "TextEncoderStream"
+        | "TextDecoderStream"
+        | "URLSearchParams"
+        | "AbortController"
+        | "AbortSignal"
+        | "FormData"
+        | "Blob"
+        | "Headers"
+        | "Response"
+        | "DisposableStack"
+        | "AsyncDisposableStack" => 0,
+        "Array"
+        | "Object"
+        | "String"
+        | "Number"
+        | "Boolean"
+        | "Function"
+        | "Error"
+        | "TypeError"
+        | "RangeError"
+        | "SyntaxError"
+        | "ReferenceError"
+        | "EvalError"
+        | "URIError"
+        | "WeakRef"
+        | "BigInt"
+        | "ArrayBuffer"
+        | "SharedArrayBuffer"
+        | "DataView"
+        | "URL"
+        | "Request"
+        | "FinalizationRegistry"
+        | "Promise" => 1,
+        "RegExp" | "Proxy" | "AggregateError" | "File" => 2,
+        "Date" => 7,
+        "SuppressedError" | "Buffer" | "Uint8Array" | "Int8Array" | "Uint16Array"
+        | "Int16Array" | "Uint32Array" | "Int32Array" | "Float16Array" | "Float32Array"
+        | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array" | "BigUint64Array" => 3,
+        _ => return None,
+    };
+    Some(len)
+}
+
 /// JS built-in namespaces (typeof === "object", not "function"). Same
 /// shape on the singleton — a backing object with `prototype` so chained
 /// reads degrade gracefully — but typeof reports "object".
@@ -792,6 +852,11 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(false, false, false),
+    );
     // #2060: the four reflectable `length`/`byteLength`/`byteOffset`/`buffer`
     // accessor descriptors are own properties of `%TypedArray%.prototype` per
     // spec, NOT of the per-kind proto. Pre-#2145 they were installed on each
@@ -878,12 +943,31 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         // on the constructor closure so rebound usage like
         // `const O = Object; O.keys(x)` dispatches through the real helpers.
         install_builtin_constructor_statics(name, closure_ptr);
-        if matches!(
-            name,
-            "Blob" | "File" | "EvalError" | "URIError" | "Uint8Array"
-        ) {
-            super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        if name == "Number" {
+            install_number_static_data_properties(closure_ptr);
         }
+        // #3655: every constructor carries spec-correct own `name`/`length`
+        // data properties (`{ writable:false, enumerable:false,
+        // configurable:true }`). The shared no-op thunk can't carry a name via
+        // the func-ptr registry (every constructor would read the same one),
+        // so record both per-closure. Without this, a rebound constructor read
+        // `Date.name === ""` / `Date.length === 0` and test262's
+        // `verifyProperty(Ctor, 'name'|'length', …)` failed "should be an own
+        // property".
+        super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        if let Some(len) = builtin_constructor_spec_length(name) {
+            super::native_module::set_builtin_closure_length(closure_ptr as usize, len);
+        }
+        super::set_builtin_property_attrs(
+            closure_ptr as usize,
+            "name".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
+        super::set_builtin_property_attrs(
+            closure_ptr as usize,
+            "length".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
@@ -895,6 +979,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if !proto_obj.is_null() {
             let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
             js_object_set_field_by_name(closure_ptr as *mut ObjectHeader, proto_key, proto_value);
+            super::set_builtin_property_attrs(
+                closure_ptr as usize,
+                "prototype".to_string(),
+                super::PropertyAttrs::new(false, false, false),
+            );
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
             // ClosureHeader-backed thunks that read their receiver from
@@ -1240,6 +1329,31 @@ fn install_constructor_static(
         name.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
+}
+
+fn install_number_static_data_properties(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    let props = [
+        ("NaN", f64::NAN),
+        ("POSITIVE_INFINITY", f64::INFINITY),
+        ("NEGATIVE_INFINITY", f64::NEG_INFINITY),
+        ("MAX_VALUE", f64::MAX),
+        ("MIN_VALUE", f64::MIN_POSITIVE),
+        ("EPSILON", f64::EPSILON),
+        ("MAX_SAFE_INTEGER", 9007199254740991.0),
+        ("MIN_SAFE_INTEGER", -9007199254740991.0),
+    ];
+    for (name, value) in props {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
+        super::set_builtin_property_attrs(
+            ctor as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(false, false, false),
+        );
+    }
 }
 
 /// #2889: install the common static methods on the `Object` / `Array`

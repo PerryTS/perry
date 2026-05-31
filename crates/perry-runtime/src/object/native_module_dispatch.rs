@@ -446,6 +446,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
@@ -471,6 +475,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("process", "getgroups") => crate::process::js_process_getgroups(),
         ("process", "setuid") => {
             crate::process::js_process_setuid(arg(0));
@@ -1177,6 +1182,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util.types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util.types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util.types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util.types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util.types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
 
         // ── node:util/types direct module ──
         ("util/types", "isPromise") => {
@@ -1263,6 +1274,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util/types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util/types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util/types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util/types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util/types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
         // ── url module (module-level functions return NaN-boxed JS values) ──
         ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
         ("url", "fileURLToPathBuffer") => {
@@ -1371,6 +1388,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+
+        // ── node:dns / node:dns/promises configuration ──
+        ("dns", "getServers") => crate::dns::dns_get_servers_value(),
+        ("dns", "setServers") => crate::dns::dns_set_servers_value(arg(0)),
+        ("dns/promises", "getServers") => crate::dns::dns_promises_get_servers_value(),
+        ("dns/promises", "setServers") => crate::dns::dns_promises_set_servers_value(arg(0)),
+        ("dns" | "dns/promises", "getDefaultResultOrder") => {
+            crate::dns::dns_get_default_result_order_value()
+        }
+        ("dns" | "dns/promises", "setDefaultResultOrder") => {
+            crate::dns::dns_set_default_result_order_value(arg(0))
+        }
 
         // #2130: captured-then-called child_process methods (`const spawn =
         // require('child_process').spawn; spawn(...)`, Node's canonical test
