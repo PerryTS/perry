@@ -8,6 +8,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
     ctx: &mut LoweringContext,
     decl: &ast::VarDeclarator,
     mutable: bool,
+    is_var_decl: bool,
 ) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
 
@@ -1404,25 +1405,34 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     *existing_ty = ty.clone();
                 }
                 id
-            } else if ctx.var_hoisted_ids.iter().any(|hid| {
-                // Issue #838 followup (b): when the closure-body hoist
-                // in `lower_fn_expr` / `lower_arrow` pre-registered this
-                // `var` (so forward references like `var O = function(){
-                // … _ … }; var _ = …;` resolve before `_`'s let runs),
-                // reuse that pre-hoisted id here. Otherwise the let
-                // defines a fresh id and the pre-hoisted slot stays
-                // uninitialised — closures created before the let see
-                // value-zero through the capture box and dispatch
-                // misses entirely. dayjs's outer IIFE hits this with
-                // `var O = function(t){ return new _(n); }; var _ = ((
-                // function(){ function M(){…}; … return M; })());`.
-                ctx.locals
-                    .iter()
-                    .any(|(n, lid, _)| n == &name && lid == hid)
-            }) {
-                let id = ctx.lookup_local(&name).unwrap();
+            } else if let Some(id) = is_var_decl
+                .then(|| {
+                    // Issue #838 followup (b): when the closure-body hoist
+                    // in `lower_fn_expr` / `lower_arrow` pre-registered this
+                    // `var` (so forward references like `var O = function(){
+                    // … _ … }; var _ = …;` resolve before `_`'s let runs),
+                    // reuse that pre-hoisted id here. Otherwise the let
+                    // defines a fresh id and the pre-hoisted slot stays
+                    // uninitialised — closures created before the let see
+                    // value-zero through the capture box and dispatch
+                    // misses entirely. dayjs's outer IIFE hits this with
+                    // `var O = function(t){ return new _(n); }; var _ = ((
+                    // function(){ function M(){…}; … return M; })());`.
+                    //
+                    // Restrict this path to syntactic `var`. A block-scoped
+                    // `let`/`const` with the same name must create a fresh
+                    // lexical binding, and using `lookup_local(name)` here
+                    // would accidentally grab a shadowing catch parameter.
+                    ctx.locals
+                        .iter()
+                        .rev()
+                        .find(|(n, lid, _)| n == &name && ctx.var_hoisted_ids.contains(lid))
+                        .map(|(_, lid, _)| *lid)
+                })
+                .flatten()
+            {
                 if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                    ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
                 {
                     *existing_ty = ty.clone();
                 }
@@ -1430,6 +1440,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            if !mutable {
+                ctx.mark_local_immutable(id);
+            }
             // Issue #886: detect `let/const/var <name> = Object.<staticMethod>`
             // from the raw AST so a subsequent indirect call `<name>(args)`
             // can route to the dedicated HIR variant the literal
@@ -1697,6 +1710,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            if !mutable {
+                ctx.mark_local_immutable(id);
+            }
             result.push(Stmt::Let {
                 id,
                 name,

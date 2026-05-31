@@ -154,6 +154,74 @@ pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
         .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
 }
 
+fn global_object_prototype_bits() -> Option<u64> {
+    let object_ctor = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_bits = object_ctor.to_bits();
+    if (ctor_bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return None;
+    }
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_bits = proto.to_bits();
+    if (proto_bits >> 48) == 0x7FFD {
+        Some(proto_bits)
+    } else {
+        None
+    }
+}
+
+fn ensure_function_prototype_object(func_value: f64, class_id: u32) -> *mut ObjectHeader {
+    if class_id == 0 {
+        return std::ptr::null_mut();
+    }
+    let existing = class_prototype_object(class_id);
+    if !existing.is_null() {
+        return existing;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return proto;
+    }
+
+    let constructor_key =
+        crate::string::js_string_from_bytes(b"constructor".as_ptr(), "constructor".len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, func_value);
+    set_builtin_property_attrs(
+        proto as usize,
+        "constructor".to_string(),
+        PropertyAttrs::new(true, false, true),
+    );
+
+    if let Some(object_proto_bits) = global_object_prototype_bits() {
+        super::prototype_chain::object_set_static_prototype(proto as usize, object_proto_bits);
+    }
+
+    class_prototype_object_root_store(class_id, proto);
+
+    let func_bits = func_value.to_bits();
+    if (func_bits >> 48) == 0x7FFD {
+        let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+        if func_ptr != 0 {
+            crate::closure::closure_set_dynamic_prop(
+                func_ptr,
+                "prototype",
+                crate::value::js_nanbox_pointer(proto as i64),
+            );
+            set_builtin_property_attrs(
+                func_ptr,
+                "prototype".to_string(),
+                PropertyAttrs::new(true, false, false),
+            );
+        }
+    }
+
+    proto
+}
+
 /// Synthetic class id allocator for prototype-object classes. High bit
 /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
 /// (which start from 1 and grow by module). u32 wraparound is not a
@@ -220,6 +288,15 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
                 // Update the prototype object (allow re-pointing)
                 // without changing the class_id.
                 class_prototype_object_root_store(existing, proto_ptr);
+                let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+                if func_ptr != 0 {
+                    crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+                    set_builtin_property_attrs(
+                        func_ptr,
+                        "prototype".to_string(),
+                        PropertyAttrs::new(true, false, false),
+                    );
+                }
                 crate::typed_feedback::invalidate_method_change(existing);
                 return existing;
             }
@@ -234,6 +311,15 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         write.as_mut().unwrap().insert(func_bits, new_cid);
     }
     class_prototype_object_root_store(new_cid, proto_ptr);
+    let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+    if func_ptr != 0 {
+        crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+        set_builtin_property_attrs(
+            func_ptr,
+            "prototype".to_string(),
+            PropertyAttrs::new(true, false, false),
+        );
+    }
     // Register the synthetic id so REGISTERED_CLASS_IDS-gated paths
     // (e.g., the #687 ClassRef-as-receiver short-circuit) recognize it.
     unsafe { js_register_class_id(new_cid) };
@@ -735,6 +821,24 @@ pub unsafe extern "C" fn js_get_function_prototype_method(
     }
     match lookup_prototype_method(cid, name) {
         Some(v) => v,
+        None if matches!(
+            name,
+            "toString"
+                | "valueOf"
+                | "hasOwnProperty"
+                | "isPrototypeOf"
+                | "propertyIsEnumerable"
+                | "toLocaleString"
+        ) =>
+        {
+            let proto = ensure_function_prototype_object(func_value, cid);
+            if proto.is_null() {
+                return undef;
+            }
+            let receiver = crate::value::js_nanbox_pointer(proto as i64);
+            let method = js_class_method_bind(receiver, name_ptr, name_len);
+            f64::from_bits(method.to_bits())
+        }
         None => undef,
     }
 }
@@ -1044,6 +1148,13 @@ pub unsafe extern "C" fn js_new_function_construct(
     // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
     let obj_ptr = js_object_alloc(cid, 0);
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
+    let proto = ensure_function_prototype_object(func_value, cid);
+    if !proto.is_null() {
+        super::prototype_chain::object_set_static_prototype(
+            obj_ptr as usize,
+            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+        );
+    }
     // Only run the constructor body when the callee is recognised as
     // a closure shape. The codegen LocalGet path widens the route to
     // any local-resolved callee, so we have to gate the

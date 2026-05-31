@@ -264,7 +264,7 @@ pub(crate) fn lower_stmt(
                         rest_idx,
                         has_synth_args,
                     ));
-                    module.functions.push(func);
+                    push_function_decl_dedup(module, func);
                 }
                 ast::Decl::Var(var_decl) => {
                     let mutable = var_decl.kind != ast::VarDeclKind::Const;
@@ -632,7 +632,7 @@ pub(crate) fn lower_stmt(
                                 }
                             }
                         }
-                        let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable)?;
+                        let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
                         // `var` is function-scoped: mark defined locals so
                         // `pop_block_scope` preserves them when leaving an inner block.
                         if is_var {

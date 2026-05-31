@@ -8,6 +8,10 @@
 
 use super::*;
 
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
+const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
+
 /// Get a field from an object by index
 ///
 /// #1129/#1136: the small-pointer guard below previously used a 16 MB
@@ -506,9 +510,59 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         return arr;
     }
     if jv.is_pointer() {
-        return js_object_keys(jv.as_pointer::<ObjectHeader>());
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return js_closure_dynamic_keys(ptr);
+        }
+        return js_object_keys(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)
+}
+
+fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
+    crate::closure::closure_dynamic_props_snapshot(ptr)
+        .into_iter()
+        .filter(|(name, _)| {
+            get_property_attrs(ptr, name)
+                .map(|attrs| attrs.enumerable())
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+fn js_closure_dynamic_keys(ptr: usize) -> *mut ArrayHeader {
+    let props = closure_dynamic_enumerable_props(ptr);
+    let arr = crate::array::js_array_alloc(props.len() as u32);
+    let mut out = arr;
+    for (name, _) in props {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        out = crate::array::js_array_push(out, JSValue::string_ptr(key));
+    }
+    out
+}
+
+fn js_closure_dynamic_values(ptr: usize) -> *mut ArrayHeader {
+    let props = closure_dynamic_enumerable_props(ptr);
+    let arr = crate::array::js_array_alloc(props.len() as u32);
+    let mut out = arr;
+    for (_, value) in props {
+        out = crate::array::js_array_push(out, JSValue::from_bits(value.to_bits()));
+    }
+    out
+}
+
+fn js_closure_dynamic_entries(ptr: usize) -> *mut ArrayHeader {
+    let props = closure_dynamic_enumerable_props(ptr);
+    let arr = crate::array::js_array_alloc(props.len() as u32);
+    let mut out = arr;
+    for (name, value) in props {
+        let pair = crate::array::js_array_alloc(2);
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let pair = crate::array::js_array_push(pair, JSValue::string_ptr(key));
+        let pair = crate::array::js_array_push(pair, JSValue::from_bits(value.to_bits()));
+        out = crate::array::js_array_push(out, JSValue::array_ptr(pair));
+    }
+    out
 }
 
 /// Iterate a string value's characters, invoking `emit(index, char_str_value)`
@@ -556,7 +610,11 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
         return out;
     }
     if jv.is_pointer() {
-        return js_object_values(jv.as_pointer::<ObjectHeader>());
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return js_closure_dynamic_values(ptr);
+        }
+        return js_object_values(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)
 }
@@ -590,7 +648,11 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
         return out;
     }
     if jv.is_pointer() {
-        return js_object_entries(jv.as_pointer::<ObjectHeader>());
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return js_closure_dynamic_entries(ptr);
+        }
+        return js_object_entries(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)
 }
@@ -1953,6 +2015,24 @@ pub extern "C" fn js_object_get_field_by_name(
                         let v = crate::error::js_error_get_cause(err_ptr);
                         return JSValue::from_bits(v.to_bits());
                     }
+                    b"constructor" => {
+                        let name = match (*err_ptr).error_kind {
+                            crate::error::ERROR_KIND_TYPE_ERROR => b"TypeError".as_slice(),
+                            crate::error::ERROR_KIND_RANGE_ERROR => b"RangeError".as_slice(),
+                            crate::error::ERROR_KIND_REFERENCE_ERROR => {
+                                b"ReferenceError".as_slice()
+                            }
+                            crate::error::ERROR_KIND_SYNTAX_ERROR => b"SyntaxError".as_slice(),
+                            crate::error::ERROR_KIND_EVAL_ERROR => b"EvalError".as_slice(),
+                            crate::error::ERROR_KIND_URI_ERROR => b"URIError".as_slice(),
+                            crate::error::ERROR_KIND_AGGREGATE_ERROR => {
+                                b"AggregateError".as_slice()
+                            }
+                            _ => b"Error".as_slice(),
+                        };
+                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        return JSValue::from_bits(v.to_bits());
+                    }
                     b"code" => {
                         // Errors thrown by runtime validation paths (e.g.
                         // diagnostics_channel argument checks) register
@@ -2368,6 +2448,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     return v;
                 }
                 let class_id = (*obj).class_id;
+                if matches!(
+                    class_id,
+                    CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN
+                ) {
+                    let name = match class_id {
+                        CLASS_ID_BOXED_NUMBER => b"Number".as_slice(),
+                        CLASS_ID_BOXED_STRING => b"String".as_slice(),
+                        CLASS_ID_BOXED_BOOLEAN => b"Boolean".as_slice(),
+                        _ => unreachable!(),
+                    };
+                    let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                    return JSValue::from_bits(v.to_bits());
+                }
                 // Object-literal instances (`{ x: 1 }`) carry a synthetic
                 // `__AnonShape_*` class id. Spec says their `.constructor`
                 // is the global `Object`, not the synthetic class — so
