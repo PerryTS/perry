@@ -124,6 +124,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Uint8ClampedArray" => 0xFFFF0038u32,
                 "BigInt64Array" => 0xFFFF0039u32,
                 "BigUint64Array" => 0xFFFF003Au32,
+                "Float16Array" => 0xFFFF003Bu32,
                 // Built-in JS types: Date, RegExp, Map, Set. The runtime
                 // detects these via per-type registries (or, for Date,
                 // by checking that the value is a finite f64 timestamp).

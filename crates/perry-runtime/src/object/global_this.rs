@@ -131,6 +131,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Int16Array",
     "Uint32Array",
     "Int32Array",
+    "Float16Array",
     "Float32Array",
     "Float64Array",
     "Uint8ClampedArray",
@@ -918,6 +919,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                         | "Uint16Array"
                         | "Int32Array"
                         | "Uint32Array"
+                        | "Float16Array"
                         | "Float32Array"
                         | "Float64Array"
                         | "BigInt64Array"
@@ -1704,8 +1706,8 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         // `getOwnPropertyDescriptor(Int8Array.prototype, "length")` =
         // `undefined`).
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-        | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
-        | "BigUint64Array" => {
+        | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[

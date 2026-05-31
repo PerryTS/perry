@@ -1397,6 +1397,7 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
                 6 => "Float32Array",
                 7 => "Float64Array",
                 8 => "Uint8ClampedArray",
+                11 => "Float16Array",
                 _ => return None,
             };
             Some(Type::Named(name.to_string()))
