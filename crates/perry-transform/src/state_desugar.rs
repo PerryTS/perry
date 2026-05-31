@@ -897,6 +897,7 @@ fn try_rewrite_foreach(
         mutable_captures: Vec::new(),
         captures_this: false,
         enclosing_class: None,
+        is_strict: false,
         is_async: false,
         is_generator: false,
     };
@@ -1090,6 +1091,7 @@ fn try_rewrite_navstack(
         mutable_captures: Vec::new(),
         captures_this: false,
         enclosing_class: None,
+        is_strict: false,
         is_async: false,
         is_generator: false,
     };
@@ -1326,6 +1328,7 @@ mod tests {
                     mutable_captures: vec![],
                     captures_this: false,
                     enclosing_class: None,
+                    is_strict: false,
                     is_async: false,
                     is_generator: false,
                 },
@@ -1449,6 +1452,7 @@ mod tests {
             type_params: vec![],
             return_type: Type::Any,
             body: vec![handle_call("stateOnChange", 0)],
+            is_strict: false,
             is_async: false,
             is_generator: false,
             is_exported: false,

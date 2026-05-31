@@ -662,6 +662,65 @@ extern "C" fn object_prototype_to_locale_string_thunk(
     unsafe { super::js_object_default_to_locale_string(this_value) }
 }
 
+unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
+    let value = JSValue::from_bits(args_array.to_bits());
+    if value.is_undefined() || value.is_null() {
+        return Vec::new();
+    }
+    let is_array = JSValue::from_bits(crate::array::js_array_is_array(args_array).to_bits());
+    if !is_array.is_bool() || !is_array.as_bool() {
+        return Vec::new();
+    }
+    let arr = if value.is_pointer() {
+        value.as_pointer::<crate::array::ArrayHeader>()
+    } else if (args_array.to_bits() >> 48) == 0 {
+        args_array.to_bits() as *const crate::array::ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(arr) as usize;
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        out.push(f64::from_bits(
+            crate::array::js_array_get(arr, i as u32).bits(),
+        ));
+    }
+    out
+}
+
+extern "C" fn function_prototype_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this_arg: f64,
+    rest_array: f64,
+) -> f64 {
+    unsafe {
+        let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let args = function_apply_args(rest_array);
+        let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
+        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        result
+    }
+}
+
+extern "C" fn function_prototype_apply_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this_arg: f64,
+    args_array: f64,
+) -> f64 {
+    unsafe {
+        let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let args = function_apply_args(args_array);
+        let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
+        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        result
+    }
+}
+
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
@@ -1479,6 +1538,39 @@ fn install_proto_method(
     );
 }
 
+fn install_proto_method_rest(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    fixed_arity: u32,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    super::native_module::set_bound_native_closure_name(closure, method_name);
+    super::native_module::set_builtin_closure_length(closure as usize, fixed_arity);
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    js_object_set_field_by_name(proto_obj, key, value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        method_name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        closure as usize,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+}
+
 /// Install a list of `(method_name, arity)` pairs on a prototype object,
 /// each backed by `global_this_builtin_noop_thunk`. The shared no-op thunk
 /// is fine because every method shares the same backing func pointer (the
@@ -1617,9 +1709,18 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             );
         }
         "Function" => {
-            install_noop_proto_methods(
+            install_proto_method(
                 proto_obj,
-                &[("apply", 2), ("bind", 1), ("call", 1), ("toString", 0)],
+                "apply",
+                function_prototype_apply_thunk as *const u8,
+                2,
+            );
+            install_noop_proto_methods(proto_obj, &[("bind", 1), ("toString", 0)]);
+            install_proto_method_rest(
+                proto_obj,
+                "call",
+                function_prototype_call_thunk as *const u8,
+                1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
