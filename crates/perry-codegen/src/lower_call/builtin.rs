@@ -139,27 +139,32 @@ pub(super) fn lower_builtin_new(
         // BufferHeader, so `new DataView(buffer)` can alias the same backing
         // pointer for byte-extraction call sites.
         "DataView" => {
+            // Pass the raw NaN-boxed arguments (undefined when absent) so the
+            // runtime can apply the spec's ToIndex/range validation and throw
+            // TypeError/RangeError where required (#3657).
             let view_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            let offset_i32 = if args.len() >= 2 {
-                let offset = lower_expr(ctx, &args[1])?;
-                ctx.block().fptosi(DOUBLE, &offset, I32)
+            let offset_box = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
             } else {
-                "0".to_string()
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            let length_i32 = if args.len() >= 3 {
-                let length = lower_expr(ctx, &args[2])?;
-                ctx.block().fptosi(DOUBLE, &length, I32)
+            let length_box = if args.len() >= 3 {
+                lower_expr(ctx, &args[2])?
             } else {
-                "-1".to_string()
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             Ok(Some(ctx.block().call(
                 DOUBLE,
                 "js_data_view_new",
-                &[(DOUBLE, &view_box), (I32, &offset_i32), (I32, &length_i32)],
+                &[
+                    (DOUBLE, &view_box),
+                    (DOUBLE, &offset_box),
+                    (DOUBLE, &length_box),
+                ],
             )))
         }
         "RegExp" => {

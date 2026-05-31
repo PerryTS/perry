@@ -1816,6 +1816,14 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
                 if key_bytes == b"constructor" {
+                    // #3657: a DataView's `.constructor` is the global
+                    // `DataView`, not `Buffer` — checked before the
+                    // Uint8Array/Buffer arms since a DataView slice is also a
+                    // registered buffer.
+                    if crate::buffer::is_data_view(obj as usize) {
+                        let ctor = super::js_get_global_this_builtin_value(b"DataView".as_ptr(), 8);
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
                     if crate::buffer::is_uint8array_buffer(obj as usize) {
                         let ctor =
                             super::js_get_global_this_builtin_value(b"Uint8Array".as_ptr(), 10);
