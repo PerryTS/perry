@@ -1635,65 +1635,22 @@ fn install_proto_method_rest(
     );
 }
 
-/// Install a single reified built-in prototype method as an *unbound*
-/// dispatch-by-name callable (#3828). The value is a `BOUND_METHOD_FUNC_PTR`
-/// closure whose slot 0 holds `PROTO_METHOD_THIS_MARKER`; when invoked it routes
-/// through `dispatch_bound_method`, which resolves the receiver from the live
-/// `IMPLICIT_THIS` and calls `js_native_call_method(receiver, method_name, args)`
-/// — the same dispatch tower that backs `obj.method(...)`. So a stored /
-/// indirect reference such as `Object.prototype.hasOwnProperty.call(o, k)` or
-/// `Function.prototype.bind.call(fn, …)` actually performs the method instead of
-/// the old no-op (which returned `undefined`). The captured `method_name` ptr is
-/// the `'static` rodata of the caller's name literal, stable for the closure's
-/// lifetime.
-fn install_dispatch_proto_method(
-    proto_obj: *mut ObjectHeader,
-    method_name: &'static str,
-    arity: u32,
-) {
-    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
-    if closure.is_null() {
-        return;
-    }
-    crate::closure::js_closure_set_capture_f64(
-        closure,
-        0,
-        f64::from_bits(crate::closure::PROTO_METHOD_THIS_MARKER),
-    );
-    crate::closure::js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);
-    super::native_module::set_bound_native_closure_name(closure, method_name);
-    // Per-instance spec `.length` (all BOUND_METHOD closures share one func_ptr,
-    // so the func-ptr arity registry can't distinguish them).
-    super::native_module::set_builtin_closure_length(closure as usize, arity);
-    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
-    js_object_set_field_by_name(proto_obj, key, value);
-    // Built-in prototype methods are `{ writable: true, enumerable: false,
-    // configurable: true }`; their own `.name`/`.length` are
-    // `{ writable: false, enumerable: false, configurable: true }` (#3143).
-    super::set_builtin_property_attrs(
-        proto_obj as usize,
-        method_name.to_string(),
-        super::PropertyAttrs::new(true, false, true),
-    );
-    super::set_builtin_property_attrs(
-        closure as usize,
-        "name".to_string(),
-        super::PropertyAttrs::new(false, false, true),
-    );
-    super::set_builtin_property_attrs(
-        closure as usize,
-        "length".to_string(),
-        super::PropertyAttrs::new(false, false, true),
-    );
-}
-
-/// Install a list of `(method_name, arity)` pairs on a prototype object as
-/// dispatch-by-name reified callables (see `install_dispatch_proto_method`).
-fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&'static str, u32)]) {
+/// Install a list of `(method_name, arity)` pairs on a prototype object,
+/// each backed by `global_this_builtin_noop_thunk`. The shared no-op thunk
+/// is fine because every method shares the same backing func pointer (the
+/// arity registration on that pointer is overwritten harmlessly with each
+/// call — the last winner is whichever arity matches the dominant call
+/// site, but no current code path depends on the registered arity for the
+/// noop thunk; the real dispatch arms each register their own arity on
+/// their own thunk pointer).
+fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u32)]) {
     for (name, arity) in methods.iter().copied() {
-        install_dispatch_proto_method(proto_obj, name, arity);
+        install_proto_method(
+            proto_obj,
+            name,
+            global_this_builtin_noop_thunk as *const u8,
+            arity,
+        );
     }
 }
 

@@ -2054,28 +2054,6 @@ pub extern "C" fn js_object_get_field_by_name(
                     if val.to_bits() != crate::value::TAG_UNDEFINED {
                         return JSValue::from_bits(val.to_bits());
                     }
-                    // #3828: `.call` / `.apply` / `.bind` read as a VALUE on a
-                    // function resolve to a real callable bound to that function,
-                    // so `typeof fn.apply === "function"` and the value can be
-                    // stored / passed / re-bound. The result is a
-                    // `BOUND_METHOD_FUNC_PTR` closure (capture 0 = this function);
-                    // invoking it routes through `dispatch_bound_method` →
-                    // `js_native_call_method(fn, "<m>", args)`, i.e. the existing
-                    // Function.prototype.call/apply/bind runtime arms. This is the
-                    // `call-bind` / `function-bind` / `hasown` shape (#3527): a
-                    // function-method value flowing through a variable.
-                    let (np, nl): (*const u8, usize) = match name_str {
-                        "call" => (b"call".as_ptr(), 4),
-                        "apply" => (b"apply".as_ptr(), 5),
-                        "bind" => (b"bind".as_ptr(), 4),
-                        _ => (std::ptr::null(), 0),
-                    };
-                    if !np.is_null() {
-                        let closure_value = crate::value::js_nanbox_pointer(obj as i64);
-                        let bound =
-                            super::native_module::js_class_method_bind(closure_value, np, nl);
-                        return JSValue::from_bits(bound.to_bits());
-                    }
                     // #2059: `fn.name` — every function carries a built-in own
                     // `name` data property. Resolve the codegen-registered name
                     // (keyed by the wrapper func_ptr, the same registry the

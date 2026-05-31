@@ -13,20 +13,8 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     let namespace_obj = js_closure_get_capture_f64(closure, 0);
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
-    // #3828: an *unbound* reified built-in prototype method
-    // (`Function.prototype.call`, `Object.prototype.hasOwnProperty`, …) carries
-    // the `PROTO_METHOD_THIS_MARKER` in slot 0 instead of a fixed receiver. Its
-    // receiver is whatever `IMPLICIT_THIS` holds at call time — set by the outer
-    // `.call`/`.apply` arm (or `Function.prototype.call`'s thunk) — so e.g.
-    // `Object.prototype.hasOwnProperty.call(o, k)` dispatches `hasOwnProperty`
-    // on `o`.
-    let receiver = if namespace_obj.to_bits() == PROTO_METHOD_THIS_MARKER {
-        crate::object::js_implicit_this_get()
-    } else {
-        namespace_obj
-    };
     crate::object::js_native_call_method(
-        receiver,
+        namespace_obj,
         method_name_ptr,
         method_name_len,
         args.as_ptr(),
