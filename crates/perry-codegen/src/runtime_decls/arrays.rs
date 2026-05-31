@@ -46,6 +46,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_f64_extend", I64, &[I64, I32, DOUBLE]);
     module.declare_function("js_array_set_string_key", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_array_set_index_or_string", I64, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_array_mark_arguments_object", I64, &[I64]);
     module.declare_function("js_array_mark_numeric_f64_layout", I32, &[I64]);
     module.declare_function("js_array_is_numeric_f64_layout", I32, &[I64]);
     module.declare_function("js_array_clear_numeric_layout", VOID, &[I64]);

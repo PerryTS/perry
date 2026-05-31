@@ -3226,18 +3226,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "styleText", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
-    // util.types — Node's runtime type-introspection namespace. Required
-    // for `@nestjs/core` / rxjs internal dispatch (PR #754 fixture). The
-    // backing object lives in the `node:util` stub in
-    // perry-jsruntime/src/modules.rs and answers every is* probe with
-    // `false` (a safe default — no Perry value type matches Node's
-    // privileged BoxedPrimitive/Proxy/external introspection cases).
+    // util.types — Node's runtime type-introspection namespace. The
+    // direct `node:util/types` import form and the `util.types` namespace
+    // access form both lower to this canonical module key.
     property("util", "types"),
+    method("util/types", "isArgumentsObject", false, None),
     method("util/types", "isPromise", false, None),
+    method("util/types", "isBigIntObject", false, None),
     method("util/types", "isArrayBuffer", false, None),
     method("util/types", "isSharedArrayBuffer", false, None),
     method("util/types", "isAnyArrayBuffer", false, None),
     method("util/types", "isArrayBufferView", false, None),
+    method("util/types", "isDataView", false, None),
     method("util/types", "isTypedArray", false, None),
     method("util/types", "isUint8Array", false, None),
     method("util/types", "isInt8Array", false, None),
@@ -3245,6 +3245,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isUint16Array", false, None),
     method("util/types", "isInt32Array", false, None),
     method("util/types", "isUint32Array", false, None),
+    method("util/types", "isFloat16Array", false, None),
     method("util/types", "isFloat32Array", false, None),
     method("util/types", "isFloat64Array", false, None),
     method("util/types", "isUint8ClampedArray", false, None),
@@ -3253,31 +3254,28 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isMap", false, None),
     method("util/types", "isMapIterator", false, None),
     method("util/types", "isProxy", false, None),
+    method("util/types", "isExternal", false, None),
+    method("util/types", "isModuleNamespaceObject", false, None),
     method("util/types", "isSet", false, None),
     method("util/types", "isSetIterator", false, None),
+    method("util/types", "isWeakMap", false, None),
+    method("util/types", "isWeakSet", false, None),
     method("util/types", "isDate", false, None),
     method("util/types", "isRegExp", false, None),
     method("util/types", "isAsyncFunction", false, None),
     method("util/types", "isGeneratorFunction", false, None),
     method("util/types", "isGeneratorObject", false, None),
     method("util/types", "isNativeError", false, None),
+    method("util/types", "isKeyObject", false, None),
+    method("util/types", "isCryptoKey", false, None),
     // Boxed primitive introspection (PR #1257). The `util/types` import form
     // and the `util.types` namespace-access form both lower to this canonical
     // module key.
     method("util/types", "isNumberObject", false, None),
     method("util/types", "isStringObject", false, None),
     method("util/types", "isBooleanObject", false, None),
+    method("util/types", "isSymbolObject", false, None),
     method("util/types", "isBoxedPrimitive", false, None),
-    // #3678: predicate tail beyond Perry's previously-claimed subset. Only the
-    // predicates Perry can correctly back are exposed — isBigIntObject /
-    // isSymbolObject / isArgumentsObject / isModuleNamespaceObject / isKeyObject
-    // / isCryptoKey are omitted because Perry has no distinct backing value type
-    // for them and a `false`-always stub would lie about Node's positive cases.
-    method("util/types", "isDataView", false, None),
-    method("util/types", "isFloat16Array", false, None),
-    method("util/types", "isWeakMap", false, None),
-    method("util/types", "isWeakSet", false, None),
-    method("util/types", "isExternal", false, None),
     // --- sys: deprecated alias for node:util. Keep this module-level
     // surface aligned with the public `util` manifest rows above; the
     // runtime routes `node:sys` through the util namespace.

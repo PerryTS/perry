@@ -123,7 +123,7 @@ pub(crate) fn lower_module_decl(
                             // dispatch as `node:util/types` and `util.types.isX()`.
                             let (native_module, native_method) =
                                 if source == "util" && imported == "types" {
-                                    ("util/types".to_string(), None)
+                                    ("util.types".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };

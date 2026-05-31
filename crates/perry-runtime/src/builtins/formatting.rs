@@ -14,8 +14,8 @@ mod boxed_primitives;
 mod collection_equality;
 pub(crate) use boxed_primitives::boxed_primitive_payload;
 pub use boxed_primitives::{
-    js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
-    scan_boxed_primitive_payload_roots_mut,
+    js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
+    js_boxed_symbol_new, scan_boxed_primitive_payload_roots_mut,
 };
 mod collections;
 mod identity_equality;
