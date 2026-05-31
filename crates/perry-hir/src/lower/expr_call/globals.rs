@@ -629,7 +629,11 @@ pub(super) fn try_global_builtins(
             if module_name == "url" {
                 match func_name {
                     "fileURLToPath" => {
-                        if !args.is_empty() {
+                        // Only the 1-arg form takes the dedicated fast path. The
+                        // 2-arg form `fileURLToPath(url, { windows })` (#2975)
+                        // must fall through to the native dispatch table so the
+                        // options object reaches the runtime.
+                        if args.len() == 1 {
                             return Ok(Ok(Expr::FileURLToPath(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));

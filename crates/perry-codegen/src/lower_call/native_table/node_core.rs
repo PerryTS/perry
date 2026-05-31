@@ -560,7 +560,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "fileURLToPath",
         class_filter: None,
         runtime: "js_url_file_url_to_path",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -569,7 +569,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "fileURLToPathBuffer",
         class_filter: None,
         runtime: "js_url_file_url_to_path_buffer",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -578,7 +578,7 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         method: "pathToFileURL",
         class_filter: None,
         runtime: "js_url_path_to_file_url",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
