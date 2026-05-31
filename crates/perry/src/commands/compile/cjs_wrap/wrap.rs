@@ -335,8 +335,18 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
 {import_aliases}
 {hoisted_class_block}
 const _cjs = (function() {{
-    const module = {{ exports: {{}} }};
-    const exports = module.exports;
+    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
+    // they are wrapper-function parameters), so CJS bodies that do
+    // `var module = X` / `module = X` / `exports = X` — e.g. iconv-lite's
+    // `for (...) {{ var module = modules[i]; mergeModules(exports, module); }}`
+    // — rebind the local instead of colliding with a `const`. The stable
+    // `__cjs_module` is what the module actually exports, read back at the end;
+    // a body reassigning its local `module` can't clobber it (Node holds the
+    // real module ref the same way), so named/default-export resolution stays
+    // correct regardless of what the body does to its `module` local.
+    const __cjs_module = {{ exports: {{}} }};
+    var module = __cjs_module;
+    var exports = __cjs_module.exports;
     function require(specifier) {{
 {require_cases}
         throw new Error('require() is not supported: ' + specifier);
@@ -344,7 +354,7 @@ const _cjs = (function() {{
 
     {body_for_iife}
 
-    return module.exports;
+    return __cjs_module.exports;
 }})();
 
 {default_export_decl}
