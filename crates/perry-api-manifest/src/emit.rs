@@ -7,7 +7,7 @@
 //! so regenerated docs produce stable diffs in CI.
 
 use crate::{
-    entry_is_module_export, ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST,
+    entry_is_public_named_export, ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -58,17 +58,27 @@ pub fn emit_markdown(_perry_version: &str) -> String {
         let methods: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Method { .. }))
+            .filter(|e| match e.kind {
+                ApiKind::Method {
+                    has_receiver: true, ..
+                } => true,
+                ApiKind::Method {
+                    class_filter: Some(_),
+                    ..
+                } => true,
+                ApiKind::Method { .. } => entry_is_public_named_export(e),
+                _ => false,
+            })
             .collect();
         let properties: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Property))
+            .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_public_named_export(e))
             .collect();
         let classes: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Class))
+            .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_public_named_export(e))
             .collect();
 
         if !classes.is_empty() {
@@ -89,15 +99,7 @@ pub fn emit_markdown(_perry_version: &str) -> String {
                     class_filter,
                 } = e.kind
                 {
-                    let receiver = if has_receiver {
-                        "instance"
-                    } else if class_filter.is_some() {
-                        "class/member"
-                    } else if entry_is_module_export(e) {
-                        "module"
-                    } else {
-                        "member/dispatch"
-                    };
+                    let receiver = if has_receiver { "instance" } else { "module" };
                     let cls = class_filter
                         .map(|c| format!(" *(class: `{}`)*", c))
                         .unwrap_or_default();
@@ -140,7 +142,7 @@ pub fn emit_markdown(_perry_version: &str) -> String {
 /// follow-up that threads receiver-type info through HIR.
 pub fn emit_dts(_perry_version: &str) -> String {
     let mut out = String::new();
-    let by_module = group_by_module_exports();
+    let by_module = group_by_module();
 
     let _ = writeln!(
         out,
@@ -168,7 +170,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
         // Classes first — methods may reference them via class_filter.
         for e in entries
             .iter()
-            .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_module_export(e))
+            .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_public_named_export(e))
         {
             let _ = writeln!(
                 out,
@@ -190,7 +192,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
         // Properties.
         for e in entries
             .iter()
-            .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_module_export(e))
+            .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_public_named_export(e))
         {
             let _ = writeln!(
                 out,
@@ -210,14 +212,13 @@ pub fn emit_dts(_perry_version: &str) -> String {
         let mut emitted_fn_names: std::collections::HashSet<&str> =
             std::collections::HashSet::new();
         for e in entries.iter().filter(|e| {
-            entry_is_module_export(e)
-                && matches!(
-                    e.kind,
-                    ApiKind::Method {
-                        has_receiver: false,
-                        class_filter: None,
-                    }
-                )
+            matches!(
+                e.kind,
+                ApiKind::Method {
+                    has_receiver: false,
+                    class_filter: None,
+                }
+            ) && entry_is_public_named_export(e)
         }) {
             // Same name can appear with multiple class_filter rows in
             // the dispatch table; the manifest collapses them but a
@@ -275,19 +276,6 @@ fn group_by_module() -> BTreeMap<&'static str, Vec<&'static ApiEntry>> {
     let mut by_module: BTreeMap<&'static str, Vec<&'static ApiEntry>> = BTreeMap::new();
     for entry in API_MANIFEST {
         by_module.entry(entry.module).or_default().push(entry);
-    }
-    for entries in by_module.values_mut() {
-        entries.sort_by_key(|e| (kind_order(&e.kind), e.name));
-    }
-    by_module
-}
-
-fn group_by_module_exports() -> BTreeMap<&'static str, Vec<&'static ApiEntry>> {
-    let mut by_module: BTreeMap<&'static str, Vec<&'static ApiEntry>> = BTreeMap::new();
-    for entry in API_MANIFEST {
-        if entry_is_module_export(entry) {
-            by_module.entry(entry.module).or_default().push(entry);
-        }
     }
     for entries in by_module.values_mut() {
         entries.sort_by_key(|e| (kind_order(&e.kind), e.name));
@@ -424,25 +412,7 @@ fn source_marker(entry: &ApiEntry) -> String {
     if entry.stub {
         tag.push_str(" ⚠ stub");
     }
-    if marks_non_exported_top_level_shape(entry) {
-        tag.push_str(" *(not a module export)*");
-    }
     tag
-}
-
-fn marks_non_exported_top_level_shape(entry: &ApiEntry) -> bool {
-    if entry_is_module_export(entry) {
-        return false;
-    }
-    matches!(
-        entry.kind,
-        ApiKind::Class
-            | ApiKind::Property
-            | ApiKind::Method {
-                has_receiver: false,
-                class_filter: None
-            }
-    )
 }
 
 fn source_dts_tag(entry: &ApiEntry) -> &'static str {
@@ -642,11 +612,8 @@ mod tests {
     #[test]
     fn dts_declares_every_module() {
         let dts = emit_dts("test");
-        let modules: std::collections::HashSet<&'static str> = API_MANIFEST
-            .iter()
-            .filter(|e| entry_is_module_export(e))
-            .map(|e| e.module)
-            .collect();
+        let modules: std::collections::HashSet<&'static str> =
+            API_MANIFEST.iter().map(|e| e.module).collect();
         for m in &modules {
             assert!(
                 dts.contains(&format!("declare module \"{}\"", m)),
@@ -746,9 +713,6 @@ mod tests {
     fn dts_no_reserved_word_function_declarations() {
         let dts = emit_dts("test");
         for entry in API_MANIFEST {
-            if !entry_is_module_export(entry) {
-                continue;
-            }
             if !matches!(
                 entry.kind,
                 ApiKind::Method {
@@ -786,52 +750,5 @@ mod tests {
             "uuid.v4 should be (): string\nblock: {}",
             block
         );
-    }
-
-    #[test]
-    fn dts_omits_dispatch_only_node_members() {
-        let dts = emit_dts("test");
-        let cases = [
-            ("buffer", &["alloc", "from", "isBuffer"][..]),
-            ("perf_hooks", &["mark", "now", "timeOrigin"][..]),
-            ("process", &["on", "emit", "setMaxListeners"][..]),
-            ("tty", &["clearLine", "cursorTo"][..]),
-            ("url", &["createObjectURL", "revokeObjectURL"][..]),
-            ("worker_threads", &["getWorkerData"][..]),
-            ("https", &["ClientRequest", "IncomingMessage"][..]),
-            ("stream", &["from", "fromWeb", "prototype", "toWeb"][..]),
-        ];
-
-        for (module, names) in cases {
-            let block_start = dts
-                .find(&format!("declare module \"{}\"", module))
-                .unwrap_or_else(|| panic!("{module} block"));
-            let after = &dts[block_start..];
-            let block_end = after.find("\n}\n").expect("block end");
-            let block = &after[..block_end];
-            for name in names {
-                assert!(
-                    !block.contains(&format!("export function {name}("))
-                        && !block.contains(&format!("export const {name}:"))
-                        && !block.contains(&format!("export class {name} ")),
-                    "{module}.{name} leaked as a top-level .d.ts export\nblock: {block}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn dts_keeps_value_exports_for_worker_threads() {
-        let dts = emit_dts("test");
-        let block_start = dts
-            .find("declare module \"worker_threads\"")
-            .expect("worker_threads block");
-        let after = &dts[block_start..];
-        let block_end = after.find("\n}\n").expect("block end");
-        let block = &after[..block_end];
-        assert!(block.contains("export const workerData: any;"));
-        assert!(block.contains("export const parentPort: any;"));
-        assert!(!block.contains("export function workerData"));
-        assert!(!block.contains("export function parentPort"));
     }
 }

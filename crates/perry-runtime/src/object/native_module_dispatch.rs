@@ -1307,6 +1307,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("punycode.ucs2", "decode") => crate::punycode::js_punycode_ucs2_decode(arg(0)),
         ("punycode.ucs2", "encode") => crate::punycode::js_punycode_ucs2_encode(arg(0)),
 
+        // ── dgram namespace (`node:dgram` / `dgram`) ──
+        ("dgram", "createSocket") | ("dgram", "Socket") => {
+            crate::dgram::js_dgram_create_socket(pack_args())
+        }
+
         // ── console module namespace (`node:console` / `console`) ──
         ("console", "Console") => crate::builtins::js_console_new2(arg(0), arg(1)),
         ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {

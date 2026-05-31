@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2277 entries across 99 modules.
+Total: 2289 entries across 99 modules.
 
 ## Modules
 
@@ -284,22 +284,10 @@ Total: 2277 entries across 99 modules.
 
 ### Methods
 
-- `alloc` — member/dispatch *(not a module export)*
-- `allocUnsafe` — member/dispatch *(not a module export)*
-- `allocUnsafeSlow` — member/dispatch *(not a module export)*
 - `atob` — module
 - `btoa` — module
-- `byteLength` — member/dispatch *(not a module export)*
-- `concat` — member/dispatch *(not a module export)*
-- `copyBytesFrom` — member/dispatch *(not a module export)*
-- `from` — member/dispatch *(not a module export)*
-- `fromBase64` — member/dispatch *(not a module export)*
-- `fromHex` — member/dispatch *(not a module export)*
 - `isAscii` — module
-- `isBuffer` — member/dispatch *(not a module export)*
-- `isEncoding` — member/dispatch *(not a module export)*
 - `isUtf8` — module
-- `of` — member/dispatch *(not a module export)*
 - `resolveObjectURL` — module
 - `transcode` — module
 
@@ -344,10 +332,6 @@ Total: 2277 entries across 99 modules.
 - `spawn` — module
 - `spawnSync` — module
 
-### Properties
-
-- `Stream` *(not a module export)*
-
 ## `cluster`
 
 ### Classes
@@ -365,14 +349,11 @@ Total: 2277 entries across 99 modules.
 
 - `SCHED_NONE`
 - `SCHED_RR`
-- `addListener` *(not a module export)*
 - `isMaster`
 - `isPrimary`
 - `isWorker`
-- `on` *(not a module export)*
 - `schedulingPolicy`
 - `settings`
-- `worker` *(not a module export)*
 - `workers`
 
 ## `commander`
@@ -701,7 +682,6 @@ Total: 2277 entries across 99 modules.
 - `getRandomValues` — module
 - `hash` — module
 - `hkdfSync` — module
-- `md5` — member/dispatch *(not a module export)*
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
 - `privateDecrypt` — module
@@ -714,9 +694,7 @@ Total: 2277 entries across 99 modules.
 - `randomInt` — module
 - `randomInt` — module
 - `randomUUID` — module
-- `randomUUIDv7` — member/dispatch *(not a module export)*
 - `scryptSync` — module
-- `sha256` — member/dispatch *(not a module export)*
 - `sign` — module
 - `timingSafeEqual` — module
 - `verify` — module
@@ -812,7 +790,9 @@ Total: 2277 entries across 99 modules.
 ### Methods
 
 - `Socket` — module
+- `addListener` — instance *(class: `Socket`)*
 - `addMembership` — instance *(class: `Socket`)*
+- `addSourceSpecificMembership` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Socket`)*
 - `bind` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Socket`)*
@@ -820,9 +800,19 @@ Total: 2277 entries across 99 modules.
 - `createSocket` — module
 - `disconnect` — instance *(class: `Socket`)*
 - `dropMembership` — instance *(class: `Socket`)*
+- `dropSourceSpecificMembership` — instance *(class: `Socket`)*
+- `emit` — instance *(class: `Socket`)*
 - `getRecvBufferSize` — instance *(class: `Socket`)*
 - `getSendBufferSize` — instance *(class: `Socket`)*
+- `getSendQueueCount` — instance *(class: `Socket`)*
+- `getSendQueueSize` — instance *(class: `Socket`)*
+- `listenerCount` — instance *(class: `Socket`)*
+- `off` — instance *(class: `Socket`)*
+- `on` — instance *(class: `Socket`)*
+- `once` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
+- `remoteAddress` — instance *(class: `Socket`)*
+- `removeListener` — instance *(class: `Socket`)*
 - `send` — instance *(class: `Socket`)*
 - `setBroadcast` — instance *(class: `Socket`)*
 - `setMulticastInterface` — instance *(class: `Socket`)*
@@ -1028,7 +1018,7 @@ Total: 2277 entries across 99 modules.
 
 ### Methods
 
-- `createRandom` — class/member *(class: `Wallet`)*
+- `createRandom` — module *(class: `Wallet`)*
 - `formatEther` — module
 - `formatUnits` — module
 - `getAddress` — module
@@ -1416,7 +1406,6 @@ Total: 2277 entries across 99 modules.
 
 ### Classes
 
-- `Http2SecureServer` *(not a module export)*
 - `Http2ServerRequest`
 - `Http2ServerResponse`
 
@@ -1440,11 +1429,8 @@ Total: 2277 entries across 99 modules.
 ### Classes
 
 - `Agent`
-- `ClientRequest` *(not a module export)*
-- `IncomingMessage` *(not a module export)*
 - `Server`
 - `Server`
-- `ServerResponse` *(not a module export)*
 
 ### Methods
 
@@ -1910,33 +1896,18 @@ Total: 2277 entries across 99 modules.
 
 ### Methods
 
-- `clearMarks` — member/dispatch *(not a module export)*
-- `clearMeasures` — member/dispatch *(not a module export)*
-- `clearResourceTimings` — member/dispatch *(not a module export)*
 - `createHistogram` — module
 - `disconnect` — instance *(class: `PerformanceObserver`)*
-- `eventLoopUtilization` — member/dispatch *(not a module export)*
-- `getEntries` — member/dispatch *(not a module export)*
-- `getEntriesByName` — member/dispatch *(not a module export)*
-- `getEntriesByType` — member/dispatch *(not a module export)*
-- `mark` — member/dispatch *(not a module export)*
-- `markResourceTiming` — member/dispatch *(not a module export)*
-- `measure` — member/dispatch *(not a module export)*
+- `eventLoopUtilization` — module
 - `monitorEventLoopDelay` — module
-- `now` — member/dispatch *(not a module export)*
 - `observe` — instance *(class: `PerformanceObserver`)*
-- `setResourceTimingBufferSize` — member/dispatch *(not a module export)*
 - `takeRecords` — instance *(class: `PerformanceObserver`)*
-- `timerify` — member/dispatch *(not a module export)*
-- `toJSON` — member/dispatch *(not a module export)*
+- `timerify` — module
 
 ### Properties
 
 - `constants`
-- `nodeTiming` *(not a module export)*
 - `performance`
-- `supportedEntryTypes` *(not a module export)*
-- `timeOrigin` *(not a module export)*
 
 ## `perry/ads`
 
@@ -2334,20 +2305,16 @@ Total: 2277 entries across 99 modules.
 ### Methods
 
 - `abort` — module
-- `addListener` — member/dispatch *(not a module export)*
 - `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
 - `chdir` — module
 - `constrainedMemory` — module
 - `cpuUsage` — module
 - `cwd` — module
-- `emit` — member/dispatch *(not a module export)*
 - `emitWarning` — module
-- `eventNames` — member/dispatch *(not a module export)*
 - `exit` — module
 - `getActiveResourcesInfo` — module
 - `getBuiltinModule` — module
-- `getMaxListeners` — member/dispatch *(not a module export)*
 - `getegid` — module
 - `geteuid` — module
 - `getgid` — module
@@ -2357,21 +2324,10 @@ Total: 2277 entries across 99 modules.
 - `hrtime` — module
 - `initgroups` — module
 - `kill` — module
-- `listenerCount` — member/dispatch *(not a module export)*
-- `listeners` — member/dispatch *(not a module export)*
 - `loadEnvFile` — module
 - `memoryUsage` — module
 - `nextTick` — module
-- `off` — member/dispatch *(not a module export)*
-- `on` — member/dispatch *(not a module export)*
-- `once` — member/dispatch *(not a module export)*
-- `prependListener` — member/dispatch *(not a module export)*
-- `prependOnceListener` — member/dispatch *(not a module export)*
-- `rawListeners` — member/dispatch *(not a module export)*
-- `removeAllListeners` — member/dispatch *(not a module export)*
-- `removeListener` — member/dispatch *(not a module export)*
 - `resourceUsage` — module
-- `setMaxListeners` — member/dispatch *(not a module export)*
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
 - `setUncaughtExceptionCaptureCallback` — module
@@ -2542,8 +2498,6 @@ Total: 2277 entries across 99 modules.
 - `errored` — instance
 - `eventNames` — instance
 - `finished` — module
-- `from` — member/dispatch *(not a module export)*
-- `fromWeb` — member/dispatch *(not a module export)*
 - `getDefaultHighWaterMark` — module
 - `getMaxListeners` — instance
 - `isDisturbed` — module
@@ -2579,7 +2533,6 @@ Total: 2277 entries across 99 modules.
 - `setDefaultHighWaterMark` — module
 - `setEncoding` — instance
 - `setMaxListeners` — instance
-- `toWeb` — member/dispatch *(not a module export)*
 - `uncork` — instance
 - `unpipe` — instance
 - `unshift` — instance
@@ -2597,7 +2550,6 @@ Total: 2277 entries across 99 modules.
 
 - `promises`
 - `promises`
-- `prototype` *(not a module export)*
 
 ## `stream/consumers`
 
@@ -2642,13 +2594,6 @@ Total: 2277 entries across 99 modules.
 
 - `end` — instance *(class: `StringDecoder`)*
 - `write` — instance *(class: `StringDecoder`)*
-
-### Properties
-
-- `encoding` *(not a module export)*
-- `lastChar` *(not a module export)*
-- `lastNeed` *(not a module export)*
-- `lastTotal` *(not a module export)*
 
 ## `sys`
 
@@ -2699,10 +2644,10 @@ Total: 2277 entries across 99 modules.
 - `before` — module
 - `beforeEach` — module
 - `describe` — module
-- `fn` — class/member *(class: `mock`)*
+- `fn` — module *(class: `mock`)*
 - `it` — module
 - `only` — module
-- `property` — class/member *(class: `mock`)*
+- `property` — module *(class: `mock`)*
 - `run` — module
 - `skip` — module
 - `suite` — module
@@ -2771,7 +2716,6 @@ Total: 2277 entries across 99 modules.
 ### Methods
 
 - `Url` — module
-- `createObjectURL` — member/dispatch *(not a module export)*
 - `domainToASCII` — module
 - `domainToUnicode` — module
 - `fileURLToPath` — module
@@ -2781,7 +2725,6 @@ Total: 2277 entries across 99 modules.
 - `pathToFileURL` — module
 - `resolve` — module
 - `resolveObject` — module
-- `revokeObjectURL` — member/dispatch *(not a module export)*
 - `urlToHttpOptions` — module
 
 ## `util`
@@ -2975,17 +2918,16 @@ Total: 2277 entries across 99 modules.
 - `BroadcastChannel` — module
 - `MessageChannel` — module
 - `getEnvironmentData` — module
-- `getWorkerData` — member/dispatch *(not a module export)*
 - `isMarkedAsUntransferable` — module
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module
 - `moveMessagePortToContext` — module
-- `parentPort` — member/dispatch *(not a module export)*
+- `parentPort` — module
 - `postMessage` — instance
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
 - `setEnvironmentData` — module
-- `workerData` — member/dispatch *(not a module export)*
+- `workerData` — module
 
 ### Properties
 
