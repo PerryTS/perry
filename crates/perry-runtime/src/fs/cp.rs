@@ -256,6 +256,9 @@ fn js_fs_cp_options_inner(
     options_value: f64,
     sync_symlink_resolution: bool,
 ) -> i32 {
+    validate::validate_path("src", from_value);
+    validate::validate_path("dest", to_value);
+    validate::validate_object_options("options", options_value);
     unsafe {
         let from = match decode_path_value(from_value) {
             Some(s) => s,

@@ -9,6 +9,7 @@
 
 use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::value::JSValue;
+use std::os::raw::c_int;
 
 pub(crate) fn promise_value(value: f64) -> f64 {
     let promise = crate::promise::js_promise_new();
@@ -25,12 +26,64 @@ pub(crate) fn promise_undefined() -> f64 {
     promise_value(f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+fn catch_fs_promises_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    if jumped == 0 {
+        let value = call();
+        crate::exception::js_try_end();
+        Ok(value)
+    } else {
+        let err = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        crate::exception::js_try_end();
+        Err(err)
+    }
+}
+
+fn promise_from_sync_value(call: impl FnOnce() -> f64) -> f64 {
+    match catch_fs_promises_throw(call) {
+        Ok(value) => promise_value(value),
+        Err(err) => promise_rejected(err),
+    }
+}
+
+fn promise_from_sync_undefined(call: impl FnOnce()) -> f64 {
+    match catch_fs_promises_throw(|| {
+        call();
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }) {
+        Ok(_) => promise_undefined(),
+        Err(err) => promise_rejected(err),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_promises_read_file(path: f64, options: f64) -> f64 {
+    thunk_fs_promises_readFile(std::ptr::null(), path, options)
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_promises_write_file(path: f64, data: f64, options: f64) -> f64 {
+    thunk_fs_promises_writeFile(std::ptr::null(), path, data, options)
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_promises_append_file(path: f64, data: f64, options: f64) -> f64 {
+    thunk_fs_promises_appendFile(std::ptr::null(), path, data, options)
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_promises_mkdir(path: f64, options: f64) -> f64 {
+    thunk_fs_promises_mkdir(std::ptr::null(), path, options)
+}
+
 pub(crate) extern "C" fn thunk_fs_promises_readFile(
     _closure: *const ClosureHeader,
     path: f64,
     encoding: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_read_file_dispatch(path, encoding))
+    promise_from_sync_value(|| crate::fs::js_fs_read_file_dispatch(path, encoding))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_open(
@@ -39,9 +92,14 @@ pub(crate) extern "C" fn thunk_fs_promises_open(
     flags: f64,
     _mode: f64,
 ) -> f64 {
-    match unsafe { crate::fs::js_fs_filehandle_open_result(path, flags) } {
-        Ok(handle) => promise_value(handle),
-        Err(err_val) => promise_rejected(err_val),
+    match catch_fs_promises_throw(|| {
+        match unsafe { crate::fs::js_fs_filehandle_open_result(path, flags) } {
+            Ok(handle) => promise_value(handle),
+            Err(err_val) => promise_rejected(err_val),
+        }
+    }) {
+        Ok(promise) => promise,
+        Err(err) => promise_rejected(err),
     }
 }
 
@@ -51,8 +109,9 @@ pub(crate) extern "C" fn thunk_fs_promises_writeFile(
     data: f64,
     options: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_write_file_sync_options(path, data, options);
-    promise_undefined()
+    promise_from_sync_undefined(|| {
+        let _ = crate::fs::js_fs_write_file_sync_options(path, data, options);
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_appendFile(
@@ -61,8 +120,9 @@ pub(crate) extern "C" fn thunk_fs_promises_appendFile(
     data: f64,
     options: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_append_file_sync_options(path, data, options);
-    promise_undefined()
+    promise_from_sync_undefined(|| {
+        let _ = crate::fs::js_fs_append_file_sync_options(path, data, options);
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_chmod(
@@ -124,8 +184,9 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdir(
     path: f64,
     options: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_mkdir_sync_options(path, options);
-    promise_undefined()
+    promise_from_sync_undefined(|| {
+        let _ = crate::fs::js_fs_mkdir_sync_options(path, options);
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_readdir(
@@ -133,10 +194,10 @@ pub(crate) extern "C" fn thunk_fs_promises_readdir(
     path: f64,
     options: f64,
 ) -> f64 {
-    let raw = crate::fs::js_fs_readdir_sync(path, options);
-    promise_value(f64::from_bits(
-        JSValue::pointer(raw.to_bits() as *const u8).bits(),
-    ))
+    promise_from_sync_value(|| {
+        let raw = crate::fs::js_fs_readdir_sync(path, options);
+        f64::from_bits(JSValue::pointer(raw.to_bits() as *const u8).bits())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_stat(
@@ -144,7 +205,7 @@ pub(crate) extern "C" fn thunk_fs_promises_stat(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_stat_sync_options(path, options))
+    promise_from_sync_value(|| crate::fs::js_fs_stat_sync_options(path, options))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_statfs(
@@ -152,7 +213,7 @@ pub(crate) extern "C" fn thunk_fs_promises_statfs(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_statfs_sync_options(path, options))
+    promise_from_sync_value(|| crate::fs::js_fs_statfs_sync_options(path, options))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_lstat(
@@ -160,7 +221,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lstat(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_lstat_sync_options(path, options))
+    promise_from_sync_value(|| crate::fs::js_fs_lstat_sync_options(path, options))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_rm(
@@ -189,9 +250,12 @@ pub(crate) extern "C" fn thunk_fs_promises_unlink(
     _closure: *const ClosureHeader,
     path: f64,
 ) -> f64 {
-    match unsafe { crate::fs::js_fs_unlink_result(path) } {
+    match catch_fs_promises_throw(|| match unsafe { crate::fs::js_fs_unlink_result(path) } {
         Ok(()) => promise_undefined(),
         Err(err_val) => promise_rejected(err_val),
+    }) {
+        Ok(promise) => promise,
+        Err(err) => promise_rejected(err),
     }
 }
 
@@ -224,8 +288,9 @@ pub(crate) extern "C" fn thunk_fs_promises_cp(
     to: f64,
     options: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_cp_async_options(from, to, options);
-    promise_undefined()
+    promise_from_sync_undefined(|| {
+        let _ = crate::fs::js_fs_cp_async_options(from, to, options);
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_truncate(
@@ -302,7 +367,7 @@ pub(crate) extern "C" fn thunk_fs_promises_realpath(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_realpath_dispatch(path, options))
+    promise_from_sync_value(|| crate::fs::js_fs_realpath_dispatch(path, options))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_mkdtemp(
@@ -310,14 +375,14 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdtemp(
     prefix: f64,
     options: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_mkdtemp_dispatch(prefix, options))
+    promise_from_sync_value(|| crate::fs::js_fs_mkdtemp_dispatch(prefix, options))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_opendir(
     _closure: *const ClosureHeader,
     path: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_opendir_sync(path))
+    promise_from_sync_value(|| crate::fs::js_fs_opendir_sync(path))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_glob(
@@ -325,10 +390,10 @@ pub(crate) extern "C" fn thunk_fs_promises_glob(
     pattern: f64,
     options: f64,
 ) -> f64 {
-    let raw = crate::fs::js_fs_glob_sync_options(pattern, options);
-    promise_value(f64::from_bits(
-        JSValue::pointer(raw.to_bits() as *const u8).bits(),
-    ))
+    promise_from_sync_value(|| {
+        let raw = crate::fs::js_fs_glob_sync_options(pattern, options);
+        f64::from_bits(JSValue::pointer(raw.to_bits() as *const u8).bits())
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_watch(

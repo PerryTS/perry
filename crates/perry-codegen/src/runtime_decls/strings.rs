@@ -325,6 +325,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // fs.readFileSync(path, encoding) — returns a raw *mut StringHeader i64.
     module.declare_function("js_fs_read_file_sync", I64, &[DOUBLE]);
     module.declare_function("js_fs_read_file_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_promises_read_file", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_promises_write_file",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_fs_promises_append_file",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_fs_promises_mkdir", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.mkdirSync(path) — returns i32 status (1=success).
     module.declare_function("js_fs_mkdir_sync", I32, &[DOUBLE]);
     module.declare_function("js_fs_mkdir_sync_options", I32, &[DOUBLE, DOUBLE]);
