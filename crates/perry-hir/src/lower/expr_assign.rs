@@ -16,6 +16,30 @@ use crate::lower_patterns::lower_assign_target_to_expr;
 
 use super::{lower_expr, lower_expr_assignment, LoweringContext};
 
+fn throw_type_error_const_assignment(name: &str) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_throw_type_error_const_assignment".to_string(),
+            param_types: vec![Type::String],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::String(name.to_string())],
+        type_args: vec![],
+    }
+}
+
+fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_throw_reference_error_unresolvable_assignment".to_string(),
+            param_types: vec![Type::String],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::String(name.to_string())],
+        type_args: vec![],
+    }
+}
+
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
     // Detect assignments from native module calls and register for cross-function tracking.
     // e.g., `mongoClient = await MongoClient.connect(uri)` registers mongoClient as a mongodb instance.
@@ -232,6 +256,9 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
             let name = ident.id.sym.to_string();
             if let Some(id) = ctx.lookup_local(&name) {
+                if ctx.is_local_immutable(id) {
+                    return Ok(throw_type_error_const_assignment(&name));
+                }
                 Ok(Expr::LocalSet(id, value))
             } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
                 // v0.5.757: don't shadow a class/function binding with an
@@ -244,6 +271,12 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 // side effects. Refs #420.
                 Ok(*value)
             } else {
+                if ctx.current_strict {
+                    return Ok(Expr::Sequence(vec![
+                        *value,
+                        throw_reference_error_unresolvable_assignment(&name),
+                    ]));
+                }
                 // Variable not found in scope — likely a closure capture that wasn't
                 // properly tracked. Create an implicit local to avoid hard failure.
                 eprintln!(
@@ -510,7 +543,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                     .lookup_native_instance(&obj_name)
                     .map(|(m, c)| (m.to_string(), c.to_string()));
                 if let Some((module_name, class_name)) = native_instance {
-                    if module_name == "http" {
+                    if matches!(module_name.as_str(), "http" | "https") {
                         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                             let prop = prop_ident.sym.to_string();
                             let setter_method = match (class_name.as_str(), prop.as_str()) {
@@ -527,6 +560,16 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 ("HttpServer", "timeout") => Some("__set_timeout"),
                                 ("HttpServer", "maxHeadersCount") => Some("__set_maxHeadersCount"),
                                 ("HttpServer", "maxRequestsPerSocket") => {
+                                    Some("__set_maxRequestsPerSocket")
+                                }
+                                ("HttpsServer", "headersTimeout") => Some("__set_headersTimeout"),
+                                ("HttpsServer", "keepAliveTimeout") => {
+                                    Some("__set_keepAliveTimeout")
+                                }
+                                ("HttpsServer", "requestTimeout") => Some("__set_requestTimeout"),
+                                ("HttpsServer", "timeout") => Some("__set_timeout"),
+                                ("HttpsServer", "maxHeadersCount") => Some("__set_maxHeadersCount"),
+                                ("HttpsServer", "maxRequestsPerSocket") => {
                                     Some("__set_maxRequestsPerSocket")
                                 }
                                 // #2154 — `http.Agent` / `https.Agent` tunable

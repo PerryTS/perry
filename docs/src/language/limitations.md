@@ -29,6 +29,13 @@ eval("console.log('hi')");
 new Function("return 42");
 ```
 
+Test262 rows that only observe parsing or executing a code string remain
+intentional AOT exclusions, not runtime dynamic-code work. This includes the
+`language/white-space/comment-{multi,single}-{form-feed,horizontal-tab,nbsp,space,vertical-tab}.js`
+rows and the direct-eval reference row `language/types/reference/8.7.2-1-s.js`;
+they map to the AOT eval tracker (#1677), eval classifier diagnostics (#1678),
+and the limited literal `Function` folding work (#1679).
+
 ## Decorators
 
 Perry parses decorator syntax, supports compile-time-only transforms

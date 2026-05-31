@@ -32,14 +32,19 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     // flag never leaks past this member, and only touch it when our own
     // detection fires (a method-call receiver sets the flag via `lower_call`
     // instead, and that must survive into the bare `ns[dynamicKey]` lowering).
+    let prev_unresolved_ident_as_global = ctx.unresolved_ident_as_global;
+    ctx.unresolved_ident_as_global = true;
     let suppress_for_obj = stdlib_ns_subnamespace_static_access(ctx, member);
     if !suppress_for_obj {
-        return lower_member_inner(ctx, member);
+        let result = lower_member_inner(ctx, member);
+        ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
+        return result;
     }
     let prev_suppress = ctx.suppress_stdlib_dispatch_guard_once;
     ctx.suppress_stdlib_dispatch_guard_once = true;
     let result = lower_member_inner(ctx, member);
     ctx.suppress_stdlib_dispatch_guard_once = prev_suppress;
+    ctx.unresolved_ident_as_global = prev_unresolved_ident_as_global;
     result
 }
 
@@ -980,6 +985,43 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "Agent"
+                    && matches!(
+                        property_name.as_str(),
+                        "keepSocketAlive" | "reuseSocket" | "getName" | "destroy" | "close"
+                    )
+                {
+                    // A bare read of an Agent method (`typeof a.getName`)
+                    // should produce a callable bound-method value, not invoke
+                    // the native method with zero arguments.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && matches!(class_name.as_str(), "HttpServer" | "HttpsServer")
+                    && matches!(
+                        property_name.as_str(),
+                        "listen"
+                            | "close"
+                            | "closeAllConnections"
+                            | "closeIdleConnections"
+                            | "on"
+                            | "addListener"
+                            | "address"
+                            | "setTimeout"
+                    )
+                {
+                    // Bare reads of HTTP/HTTPS server method values
+                    // (`typeof server.listen`) return a callable bound method
+                    // rather than invoking the native method with zero args.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(module_name.as_str(), "dns" | "dns/promises")
                     && class_name == "Resolver"
                     && is_dns_resolver_method_name(&property_name)
@@ -1065,9 +1107,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // falls back to the existing bare-method-name
                     // dispatch (covers `request.headers` on fastify
                     // and similar).
-                    let property_name = if module_name == "http" {
+                    let property_name = if matches!(module_name.as_str(), "http" | "https") {
                         match (class_name.as_str(), property_name.as_str()) {
-                            ("IncomingMessage", "method")
+                            ("ClientRequest", "method")
+                            | ("ClientRequest", "protocol")
+                            | ("ClientRequest", "host")
+                            | ("ClientRequest", "path")
+                            | ("Agent", "createConnection")
+                            | ("Agent", "createSocket")
+                            | ("IncomingMessage", "method")
                             | ("IncomingMessage", "url")
                             | ("IncomingMessage", "httpVersion")
                             | ("IncomingMessage", "complete")
@@ -1101,7 +1149,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("HttpServer", "requestTimeout")
                             | ("HttpServer", "timeout")
                             | ("HttpServer", "maxHeadersCount")
-                            | ("HttpServer", "maxRequestsPerSocket") => {
+                            | ("HttpServer", "maxRequestsPerSocket")
+                            | ("HttpsServer", "headersTimeout")
+                            | ("HttpsServer", "keepAliveTimeout")
+                            | ("HttpsServer", "requestTimeout")
+                            | ("HttpsServer", "timeout")
+                            | ("HttpsServer", "maxHeadersCount")
+                            | ("HttpsServer", "maxRequestsPerSocket") => {
                                 format!("__get_{}", property_name)
                             }
                             _ => property_name,
@@ -1109,7 +1163,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     } else {
                         property_name
                     };
-                    let class_filter = if module_name == "http" {
+                    let class_filter = if matches!(module_name.as_str(), "http" | "https") {
                         Some(class_name.clone())
                     } else {
                         None
@@ -1284,7 +1338,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             && crate::analysis::is_builtin_global_value_name(property)
         {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                if obj_ident.sym.as_ref() == property.as_str() {
+                if obj_ident.sym.as_ref() == property.as_str() && property != "globalThis" {
                     // #2060 / #2142 / #2145: `<Ctor>.prototype` and
                     // `<Ctor>.__proto__` must keep reading the constructor
                     // closure's real proto / static-prototype. Each built-in
@@ -1918,7 +1972,25 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
 fn is_dns_resolver_method_name(prop: &str) -> bool {
     matches!(
         prop,
-        "cancel" | "getServers" | "setServers" | "setLocalAddress"
+        "cancel"
+            | "getServers"
+            | "setServers"
+            | "setLocalAddress"
+            | "resolve"
+            | "resolve4"
+            | "resolve6"
+            | "resolveAny"
+            | "resolveCaa"
+            | "resolveCname"
+            | "resolveMx"
+            | "resolveNaptr"
+            | "resolveNs"
+            | "resolvePtr"
+            | "resolveSoa"
+            | "resolveSrv"
+            | "resolveTlsa"
+            | "resolveTxt"
+            | "reverse"
     )
 }
 

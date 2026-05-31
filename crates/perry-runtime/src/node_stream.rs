@@ -180,8 +180,9 @@ fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHea
         return;
     };
     let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
+    let event_bits = crate::value::js_nanbox_string(event as i64).to_bits() as i64;
     let listener_value = crate::value::js_nanbox_pointer(listener as i64);
-    unsafe { on(handle, event, listener_value.to_bits() as i64) };
+    unsafe { on(handle, event_bits, listener_value.to_bits() as i64) };
 }
 
 extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
@@ -1678,6 +1679,10 @@ pub use pipeline::*;
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
 pub use readwrite::*;
+
+#[path = "node_stream_compose_live.rs"]
+mod compose_live;
+pub use compose_live::*;
 
 #[path = "node_stream_json.rs"]
 mod json_stream;

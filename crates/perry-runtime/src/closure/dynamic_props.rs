@@ -2,13 +2,64 @@
 //! and the closure-magic-tag pointer predicate.
 
 use super::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 static CLOSURE_PROPS: OnceLock<Mutex<HashMap<usize, HashMap<String, f64>>>> = OnceLock::new();
 
 fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// #3655: keys deleted off a closure via `delete fn.name` etc.
+///
+/// Functions carry built-in own data properties (`name`, `length`, and —
+/// for constructors — `prototype`) that aren't stored in `CLOSURE_PROPS`:
+/// they're synthesized from the arity/name registries on read. Those
+/// properties are spec'd `configurable: true`, so `delete fn.name` must make
+/// them disappear from every subsequent `hasOwnProperty` / `getOwnProperty*`
+/// / value read. We can't remove a synthesized slot, so we record the
+/// deletion here and have every property-protocol site consult it. test262's
+/// `verifyProperty` exercises exactly this (delete-then-`hasOwnProperty`)
+/// when checking `configurable`.
+static CLOSURE_DELETED_KEYS: OnceLock<Mutex<HashMap<usize, HashSet<String>>>> = OnceLock::new();
+
+fn get_closure_deleted_keys() -> &'static Mutex<HashMap<usize, HashSet<String>>> {
+    CLOSURE_DELETED_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record that `key` was `delete`d off the closure at `ptr`.
+pub fn closure_mark_key_deleted(ptr: usize, key: &str) {
+    if ptr == 0 {
+        return;
+    }
+    if let Ok(mut map) = get_closure_deleted_keys().lock() {
+        map.entry(ptr).or_default().insert(key.to_string());
+    }
+}
+
+/// True if `key` was previously `delete`d off the closure at `ptr`.
+pub fn closure_is_key_deleted(ptr: usize, key: &str) -> bool {
+    if ptr == 0 {
+        return false;
+    }
+    get_closure_deleted_keys()
+        .lock()
+        .ok()
+        .map(|map| map.get(&ptr).map(|s| s.contains(key)).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// True if `prop` is an OWN dynamic property of the closure at `ptr` (does NOT
+/// walk the static-prototype chain, unlike `closure_get_dynamic_prop`). Used
+/// by `hasOwnProperty`/`getOwnPropertyNames` to report own user props and the
+/// constructor `prototype` slot without inheriting from a set prototype.
+pub fn closure_has_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
+    get_closure_props()
+        .lock()
+        .ok()
+        .map(|m| m.get(&ptr).map(|p| p.contains_key(prop)).unwrap_or(false))
+        .unwrap_or(false)
 }
 
 /// #36 / #321: `Object.setPrototypeOf(closure, protoObj)` side-table.
@@ -89,6 +140,11 @@ pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usi
     if let Ok(mut prototypes) = get_closure_prototypes().lock() {
         if let Some(proto_bits) = prototypes.remove(&old_owner) {
             prototypes.insert(new_owner, proto_bits);
+        }
+    }
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        if let Some(keys) = deleted.remove(&old_owner) {
+            deleted.entry(new_owner).or_default().extend(keys);
         }
     }
 }
@@ -193,6 +249,23 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
             }
         }
     }
+    // #3655: re-key the deleted-keys side table when a closure moves. The
+    // entries are pure metadata (string keys, no JS references), so the
+    // metadata-key visitor only records a re-key; nothing to trace.
+    let mut moved_deleted = Vec::new();
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        for owner in deleted.keys().copied().collect::<Vec<_>>() {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved_deleted.push((owner, new_owner));
+            }
+        }
+        for (old_owner, new_owner) in moved_deleted {
+            if let Some(keys) = deleted.remove(&old_owner) {
+                deleted.entry(new_owner).or_default().extend(keys);
+            }
+        }
+    }
 }
 
 /// Check if a raw pointer points to a ClosureHeader by checking CLOSURE_MAGIC at offset 12.
@@ -289,6 +362,25 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
         closure_props.insert(prop.to_string(), value);
         barrier_closure_dynamic_props(ptr, closure_props);
     }
+    // #3655: re-defining a previously deleted slot makes it present again.
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        if let Some(keys) = deleted.get_mut(&ptr) {
+            keys.remove(prop);
+        }
+    }
+}
+
+/// #3655: remove an OWN user dynamic property from a closure (used by
+/// `delete fn.userProp`). Returns true if a property was actually removed.
+/// Built-in synthesized slots (`name`/`length`/`prototype`) are handled by
+/// `closure_mark_key_deleted` instead, since they have no map entry to drop.
+pub fn closure_delete_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
+    if let Ok(mut props) = get_closure_props().lock() {
+        if let Some(closure_props) = props.get_mut(&ptr) {
+            return closure_props.remove(prop).is_some();
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -298,6 +390,9 @@ pub(crate) fn test_clear_closure_side_tables() {
     }
     if let Ok(mut prototypes) = get_closure_prototypes().lock() {
         prototypes.clear();
+    }
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        deleted.clear();
     }
 }
 

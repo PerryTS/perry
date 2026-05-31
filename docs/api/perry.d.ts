@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2125 entries across 99 modules
+// Coverage: 2196 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1223,6 +1223,8 @@ declare module "events" {
   /** stdlib */
   export const errorMonitor: any;
   /** stdlib */
+  export const usingDomains: any;
+  /** stdlib */
   export function EventEmitter(...args: any[]): any;
   /** stdlib */
   export function addAbortListener(...args: any[]): any;
@@ -1230,6 +1232,8 @@ declare module "events" {
   export function getEventListeners(...args: any[]): any;
   /** stdlib */
   export function getMaxListeners(...args: any[]): any;
+  /** stdlib */
+  export function init(...args: any[]): any;
   /** stdlib */
   export function listenerCount(...args: any[]): any;
   /** stdlib */
@@ -1582,6 +1586,8 @@ declare module "https" {
   export class Server { [key: string]: any; }
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
+  /** stdlib */
+  export const globalAgent: any;
   /** stdlib */
   export function Agent(...args: any[]): any;
   /** stdlib */
@@ -3207,7 +3213,13 @@ declare module "util/types" {
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
   /** stdlib */
+  export function isDataView(...args: any[]): any;
+  /** stdlib */
   export function isDate(...args: any[]): any;
+  /** stdlib */
+  export function isExternal(...args: any[]): any;
+  /** stdlib */
+  export function isFloat16Array(...args: any[]): any;
   /** stdlib */
   export function isFloat32Array(...args: any[]): any;
   /** stdlib */
@@ -3254,6 +3266,10 @@ declare module "util/types" {
   export function isUint8Array(...args: any[]): any;
   /** stdlib */
   export function isUint8ClampedArray(...args: any[]): any;
+  /** stdlib */
+  export function isWeakMap(...args: any[]): any;
+  /** stdlib */
+  export function isWeakSet(...args: any[]): any;
 }
 
 declare module "uuid" {

@@ -77,6 +77,7 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
     let helper = match name {
         "Symbol" => "js_throw_symbol_constructor_type_error",
         "BigInt" => "js_throw_bigint_constructor_type_error",
+        "Math" => "js_throw_math_constructor_type_error",
         _ => unreachable!(),
     };
     let throw_expr = Expr::Call {
@@ -569,7 +570,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
-            if matches!(class_name.as_str(), "Symbol" | "BigInt") {
+            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1130,7 +1131,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Symbol" | "BigInt")
+                    && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
