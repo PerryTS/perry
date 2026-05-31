@@ -1843,8 +1843,8 @@ pub extern "C" fn js_object_get_field_by_name(
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
-                // `fn.length` — return the registered declared-param
-                // count for the underlying function. Ramda's
+                // `fn.length` — return the registered ECMAScript-visible
+                // length for the underlying function. Ramda's
                 // `converge` / `useWith` / `addIndex` chain feeds
                 // `pluck('length', fns)` through
                 // `reduce(max, 0, …)` → `curryN(N, …)` → `_arity(N, …)`;
@@ -1865,9 +1865,9 @@ pub extern "C" fn js_object_get_field_by_name(
                     if let Some(len) = super::native_module::builtin_closure_length(obj as usize) {
                         return JSValue::number(len as f64);
                     }
-                    let arity =
-                        crate::closure::closure_arity(obj as *const crate::closure::ClosureHeader);
-                    return JSValue::number(arity.unwrap_or(0) as f64);
+                    let length =
+                        crate::closure::closure_length(obj as *const crate::closure::ClosureHeader);
+                    return JSValue::number(length.unwrap_or(0) as f64);
                 }
                 // #2145: `fn.__proto__` is the closure's [[Prototype]]
                 // — `Int8Array.__proto__ === %TypedArray%` after

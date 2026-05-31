@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2160 entries across 97 modules
+// Coverage: 2125 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2769,6 +2769,8 @@ declare module "process" {
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
   /** stdlib */
+  export function setSourceMapsEnabled(enabled: boolean): void;
+  /** stdlib */
   export function setegid(...args: any[]): any;
   /** stdlib */
   export function seteuid(...args: any[]): any;
@@ -2778,6 +2780,8 @@ declare module "process" {
   export function setgroups(...args: any[]): any;
   /** stdlib */
   export function setuid(...args: any[]): any;
+  /** stdlib */
+  export function sourceMapsEnabled(): boolean;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
@@ -2926,6 +2930,21 @@ declare module "stream" {
   export function setDefaultHighWaterMark(...args: any[]): any;
   /** stdlib */
   export function toWeb(...args: any[]): any;
+}
+
+declare module "stream/consumers" {
+  /** stdlib */
+  export function arrayBuffer(...args: any[]): any;
+  /** stdlib */
+  export function blob(...args: any[]): any;
+  /** stdlib */
+  export function buffer(...args: any[]): any;
+  /** stdlib */
+  export function bytes(...args: any[]): any;
+  /** stdlib */
+  export function json(...args: any[]): any;
+  /** stdlib */
+  export function text(...args: any[]): any;
 }
 
 declare module "stream/promises" {
@@ -3250,23 +3269,7 @@ declare module "uuid" {
 
 declare module "v8" {
   /** stdlib */
-  export class DefaultDeserializer { [key: string]: any; }
-  /** stdlib */
-  export class DefaultSerializer { [key: string]: any; }
-  /** stdlib */
-  export class Deserializer { [key: string]: any; }
-  /** stdlib */
   export class GCProfiler { [key: string]: any; }
-  /** stdlib */
-  export class Serializer { [key: string]: any; }
-  /** stdlib */
-  export function DefaultDeserializer(...args: any[]): any;
-  /** stdlib */
-  export function DefaultSerializer(...args: any[]): any;
-  /** stdlib */
-  export function Deserializer(...args: any[]): any;
-  /** stdlib */
-  export function Serializer(...args: any[]): any;
   /** stdlib */
   export function cachedDataVersionTag(...args: any[]): any;
   /** stdlib */
@@ -3292,6 +3295,15 @@ declare module "validator" {
   export function isURL(s: string): boolean;
   /** stdlib */
   export function isUUID(s: string): boolean;
+}
+
+declare module "wasi" {
+  /** stdlib */
+  export class WASI { [key: string]: any; }
+  /** stdlib */
+  export const wasiImport: any;
+  /** stdlib */
+  export function WASI(...args: any[]): any;
 }
 
 declare module "worker_threads" {

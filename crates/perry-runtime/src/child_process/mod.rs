@@ -7,7 +7,7 @@ pub mod reactor;
 // `process.send`/`process.on('message')`).
 pub mod fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
-pub(crate) mod v8_serde;
+mod v8_serde;
 
 // #3137: reuse the codec for the public `node:v8` serialize/deserialize API.
 pub(crate) use v8_serde::{v8_deserialize, v8_serialize};

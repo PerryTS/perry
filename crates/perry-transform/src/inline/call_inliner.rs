@@ -394,19 +394,24 @@ pub fn inline_calls_in_stmts(
                 then_branch,
                 else_branch,
             } => {
-                let _hoisted = inline_calls_in_expr(
-                    condition,
+                let mut condition_candidate = condition.clone();
+                let mut condition_facts = exact_receiver_facts.clone();
+                let hoisted = inline_calls_in_expr(
+                    &mut condition_candidate,
                     func_candidates,
                     method_candidates,
                     local_types,
-                    exact_receiver_facts,
+                    &mut condition_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 );
+                if hoisted.is_empty() {
+                    *condition = condition_candidate;
+                    *exact_receiver_facts = condition_facts;
+                }
                 invalidate_exact_receivers_for_expr(condition, exact_receiver_facts);
                 let after_condition_facts = exact_receiver_facts.clone();
-                // Note: hoisting from conditions is rare and complex; skip for now
                 let mut then_facts = after_condition_facts.clone();
                 inline_calls_in_stmts(
                     then_branch,
@@ -438,8 +443,9 @@ pub fn inline_calls_in_stmts(
             }
             Stmt::While { condition, body } => {
                 let mut empty_facts = ExactReceiverFacts::new();
-                let _hoisted = inline_calls_in_expr(
-                    condition,
+                let mut condition_candidate = condition.clone();
+                let hoisted = inline_calls_in_expr(
+                    &mut condition_candidate,
                     func_candidates,
                     method_candidates,
                     local_types,
@@ -448,6 +454,9 @@ pub fn inline_calls_in_stmts(
                     enclosing_class,
                     class_field_types,
                 );
+                if hoisted.is_empty() {
+                    *condition = condition_candidate;
+                }
                 let mut body_facts = ExactReceiverFacts::new();
                 inline_calls_in_stmts(
                     body,
@@ -477,8 +486,9 @@ pub fn inline_calls_in_stmts(
                     class_field_types,
                 );
                 let mut empty_facts = ExactReceiverFacts::new();
-                let _hoisted = inline_calls_in_expr(
-                    condition,
+                let mut condition_candidate = condition.clone();
+                let hoisted = inline_calls_in_expr(
+                    &mut condition_candidate,
                     func_candidates,
                     method_candidates,
                     local_types,
@@ -487,6 +497,9 @@ pub fn inline_calls_in_stmts(
                     enclosing_class,
                     class_field_types,
                 );
+                if hoisted.is_empty() {
+                    *condition = condition_candidate;
+                }
                 exact_receiver_facts.clear();
                 exact_effect_handled = true;
             }
@@ -516,8 +529,9 @@ pub fn inline_calls_in_stmts(
                 }
                 if let Some(cond) = condition {
                     let mut empty_facts = ExactReceiverFacts::new();
-                    let _hoisted = inline_calls_in_expr(
-                        cond,
+                    let mut condition_candidate = cond.clone();
+                    let hoisted = inline_calls_in_expr(
+                        &mut condition_candidate,
                         func_candidates,
                         method_candidates,
                         local_types,
@@ -526,6 +540,9 @@ pub fn inline_calls_in_stmts(
                         enclosing_class,
                         class_field_types,
                     );
+                    if hoisted.is_empty() {
+                        *cond = condition_candidate;
+                    }
                 }
                 if let Some(upd) = update {
                     let mut empty_facts = ExactReceiverFacts::new();

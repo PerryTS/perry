@@ -14,18 +14,46 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-pub(crate) fn strict_unresolvable_assignment(name: String, value: Box<Expr>) -> Expr {
-    // Keep the RHS as a runtime-call argument so lowering evaluates it before
-    // throwing the strict-mode ReferenceError for the unresolvable binding.
-    Expr::Call {
-        callee: Box::new(Expr::ExternFuncRef {
-            name: "js_throw_reference_error_unresolvable_assignment".to_string(),
-            param_types: vec![Type::String, Type::Any],
-            return_type: Type::Any,
-        }),
-        args: vec![Expr::String(name), *value],
-        type_args: vec![],
+fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
+    let ast::Stmt::Expr(expr_stmt) = stmt else {
+        return None;
+    };
+    let ast::Expr::Lit(ast::Lit::Str(str_lit)) = expr_stmt.expr.as_ref() else {
+        return None;
+    };
+    Some(str_lit.value.as_str() == Some("use strict"))
+}
+
+pub(crate) fn stmt_list_starts_with_use_strict_directive(stmts: &[ast::Stmt]) -> bool {
+    for stmt in stmts {
+        match is_use_strict_directive_stmt(stmt) {
+            Some(true) => return true,
+            Some(false) => continue,
+            None => return false,
+        }
     }
+    false
+}
+
+pub(crate) fn module_starts_with_use_strict_directive(module: &ast::Module) -> bool {
+    for item in &module.body {
+        match item {
+            ast::ModuleItem::Stmt(stmt) => match is_use_strict_directive_stmt(stmt) {
+                Some(true) => return true,
+                Some(false) => continue,
+                None => return false,
+            },
+            ast::ModuleItem::ModuleDecl(_) => return false,
+        }
+    }
+    false
+}
+
+pub(crate) fn module_has_module_declaration(module: &ast::Module) -> bool {
+    module
+        .body
+        .iter()
+        .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
 }
 
 /// Map a function's declared return type to a native-instance class when it
@@ -72,6 +100,21 @@ pub(crate) fn native_instance_from_return_type(ty: &Type) -> Option<(&'static st
 pub(crate) fn push_class_dedup(module: &mut Module, class: Class) {
     if !module.classes.iter().any(|c| c.name == class.name) {
         module.classes.push(class);
+    }
+}
+
+/// Function declarations with the same name in the same scope follow JS's
+/// "last declaration wins" semantics. Keep the latest HIR body and avoid
+/// emitting duplicate LLVM symbols for the same scoped function name.
+pub(crate) fn push_function_decl_dedup(module: &mut Module, func: Function) {
+    if let Some(existing) = module
+        .functions
+        .iter_mut()
+        .find(|existing| existing.name == func.name)
+    {
+        *existing = func;
+    } else {
+        module.functions.push(func);
     }
 }
 

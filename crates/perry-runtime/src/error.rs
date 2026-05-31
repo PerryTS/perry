@@ -206,22 +206,6 @@ pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut Erro
     unsafe { alloc_error(ERROR_KIND_REFERENCE_ERROR, b"ReferenceError", message) }
 }
 
-#[no_mangle]
-pub extern "C" fn js_throw_reference_error_unresolvable_assignment(
-    name: *const StringHeader,
-    _value: f64,
-) -> f64 {
-    let name = unsafe { read_string_header_owned(name) };
-    let message = if name.is_empty() {
-        "is not defined".to_string()
-    } else {
-        format!("{name} is not defined")
-    };
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = js_referenceerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
 thread_local! {
     /// Interned `&'static str` for each distinct Node `ERR_*` code passed
     /// across the FFI boundary, so it can be stored in the
@@ -492,6 +476,60 @@ pub extern "C" fn js_throw_symbol_constructor_type_error() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
     throw_builtin_not_constructor("BigInt")
+}
+
+fn value_to_lossy_string(value: f64) -> String {
+    let string = crate::builtins::js_string_coerce(value);
+    if string.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*string).byte_len as usize;
+        let data = (string as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_type_error_const_assignment(name: f64) -> f64 {
+    let name = value_to_lossy_string(name);
+    let msg = if name.is_empty() {
+        "Assignment to constant variable.".to_string()
+    } else {
+        format!("Assignment to constant variable '{}'.", name)
+    };
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolvable_assignment(name: f64) -> f64 {
+    let name = value_to_lossy_string(name);
+    let msg = if name.is_empty() {
+        "Assignment to undeclared variable.".to_string()
+    } else {
+        format!("{} is not defined", name)
+    };
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_referenceerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+}
+
+fn throw_reference_error_message(message: &'static [u8]) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_referenceerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
+    throw_reference_error_message(b"identifier is not defined")
+}
+
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
+    throw_reference_error_message(b"assignment to undeclared variable")
 }
 
 fn throw_capture_stack_trace_target_type_error() -> ! {
@@ -774,11 +812,6 @@ static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
 ) -> *mut ErrorHeader = js_aggregateerror_new_full;
 #[used]
 static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
-#[used]
-static KEEP_THROW_REFERENCE_ERROR_UNRESOLVABLE_ASSIGNMENT: extern "C" fn(
-    *const StringHeader,
-    f64,
-) -> f64 = js_throw_reference_error_unresolvable_assignment;
 
 #[cfg(test)]
 mod tostring_tests {
