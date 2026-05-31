@@ -1207,7 +1207,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
     module.declare_function("js_call_value", DOUBLE, &[DOUBLE, I64, I64]);
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
+    // (closure_env i64, args_ptr, args_len i64). The args pointer is a real
+    // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
+    // to I64 in the integer register class) so call sites can pass an alloca
+    // directly. See `try_lower_closure_call_fallthrough` (#3527).
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,

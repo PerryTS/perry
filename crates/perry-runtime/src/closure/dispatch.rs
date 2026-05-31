@@ -1412,7 +1412,7 @@ pub unsafe extern "C" fn js_closure_call_array(
             a(13),
             a(14),
         ),
-        _ => js_closure_call16(
+        16 => js_closure_call16(
             closure,
             a(0),
             a(1),
@@ -1431,6 +1431,37 @@ pub unsafe extern "C" fn js_closure_call_array(
             a(14),
             a(15),
         ),
+        // #3527: arities above 16 can't go through a fixed per-arity
+        // `js_closure_callN` (none exist past 16). Build the full unboxed
+        // arg slice and dispatch through the strategy resolver so the
+        // closure body is called with ALL its args (the old `_ =>
+        // js_closure_call16(...)` silently dropped args 16.. — breaking
+        // qs's recursive `stringify`, which self-calls with 18 args). For
+        // a plain (Direct) closure with no registered rest/arity, dispatch
+        // through `dispatch_with_arity` with the provided count so the body
+        // is transmuted to its real N-arg signature.
+        _ => {
+            let mut full: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                full.push(a(i));
+            }
+            let func_ptr = get_valid_func_ptr(closure);
+            if func_ptr.is_null() {
+                throw_not_callable();
+            }
+            if let Some(result) = dispatch_registered_call(closure, func_ptr, &full) {
+                return result;
+            }
+            if let Some(result) =
+                dispatch_rest_or_declared_arity(closure, func_ptr, &full, n as u32)
+            {
+                return result;
+            }
+            // Direct closure: declared arity == provided count. Reuse the
+            // arity dispatcher (it transmutes to the concrete N-arg fn and
+            // forwards the slice unchanged when provided == declared).
+            dispatch_with_arity(closure, func_ptr, &full, n as u32)
+        }
     }
 }
 
