@@ -98,7 +98,7 @@ pub(crate) fn boxed_primitive_value(value: f64) -> Option<f64> {
 }
 
 #[inline]
-pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
+pub(super) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return None;
