@@ -81,6 +81,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
                         .unwrap_or("");
 
+                    // #3655: a `delete`d configurable slot is no longer own.
+                    if crate::closure::closure_is_key_deleted(ptr, name) {
+                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    }
+
                     // (value, writable, configurable). `name`/`length` are the
                     // built-in own data slots; anything else falls back to the
                     // user-attached dynamic-property side table.
@@ -386,6 +391,45 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 }
                 let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                 crate::array::js_array_push(result, JSValue::string_ptr(lk));
+                return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
+            }
+        }
+
+        // #3655: functions/closures. Own keys are `length`, `name`, then any
+        // user-attached props, then `prototype` (constructors) — matching V8's
+        // ordering. All honor `delete`. Reading `keys_array` off a closure
+        // (below) would be out of bounds.
+        if obj_jv.is_pointer() {
+            let ptr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                let mut names: Vec<String> = Vec::new();
+                if !crate::closure::closure_is_key_deleted(ptr, "length") {
+                    names.push("length".to_string());
+                }
+                if !crate::closure::closure_is_key_deleted(ptr, "name") {
+                    names.push("name".to_string());
+                }
+                let has_prototype = crate::closure::closure_has_own_dynamic_prop(ptr, "prototype")
+                    && !crate::closure::closure_is_key_deleted(ptr, "prototype");
+                // User-attached props (snapshot is already sorted); the
+                // built-in slots are emitted explicitly so skip them here.
+                for (name, _) in crate::closure::closure_dynamic_props_snapshot(ptr) {
+                    if matches!(name.as_str(), "length" | "name" | "prototype") {
+                        continue;
+                    }
+                    if crate::closure::closure_is_key_deleted(ptr, &name) {
+                        continue;
+                    }
+                    names.push(name);
+                }
+                if has_prototype {
+                    names.push("prototype".to_string());
+                }
+                let result = crate::array::js_array_alloc(names.len() as u32);
+                for name in names {
+                    let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::array::js_array_push(result, JSValue::string_ptr(s));
+                }
                 return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
             }
         }
