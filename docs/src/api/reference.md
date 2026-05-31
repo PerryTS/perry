@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2374 entries across 104 modules.
+Total: 2368 entries across 103 modules.
 
 ## Modules
 
@@ -87,7 +87,6 @@ Total: 2374 entries across 104 modules.
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
-- [`sqlite`](#sqlite)
 - [`stream`](#stream)
 - [`stream/consumers`](#stream-consumers)
 - [`stream/promises`](#stream-promises)
@@ -564,9 +563,12 @@ Total: 2374 entries across 104 modules.
 - `SIGIOT`
 - `SIGKILL`
 - `SIGPIPE`
+- `SIGPOLL`
 - `SIGPROF`
+- `SIGPWR`
 - `SIGQUIT`
 - `SIGSEGV`
+- `SIGSTKFLT`
 - `SIGSTOP`
 - `SIGSYS`
 - `SIGTERM`
@@ -2539,20 +2541,6 @@ Total: 2374 entries across 104 modules.
 
 - `default` — module
 - `slugify` — module
-
-## `sqlite`
-
-### Methods
-
-- `DatabaseSync` — module
-- `all` — instance
-- `close` — instance
-- `columns` — instance
-- `exec` — instance
-- `get` — instance
-- `iterate` — instance
-- `prepare` — instance
-- `run` — instance
 
 ## `stream`
 

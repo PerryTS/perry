@@ -569,7 +569,6 @@ mod tests {
             "SIGINT",
             "EACCES",
             "PRIORITY_NORMAL",
-            "RTLD_DEEPBIND",
             "RSA_PKCS1_PADDING",
             "SSL_OP_NO_SSLv2",
             "SSL_OP_NO_TLSv1",
@@ -578,6 +577,15 @@ mod tests {
         ] {
             let entry = module_has_symbol("node:constants", name)
                 .expect("node:constants representative property should be in the manifest");
+            assert!(matches!(entry.kind, ApiKind::Property));
+        }
+
+        let rtld_deepbind = module_has_symbol("node:constants", "RTLD_DEEPBIND");
+        assert_eq!(
+            rtld_deepbind.is_some(),
+            cfg!(all(target_os = "linux", target_env = "gnu"))
+        );
+        if let Some(entry) = rtld_deepbind {
             assert!(matches!(entry.kind, ApiKind::Property));
         }
     }
