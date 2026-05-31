@@ -65,6 +65,10 @@ fn throw_sqlite_error(message: &str) -> ! {
     perry_runtime::fs::validate::throw_error_with_code(message, "ERR_SQLITE_ERROR")
 }
 
+fn throw_load_sqlite_extension(message: &str) -> ! {
+    perry_runtime::fs::validate::throw_error_with_code(message, "ERR_LOAD_SQLITE_EXTENSION")
+}
+
 unsafe fn node_sqlite_exec_batch(conn: &Connection, sql: &str) -> Result<(), String> {
     let c_sql =
         CString::new(sql).map_err(|_| "SQL string must not contain null bytes".to_string())?;
@@ -218,6 +222,7 @@ unsafe fn parse_node_sqlite_options(options_value: f64) -> NodeSqliteOptions {
         "allowUnknownNamedParameters",
         options.allow_unknown_named_parameters,
     );
+    options.allow_extension = bool_option(options_value, "allowExtension", options.allow_extension);
     options.defensive = bool_option(options_value, "defensive", options.defensive);
 
     let limits = object_field(options_value, "limits");
@@ -322,6 +327,25 @@ fn open_node_sqlite_connection(db: &NodeSqliteDbHandle) -> rusqlite::Result<Conn
     Ok(conn)
 }
 
+unsafe fn configure_node_sqlite_load_extension(
+    conn: &Connection,
+    enable: bool,
+) -> Result<(), String> {
+    let mut current = 0;
+    let rc = ffi::sqlite3_db_config(
+        conn.handle(),
+        ffi::SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION,
+        if enable { 1 } else { 0 },
+        &mut current,
+    );
+    if rc == ffi::SQLITE_OK {
+        return Ok(());
+    }
+    Err(CStr::from_ptr(ffi::sqlite3_errmsg(conn.handle()))
+        .to_string_lossy()
+        .into_owned())
+}
+
 unsafe fn with_sqlite_connection<R, F>(db_handle: Handle, f: F) -> Option<R>
 where
     F: FnOnce(&Connection) -> R,
@@ -392,6 +416,8 @@ pub struct NodeSqliteDbHandle {
     pub return_arrays: bool,
     pub allow_bare_named_parameters: bool,
     pub allow_unknown_named_parameters: bool,
+    pub allow_load_extension: bool,
+    pub enable_load_extension: AtomicBool,
     pub defensive: bool,
     pub initial_limits: [Option<i32>; NODE_SQLITE_LIMIT_COUNT],
     pub limits_handle: Mutex<Option<Handle>>,
@@ -412,6 +438,7 @@ struct NodeSqliteOptions {
     return_arrays: bool,
     allow_bare_named_parameters: bool,
     allow_unknown_named_parameters: bool,
+    allow_extension: bool,
     defensive: bool,
     initial_limits: [Option<i32>; NODE_SQLITE_LIMIT_COUNT],
 }
@@ -428,6 +455,7 @@ impl Default for NodeSqliteOptions {
             return_arrays: false,
             allow_bare_named_parameters: true,
             allow_unknown_named_parameters: false,
+            allow_extension: false,
             defensive: true,
             initial_limits: [None; NODE_SQLITE_LIMIT_COUNT],
         }
@@ -1050,6 +1078,8 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_new(
         return_arrays: options.return_arrays,
         allow_bare_named_parameters: options.allow_bare_named_parameters,
         allow_unknown_named_parameters: options.allow_unknown_named_parameters,
+        allow_load_extension: options.allow_extension,
+        enable_load_extension: AtomicBool::new(options.allow_extension),
         defensive: options.defensive,
         initial_limits: options.initial_limits,
         limits_handle: Mutex::new(None),
@@ -1078,6 +1108,12 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_open(db_handle: Handle) ->
         Ok(opened) => opened,
         Err(err) => throw_sqlite_error(&err.to_string()),
     };
+    if let Err(err) = configure_node_sqlite_load_extension(
+        &opened,
+        db.enable_load_extension.load(Ordering::Relaxed),
+    ) {
+        throw_sqlite_error(&err);
+    }
     let mut conn = db
         .conn
         .lock()
@@ -1178,6 +1214,99 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_prepare(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_database_sync_enable_load_extension(
+    db_handle: Handle,
+    allow_value: f64,
+) -> i32 {
+    let allow = {
+        let js = value_from_f64(allow_value);
+        if !js.is_bool() {
+            throw_type("The \"allow\" argument must be a boolean");
+        }
+        js.as_bool()
+    };
+
+    let db = get_handle::<NodeSqliteDbHandle>(db_handle)
+        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+    if allow && !db.allow_load_extension {
+        throw_invalid_state(
+            "Cannot enable extension loading because it was disabled at database creation.",
+        );
+    }
+
+    let conn = db
+        .conn
+        .lock()
+        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+    let config_error = conn
+        .as_ref()
+        .and_then(|conn| configure_node_sqlite_load_extension(conn, allow).err());
+    drop(conn);
+    if let Some(err) = config_error {
+        throw_sqlite_error(&err);
+    }
+    db.enable_load_extension.store(allow, Ordering::Relaxed);
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_database_sync_load_extension(
+    db_handle: Handle,
+    path_value: f64,
+) -> i32 {
+    let db = get_handle::<NodeSqliteDbHandle>(db_handle)
+        .unwrap_or_else(|| throw_invalid_state("Database is not open"));
+    {
+        let conn = db
+            .conn
+            .lock()
+            .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+        if conn.is_none() {
+            drop(conn);
+            throw_invalid_state("Database is not open");
+        }
+    }
+
+    if !db.allow_load_extension || !db.enable_load_extension.load(Ordering::Relaxed) {
+        throw_invalid_state("extension loading is not allowed");
+    }
+
+    let path = string_from_value(path_value, "path");
+    let c_path = CString::new(path)
+        .unwrap_or_else(|_| throw_type("The \"path\" argument must not contain null bytes"));
+    let conn_guard = db
+        .conn
+        .lock()
+        .unwrap_or_else(|_| throw_invalid_state("Database is not open"));
+    let Some(conn) = conn_guard.as_ref() else {
+        drop(conn_guard);
+        throw_invalid_state("Database is not open");
+    };
+    let mut error_message = std::ptr::null_mut();
+    let rc = ffi::sqlite3_load_extension(
+        conn.handle(),
+        c_path.as_ptr(),
+        std::ptr::null(),
+        &mut error_message,
+    );
+    if rc == ffi::SQLITE_OK {
+        return 1;
+    }
+
+    let message = if error_message.is_null() {
+        CStr::from_ptr(ffi::sqlite3_errmsg(conn.handle()))
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        let message = CStr::from_ptr(error_message).to_string_lossy().into_owned();
+        ffi::sqlite3_free(error_message.cast());
+        message
+    };
+    drop(conn_guard);
+    throw_load_sqlite_extension(&message)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn js_node_sqlite_database_sync_location(
     db_handle: Handle,
     db_name_value: f64,
@@ -1254,6 +1383,14 @@ pub unsafe fn dispatch_node_sqlite_database_method(
             let stmt = js_node_sqlite_database_sync_prepare(handle, arg0, arg1);
             Some(js_nanbox_pointer(stmt))
         }
+        "enableLoadExtension" => {
+            js_node_sqlite_database_sync_enable_load_extension(handle, arg0);
+            Some(undefined_f64())
+        }
+        "loadExtension" => {
+            js_node_sqlite_database_sync_load_extension(handle, arg0);
+            Some(undefined_f64())
+        }
         "location" => Some(js_node_sqlite_database_sync_location(handle, arg0)),
         _ => None,
     }
@@ -1276,6 +1413,8 @@ pub unsafe fn dispatch_node_sqlite_database_property(
         | "close"
         | "exec"
         | "prepare"
+        | "enableLoadExtension"
+        | "loadExtension"
         | "location"
         | "__perry_dispose__"
         | "@@__perry_wk_dispose" => {

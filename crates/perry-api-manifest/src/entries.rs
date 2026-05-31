@@ -500,6 +500,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sqlite", "@@__perry_wk_dispose", true, None),
     method("sqlite", "exec", true, None),
     method("sqlite", "prepare", true, None),
+    method("sqlite", "enableLoadExtension", true, None),
+    method("sqlite", "loadExtension", true, None),
     method("sqlite", "location", true, None),
     method("sqlite", "isOpen", true, None),
     method("sqlite", "isTransaction", true, None),

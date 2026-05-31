@@ -652,6 +652,16 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
+        "js_node_sqlite_database_sync_enable_load_extension",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_load_extension",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
         "js_node_sqlite_database_sync_location",
         DOUBLE,
         &[I64, DOUBLE],

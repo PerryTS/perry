@@ -973,7 +973,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     && class_name == "DatabaseSync"
                     && matches!(
                         property_name.as_str(),
-                        "open" | "close" | "exec" | "prepare" | "location"
+                        "open"
+                            | "close"
+                            | "exec"
+                            | "prepare"
+                            | "enableLoadExtension"
+                            | "loadExtension"
+                            | "location"
                     )
                 {
                     // `node:sqlite` DatabaseSync methods are callable fields.

@@ -66,6 +66,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "close"
             | "exec"
             | "prepare"
+            | "enableLoadExtension"
+            | "loadExtension"
             | "location"
             | "__perry_dispose__"
             | "@@__perry_wk_dispose"
