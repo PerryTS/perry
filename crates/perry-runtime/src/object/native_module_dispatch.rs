@@ -548,6 +548,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "setResourceTimingBufferSize") => {
             crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
         }
+        ("perf_hooks", "markResourceTiming") => crate::perf_hooks::js_perf_mark_resource_timing(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+            arg(5),
+            arg(6),
+            arg(7),
+        ),
+        ("perf_hooks", "timerify") => crate::perf_hooks::js_perf_timerify(arg(0), arg(1)),
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the
@@ -1004,6 +1015,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
         ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
+        ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
             crate::builtins::js_util_is_deep_strict_equal(arg(0), arg(1))
@@ -1400,6 +1412,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
         }
+        ("cluster", "setupPrimary") | ("cluster", "setupMaster") => {
+            crate::cluster::js_cluster_setup_primary(arg(0))
+        }
+        ("cluster", "fork") => crate::cluster::js_cluster_fork(arg(0)),
+        ("cluster", "disconnect") => crate::cluster::js_cluster_disconnect(arg(0)),
+        ("cluster", "Worker") => f64::from_bits(JSValue::undefined().bits()),
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which

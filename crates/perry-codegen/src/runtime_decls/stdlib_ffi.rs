@@ -1207,7 +1207,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
     module.declare_function("js_call_value", DOUBLE, &[DOUBLE, I64, I64]);
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
+    // (closure_env i64, args_ptr, args_len i64). The args pointer is a real
+    // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
+    // to I64 in the integer register class) so call sites can pass an alloca
+    // directly. See `try_lower_closure_call_fallthrough` (#3527).
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,
@@ -1308,6 +1312,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_to_json", DOUBLE, &[]);
     module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
     module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_perf_mark_resource_timing",
+        DOUBLE,
+        &[
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function("js_perf_timerify", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);

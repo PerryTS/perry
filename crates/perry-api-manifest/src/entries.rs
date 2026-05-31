@@ -2832,11 +2832,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // at the same address.
     method("querystring", "decode", false, None),
     method("querystring", "encode", false, None),
-    // node:cluster — shape-only surface. The fixture probes
-    // typeof properties + reads constants; we never actually fork.
-    // Methods are wired through `is_native_module_callable_export`
-    // (bound-method closure path) so `typeof cluster.fork === "function"`
-    // holds without us implementing a real fork.
+    // node:cluster — primary lifecycle surface. `setupPrimary` /
+    // `setupMaster`, `fork`, and `disconnect` route through the native
+    // module bound-method path; handle sharing/listening distribution is
+    // outside this manifest entry.
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),
@@ -2996,6 +2995,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "inspect", false, None),
     method("util", "format", false, None),
     method("util", "convertProcessSignalToExitCode", false, None),
+    method("util", "diff", false, None),
     // #2514: libuv-style errno helpers.
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
@@ -3082,6 +3082,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
     method("sys", "convertProcessSignalToExitCode", false, None),
+    method("sys", "diff", false, None),
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
     method("sys", "getSystemErrorMap", false, None),
@@ -3395,10 +3396,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "toJSON", false, None),
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
-    // #1478: stub — records the entry (no-op today, see codegen).
+    // Resource timing entries are recorded through the perf_hooks timeline.
     method("perf_hooks", "markResourceTiming", false, None),
-    // #1335: returns `fn` unchanged today; the spec'd "wraps fn to
-    // record a 'function' timeline entry" piece isn't recorded yet.
+    // timerify returns a wrapper that emits observer-visible function entries.
     method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
