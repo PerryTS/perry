@@ -159,6 +159,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Console" => 0xFFFF0083u32,
                 "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
+                "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
                 "WASI" | "wasi.WASI" => 0xFFFF00B2u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell

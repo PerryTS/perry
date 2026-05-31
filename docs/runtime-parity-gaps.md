@@ -1255,24 +1255,12 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:tls
 
-**Gap APIs: 50** · Already covered: 3
+**Gap APIs: 38** · Already covered: 15
 
 #### Missing from Perry
 
-- `tls.checkServerIdentity(hostname, cert)`
-- `tls.createSecureContext([options])`
 - `tls.createSecurePair([context][, isServer][, requestCert][, rejectUnauthorized][, options])`
 - `tls.createServer([options][, secureConnectionListener])`
-- `tls.setDefaultCACertificates(certs)`
-- `tls.getCACertificates([type])`
-- `tls.getCiphers()`
-- `tls.DEFAULT_ECDH_CURVE`
-- `tls.DEFAULT_MAX_VERSION`
-- `tls.DEFAULT_MIN_VERSION`
-- `tls.DEFAULT_CIPHERS`
-- `tls.rootCertificates`
-- `tls.CLIENT_RENEG_LIMIT`
-- `tls.CLIENT_RENEG_WINDOW`
 - `server.addContext(hostname, context)`
 - `server.address()`
 - `server.close([callback])`
@@ -1317,6 +1305,18 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `tls.connect(options[, callback])` | `ffi:js_tls_connect` |
 | `tls.connect(port[, host][, options][, callback])` | `ffi:js_tls_connect` |
 | `tls.connect(path[, options][, callback])` | `ffi:js_tls_connect` |
+| `tls.checkServerIdentity(hostname, cert)` | `manifest:tls.checkServerIdentity`; `test-parity/node-suite/tls/identity/check-server-identity.ts` |
+| `tls.createSecureContext([options])` | `manifest:tls.createSecureContext`; `test-parity/node-suite/tls/context/secure-context.ts` |
+| `tls.setDefaultCACertificates(certs)` | `manifest:tls.setDefaultCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.getCACertificates([type])` | `manifest:tls.getCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.getCiphers()` | `manifest:tls.getCiphers`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_ECDH_CURVE` | `manifest:tls.DEFAULT_ECDH_CURVE`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_MAX_VERSION` | `manifest:tls.DEFAULT_MAX_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_MIN_VERSION` | `manifest:tls.DEFAULT_MIN_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_CIPHERS` | `manifest:tls.DEFAULT_CIPHERS`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.rootCertificates` | `manifest:tls.rootCertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.CLIENT_RENEG_LIMIT` | `manifest:tls.CLIENT_RENEG_LIMIT`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.CLIENT_RENEG_WINDOW` | `manifest:tls.CLIENT_RENEG_WINDOW`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
 
 ### node:fs/promises
 
