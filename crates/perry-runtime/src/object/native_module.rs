@@ -879,6 +879,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"strict",
         ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
         // #3677: zlib.constants enumerates the full Z_*/BROTLI_*/ZSTD_* table.
         "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
         // Deprecated path alias enumerable on the top-level and style
@@ -1279,6 +1280,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
+        ("domain", "Domain" | "createDomain" | "create") => Some(0),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
         ("events", "init") => Some(1),
@@ -1747,6 +1749,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("domain", "Domain")
+            | ("domain", "createDomain")
+            | ("domain", "create")
             | ("dgram", "createSocket")
             | ("dgram", "Socket")
             | ("process", "abort")
@@ -3720,6 +3725,24 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "assert/strict" => match property {
             "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
+            _ => None,
+        },
+        "domain" => match property {
+            "_stack" | "active" => {
+                let ptr = crate::value::JS_NATIVE_DOMAIN_DISPATCH.load(Ordering::SeqCst);
+                if ptr.is_null() {
+                    None
+                } else {
+                    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                        std::mem::transmute(ptr);
+                    Some(dispatch(
+                        property.as_ptr(),
+                        property.len(),
+                        std::ptr::null(),
+                        0,
+                    ))
+                }
+            }
             _ => None,
         },
         "test" => crate::node_test::property(property),

@@ -34,6 +34,7 @@ pub mod async_local_storage;
 #[cfg(feature = "bundled-commander")]
 pub mod commander;
 pub mod common;
+pub mod domain;
 // dayjs / date-fns — feature-gated as of v0.5.548 so the well-known
 // flip can route `import 'dayjs'` / `import 'date-fns'` to
 // perry-ext-dayjs without duplicate `_js_dayjs_*` symbols at link.
@@ -93,6 +94,7 @@ pub use common::*;
 pub use dayjs::*;
 #[cfg(feature = "bundled-decimal")]
 pub use decimal::*;
+pub use domain::*;
 #[cfg(feature = "bundled-dotenv")]
 pub use dotenv::*;
 #[cfg(feature = "bundled-events")]

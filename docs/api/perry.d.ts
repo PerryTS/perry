@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2356 entries across 103 modules
+// Coverage: 2365 entries across 103 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1240,6 +1240,23 @@ declare module "dns/promises" {
   export function setDefaultResultOrder(...args: any[]): any;
   /** stdlib */
   export function setServers(...args: any[]): any;
+}
+
+declare module "domain" {
+  /** stdlib */
+  export class Domain { [key: string]: any; }
+  /** stdlib */
+  export const _stack: any;
+  /** stdlib */
+  export const active: any;
+  /** stdlib */
+  export const members: any;
+  /** stdlib */
+  export function Domain(...args: any[]): any;
+  /** stdlib */
+  export function create(...args: any[]): any;
+  /** stdlib */
+  export function createDomain(...args: any[]): any;
 }
 
 declare module "dotenv" {
@@ -2899,11 +2916,6 @@ declare module "slugify" {
   export default function (p0: string, p1: string, p2: string): string;
   /** stdlib */
   export function slugify(p0: string, p1: string, p2: string): string;
-}
-
-declare module "sqlite" {
-  /** stdlib */
-  export function DatabaseSync(p0: string): any;
 }
 
 declare module "stream" {

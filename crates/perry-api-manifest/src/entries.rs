@@ -58,6 +58,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "https",
     "http2",
     "events",
+    "domain",
     "os",
     "buffer",
     "assert",
@@ -203,6 +204,25 @@ const fn method(
     has_receiver: bool,
     class_filter: Option<&'static str>,
 ) -> ApiEntry {
+    method_entry(module, name, has_receiver, class_filter, true)
+}
+
+const fn internal_method(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+) -> ApiEntry {
+    method_entry(module, name, has_receiver, class_filter, false)
+}
+
+const fn method_entry(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+    module_export: bool,
+) -> ApiEntry {
     ApiEntry {
         module,
         name,
@@ -212,6 +232,7 @@ const fn method(
         },
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: module_export && !has_receiver && class_filter.is_none(),
         abi_version: None,
         params: &[],
         returns: TypeSpec::Any,
@@ -229,6 +250,45 @@ const fn method_sig(
     params: &'static [ParamSpec],
     returns: TypeSpec,
 ) -> ApiEntry {
+    method_sig_entry(
+        module,
+        name,
+        has_receiver,
+        class_filter,
+        params,
+        returns,
+        true,
+    )
+}
+
+const fn internal_method_sig(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+    params: &'static [ParamSpec],
+    returns: TypeSpec,
+) -> ApiEntry {
+    method_sig_entry(
+        module,
+        name,
+        has_receiver,
+        class_filter,
+        params,
+        returns,
+        false,
+    )
+}
+
+const fn method_sig_entry(
+    module: &'static str,
+    name: &'static str,
+    has_receiver: bool,
+    class_filter: Option<&'static str>,
+    params: &'static [ParamSpec],
+    returns: TypeSpec,
+    module_export: bool,
+) -> ApiEntry {
     ApiEntry {
         module,
         name,
@@ -238,6 +298,7 @@ const fn method_sig(
         },
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: module_export && !has_receiver && class_filter.is_none(),
         abi_version: None,
         params,
         returns,
@@ -251,6 +312,21 @@ const fn property(module: &'static str, name: &'static str) -> ApiEntry {
         kind: ApiKind::Property,
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: true,
+        abi_version: None,
+        params: &[],
+        returns: TypeSpec::Any,
+    }
+}
+
+const fn internal_property(module: &'static str, name: &'static str) -> ApiEntry {
+    ApiEntry {
+        module,
+        name,
+        kind: ApiKind::Property,
+        source: ApiSource::Stdlib,
+        stub: false,
+        module_export: false,
         abi_version: None,
         params: &[],
         returns: TypeSpec::Any,
@@ -264,6 +340,21 @@ const fn class(module: &'static str, name: &'static str) -> ApiEntry {
         kind: ApiKind::Class,
         source: ApiSource::Stdlib,
         stub: false,
+        module_export: true,
+        abi_version: None,
+        params: &[],
+        returns: TypeSpec::Any,
+    }
+}
+
+const fn internal_class(module: &'static str, name: &'static str) -> ApiEntry {
+    ApiEntry {
+        module,
+        name,
+        kind: ApiKind::Class,
+        source: ApiSource::Stdlib,
+        stub: false,
+        module_export: false,
         abi_version: None,
         params: &[],
         returns: TypeSpec::Any,
@@ -964,6 +1055,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "eventNames", true, None),
     method("events", "setMaxListeners", true, None),
     method("events", "getMaxListeners", true, None),
+    method("events", "domain", true, None),
     // Module-level helpers (`events.once` / `events.getEventListeners` /
     // `events.listenerCount` / `events.getMaxListeners` /
     // `events.setMaxListeners`).
@@ -977,6 +1069,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Module-level `events.on(emitter, name)` — async-iterable queue,
     // PR #1257.
     method("events", "on", false, None),
+    method_sig("domain", "Domain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "createDomain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "create", false, None, &[], TypeSpec::Any),
+    property("domain", "_stack"),
+    property("domain", "active"),
+    property("domain", "members"),
+    method("domain", "on", true, None),
+    method("domain", "addListener", true, None),
+    method("domain", "emit", true, None),
+    method("domain", "run", true, None),
+    method("domain", "bind", true, None),
+    method("domain", "intercept", true, None),
+    method("domain", "add", true, None),
+    method("domain", "remove", true, None),
+    method("domain", "enter", true, None),
+    method("domain", "exit", true, None),
     method_sig(
         "lru-cache",
         "default",
@@ -2330,7 +2438,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
-    method_sig(
+    internal_method_sig(
         "worker_threads",
         "getWorkerData",
         false,
@@ -2338,7 +2446,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[],
         TypeSpec::Any,
     ),
-    method_sig(
+    internal_method_sig(
         "worker_threads",
         "workerData",
         false,
@@ -2346,7 +2454,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[],
         TypeSpec::Any,
     ),
-    method_sig(
+    internal_method_sig(
         "worker_threads",
         "parentPort",
         false,
@@ -2427,11 +2535,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // up in the dispatch-table extraction.
     method("crypto", "randomBytes", false, None),
     method("crypto", "randomUUID", false, None),
-    method("crypto", "randomUUIDv7", false, None),
+    internal_method("crypto", "randomUUIDv7", false, None),
     method("crypto", "randomInt", false, None),
     method("crypto", "hash", false, None),
-    method("crypto", "sha256", false, None),
-    method("crypto", "md5", false, None),
+    internal_method("crypto", "sha256", false, None),
+    internal_method("crypto", "md5", false, None),
     method("crypto", "getRandomValues", false, None),
     // crypto.randomFill(buffer[, offset][, size], callback) /
     // randomFillSync(buffer, offset?, size?) — fills the
@@ -2989,21 +3097,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "setgroups", false, None),
     method("process", "initgroups", false, None),
     method("process", "emitWarning", false, None),
-    method("process", "on", false, None),
-    method("process", "addListener", false, None),
-    method("process", "once", false, None),
-    method("process", "prependListener", false, None),
-    method("process", "prependOnceListener", false, None),
-    method("process", "emit", false, None),
-    method("process", "listeners", false, None),
-    method("process", "rawListeners", false, None),
-    method("process", "eventNames", false, None),
-    method("process", "listenerCount", false, None),
-    method("process", "removeListener", false, None),
-    method("process", "off", false, None),
-    method("process", "removeAllListeners", false, None),
-    method("process", "setMaxListeners", false, None),
-    method("process", "getMaxListeners", false, None),
+    internal_method("process", "on", false, None),
+    internal_method("process", "addListener", false, None),
+    internal_method("process", "once", false, None),
+    internal_method("process", "prependListener", false, None),
+    internal_method("process", "prependOnceListener", false, None),
+    internal_method("process", "emit", false, None),
+    internal_method("process", "listeners", false, None),
+    internal_method("process", "rawListeners", false, None),
+    internal_method("process", "eventNames", false, None),
+    internal_method("process", "listenerCount", false, None),
+    internal_method("process", "removeListener", false, None),
+    internal_method("process", "off", false, None),
+    internal_method("process", "removeAllListeners", false, None),
+    internal_method("process", "setMaxListeners", false, None),
+    internal_method("process", "getMaxListeners", false, None),
     method("process", "cpuUsage", false, None),
     method("process", "resourceUsage", false, None),
     method("process", "getActiveResourcesInfo", false, None),
@@ -3024,6 +3132,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // ===========================================================
     class("buffer", "Buffer"),
     class("events", "EventEmitter"),
+    class("domain", "Domain"),
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
     class("net", "Socket"),
@@ -3040,10 +3149,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("string_decoder", "StringDecoder"),
     method("string_decoder", "write", true, Some("StringDecoder")),
     method("string_decoder", "end", true, Some("StringDecoder")),
-    property("string_decoder", "lastNeed"),
-    property("string_decoder", "lastTotal"),
-    property("string_decoder", "lastChar"),
-    property("string_decoder", "encoding"),
+    internal_property("string_decoder", "lastNeed"),
+    internal_property("string_decoder", "lastTotal"),
+    internal_property("string_decoder", "lastChar"),
+    internal_property("string_decoder", "encoding"),
     // node:querystring — legacy URL-encoded form parser. Greenfield
     // (deprecated since Node 11 but still imported by many npm pkgs).
     property("querystring", "default"),
@@ -3070,7 +3179,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("cluster", "isPrimary"),
     property("cluster", "isMaster"),
     property("cluster", "isWorker"),
-    property("cluster", "worker"),
+    internal_property("cluster", "worker"),
     property("cluster", "workers"),
     property("cluster", "settings"),
     property("cluster", "schedulingPolicy"),
@@ -3084,8 +3193,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // as properties so the #463 strict gate doesn't bail out at compile
     // time; `get_native_module_constant` returns `undefined` at
     // runtime.
-    property("cluster", "on"),
-    property("cluster", "addListener"),
+    internal_property("cluster", "on"),
+    internal_property("cluster", "addListener"),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`
@@ -3547,7 +3656,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `node_modules/send` package (express's static-file backend) does
     // `util.inherits(SendStream, require('stream'))`, which reads
     // `Stream.prototype` — the gate rejects the access without this entry.
-    property("stream", "prototype"),
+    internal_property("stream", "prototype"),
     // #1533: `stream.promises` namespace (`await pipeline(...)` /
     // `finished(...)`). The read resolves to a `stream/promises`-tagged
     // namespace object; its members are gated under that submodule name.
@@ -3557,7 +3666,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `Readable.from(iterable)` — Node's static factory. Resolves
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
-    method("stream", "from", false, None),
+    internal_method("stream", "from", false, None),
     // #1534/#1746: static introspection helpers — `Readable.isDisturbed(s)`,
     // `Readable.isErrored(s)`, `Readable.isReadable(s)`, and
     // `stream.isWritable(s)` (also re-exported module-level). Perry tracks
@@ -3586,8 +3695,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // #1540: Web-stream interop helpers — Readable/Writable .toWeb /
     // .fromWeb. Stubs return a fresh Duplex (data isn't propagated
     // between Node and WHATWG universes yet).
-    method("stream", "toWeb", false, None),
-    method("stream", "fromWeb", false, None),
+    internal_method("stream", "toWeb", false, None),
+    internal_method("stream", "fromWeb", false, None),
     // EventEmitter methods on stream instances. node:stream extends
     // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
     // exposes the full `.on('data'|'end'|'error'|'close'|...)` /
@@ -3671,7 +3780,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `child_process` export (Node returns `undefined`) — registered so the
     // value-read passes the #463 surface gate and resolves to `undefined`.
     class("child_process", "ChildProcess"),
-    property("child_process", "Stream"),
+    internal_property("child_process", "Stream"),
     // --- tty ---
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
@@ -3706,22 +3815,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("wasi", "finalizeBindings", true, Some("WASI")),
     property("wasi", "wasiImport"),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
-    method("perf_hooks", "now", false, None),
-    method("perf_hooks", "mark", false, None),
-    method("perf_hooks", "measure", false, None),
-    method("perf_hooks", "getEntries", false, None),
-    method("perf_hooks", "getEntriesByName", false, None),
-    method("perf_hooks", "getEntriesByType", false, None),
-    method("perf_hooks", "clearMarks", false, None),
-    method("perf_hooks", "clearMeasures", false, None),
-    method("perf_hooks", "eventLoopUtilization", false, None),
-    method("perf_hooks", "toJSON", false, None),
-    method("perf_hooks", "clearResourceTimings", false, None),
-    method("perf_hooks", "setResourceTimingBufferSize", false, None),
+    internal_method("perf_hooks", "now", false, None),
+    internal_method("perf_hooks", "mark", false, None),
+    internal_method("perf_hooks", "measure", false, None),
+    internal_method("perf_hooks", "getEntries", false, None),
+    internal_method("perf_hooks", "getEntriesByName", false, None),
+    internal_method("perf_hooks", "getEntriesByType", false, None),
+    internal_method("perf_hooks", "clearMarks", false, None),
+    internal_method("perf_hooks", "clearMeasures", false, None),
+    internal_method("perf_hooks", "eventLoopUtilization", false, None),
+    internal_method("perf_hooks", "toJSON", false, None),
+    internal_method("perf_hooks", "clearResourceTimings", false, None),
+    internal_method("perf_hooks", "setResourceTimingBufferSize", false, None),
     // Resource timing entries are recorded through the perf_hooks timeline.
-    method("perf_hooks", "markResourceTiming", false, None),
+    internal_method("perf_hooks", "markResourceTiming", false, None),
     // timerify returns a wrapper that emits observer-visible function entries.
-    method("perf_hooks", "timerify", false, None),
+    internal_method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
     // through the internal `perf_histogram` namespace (not listed in
@@ -3730,15 +3839,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Stub — every stat reads 0 and the mutators are no-ops.
     method("perf_hooks", "monitorEventLoopDelay", false, None),
     method("perf_hooks", "createHistogram", false, None),
-    property("perf_hooks", "timeOrigin"),
-    property("perf_hooks", "nodeTiming"),
+    internal_property("perf_hooks", "timeOrigin"),
+    internal_property("perf_hooks", "nodeTiming"),
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),
     class("perf_hooks", "PerformanceObserver"),
     // PerformanceObserver.supportedEntryTypes — static array of entry-type
     // names. Read inline (`PerformanceObserver.supportedEntryTypes.includes(...)`)
     // it resolves as a perf_hooks property; declare it so the read isn't gated.
-    property("perf_hooks", "supportedEntryTypes"),
+    internal_property("perf_hooks", "supportedEntryTypes"),
     class("perf_hooks", "PerformanceEntry"),
     class("perf_hooks", "PerformanceMark"),
     class("perf_hooks", "PerformanceMeasure"),
@@ -3812,20 +3921,20 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("v8", "createHook", true, Some("promiseHooks")),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
-    method("buffer", "alloc", false, None),
-    method("buffer", "allocUnsafe", false, None),
-    method("buffer", "allocUnsafeSlow", false, None),
-    method("buffer", "from", false, None),
-    method("buffer", "of", false, None),
-    method("buffer", "concat", false, None),
-    method("buffer", "copyBytesFrom", false, None),
+    internal_method("buffer", "alloc", false, None),
+    internal_method("buffer", "allocUnsafe", false, None),
+    internal_method("buffer", "allocUnsafeSlow", false, None),
+    internal_method("buffer", "from", false, None),
+    internal_method("buffer", "of", false, None),
+    internal_method("buffer", "concat", false, None),
+    internal_method("buffer", "copyBytesFrom", false, None),
     // #2901: TC39 `Uint8Array.fromBase64` / `fromHex` static factories,
     // routed through the buffer module (Uint8Array ≡ Buffer in Perry).
-    method("buffer", "fromBase64", false, None),
-    method("buffer", "fromHex", false, None),
-    method("buffer", "isBuffer", false, None),
-    method("buffer", "isEncoding", false, None),
-    method("buffer", "byteLength", false, None),
+    internal_method("buffer", "fromBase64", false, None),
+    internal_method("buffer", "fromHex", false, None),
+    internal_method("buffer", "isBuffer", false, None),
+    internal_method("buffer", "isEncoding", false, None),
+    internal_method("buffer", "byteLength", false, None),
     // Issue #800: WHATWG base64 aliases exposed from node:buffer.
     method("buffer", "atob", false, None),
     method("buffer", "btoa", false, None),
@@ -3861,8 +3970,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("url", "resolveObject", false, None),
     // Issue #1211: Blob/File object-URL registry — paired with the
     // `resolveObjectURL` export on `node:buffer`.
-    method("url", "createObjectURL", false, None),
-    method("url", "revokeObjectURL", false, None),
+    internal_method("url", "createObjectURL", false, None),
+    internal_method("url", "revokeObjectURL", false, None),
     // --- punycode (deprecated module, #2513). Top-level string helpers +
     //     the `version` property. `ucs2.*` array helpers are a follow-up. ---
     method("punycode", "decode", false, None),
@@ -3950,9 +4059,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("https", "get", false, None),
     property("https", "globalAgent"),
     class("https", "Server"),
-    class("https", "ClientRequest"),
-    class("https", "IncomingMessage"),
-    class("https", "ServerResponse"),
+    internal_class("https", "ClientRequest"),
+    internal_class("https", "IncomingMessage"),
+    internal_class("https", "ServerResponse"),
     // #2129 — `new https.Agent(options?)`. The instance is tagged as
     // ("http", "Agent") in destructuring/var_decl.rs so it shares the
     // method surface; only the constructor's default protocol differs.
@@ -4468,7 +4577,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "getDefaultSettings", false, None),
     method("http2", "getPackedSettings", false, None),
     method("http2", "getUnpackedSettings", false, None),
-    class("http2", "Http2SecureServer"),
+    internal_class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),
     // `http2.constants` — the frozen object of HTTP2_HEADER_* / NGHTTP2_* /
