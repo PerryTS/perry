@@ -57,6 +57,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "https",
     "http2",
     "events",
+    "domain",
     "os",
     "buffer",
     "assert",
@@ -1006,6 +1007,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("tls", "rootCertificates"),
     property("tls", "CLIENT_RENEG_LIMIT"),
     property("tls", "CLIENT_RENEG_WINDOW"),
+    property("events", "default"),
     method_sig("events", "EventEmitter", false, None, &[], TypeSpec::Any),
     method("events", "on", true, None),
     method("events", "emit", true, None),
@@ -1028,6 +1030,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "eventNames", true, None),
     method("events", "setMaxListeners", true, None),
     method("events", "getMaxListeners", true, None),
+    method("events", "domain", true, None),
     // Module-level helpers (`events.once` / `events.getEventListeners` /
     // `events.listenerCount` / `events.getMaxListeners` /
     // `events.setMaxListeners`).
@@ -1041,6 +1044,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Module-level `events.on(emitter, name)` — async-iterable queue,
     // PR #1257.
     method("events", "on", false, None),
+    method_sig("domain", "Domain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "createDomain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "create", false, None, &[], TypeSpec::Any),
+    property("domain", "_stack"),
+    property("domain", "active"),
+    property("domain", "members"),
+    method("domain", "on", true, None),
+    method("domain", "addListener", true, None),
+    method("domain", "emit", true, None),
+    method("domain", "run", true, None),
+    method("domain", "bind", true, None),
+    method("domain", "intercept", true, None),
+    method("domain", "add", true, None),
+    method("domain", "remove", true, None),
+    method("domain", "enter", true, None),
+    method("domain", "exit", true, None),
     method_sig(
         "lru-cache",
         "default",
@@ -1064,6 +1083,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("commander", "action", true, None),
     method("commander", "parse", true, None),
     method("commander", "opts", true, None),
+    property("async_hooks", "default"),
     method("async_hooks", "createHook", false, None),
     method("async_hooks", "executionAsyncId", false, None),
     method("async_hooks", "triggerAsyncId", false, None),
@@ -2576,6 +2596,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // an import-style binding don't silently return undefined.
     property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
+    property("os", "default"),
     method("os", "platform", false, None),
     method("os", "availableParallelism", false, None),
     method("os", "arch", false, None),
@@ -2866,6 +2887,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "POINT_CONVERSION_UNCOMPRESSED"),
     property("constants", "POINT_CONVERSION_HYBRID"),
     // path — methods mapped to Expr::Path* in expr_call.rs.
+    property("path", "default"),
     method("path", "join", false, None),
     method("path", "dirname", false, None),
     method("path", "basename", false, None),
@@ -2886,6 +2908,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Direct Node path submodules. Runtime aliases `path/posix` and
     // `path/win32` to the existing `path.posix` / `path.win32`
     // native-module namespaces.
+    property("path/posix", "default"),
     method("path/posix", "join", false, None),
     method("path/posix", "dirname", false, None),
     method("path/posix", "basename", false, None),
@@ -2903,6 +2926,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path/posix", "delimiter"),
     property("path/posix", "posix"),
     property("path/posix", "win32"),
+    property("path/win32", "default"),
     method("path/win32", "join", false, None),
     method("path/win32", "dirname", false, None),
     method("path/win32", "basename", false, None),
@@ -3083,6 +3107,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // ===========================================================
     class("buffer", "Buffer"),
     class("events", "EventEmitter"),
+    class("domain", "Domain"),
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
     class("net", "Socket"),
@@ -3105,6 +3130,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     internal_property("string_decoder", "encoding"),
     // node:querystring — legacy URL-encoded form parser. Greenfield
     // (deprecated since Node 11 but still imported by many npm pkgs).
+    property("querystring", "default"),
     method("querystring", "escape", false, None),
     method("querystring", "unescape", false, None),
     method("querystring", "unescapeBuffer", false, None),
@@ -3323,6 +3349,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- util (a small surface — Perry implements util.inspect /
     //     util.format / util.promisify shapes through builtins.rs;
     //     the rest are documented stubs) ---
+    property("util", "default"),
     method("util", "inspect", false, None),
     method("util", "format", false, None),
     method("util", "convertProcessSignalToExitCode", false, None),
@@ -3419,6 +3446,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- sys: deprecated alias for node:util. Keep this module-level
     // surface aligned with the public `util` manifest rows above; the
     // runtime routes `node:sys` through the util namespace.
+    property("sys", "default"),
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
     method("sys", "convertProcessSignalToExitCode", false, None),
@@ -3902,6 +3930,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("buffer", "kMaxLength"),
     property("buffer", "kStringMaxLength"),
     // --- url (additional helpers) ---
+    property("url", "default"),
     method("url", "fileURLToPath", false, None),
     method("url", "fileURLToPathBuffer", false, None),
     method("url", "pathToFileURL", false, None),
