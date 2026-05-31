@@ -5,6 +5,15 @@ use super::intern::{
 };
 use super::*;
 
+#[inline]
+unsafe fn add_operand_to_string(value: f64) -> *mut StringHeader {
+    let primitive = crate::symbol::js_to_primitive_for_add(value);
+    if crate::symbol::js_value_is_symbol(primitive) {
+        crate::symbol::throw_symbol_to_string_type_error();
+    }
+    crate::value::js_jsvalue_to_string(primitive)
+}
+
 /// SSO-aware string concatenation: takes both operands as NaN-boxed f64
 /// values, returns the result as an SSO `f64` when total ≤
 /// `SHORT_STRING_MAX_LEN` (zero heap alloc), or as a heap `STRING_TAG`-
@@ -283,8 +292,9 @@ pub extern "C" fn js_string_concat_value(
         return ptr;
     }
 
-    // Slow path: non-number value — fall back to js_jsvalue_to_string + js_string_concat
-    let value_str = crate::value::js_jsvalue_to_string(value);
+    // Slow path: complete ToPrimitive(default) before ToString so string
+    // addition respects user valueOf/toString hooks and their abrupt exits.
+    let value_str = unsafe { add_operand_to_string(value) };
     js_string_concat(prefix, value_str)
 }
 
@@ -373,7 +383,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
         // SHORT_STRING_TAG = 0x7FF9 — payload encoded inline. Materialize
         // through the slow path (rare in hot loops).
         if tag == 0x7FF9 {
-            let s = crate::value::js_jsvalue_to_string(value);
+            let s = unsafe { add_operand_to_string(value) };
             if is_valid_string_ptr(s) {
                 let blen = unsafe { (*s).byte_len };
                 let u16len = unsafe { (*s).utf16_len };
@@ -422,7 +432,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
         }
 
         // Anything else (bool, null, undefined, object, etc.) — slow path.
-        let s = crate::value::js_jsvalue_to_string(value);
+        let s = unsafe { add_operand_to_string(value) };
         if is_valid_string_ptr(s) {
             let blen = unsafe { (*s).byte_len };
             let u16len = unsafe { (*s).utf16_len };
@@ -589,7 +599,7 @@ pub extern "C" fn js_value_concat_string(
         return ptr;
     }
 
-    let value_str = crate::value::js_jsvalue_to_string(value);
+    let value_str = unsafe { add_operand_to_string(value) };
     js_string_concat(value_str, suffix)
 }
 

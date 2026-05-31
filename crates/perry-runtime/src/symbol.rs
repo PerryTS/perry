@@ -181,6 +181,30 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     guard.as_ref().is_some_and(|s| s.contains(&ptr))
 }
 
+#[inline]
+pub(crate) fn js_value_is_symbol(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return false;
+    }
+    is_registered_symbol((bits & POINTER_MASK) as usize)
+}
+
+#[cold]
+fn throw_type_error_bytes(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+pub(crate) fn throw_symbol_to_string_type_error() -> ! {
+    throw_type_error_bytes(b"Cannot convert a Symbol value to a string")
+}
+
+pub(crate) fn throw_symbol_to_number_type_error() -> ! {
+    throw_type_error_bytes(b"Cannot convert a Symbol value to a number")
+}
+
 /// True for symbols created through `Symbol.for(...)`. These are known symbols
 /// too, but WeakRef / FinalizationRegistry must reject them while accepting
 /// fresh and well-known symbols.
@@ -1437,6 +1461,10 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
         let iter_fn = unsafe { js_object_get_symbol_property(val_f64, sym_f64) };
         if iter_fn.to_bits() != TAG_UNDEFINED {
+            let fn_raw = crate::value::js_nanbox_get_pointer(iter_fn) as usize;
+            if fn_raw < 0x10000 || !crate::closure::is_closure_ptr(fn_raw) {
+                throw_type_error_bytes(b"object is not iterable");
+            }
             // #321: the `[Symbol.iterator]` method may be INHERITED from a
             // prototype object literal (effect's `EffectPrototype`), in which
             // case codegen baked `this` to the prototype object at definition
@@ -1459,6 +1487,11 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 // consumers can drive `.next()`.
                 if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
                     return crate::array::array_values_iter(iter);
+                }
+                if crate::value::js_nanbox_get_pointer(iter) == 0 {
+                    throw_type_error_bytes(
+                        b"Result of the Symbol.iterator method is not an object",
+                    );
                 }
                 return iter;
             }
@@ -1594,6 +1627,195 @@ pub unsafe extern "C" fn js_object_set_method_by_name(
         crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, closure_f64);
     }
     obj_f64
+}
+
+enum ToPrimitiveMethodOutcome {
+    Primitive(f64),
+    NonPrimitive(f64),
+    Absent,
+}
+
+#[inline]
+fn is_primitive_for_add(value: f64) -> bool {
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    jsv.is_any_string() || jv_is_non_string_primitive(jsv) || js_value_is_symbol(value)
+}
+
+#[inline]
+fn jv_is_non_string_primitive(jsv: crate::value::JSValue) -> bool {
+    jsv.is_number()
+        || jsv.is_int32()
+        || jsv.is_bool()
+        || jsv.is_null()
+        || jsv.is_undefined()
+        || jsv.is_bigint()
+}
+
+unsafe fn call_symbol_to_primitive_strict(
+    scope: &crate::gc::RuntimeHandleScope,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+    hint: i32,
+) -> Option<f64> {
+    let wk_ptr = well_known_symbol("toPrimitive");
+    if wk_ptr.is_null() {
+        return None;
+    }
+    let sym_f64 = f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
+    let receiver = value_handle.get_nanbox_f64();
+    let method = js_object_get_symbol_property(receiver, sym_f64);
+    if method.to_bits() == TAG_UNDEFINED {
+        return None;
+    }
+    let method_bits = method.to_bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        throw_type_error_bytes(b"Cannot convert object to primitive value");
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        throw_type_error_bytes(b"Cannot convert object to primitive value");
+    }
+
+    let method_handle = scope.root_nanbox_f64(method);
+    let hint_str: &[u8] = match hint {
+        1 => b"number",
+        2 => b"string",
+        _ => b"default",
+    };
+    let hint_ptr = js_string_from_bytes(hint_str.as_ptr(), hint_str.len() as u32);
+    let hint_handle = scope.root_string_ptr(hint_ptr);
+    let hint_f64 = f64::from_bits(
+        STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
+    );
+
+    let rebound = crate::closure::clone_closure_rebind_this(
+        method_handle.get_nanbox_f64().to_bits(),
+        receiver,
+    );
+    let closure_ptr = (rebound & POINTER_MASK) as *const crate::closure::ClosureHeader;
+    let result = crate::closure::js_closure_call1(closure_ptr, hint_f64);
+    if is_primitive_for_add(result) {
+        Some(result)
+    } else {
+        throw_type_error_bytes(b"Cannot convert object to primitive value");
+    }
+}
+
+unsafe fn call_named_to_primitive_method(
+    scope: &crate::gc::RuntimeHandleScope,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+    method_name: &[u8],
+) -> ToPrimitiveMethodOutcome {
+    let receiver = value_handle.get_nanbox_f64();
+    let obj_ptr = (receiver.to_bits() & POINTER_MASK) as *const crate::object::ObjectHeader;
+    if obj_ptr.is_null() || (obj_ptr as usize) < 0x10000 {
+        return ToPrimitiveMethodOutcome::Absent;
+    }
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let key_handle = scope.root_string_ptr(key);
+    let method = crate::object::js_object_get_field_by_name(
+        obj_ptr,
+        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
+    );
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return ToPrimitiveMethodOutcome::Absent;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return ToPrimitiveMethodOutcome::Absent;
+    }
+    let rebound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let ret = crate::closure::js_native_call_value(f64::from_bits(rebound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    if is_primitive_for_add(ret) {
+        ToPrimitiveMethodOutcome::Primitive(ret)
+    } else {
+        ToPrimitiveMethodOutcome::NonPrimitive(ret)
+    }
+}
+
+unsafe fn array_to_primitive_string(value: f64) -> f64 {
+    let arr_ptr = crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader;
+    if arr_ptr.is_null() {
+        return crate::object::js_object_to_string(value);
+    }
+    let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
+    let joined = crate::array::js_array_join(arr_ptr, comma);
+    f64::from_bits(crate::value::JSValue::string_ptr(joined).bits())
+}
+
+unsafe fn ordinary_to_primitive_strict(
+    scope: &crate::gc::RuntimeHandleScope,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+    hint: i32,
+) -> f64 {
+    let order: [&[u8]; 2] = if hint == 2 {
+        [b"toString", b"valueOf"]
+    } else {
+        [b"valueOf", b"toString"]
+    };
+    let mut saw_user_nonprimitive = false;
+
+    for method_name in order {
+        match call_named_to_primitive_method(scope, value_handle, method_name) {
+            ToPrimitiveMethodOutcome::Primitive(value) => return value,
+            ToPrimitiveMethodOutcome::NonPrimitive(value) => {
+                let receiver = value_handle.get_nanbox_f64();
+                if !(method_name == b"valueOf" && value.to_bits() == receiver.to_bits()) {
+                    saw_user_nonprimitive = true;
+                }
+            }
+            ToPrimitiveMethodOutcome::Absent => {}
+        }
+    }
+
+    let value = value_handle.get_nanbox_f64();
+    if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        return array_to_primitive_string(value);
+    }
+
+    if saw_user_nonprimitive {
+        throw_type_error_bytes(b"Cannot convert object to primitive value");
+    }
+    crate::object::js_object_to_string(value)
+}
+
+/// Strict `ToPrimitive(input, "default")` for addition. Unlike the exported
+/// `js_to_primitive` compatibility helper below, this completes ordinary
+/// valueOf/toString fallback and throws when user coercion returns an object.
+pub(crate) unsafe fn js_to_primitive_for_add(value: f64) -> f64 {
+    if is_primitive_for_add(value) {
+        return value;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let current = value_handle.get_nanbox_f64();
+    let bits = current.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return current;
+    }
+    let obj_ptr = (bits & POINTER_MASK) as usize;
+    if obj_ptr < 0x1000 || is_registered_symbol(obj_ptr) {
+        return current;
+    }
+
+    if let Some(result) = call_symbol_to_primitive_strict(&scope, &value_handle, 0) {
+        return result;
+    }
+    let current = value_handle.get_nanbox_f64();
+    let current_handle = scope.root_nanbox_f64(current);
+
+    if crate::date::is_date_cell_addr(obj_ptr) {
+        let s = crate::date::js_date_to_string(current_handle.get_nanbox_f64());
+        return f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
+    }
+    if let Some((_class_id, payload)) = crate::builtins::boxed_primitive_payload(current) {
+        return payload;
+    }
+
+    ordinary_to_primitive_strict(&scope, &current_handle, 1)
 }
 
 /// `ToPrimitive(value, hint)` — if `value` is an object with a

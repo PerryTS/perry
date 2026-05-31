@@ -47,6 +47,14 @@ unsafe fn both_bigint_or_throw(a: f64, b: f64) -> bool {
     }
 }
 
+#[inline]
+unsafe fn primitive_to_add_string(value: f64) -> *const crate::string::StringHeader {
+    if crate::symbol::js_value_is_symbol(value) {
+        crate::symbol::throw_symbol_to_string_type_error();
+    }
+    js_jsvalue_to_string(value) as *const crate::string::StringHeader
+}
+
 type BigIntBinaryOp = extern "C" fn(
     *const crate::bigint::BigIntHeader,
     *const crate::bigint::BigIntHeader,
@@ -118,30 +126,32 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     let scope = crate::gc::RuntimeHandleScope::new();
     let a_handle = scope.root_nanbox_f64(a);
     let b_handle = scope.root_nanbox_f64(b);
-    let a_val = JSValue::from_bits(a_handle.get_nanbox_f64().to_bits());
-    let b_val = JSValue::from_bits(b_handle.get_nanbox_f64().to_bits());
 
-    // String concat takes priority: either operand being a string forces
-    // ToPrimitive on the other side via the spec's "if either is a string,
-    // do concat" branch. js_string_concat_value handles the
-    // `string + non-string` case (it calls js_jsvalue_to_string on the
-    // non-string side); we use it for both orderings by pre-coercing the
-    // other operand to string via js_jsvalue_to_string when it ISN'T a
-    // string.
+    let a_primitive = crate::symbol::js_to_primitive_for_add(a_handle.get_nanbox_f64());
+    let a_primitive_handle = scope.root_nanbox_f64(a_primitive);
+    let b_primitive = crate::symbol::js_to_primitive_for_add(b_handle.get_nanbox_f64());
+    let b_primitive_handle = scope.root_nanbox_f64(b_primitive);
+    let a_val = JSValue::from_bits(a_primitive_handle.get_nanbox_f64().to_bits());
+    let b_val = JSValue::from_bits(b_primitive_handle.get_nanbox_f64().to_bits());
+
+    // Per ECMA-262 addition, both operands are ToPrimitive("default") before
+    // choosing string concatenation, BigInt addition, or numeric addition.
     if a_val.is_any_string() || b_val.is_any_string() {
-        let a_str = if JSValue::from_bits(a_handle.get_nanbox_f64().to_bits()).is_any_string() {
-            js_get_string_pointer_unified(a_handle.get_nanbox_f64())
-                as *const crate::string::StringHeader
-        } else {
-            js_jsvalue_to_string(a_handle.get_nanbox_f64()) as *const crate::string::StringHeader
-        };
+        let a_str =
+            if JSValue::from_bits(a_primitive_handle.get_nanbox_f64().to_bits()).is_any_string() {
+                js_get_string_pointer_unified(a_primitive_handle.get_nanbox_f64())
+                    as *const crate::string::StringHeader
+            } else {
+                primitive_to_add_string(a_primitive_handle.get_nanbox_f64())
+            };
         let a_str_handle = scope.root_string_ptr(a_str);
-        let b_str = if JSValue::from_bits(b_handle.get_nanbox_f64().to_bits()).is_any_string() {
-            js_get_string_pointer_unified(b_handle.get_nanbox_f64())
-                as *const crate::string::StringHeader
-        } else {
-            js_jsvalue_to_string(b_handle.get_nanbox_f64()) as *const crate::string::StringHeader
-        };
+        let b_str =
+            if JSValue::from_bits(b_primitive_handle.get_nanbox_f64().to_bits()).is_any_string() {
+                js_get_string_pointer_unified(b_primitive_handle.get_nanbox_f64())
+                    as *const crate::string::StringHeader
+            } else {
+                primitive_to_add_string(b_primitive_handle.get_nanbox_f64())
+            };
         let b_str_handle = scope.root_string_ptr(b_str);
         let result = crate::string::js_string_concat(
             a_str_handle.get_raw_const_ptr(),
@@ -153,26 +163,35 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     // BigInt: same as js_dynamic_add. Neither operand is a string here
     // (the concat branch above already handled that), so a mixed
     // BigInt/Number `+` throws TypeError just like Node.
-    if both_bigint_or_throw(a, b) {
+    if both_bigint_or_throw(
+        a_primitive_handle.get_nanbox_f64(),
+        b_primitive_handle.get_nanbox_f64(),
+    ) {
         return dynamic_bigint_binary_op_from_handles(
             &scope,
-            &a_handle,
-            &b_handle,
+            &a_primitive_handle,
+            &b_primitive_handle,
             crate::bigint::js_bigint_add,
         );
+    }
+
+    if crate::symbol::js_value_is_symbol(a_primitive_handle.get_nanbox_f64())
+        || crate::symbol::js_value_is_symbol(b_primitive_handle.get_nanbox_f64())
+    {
+        crate::symbol::throw_symbol_to_number_type_error();
     }
 
     // Both numeric — coerce non-numbers (booleans, null, undefined) the
     // same way the static fallback path did.
     let a_num = if a_val.is_number() || a_val.is_int32() {
-        a_handle.get_nanbox_f64()
+        a_primitive_handle.get_nanbox_f64()
     } else {
-        crate::builtins::js_number_coerce(a_handle.get_nanbox_f64())
+        crate::builtins::js_number_coerce(a_primitive_handle.get_nanbox_f64())
     };
     let b_num = if b_val.is_number() || b_val.is_int32() {
-        b_handle.get_nanbox_f64()
+        b_primitive_handle.get_nanbox_f64()
     } else {
-        crate::builtins::js_number_coerce(b_handle.get_nanbox_f64())
+        crate::builtins::js_number_coerce(b_primitive_handle.get_nanbox_f64())
     };
     a_num + b_num
 }

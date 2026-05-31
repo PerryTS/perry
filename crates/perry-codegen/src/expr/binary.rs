@@ -46,6 +46,15 @@ use super::{
     I18nLowerCtx,
 };
 
+fn is_add_known_primitive_non_string(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_)
+    ) || is_numeric_expr(ctx, expr)
+        || is_bigint_expr(ctx, expr)
+        || is_bool_expr(ctx, expr)
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Binary { op, left, right } => {
@@ -96,15 +105,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // step poisoned the result. Dispatch through the runtime
                 // helper that checks NaN-box tags: STRING_TAG / SHORT_STRING_TAG
                 // → string concat, BIGINT → bigint add, otherwise numeric.
-                // Stay on the static numeric/bigint paths when at least one
-                // operand is provably non-string (numeric / bigint / boolean
-                // / int) — those don't risk the string-concat semantics and
-                // we keep the inline fadd codegen for hot arithmetic loops.
-                let l_non_str =
-                    crate::type_analysis::is_numeric_expr(ctx, left) || is_bigint_expr(ctx, left);
-                let r_non_str =
-                    crate::type_analysis::is_numeric_expr(ctx, right) || is_bigint_expr(ctx, right);
-                if !l_non_str && !r_non_str {
+                // Stay on static numeric/bigint lowering only when BOTH sides
+                // are provably primitive non-strings. If either side might be
+                // an object, addition must run ToPrimitive before deciding
+                // between concat and numeric addition.
+                let l_primitive_non_str = is_add_known_primitive_non_string(ctx, left);
+                let r_primitive_non_str = is_add_known_primitive_non_string(ctx, right);
+                if !(l_primitive_non_str && r_primitive_non_str) {
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
                     return Ok(ctx.block().call(
