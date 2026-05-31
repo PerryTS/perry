@@ -172,6 +172,28 @@ fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
     decode_file_url_pathname_bytes(pathname)
 }
 
+/// Resolve a `node:module` "base" argument (file URL object/string or a
+/// bare path string) to a filesystem path string. URL-shaped values and
+/// `file:`-scheme strings go through the file-URL decoder; any other string
+/// is treated as a path and returned verbatim. Used by
+/// `module.findPackageJSON` (#3120). Returns `None` for non-string,
+/// non-URL-object values so the caller can raise `ERR_INVALID_ARG_TYPE`.
+pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
+    if is_js_string_value(base_f64) {
+        let s = string_from_js_value(base_f64);
+        if s.starts_with("file:") {
+            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+        }
+        return Some(s);
+    }
+    if let Some(obj) = object_from_f64(base_f64) {
+        if is_url_object_shape(obj) {
+            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+        }
+    }
+    None
+}
+
 /// Convert a file:// URL to a filesystem path
 /// Strips the "file://" prefix and percent-decodes the result
 /// js_url_file_url_to_path(url_f64: f64) -> f64 (NaN-boxed string)

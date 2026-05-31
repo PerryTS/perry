@@ -346,6 +346,118 @@ pub extern "C" fn js_module_is_builtin(id: f64) -> f64 {
     })
 }
 
+/// `module.findPackageJSON(specifier[, base])` — resolve the nearest
+/// `package.json` for a resolved specifier (#3120). Perry implements the
+/// local-specifier path: the `specifier` is resolved against `base`'s
+/// directory (when relative/absolute) and Perry walks parent directories
+/// looking for `package.json`, returning its absolute path. The result is
+/// canonicalized to match Node's realpath-based output.
+///
+/// Argument validation matches Node's observable surface:
+///   * missing `specifier` → `TypeError [ERR_MISSING_ARGS]`
+///   * `base` that is not a string/URL (number, null, …) →
+///     `TypeError [ERR_INVALID_ARG_TYPE]`
+///   * no enclosing `package.json` → `undefined`
+#[no_mangle]
+pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    // `specifier` is required and must be a string (Perry covers the
+    // local-path/file-URL specifier shape).
+    if specifier.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::fs::validate::throw_error_with_code(
+            "The \"specifier\" argument must be specified",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let spec_value = JSValue::from_bits(specifier.to_bits());
+    let Some(spec_bytes) =
+        (unsafe { crate::string::js_string_key_bytes(spec_value, &mut sso_buf) })
+    else {
+        let message = format!(
+            "The \"specifier\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(specifier)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    };
+    let specifier_str = String::from_utf8_lossy(spec_bytes).into_owned();
+
+    // Resolve `base` to a directory. A missing/undefined base anchors at the
+    // current working directory (Node requires a base for relative specifiers,
+    // but the observable test surface always passes one).
+    let base_path = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        match crate::url::node_compat::module_base_to_path(base) {
+            Some(p) => p,
+            None => {
+                let message = format!(
+                    "The \"base\" argument must be of type string or an instance of URL. Received {}",
+                    crate::fs::validate::describe_received(base)
+                );
+                crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+            }
+        }
+    };
+
+    let Some(pkg_path) = find_nearest_package_json(&specifier_str, &base_path) else {
+        return undefined;
+    };
+    module_string_value(&pkg_path)
+}
+
+/// Resolve `specifier` against `base`'s directory, then walk parent
+/// directories looking for a `package.json`. Returns the canonicalized
+/// absolute path of the first match. `base` may name a file or a directory
+/// (trailing separator); both anchor at the containing directory.
+fn find_nearest_package_json(specifier: &str, base: &str) -> Option<String> {
+    use std::path::{Path, PathBuf};
+
+    let base_path = Path::new(base);
+    // A directory base (trailing separator) or an existing directory anchors
+    // resolution at itself; otherwise resolve against the parent directory of
+    // the base file.
+    let base_dir: PathBuf = if base.ends_with(std::path::MAIN_SEPARATOR) || base_path.is_dir() {
+        base_path.to_path_buf()
+    } else {
+        base_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+
+    let resolved = if Path::new(specifier).is_absolute() {
+        PathBuf::from(specifier)
+    } else {
+        base_dir.join(specifier)
+    };
+
+    // Start the upward walk at the directory containing the resolved target.
+    let mut dir = if resolved.is_dir() {
+        resolved
+    } else {
+        resolved
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or(base_dir)
+    };
+
+    loop {
+        let candidate = dir.join("package.json");
+        if candidate.is_file() {
+            let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            return Some(canonical.to_string_lossy().into_owned());
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return None,
+        }
+    }
+}
+
 /// process.getBuiltinModule(id) -> module namespace | undefined
 #[no_mangle]
 pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
@@ -1496,6 +1608,11 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
 static KEEP_JS_SETENV: extern "C" fn(*const StringHeader, f64) = js_setenv;
 #[used]
 static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
+// #3120: codegen emits `js_module_find_package_json` only from generated `.o`,
+// so pin a retained reference edge for the auto-optimize whole-program build.
+#[used]
+static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
+    js_module_find_package_json;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
