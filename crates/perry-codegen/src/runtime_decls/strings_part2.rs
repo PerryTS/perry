@@ -562,6 +562,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // after enqueueing onto a queue the pump drains; otherwise sleeps until
     // the next timer deadline (or 1s safety cap).
     module.declare_function("js_wait_for_event", VOID, &[]);
+    module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     module.declare_function("js_throw", VOID, &[DOUBLE]);
 
     // Exception handling (Phase G): setjmp/longjmp-based try/catch.
@@ -617,9 +618,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_timer_has_pending", I32, &[]);
     module.declare_function("js_callback_timer_has_pending", I32, &[]);
     module.declare_function("js_interval_timer_has_pending", I32, &[]);
-    module.declare_function("js_event_loop_has_refed_work", I32, &[]);
-    module.declare_function("js_pending_await_should_exit", I32, &[I64]);
-    module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     // Stdlib has-active-handles — returns 1 if WS servers, pending
     // HTTP events, etc. need the loop to keep running.
     module.declare_function("js_stdlib_has_active_handles", I32, &[]);

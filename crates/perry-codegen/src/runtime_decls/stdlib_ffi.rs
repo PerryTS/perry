@@ -1090,6 +1090,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_event_names", I64, &[I64]);
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
+    module.declare_function("js_event_emitter_domain_value", DOUBLE, &[I64]);
     // Module-level helpers
     module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
     module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
@@ -1099,6 +1100,18 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_events_init", DOUBLE, &[]);
+
+    // ========== Domain ==========
+    module.declare_function("js_domain_create", I64, &[]);
+    module.declare_function("js_domain_on", I64, &[I64, I64, I64]);
+    module.declare_function("js_domain_emit", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_domain_run", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_domain_bind", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_domain_intercept", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_domain_add", I64, &[I64, DOUBLE]);
+    module.declare_function("js_domain_remove", I64, &[I64, DOUBLE]);
+    module.declare_function("js_domain_enter", I64, &[I64]);
+    module.declare_function("js_domain_exit", I64, &[I64]);
 
     // ========== StringDecoder (issue #848) ==========
     // `js_string_decoder_new` allocates a real handle; `write` / `end`
