@@ -154,6 +154,13 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Request",
     "Response",
     "FinalizationRegistry",
+    // #2875: TC39 explicit-resource-management globals. Backed by the
+    // no-op constructor thunk so `typeof DisposableStack === "function"`;
+    // real `new DisposableStack()` / `new SuppressedError(...)` flow through
+    // codegen's `lower_builtin_new` to the dedicated runtime ctors.
+    "DisposableStack",
+    "AsyncDisposableStack",
+    "SuppressedError",
     "Buffer",
 ];
 

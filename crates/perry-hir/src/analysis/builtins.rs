@@ -87,6 +87,10 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            // #2875: TC39 explicit-resource-management globals.
+            | "DisposableStack"
+            | "AsyncDisposableStack"
+            | "SuppressedError"
             | "Buffer"
             | "process"
             | "console"
