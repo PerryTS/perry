@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2365 entries across 103 modules
+// Coverage: 2374 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2916,6 +2916,11 @@ declare module "slugify" {
   export default function (p0: string, p1: string, p2: string): string;
   /** stdlib */
   export function slugify(p0: string, p1: string, p2: string): string;
+}
+
+declare module "sqlite" {
+  /** stdlib */
+  export function DatabaseSync(p0: string): any;
 }
 
 declare module "stream" {
