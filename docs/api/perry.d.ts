@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2124 entries across 98 modules
+// Coverage: 2125 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2769,7 +2769,7 @@ declare module "process" {
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
   /** stdlib */
-  export function setSourceMapsEnabled(...args: any[]): any;
+  export function setSourceMapsEnabled(enabled: boolean): void;
   /** stdlib */
   export function setegid(...args: any[]): any;
   /** stdlib */
@@ -2781,7 +2781,7 @@ declare module "process" {
   /** stdlib */
   export function setuid(...args: any[]): any;
   /** stdlib */
-  export function sourceMapsEnabled(...args: any[]): any;
+  export function sourceMapsEnabled(): boolean;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
@@ -2930,6 +2930,21 @@ declare module "stream" {
   export function setDefaultHighWaterMark(...args: any[]): any;
   /** stdlib */
   export function toWeb(...args: any[]): any;
+}
+
+declare module "stream/consumers" {
+  /** stdlib */
+  export function arrayBuffer(...args: any[]): any;
+  /** stdlib */
+  export function blob(...args: any[]): any;
+  /** stdlib */
+  export function buffer(...args: any[]): any;
+  /** stdlib */
+  export function bytes(...args: any[]): any;
+  /** stdlib */
+  export function json(...args: any[]): any;
+  /** stdlib */
+  export function text(...args: any[]): any;
 }
 
 declare module "stream/promises" {
@@ -3192,13 +3207,7 @@ declare module "util/types" {
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
   /** stdlib */
-  export function isDataView(...args: any[]): any;
-  /** stdlib */
   export function isDate(...args: any[]): any;
-  /** stdlib */
-  export function isExternal(...args: any[]): any;
-  /** stdlib */
-  export function isFloat16Array(...args: any[]): any;
   /** stdlib */
   export function isFloat32Array(...args: any[]): any;
   /** stdlib */
@@ -3245,10 +3254,6 @@ declare module "util/types" {
   export function isUint8Array(...args: any[]): any;
   /** stdlib */
   export function isUint8ClampedArray(...args: any[]): any;
-  /** stdlib */
-  export function isWeakMap(...args: any[]): any;
-  /** stdlib */
-  export function isWeakSet(...args: any[]): any;
 }
 
 declare module "uuid" {

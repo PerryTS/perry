@@ -145,6 +145,7 @@ pub const NATIVE_MODULES: &[&str] = &[
 pub const NODE_SUBMODULES: &[&str] = &[
     "fs/promises",
     "stream/promises",
+    "stream/consumers",
     "readline/promises",
     "punycode.ucs2",
     "sys",
@@ -2791,6 +2792,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         }],
         TypeSpec::Void,
     ),
+    method_sig(
+        "process",
+        "sourceMapsEnabled",
+        false,
+        None,
+        &[],
+        TypeSpec::Bool,
+    ),
+    method_sig(
+        "process",
+        "setSourceMapsEnabled",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "enabled",
+            ty: TypeSpec::Bool,
+            optional: false,
+        }],
+        TypeSpec::Void,
+    ),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
     method("process", "threadCpuUsage", false, None),
@@ -3321,6 +3342,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("stream", "promises"),
     method("stream/promises", "pipeline", false, None),
     method("stream/promises", "finished", false, None),
+    // Direct `node:stream/consumers` submodule exports.
+    method("stream/consumers", "arrayBuffer", false, None),
+    method("stream/consumers", "blob", false, None),
+    method("stream/consumers", "buffer", false, None),
+    method("stream/consumers", "bytes", false, None),
+    method("stream/consumers", "json", false, None),
+    method("stream/consumers", "text", false, None),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does

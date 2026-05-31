@@ -93,7 +93,9 @@ pub use lower_module_fn::{
 };
 
 mod lower_expr;
-pub(crate) use lower_expr::{lower_expr, lower_expr_assignment, try_desugar_reactive_text};
+pub(crate) use lower_expr::{
+    lower_expr, lower_expr_assignment, throw_reference_error_expr, try_desugar_reactive_text,
+};
 
 // Re-export extracted module functions
 pub(crate) use crate::analysis::*;

@@ -316,7 +316,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
-                    Ok(double_literal(1.0))
+                    Ok(ctx
+                        .block()
+                        .bitcast_i64_to_double(crate::nanbox::TAG_TRUE_I64))
                 }
             }
         }
