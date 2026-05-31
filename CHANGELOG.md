@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1055 — hotfix: actually remove native_module.rs conflict marker
+
+The v0.5.1054 hotfix bumped the version but its source edit failed to apply,
+so the punycode/timers conflict marker in `namespace_keys_for` remained and
+`main` stayed unbuildable. This commit removes the marker for real — union of
+both arms (punycode namespace keys + timers) — and was verified with a full
+`cargo build --release` (runtime/stdlib/codegen/hir/perry) → exit 0.
+
 ## v0.5.1054 — hotfix: resolve native_module.rs punycode/timers conflict marker
 
 Admin-merges of node-compat fork PRs left an unresolved git conflict marker in
