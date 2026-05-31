@@ -142,6 +142,7 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
 pub const NODE_SUBMODULES: &[&str] = &[
+    "fs/promises",
     "stream/promises",
     "readline/promises",
     "punycode.ucs2",
@@ -3001,6 +3002,43 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "watch", false, None),
     property("fs", "promises"),
     property("fs", "constants"),
+    // --- node:fs/promises direct submodule (#2728). Only the named exports
+    // Perry actually backs with runtime thunks (see
+    // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
+    // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
+    // intentionally omitted — they are tracked separately (#2133). The parent
+    // `fs.promises` namespace above still resolves to the same surface.
+    method("fs/promises", "access", false, None),
+    method("fs/promises", "appendFile", false, None),
+    method("fs/promises", "chmod", false, None),
+    method("fs/promises", "chown", false, None),
+    method("fs/promises", "copyFile", false, None),
+    method("fs/promises", "cp", false, None),
+    method("fs/promises", "glob", false, None),
+    method("fs/promises", "lchmod", false, None),
+    method("fs/promises", "lchown", false, None),
+    method("fs/promises", "link", false, None),
+    method("fs/promises", "lstat", false, None),
+    method("fs/promises", "lutimes", false, None),
+    method("fs/promises", "mkdir", false, None),
+    method("fs/promises", "mkdtemp", false, None),
+    method("fs/promises", "open", false, None),
+    method("fs/promises", "opendir", false, None),
+    method("fs/promises", "readFile", false, None),
+    method("fs/promises", "readdir", false, None),
+    method("fs/promises", "readlink", false, None),
+    method("fs/promises", "realpath", false, None),
+    method("fs/promises", "rename", false, None),
+    method("fs/promises", "rm", false, None),
+    method("fs/promises", "rmdir", false, None),
+    method("fs/promises", "stat", false, None),
+    method("fs/promises", "statfs", false, None),
+    method("fs/promises", "symlink", false, None),
+    method("fs/promises", "truncate", false, None),
+    method("fs/promises", "unlink", false, None),
+    method("fs/promises", "utimes", false, None),
+    method("fs/promises", "watch", false, None),
+    method("fs/promises", "writeFile", false, None),
     // --- console (Node global console exposed as node:console too). ---
     class("console", "Console"),
     method("console", "log", false, None),
