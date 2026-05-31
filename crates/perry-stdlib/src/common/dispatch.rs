@@ -120,7 +120,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "disconnect"
     ) && with_handle::<crate::ioredis::RedisClient, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return dispatch_ioredis(handle, method_name, &args);
+        return super::dispatch_ioredis::dispatch_ioredis(handle, method_name, &args);
     }
 
     // crypto Hash handle: createHash(...).update(...).digest().
@@ -1184,17 +1184,55 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         }
     }
 
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+            fn js_ext_http_agent_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+        }
+
+        if matches!(
+            property_name,
+            "createConnection"
+                | "createSocket"
+                | "keepSocketAlive"
+                | "reuseSocket"
+                | "getName"
+                | "destroy"
+                | "close"
+        ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_agent_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+    }
+
     if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
         return v;
     }
 
     // Server-side node:http request/response handles whose static
-    // `IncomingMessage` / `ServerResponse` type was lost.
+    // `HttpServer` / `IncomingMessage` / `ServerResponse` type was lost.
     #[cfg(feature = "external-http-server-pump")]
     {
         extern "C" {
+            fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http_server_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
             fn js_ext_http_incoming_message_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
@@ -1205,6 +1243,27 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 property_ptr: *const u8,
                 property_len: usize,
             ) -> f64;
+        }
+
+        if matches!(
+            property_name,
+            "listen"
+                | "close"
+                | "closeAllConnections"
+                | "closeIdleConnections"
+                | "address"
+                | "on"
+                | "addListener"
+                | "setTimeout"
+        ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_server_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
         }
 
         if matches!(
@@ -1711,89 +1770,6 @@ unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64]) -> f64 {
             f64::from_bits(perry_runtime::JSValue::undefined().bits())
         }
         _ => f64::from_bits(perry_runtime::JSValue::undefined().bits()),
-    }
-}
-
-/// Dispatch method calls on ioredis Redis client handles
-#[cfg(feature = "database-redis")]
-unsafe fn dispatch_ioredis(handle: i64, method: &str, args: &[f64]) -> f64 {
-    // Helper: extract raw StringHeader pointer from NaN-boxed f64
-    fn get_string_ptr(val: f64) -> *const perry_runtime::StringHeader {
-        let bits = val.to_bits();
-        // Strip STRING_TAG (0x7FFF) to get raw pointer
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::StringHeader
-    }
-
-    // Helper: NaN-box a Promise pointer with POINTER_TAG for return
-    fn nanbox_promise(promise: *mut perry_runtime::Promise) -> f64 {
-        let bits = (promise as u64) | 0x7FFD_0000_0000_0000;
-        f64::from_bits(bits)
-    }
-
-    match method {
-        "connect" => {
-            let promise = crate::ioredis::js_ioredis_connect(handle);
-            nanbox_promise(promise)
-        }
-        "get" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_get(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "set" if args.len() >= 2 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let value_ptr = get_string_ptr(args[1]);
-            let promise = crate::ioredis::js_ioredis_set(handle, key_ptr, value_ptr);
-            nanbox_promise(promise)
-        }
-        "setex" if args.len() >= 3 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let seconds = args[1];
-            let value_ptr = get_string_ptr(args[2]);
-            let promise = crate::ioredis::js_ioredis_setex(handle, key_ptr, seconds, value_ptr);
-            nanbox_promise(promise)
-        }
-        "del" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_del(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "exists" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_exists(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "incr" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_incr(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "decr" if !args.is_empty() => {
-            let key_ptr = get_string_ptr(args[0]);
-            let promise = crate::ioredis::js_ioredis_decr(handle, key_ptr);
-            nanbox_promise(promise)
-        }
-        "expire" if args.len() >= 2 => {
-            let key_ptr = get_string_ptr(args[0]);
-            let seconds = args[1];
-            let promise = crate::ioredis::js_ioredis_expire(handle, key_ptr, seconds);
-            nanbox_promise(promise)
-        }
-        "ping" => {
-            let promise = crate::ioredis::js_ioredis_ping(handle);
-            nanbox_promise(promise)
-        }
-        "quit" => {
-            let promise = crate::ioredis::js_ioredis_quit(handle);
-            nanbox_promise(promise)
-        }
-        "disconnect" => {
-            crate::ioredis::js_ioredis_disconnect(handle);
-            f64::from_bits(0x7FFC_0000_0000_0001) // undefined
-        }
-        _ => {
-            f64::from_bits(0x7FFC_0000_0000_0001) // undefined
-        }
     }
 }
 

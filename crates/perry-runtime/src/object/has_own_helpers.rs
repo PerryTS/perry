@@ -1,10 +1,43 @@
 //! Helpers for `Object.hasOwn` ToObject and primitive own-key handling.
 
+/// #3655: is `key` an OWN property of the function/closure at `ptr`?
+///
+/// Every function carries built-in own data properties `name` and `length`
+/// (`{ writable:false, enumerable:false, configurable:true }`); constructors
+/// also carry `prototype`. These are synthesized from the name/arity
+/// registries rather than stored as object fields, so the generic
+/// `own_key_present` (which reads `ObjectHeader.keys_array`) can't see them —
+/// and reading that offset off a closure is out-of-bounds. User-attached
+/// props (`fn.x = 1`) live in the closure dynamic-prop side table. A `delete`d
+/// slot (`closure_is_key_deleted`) is no longer own. Mirrors the value-read
+/// closure arm in `field_get_set.rs`.
+pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
+    if crate::closure::closure_is_key_deleted(ptr, key) {
+        return false;
+    }
+    match key {
+        // Always-present built-in function slots.
+        "name" | "length" => true,
+        // `prototype` and user props are real own dynamic props (constructors
+        // stash `prototype` in the side table; methods/arrows have neither).
+        _ => crate::closure::closure_has_own_dynamic_prop(ptr, key),
+    }
+}
+
 pub(crate) fn throw_to_object_nullish_type_error() -> ! {
     let message = "Cannot convert undefined or null to object";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// #3655: borrow a `StringHeader` key as `&str` (UTF-8 validated). Public
+/// sibling of the private `string_header_as_str` for the closure-key callers
+/// in `object_ops.rs` / `descriptors.rs`.
+pub(crate) unsafe fn str_from_string_header<'a>(
+    key: *const crate::StringHeader,
+) -> Option<&'a str> {
+    string_header_as_str(key)
 }
 
 unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {

@@ -1933,6 +1933,14 @@ pub extern "C" fn js_object_get_field_by_name(
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                // #3655: a `delete`d slot (`delete fn.name`, configurable:true)
+                // reads back `undefined`, even though `name`/`length` are
+                // otherwise synthesized from the registries below.
+                if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
+                        return JSValue::undefined();
+                    }
+                }
                 // `fn.length` — return the registered ECMAScript-visible
                 // length for the underlying function. Ramda's
                 // `converge` / `useWith` / `addIndex` chain feeds

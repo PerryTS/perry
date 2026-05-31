@@ -16,6 +16,23 @@ pub extern "C" fn js_object_delete_field(
         return 1;
     }
     unsafe {
+        // #3655: `delete fn.name` / `delete fn.prototype` / `delete fn.userProp`.
+        // Functions/closures aren't `ObjectHeader`s — reading `keys_array` off
+        // one is out of bounds. Built-in slots (`name`/`length`/`prototype`)
+        // are `configurable: true`, so record the deletion in the closure
+        // deleted-key side table (consulted by hasOwnProperty/getOwnProperty*/
+        // value reads); user-attached props are dropped from the dynamic-prop
+        // table outright. Either way delete succeeds (returns 1).
+        if crate::closure::is_closure_ptr(obj as usize) {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                // Drop any user-attached own prop, and mark the key deleted so
+                // a synthesized built-in slot (`name`/`length`/`prototype`)
+                // stops reporting from the registries on later reads.
+                crate::closure::closure_delete_own_dynamic_prop(obj as usize, name);
+                crate::closure::closure_mark_key_deleted(obj as usize, name);
+            }
+            return 1;
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously

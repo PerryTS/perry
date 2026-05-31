@@ -655,6 +655,14 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
         ]),
+        "https" => Some(&[
+            b"Agent",
+            b"Server",
+            b"createServer",
+            b"get",
+            b"request",
+            b"globalAgent",
+        ]),
         "events" => Some(&[
             b"EventEmitter",
             b"defaultMaxListeners",
@@ -3305,6 +3313,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "METHODS" => Some(unsafe { http_methods_array() }),
             _ => None,
         },
+        "https" => match property {
+            "globalAgent" => Some(unsafe { https_global_agent_object() }),
+            _ => None,
+        },
         // node:http2 — `constants` is a sub-namespace object (the spec exposes
         // it as a single frozen object, not loose top-level constants), so
         // `import { constants } from 'node:http2'` binds to a real object and
@@ -3441,6 +3453,46 @@ unsafe fn http_methods_array() -> f64 {
         Ordering::Relaxed,
     );
     value
+}
+
+unsafe fn https_global_agent_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("https.globalAgent").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    let field_names = [
+        "defaultPort",
+        "protocol",
+        "keepAlive",
+        "maxSockets",
+        "maxFreeSockets",
+    ];
+    let packed = field_names.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF12,
+        field_names.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    js_object_set_field(obj, 0, JSValue::number(443.0));
+    let protocol = crate::string::js_string_from_bytes(b"https:".as_ptr(), 6);
+    js_object_set_field(obj, 1, JSValue::string_ptr(protocol));
+    js_object_set_field(obj, 2, JSValue::bool(true));
+    js_object_set_field(obj, 3, JSValue::number(f64::INFINITY));
+    js_object_set_field(obj, 4, JSValue::number(256.0));
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("https.globalAgent".to_string(), result.to_bits());
+    });
+    result
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.

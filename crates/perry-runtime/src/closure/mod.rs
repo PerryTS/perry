@@ -52,9 +52,10 @@ pub(crate) use dynamic_props::{
     visit_closure_static_prototype_slot_mut,
 };
 pub use dynamic_props::{
-    closure_dynamic_props_snapshot, closure_get_dynamic_prop, closure_set_dynamic_prop,
-    closure_set_static_prototype, closure_static_prototype, is_closure_ptr, js_closure_unbind_this,
-    scan_closure_dynamic_props_roots_mut,
+    closure_delete_own_dynamic_prop, closure_dynamic_props_snapshot, closure_get_dynamic_prop,
+    closure_has_own_dynamic_prop, closure_is_key_deleted, closure_mark_key_deleted,
+    closure_set_dynamic_prop, closure_set_static_prototype, closure_static_prototype,
+    is_closure_ptr, js_closure_unbind_this, scan_closure_dynamic_props_roots_mut,
 };
 
 // v8_stubs re-exports the AOT stubs + non-macOS Rust V8-interop stubs.

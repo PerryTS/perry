@@ -1294,6 +1294,78 @@ pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle 
     handle
 }
 
+#[no_mangle]
+pub extern "C" fn js_http_client_request_method(handle: Handle) -> *mut StringHeader {
+    let method = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.method.clone())
+        .unwrap_or_default();
+    alloc_string(&method).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut StringHeader {
+    let protocol = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .map(|u| format!("{}:", u.scheme()))
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&protocol).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHeader {
+    let host = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .ok()
+            .and_then(|u| u.host_str().map(|s| s.to_string()))
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&host).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_path(handle: Handle) -> *mut StringHeader {
+    let path = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .map(|u| {
+                let mut path = u.path().to_string();
+                if path.is_empty() {
+                    path.push('/');
+                }
+                if let Some(q) = u.query() {
+                    path.push('?');
+                    path.push_str(q);
+                }
+                path
+            })
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&path).as_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_listener_count(
+    handle: Handle,
+    event_ptr: *const StringHeader,
+) -> f64 {
+    let event = match read_str(event_ptr) {
+        Some(e) => e,
+        None => return 0.0,
+    };
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
+        let implicit_response = if event == "response" && req.response_callback != 0 {
+            1
+        } else {
+            0
+        };
+        (explicit + implicit_response) as f64
+    })
+    .unwrap_or(0.0)
+}
+
 // ------------------------------------------------------------------
 // FFI: IncomingMessage accessors
 // ------------------------------------------------------------------
@@ -1730,8 +1802,23 @@ mod force_link_http_server {
         pub fn js_node_https_create_server();
         pub fn js_node_https_server_listen();
         pub fn js_node_https_server_close();
+        pub fn js_node_https_server_close_all_connections();
+        pub fn js_node_https_server_close_idle_connections();
         pub fn js_node_https_server_on();
         pub fn js_node_https_server_address_json();
+        pub fn js_node_https_server_headers_timeout();
+        pub fn js_node_https_server_set_headers_timeout();
+        pub fn js_node_https_server_keep_alive_timeout();
+        pub fn js_node_https_server_set_keep_alive_timeout();
+        pub fn js_node_https_server_request_timeout();
+        pub fn js_node_https_server_set_request_timeout();
+        pub fn js_node_https_server_idle_timeout();
+        pub fn js_node_https_server_set_idle_timeout();
+        pub fn js_node_https_server_max_headers_count();
+        pub fn js_node_https_server_set_max_headers_count();
+        pub fn js_node_https_server_max_requests_per_socket();
+        pub fn js_node_https_server_set_max_requests_per_socket();
+        pub fn js_node_https_server_set_timeout_method();
         // http2 secure server.
         pub fn js_node_http2_create_secure_server();
         pub fn js_node_http2_server_listen();
@@ -1801,8 +1888,23 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_https_create_server,
         js_node_https_server_listen,
         js_node_https_server_close,
+        js_node_https_server_close_all_connections,
+        js_node_https_server_close_idle_connections,
         js_node_https_server_on,
         js_node_https_server_address_json,
+        js_node_https_server_headers_timeout,
+        js_node_https_server_set_headers_timeout,
+        js_node_https_server_keep_alive_timeout,
+        js_node_https_server_set_keep_alive_timeout,
+        js_node_https_server_request_timeout,
+        js_node_https_server_set_request_timeout,
+        js_node_https_server_idle_timeout,
+        js_node_https_server_set_idle_timeout,
+        js_node_https_server_max_headers_count,
+        js_node_https_server_set_max_headers_count,
+        js_node_https_server_max_requests_per_socket,
+        js_node_https_server_set_max_requests_per_socket,
+        js_node_https_server_set_timeout_method,
         js_node_http2_create_secure_server,
         js_node_http2_server_listen,
         js_node_http2_server_close,

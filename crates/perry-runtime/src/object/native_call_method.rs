@@ -2537,6 +2537,18 @@ pub unsafe extern "C" fn js_native_call_method(
                 if key_str.is_null() {
                     return f64::from_bits(JSValue::bool(false).bits());
                 }
+                // #3655: a closure receiver (functions ARE objects). Report
+                // the built-in `name`/`length` (+ constructor `prototype`)
+                // and user props as own; honor `delete`. Without this, the
+                // `is_valid_obj_ptr`-false fallthrough returned `true` for
+                // *every* key (so a deleted slot still looked present).
+                let raw = jsval.as_pointer::<u8>() as usize;
+                if crate::closure::is_closure_ptr(raw) {
+                    let present = super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|k| super::has_own_helpers::closure_own_key_present(raw, k))
+                        .unwrap_or(false);
+                    return f64::from_bits(JSValue::bool(present).bits());
+                }
                 let obj_ptr = jsval.as_pointer::<ObjectHeader>();
                 if !obj_ptr.is_null() && is_valid_obj_ptr(obj_ptr as *const u8) {
                     return f64::from_bits(
@@ -2567,6 +2579,25 @@ pub unsafe extern "C" fn js_native_call_method(
             let key_str = crate::builtins::js_string_coerce(key_value);
             if key_str.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
+            }
+            // #3655: closure receiver — built-in slots are non-enumerable,
+            // user props default enumerable. Mirrors the `js_object_property_is_enumerable`
+            // entry point (the `.call`-lowered shape).
+            let raw = jsval.as_pointer::<u8>() as usize;
+            if crate::closure::is_closure_ptr(raw) {
+                let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                };
+                if !super::has_own_helpers::closure_own_key_present(raw, key_name) {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                }
+                if matches!(key_name, "name" | "length" | "prototype") {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                }
+                let enumerable = get_property_attrs(raw, key_name)
+                    .map(|attrs| attrs.enumerable())
+                    .unwrap_or(true);
+                return f64::from_bits(JSValue::bool(enumerable).bits());
             }
             let obj_ptr = jsval.as_pointer::<ObjectHeader>();
             if obj_ptr.is_null() || !is_valid_obj_ptr(obj_ptr as *const u8) {
