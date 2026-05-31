@@ -1542,6 +1542,67 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
         ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
 
+        // #3680: `v8.Serializer` / `v8.DefaultSerializer` instance methods.
+        // The registry id lives in field[1] of the namespace object; the
+        // runtime re-derives it from the receiver value.
+        ("v8.Serializer", m) | ("v8.DefaultSerializer", m) => {
+            let recv = crate::value::js_nanbox_pointer(obj as i64);
+            match m {
+                "writeHeader" => crate::node_v8::v8_serializer_write_header(recv),
+                "writeValue" => crate::node_v8::v8_serializer_write_value(recv, arg(0)),
+                "writeUint32" => crate::node_v8::v8_serializer_write_uint32(recv, arg(0)),
+                "writeUint64" => crate::node_v8::v8_serializer_write_uint64(recv, arg(0), arg(1)),
+                "writeDouble" => crate::node_v8::v8_serializer_write_double(recv, arg(0)),
+                "writeRawBytes" => crate::node_v8::v8_serializer_write_raw_bytes(recv, arg(0)),
+                "releaseBuffer" => crate::node_v8::v8_serializer_release_buffer(recv),
+                // `_setTreatArrayBufferViewsAsHostObjects` is a no-op for us
+                // (our writer always treats them as host objects).
+                _ => f64::from_bits(JSValue::undefined().bits()),
+            }
+        }
+
+        // #3680: `v8.Deserializer` / `v8.DefaultDeserializer` instance methods.
+        ("v8.Deserializer", m) | ("v8.DefaultDeserializer", m) => {
+            let recv = crate::value::js_nanbox_pointer(obj as i64);
+            match m {
+                "readHeader" => crate::node_v8::v8_deserializer_read_header(recv),
+                "readValue" => crate::node_v8::v8_deserializer_read_value(recv),
+                "readUint32" => crate::node_v8::v8_deserializer_read_uint32(recv),
+                "readUint64" => crate::node_v8::v8_deserializer_read_uint64(recv),
+                "readDouble" => crate::node_v8::v8_deserializer_read_double(recv),
+                "readRawBytes" => crate::node_v8::v8_deserializer_read_raw_bytes(recv, arg(0)),
+                _ => f64::from_bits(JSValue::undefined().bits()),
+            }
+        }
+
+        // #3679: `v8.startupSnapshot` namespace methods. Perry never builds a
+        // startup snapshot, so `isBuildingSnapshot()` is `0` and the
+        // serialize/deserialize-callback registrars throw like Node does when
+        // called outside a snapshot-building context.
+        ("v8.startupSnapshot", m) => match m {
+            "isBuildingSnapshot" => crate::node_v8::js_v8_is_building_snapshot(),
+            "addSerializeCallback" | "addDeserializeCallback" | "setDeserializeMainFunction" => {
+                crate::fs::validate::throw_type_error_with_code(
+                    "Operation not allowed when not building startup snapshot.",
+                    "ERR_NOT_BUILDING_SNAPSHOT",
+                )
+            }
+            _ => f64::from_bits(JSValue::undefined().bits()),
+        },
+
+        // #3679: `v8.promiseHooks` namespace. Hook registrars return a stop
+        // function (Node returns a callable that removes the hook); we hand
+        // back a no-op callable so `const stop = onInit(fn); stop()` works.
+        ("v8.promiseHooks", m) => match m {
+            "onInit" | "onBefore" | "onAfter" | "onSettled" | "createHook" => {
+                let c = crate::closure::js_closure_alloc_singleton(
+                    crate::node_v8::js_v8_noop_undefined as *const u8,
+                );
+                crate::value::js_nanbox_pointer(c as i64)
+            }
+            _ => f64::from_bits(JSValue::undefined().bits()),
+        },
+
         // #2533: captured / aliased server factories
         // (`const createServer = options.createServer || createServerHTTP;
         // createServer(opts, handler)` — `@hono/node-server`'s `serve()`). The

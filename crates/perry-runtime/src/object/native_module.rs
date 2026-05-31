@@ -832,6 +832,19 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         return bound_native_callable_export_value("util", "debuglog");
     }
 
+    // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
+    // `v8.promiseHooks` are object-valued exports; resolve them to
+    // dedicated native-module namespace objects so `typeof === "object"` and
+    // their methods dispatch through `dispatch_native_module_method`.
+    if module_name == "v8" && matches!(property_name, "startupSnapshot" | "promiseHooks") {
+        let submodule = if property_name == "startupSnapshot" {
+            "v8.startupSnapshot"
+        } else {
+            "v8.promiseHooks"
+        };
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    }
+
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
     }
@@ -2026,6 +2039,31 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            // #3680/#3679: node:v8 class constructors + diagnostic-control
+            // helpers read as callable values (`typeof v8.Serializer ===
+            // "function"`). Construction routes through new_dynamic.rs; the
+            // top-level helpers are no-op callables.
+            | ("v8", "Serializer")
+            | ("v8", "DefaultSerializer")
+            | ("v8", "Deserializer")
+            | ("v8", "DefaultDeserializer")
+            | ("v8", "setFlagsFromString")
+            | ("v8", "takeCoverage")
+            | ("v8", "stopCoverage")
+            | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3679: v8.startupSnapshot / v8.promiseHooks namespace methods read
+            // as callable values (`typeof v8.startupSnapshot.isBuildingSnapshot
+            // === "function"`). Invocation routes through
+            // dispatch_native_module_method on the sub-namespace tag.
+            | ("v8.startupSnapshot", "isBuildingSnapshot")
+            | ("v8.startupSnapshot", "addSerializeCallback")
+            | ("v8.startupSnapshot", "addDeserializeCallback")
+            | ("v8.startupSnapshot", "setDeserializeMainFunction")
+            | ("v8.promiseHooks", "onInit")
+            | ("v8.promiseHooks", "onBefore")
+            | ("v8.promiseHooks", "onAfter")
+            | ("v8.promiseHooks", "onSettled")
+            | ("v8.promiseHooks", "createHook")
     )
 }
 
