@@ -539,7 +539,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:process (and global `process`)
 
-**Gap APIs: 99** · Already covered: 19
+**Gap APIs: 97** · Already covered: 21
 
 #### Missing from Perry
 
@@ -572,7 +572,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `process.hasUncaughtExceptionCaptureCallback()`
 - `process.dlopen(module, filename[, flags])`
 - `process.loadEnvFile(path)`
-- `process.setSourceMapsEnabled(val)`
 - `process.hrtime([time])`
 - `process.permission.has(scope[, reference])`
 - `process.umask()`
@@ -613,6 +612,8 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `process.argv` | `expr:ProcessArgv` |
 | `process.env` | `expr:ProcessEnv` |
 | `process.stdin` | `expr:ProcessStdin` |
+| `process.sourceMapsEnabled` | `manifest:process.sourceMapsEnabled` |
+| `process.setSourceMapsEnabled(val)` | `manifest:process.setSourceMapsEnabled` |
 | … | 2 more covered APIs |
 
 ### node:util

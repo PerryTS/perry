@@ -2835,6 +2835,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "cpuUsage", false, None),
     method("process", "resourceUsage", false, None),
     method("process", "getActiveResourcesInfo", false, None),
+    method("process", "sourceMapsEnabled", false, None),
+    method("process", "setSourceMapsEnabled", false, None),
     method("process", "hrtime", false, None),
     property("process", "argv"),
     property("process", "platform"),
