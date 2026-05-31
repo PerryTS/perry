@@ -290,6 +290,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         | ("http", "Agent")
                                         | ("https", "Agent")
                                         | ("dns" | "dns/promises", "Resolver")
+                                        | ("sqlite", "DatabaseSync")
                                 );
                                 if is_known_native_class {
                                     let (mod_for_class, cls_for_class) = if class_name == "Agent" {

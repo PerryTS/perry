@@ -72,6 +72,7 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // well-known flip can route to perry-ext-pg.
         "pg" => &["bundled-pg"],
         "better-sqlite3" => &["database-sqlite"],
+        "sqlite" => &["database-sqlite"],
         // tursodb (#424) lives in the external
         // `PerryTS/tursodb-bindings` repo (`bun add @perryts/tursodb`)
         // since v0.5.557 — perry's package.json `perry.nativeLibrary`

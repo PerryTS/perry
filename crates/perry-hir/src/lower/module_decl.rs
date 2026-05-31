@@ -766,6 +766,7 @@ pub(crate) fn lower_module_decl(
                                                     "async_hooks",
                                                     "AsyncLocalStorage" | "AsyncResource"
                                                 ) | ("dns" | "dns/promises", "Resolver")
+                                                    | ("sqlite", "DatabaseSync")
                                             );
                                             if is_known_native_class {
                                                 ctx.register_native_instance(
@@ -822,6 +823,9 @@ pub(crate) fn lower_module_decl(
                                                                 "getConnection",
                                                             ) => Some("PoolConnection"),
                                                             ("better-sqlite3", "prepare") => {
+                                                                Some("Statement")
+                                                            }
+                                                            ("sqlite", "prepare") => {
                                                                 Some("Statement")
                                                             }
                                                             _ => None,

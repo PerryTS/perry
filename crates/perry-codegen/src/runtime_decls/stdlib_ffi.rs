@@ -640,6 +640,29 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction_commit", VOID, &[I64]);
     module.declare_function("js_sqlite_transaction_rollback", VOID, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_open", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_close", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_dispose", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_exec", I32, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_node_sqlite_database_sync_prepare",
+        I64,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_location",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_sqlite_database_sync_is_open", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_sqlite_database_sync_is_transaction",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function("js_node_sqlite_database_sync_limits", I64, &[I64]);
 
     // ========== OS ==========
     module.declare_function("js_os_cpus", I64, &[]);

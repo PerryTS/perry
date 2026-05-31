@@ -969,6 +969,21 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "sqlite"
+                    && class_name == "DatabaseSync"
+                    && matches!(
+                        property_name.as_str(),
+                        "open" | "close" | "exec" | "prepare" | "location"
+                    )
+                {
+                    // `node:sqlite` DatabaseSync methods are callable fields.
+                    // Bare reads like `typeof db.close` must not invoke the
+                    // lifecycle method as a zero-arg getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "Headers" && is_headers_method_name(&property_name) {
                     // A bare Fetch Headers method read (`headers.entries`) is a
                     // function value, not a zero-arg native call. The call form

@@ -45,6 +45,7 @@ pub(super) fn lower_builtin_new(
         ("Client", Some(src)) => src != "pg",
         ("Pool", Some(src)) => src != "pg",
         ("Database", Some(src)) => src != "better-sqlite3",
+        ("DatabaseSync", Some(src)) => src != "sqlite",
         ("Redis", Some(src)) => src != "ioredis" && src != "redis",
         ("MongoClient", Some(src)) => src != "mongodb",
         ("Decimal", Some(src)) => src != "decimal.js",
@@ -398,6 +399,27 @@ pub(super) fn lower_builtin_new(
             };
             let blk = ctx.block();
             let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path_ptr)]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
+        // options so the runtime can preserve Node-shaped validation errors.
+        "DatabaseSync" => {
+            let path_value = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options_value = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_database_sync_new",
+                &[(DOUBLE, &path_value), (DOUBLE, &options_value)],
+            );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // mongodb MongoClient — `new MongoClient(uri)` matching npm mongodb's

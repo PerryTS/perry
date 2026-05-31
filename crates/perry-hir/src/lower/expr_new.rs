@@ -271,6 +271,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 if matches!(
                     (module_name, class_name),
                     ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                        | ("sqlite", "DatabaseSync")
                 ) {
                     let args = new_expr
                         .args
