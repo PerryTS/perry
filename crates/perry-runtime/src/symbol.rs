@@ -1411,6 +1411,23 @@ fn class_chain_has_method(class_id: u32, name: &str) -> bool {
     false
 }
 
+fn is_object_value(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    raw >= 0x10000 && !is_registered_symbol(raw)
+}
+
+#[cold]
+fn throw_iterator_result_not_object() -> ! {
+    let msg = b"Result of the Symbol.iterator method is not an object";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
 /// #1831: resolve the iterator for a `yield*` operand.
 ///
 /// `yield* X` must drive `X[Symbol.iterator]()` — for a generator **call** the
@@ -1459,6 +1476,9 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 // consumers can drive `.next()`.
                 if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
                     return crate::array::array_values_iter(iter);
+                }
+                if !is_object_value(iter) {
+                    throw_iterator_result_not_object();
                 }
                 return iter;
             }
