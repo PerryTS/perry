@@ -187,15 +187,22 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // runtime's `node:dgram`/network stack handles it) —
                     // the literal mirrors what we actually link in.
                     "features" => return Ok(process_features_literal()),
-                    // #1400: process.sourceMapsEnabled — boolean indicating
-                    // whether the runtime's source-map support is on. Perry
-                    // compiles AOT and doesn't ship a source-map resolver,
-                    // so the value is always false. Without this arm the
-                    // bare read returned a 0 sentinel — falsy in a boolean
-                    // context but `typeof` was `"number"`, so libraries
-                    // doing `typeof process.sourceMapsEnabled === "boolean"`
-                    // bailed out (e.g. some Vitest stack-trace formatters).
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #1400 / #3108: process.sourceMapsEnabled — live boolean
+                    // reflecting setSourceMapsEnabled(). Perry compiles AOT
+                    // and ships no source-map resolver, so the flag drives
+                    // nothing observable, but it round-trips through the
+                    // setter (starting `false`) so `typeof ... === "boolean"`
+                    // holds and toggles are observable. Lower to a 0-arg
+                    // native getter that reads the runtime flag.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     // #1412: `process.moduleLoadList` is Node's list of
                     // built-in modules already loaded into the
                     // interpreter. Perry AOT-compiles every reachable
@@ -384,7 +391,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ]));
                     }
                     "features" => return Ok(process_features_literal()),
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #3108: live boolean toggle — see the matching arm above.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     "finalization" => {
                         return Ok(Expr::Object(vec![
@@ -667,6 +683,39 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // #2902: `<TypedArray>.BYTES_PER_ELEMENT` static property — fold to the
+    // element byte width. Works for all the global typed-array constructors
+    // (Int8Array..Float64Array, including Float16Array=2). Only fires when the
+    // name is a real global typed-array ctor not shadowed by a local binding.
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        let obj_name = obj_ident.sym.as_ref();
+        if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+            if prop_ident.sym.as_ref() == "BYTES_PER_ELEMENT" {
+                if let Some(kind) = crate::ir::typed_array_kind_for_name(obj_name) {
+                    let shadowed = ctx.lookup_local(obj_name).is_some()
+                        || ctx.lookup_func(obj_name).is_some()
+                        || ctx.lookup_imported_func(obj_name).is_some()
+                        || ctx.lookup_class(obj_name).is_some();
+                    if !shadowed {
+                        let bytes = match kind {
+                            crate::ir::TYPED_ARRAY_KIND_INT8
+                            | crate::ir::TYPED_ARRAY_KIND_UINT8
+                            | crate::ir::TYPED_ARRAY_KIND_UINT8_CLAMPED => 1.0,
+                            crate::ir::TYPED_ARRAY_KIND_INT16
+                            | crate::ir::TYPED_ARRAY_KIND_UINT16
+                            | crate::ir::TYPED_ARRAY_KIND_FLOAT16 => 2.0,
+                            crate::ir::TYPED_ARRAY_KIND_INT32
+                            | crate::ir::TYPED_ARRAY_KIND_UINT32
+                            | crate::ir::TYPED_ARRAY_KIND_FLOAT32 => 4.0,
+                            _ => 8.0, // Float64 / BigInt64 / BigUint64
+                        };
+                        return Ok(Expr::Number(bytes));
+                    }
+                }
+            }
+        }
+    }
+
     // Check if this is an enum member access (e.g., Color.Red)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
@@ -926,16 +975,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // zero-arg native getter. The call form still lowers
                     // through NativeMethodCall; bare reads stay as PropertyGet
                     // so runtime lookup can return a bound callable.
-                    let object_expr = lower_expr(ctx, &member.obj)?;
-                    return Ok(Expr::PropertyGet {
-                        object: Box::new(object_expr),
-                        property: property_name,
-                    });
-                } else if module_name == "v8"
-                    && is_v8_serializer_instance_method_name(&class_name, &property_name)
-                {
-                    // `new Serializer().writeHeader` and friends are method
-                    // value reads, not zero-arg native getters.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1921,36 +1960,6 @@ fn is_console_instance_method_name(prop: &str) -> bool {
             | "profileEnd"
             | "timeStamp"
     )
-}
-
-fn is_v8_serializer_instance_method_name(class_name: &str, prop: &str) -> bool {
-    match class_name {
-        "Serializer" | "DefaultSerializer" => matches!(
-            prop,
-            "writeHeader"
-                | "writeValue"
-                | "releaseBuffer"
-                | "transferArrayBuffer"
-                | "writeUint32"
-                | "writeUint64"
-                | "writeDouble"
-                | "writeRawBytes"
-                | "_getDataCloneError"
-                | "_setTreatArrayBufferViewsAsHostObjects"
-        ),
-        "Deserializer" | "DefaultDeserializer" => matches!(
-            prop,
-            "readHeader"
-                | "readValue"
-                | "transferArrayBuffer"
-                | "getWireFormatVersion"
-                | "readUint32"
-                | "readUint64"
-                | "readDouble"
-                | "readRawBytes"
-        ),
-        _ => false,
-    }
 }
 
 fn is_dgram_socket_method_name(prop: &str) -> bool {

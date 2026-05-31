@@ -115,6 +115,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     | "Uint16Array"
                                     | "Int32Array"
                                     | "Uint32Array"
+                                    | "Float16Array"
                                     | "Float32Array"
                                     | "Float64Array"
                             ) {
@@ -289,13 +290,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         // dispatch correctly.
                                         | ("http", "Agent")
                                         | ("https", "Agent")
-                                        | (
-                                            "v8",
-                                            "Serializer"
-                                                | "Deserializer"
-                                                | "DefaultSerializer"
-                                                | "DefaultDeserializer",
-                                        )
                                         | ("dns" | "dns/promises", "Resolver")
                                 );
                                 if is_known_native_class {

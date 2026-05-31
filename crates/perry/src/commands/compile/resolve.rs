@@ -171,6 +171,72 @@ pub(super) fn is_in_compile_package(path: &Path, compile_packages: &HashSet<Stri
     false
 }
 
+/// Enumerate every installed package name reachable from `project_root`'s
+/// `node_modules` tree (the nearest one walking up, plus any nested
+/// `node_modules` directories for transitive deps npm chose not to hoist).
+///
+/// Used by #3527 to materialize the `"*"` / `"@scope/*"` wildcard entries in
+/// `perry.compilePackages` into concrete package names. The routing
+/// predicates (`is_in_compile_package`, the HIR `COMPILE_PACKAGES_OVERRIDE`,
+/// and the many `compile_packages.contains(name)` sites) all match exact
+/// package names, so the wildcard has to be expanded before routing or it is a
+/// silent no-op. Returns scoped names as `@scope/name`.
+pub(super) fn enumerate_installed_packages(project_root: &Path) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if let Some(nm) = find_node_modules(project_root) {
+        collect_packages_in_node_modules(&nm, &mut out);
+    }
+    out
+}
+
+/// Walk a single `node_modules` directory, recording each package name and
+/// recursing into any nested `node_modules` it contains.
+fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashSet<String>) {
+    let entries = match fs::read_dir(node_modules) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // Skip npm bookkeeping dirs (`.bin`, `.cache`, `.package-lock.json`).
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if name.starts_with('@') {
+            // Scope directory: each child is a `@scope/pkg`.
+            if let Ok(scoped) = fs::read_dir(&path) {
+                for sub in scoped.flatten() {
+                    let sub_name = sub.file_name();
+                    let sub_name = sub_name.to_string_lossy();
+                    if sub_name.starts_with('.') {
+                        continue;
+                    }
+                    let sub_path = sub.path();
+                    if !sub_path.is_dir() {
+                        continue;
+                    }
+                    out.insert(format!("{}/{}", name, sub_name));
+                    let nested = sub_path.join("node_modules");
+                    if nested.is_dir() {
+                        collect_packages_in_node_modules(&nested, out);
+                    }
+                }
+            }
+            continue;
+        }
+        out.insert(name.to_string());
+        let nested = path.join("node_modules");
+        if nested.is_dir() {
+            collect_packages_in_node_modules(&nested, out);
+        }
+    }
+}
+
 /// Find node_modules directory starting from a given path
 pub(super) fn find_node_modules(start: &Path) -> Option<PathBuf> {
     let mut current = start.to_path_buf();

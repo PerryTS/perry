@@ -694,15 +694,10 @@ extern "C" fn ns_unshift1(closure: *const ClosureHeader, chunk: f64) -> f64 {
 }
 
 /// `readable.compose(stream)` (#1539): the instance-method form of
-/// `stream.compose`. Retained-chunk Readables can eagerly compose through a
-/// single Transform/PassThrough so downstream iterator helpers still see a
-/// readable chunk snapshot; unsupported forms keep the historical shape stub.
+/// `stream.compose`, routed through the shared compose builder so the same
+/// data-flow and error handling paths cover module and prototype calls.
 extern "C" fn ns_compose1(closure: *const ClosureHeader, arg: f64) -> f64 {
-    let source = this_value(closure);
-    if let Some(composed) = compose_readable_snapshot(source, arg) {
-        return composed;
-    }
-    js_node_stream_duplex_new(f64::from_bits(TAG_UNDEFINED))
+    build_node_stream_compose(vec![this_value(closure), arg])
 }
 
 extern "C" fn ns_pipe2(closure: *const ClosureHeader, dest: f64, options: f64) -> f64 {

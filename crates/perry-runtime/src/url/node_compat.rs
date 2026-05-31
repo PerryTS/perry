@@ -94,6 +94,17 @@ fn throw_invalid_legacy_url_arg(value: f64) -> ! {
     throw_url_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
+/// Read the `windows` option from a `{ windows }` options argument (#2975).
+/// Node treats a `true` value as force-Windows, anything else (including a
+/// missing/undefined options arg or `{ windows: false }`) as POSIX. Returns
+/// `false` for non-object / undefined options.
+fn options_windows_flag(options: f64) -> bool {
+    match object_from_f64(options) {
+        Some(opts) => crate::value::js_is_truthy(object_prop_f64(opts, "windows")) != 0,
+        None => false,
+    }
+}
+
 fn hex_nibble(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -103,10 +114,12 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
-/// Percent-decode a file-URL pathname to its raw byte sequence. Bytes are
-/// returned verbatim (no UTF-8 validation) so `fileURLToPathBuffer` can
-/// preserve paths whose decoded bytes are not valid UTF-8.
-fn decode_file_url_pathname_bytes(pathname: &str) -> Vec<u8> {
+/// Percent-decode a POSIX file-URL pathname to its raw byte sequence. Bytes
+/// are returned verbatim (no UTF-8 validation) so `fileURLToPathBuffer` can
+/// preserve paths whose decoded bytes are not valid UTF-8. Mirrors Node's
+/// `getPathFromURLPosix`: an encoded `/` (`%2f`/`%2F`) is rejected, but an
+/// encoded `\` is decoded through as an ordinary byte.
+fn decode_file_url_pathname_bytes_posix(pathname: &str) -> Vec<u8> {
     let bytes = pathname.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -130,14 +143,43 @@ fn decode_file_url_pathname_bytes(pathname: &str) -> Vec<u8> {
     out
 }
 
-fn decode_file_url_pathname(pathname: &str) -> String {
-    String::from_utf8_lossy(&decode_file_url_pathname_bytes(pathname)).into_owned()
+/// Percent-decode a Windows file-URL pathname to raw bytes, converting `/`
+/// separators to `\`. Mirrors Node's `getPathFromURLWin32`: encoded `/`
+/// (`%2f`) AND encoded `\` (`%5c`) are both rejected; the rest decodes through.
+fn decode_file_url_pathname_bytes_win32(pathname: &str) -> Vec<u8> {
+    let bytes = pathname.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h1 = bytes[i + 1];
+            let h2 = bytes[i + 2] | 0x20; // lowercase the second hex digit
+            if (h1 == b'2' && h2 == b'f') || (h1 == b'5' && h2 == b'c') {
+                throw_url_type_error_with_code(
+                    "File URL path must not include encoded \\ or / characters",
+                    "ERR_INVALID_FILE_URL_PATH",
+                );
+            }
+            if let (Some(hi), Some(lo)) = (hex_nibble(h1), hex_nibble(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        // Convert forward slashes to backslashes as Node does pre-decode.
+        out.push(if bytes[i] == b'/' { b'\\' } else { bytes[i] });
+        i += 1;
+    }
+    out
 }
 
 /// Shared `file:` URL → path parsing for both `fileURLToPath` (UTF-8 string)
 /// and `fileURLToPathBuffer` (raw bytes). Returns the decoded path bytes,
-/// throwing the same scheme/host/encoded-slash errors as Node.
-fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
+/// throwing the same scheme/host/encoded-slash errors as Node. When `windows`
+/// is true, applies Node's Win32 conversion (UNC hosts, drive-letter
+/// validation, `/`→`\`, encoded-`\` rejection) instead of the POSIX path
+/// (which still rejects non-empty/non-localhost hosts on darwin). #2975
+fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
     let url_string = if is_js_string_value(url_f64) {
         string_from_js_value(url_f64)
     } else if let Some(obj) = object_from_f64(url_f64) {
@@ -153,23 +195,50 @@ fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
         throw_url_type_error_with_code("The URL must be of scheme file", "ERR_INVALID_URL_SCHEME");
     };
 
-    let pathname = if let Some(authority_and_path) = after_scheme.strip_prefix("//") {
+    let (host, pathname) = if let Some(authority_and_path) = after_scheme.strip_prefix("//") {
         let path_start = authority_and_path
             .find('/')
             .unwrap_or(authority_and_path.len());
-        let host = &authority_and_path[..path_start];
+        (
+            &authority_and_path[..path_start],
+            &authority_and_path[path_start..],
+        )
+    } else {
+        ("", after_scheme)
+    };
+    let pathname = pathname.split(['?', '#']).next().unwrap_or_default();
+
+    if windows {
+        // Win32: a non-empty/non-localhost host is a UNC share `\\host\path`.
+        let mut decoded = decode_file_url_pathname_bytes_win32(pathname);
+        if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+            let mut out = b"\\\\".to_vec();
+            out.extend_from_slice(host.as_bytes());
+            out.extend_from_slice(&decoded);
+            return out;
+        }
+        // No host: pathname must be `/<drive-letter>:...`. Node validates the
+        // decoded form: position 1 is an ASCII letter, position 2 is `:`.
+        let letter = decoded.get(1).copied().unwrap_or(0) | 0x20;
+        let sep = decoded.get(2).copied().unwrap_or(0);
+        if !(b'a'..=b'z').contains(&letter) || sep != b':' {
+            throw_url_type_error_with_code(
+                "File URL path must be absolute",
+                "ERR_INVALID_FILE_URL_PATH",
+            );
+        }
+        // Strip the leading `\` (was `/`) so `\C:\x` → `C:\x`.
+        decoded.remove(0);
+        decoded
+    } else {
         if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
             throw_url_type_error_with_code(
                 "File URL host must be \"localhost\" or empty on darwin",
                 "ERR_INVALID_FILE_URL_HOST",
             );
         }
-        &authority_and_path[path_start..]
-    } else {
-        after_scheme
-    };
-    let pathname = pathname.split(['?', '#']).next().unwrap_or_default();
-    decode_file_url_pathname_bytes(pathname)
+        decode_file_url_pathname_bytes_posix(pathname)
+    }
 }
 
 /// Resolve a `node:module` "base" argument (file URL object/string or a
@@ -182,13 +251,17 @@ pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
     if is_js_string_value(base_f64) {
         let s = string_from_js_value(base_f64);
         if s.starts_with("file:") {
-            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+            return Some(
+                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, false)).into_owned(),
+            );
         }
         return Some(s);
     }
     if let Some(obj) = object_from_f64(base_f64) {
         if is_url_object_shape(obj) {
-            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+            return Some(
+                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, false)).into_owned(),
+            );
         }
     }
     None
@@ -196,10 +269,11 @@ pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
 
 /// Convert a file:// URL to a filesystem path
 /// Strips the "file://" prefix and percent-decodes the result
-/// js_url_file_url_to_path(url_f64: f64) -> f64 (NaN-boxed string)
+/// js_url_file_url_to_path(url_f64: f64, options_f64: f64) -> f64 (NaN-boxed string)
 #[no_mangle]
-pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
-    let decoded = String::from_utf8_lossy(&file_url_to_path_bytes(url_f64)).into_owned();
+pub extern "C" fn js_url_file_url_to_path(url_f64: f64, options_f64: f64) -> f64 {
+    let windows = options_windows_flag(options_f64);
+    let decoded = String::from_utf8_lossy(&file_url_to_path_bytes(url_f64, windows)).into_owned();
     create_string_f64(&decoded)
 }
 
@@ -208,10 +282,11 @@ pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
 /// `Buffer`, preserving percent-encoded sequences that are not valid UTF-8
 /// (where the string form would lossily substitute U+FFFD). Same scheme/host
 /// validation as `fileURLToPath`.
-/// js_url_file_url_to_path_buffer(url_f64: f64) -> f64 (NaN-boxed Buffer ptr)
+/// js_url_file_url_to_path_buffer(url_f64: f64, options_f64: f64) -> f64 (NaN-boxed Buffer ptr)
 #[no_mangle]
-pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64) -> f64 {
-    let bytes = file_url_to_path_bytes(url_f64);
+pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64, options_f64: f64) -> f64 {
+    let windows = options_windows_flag(options_f64);
+    let bytes = file_url_to_path_bytes(url_f64, windows);
     let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
     unsafe {
         (*buf).length = bytes.len() as u32;
@@ -226,27 +301,59 @@ pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64) -> f64 {
     crate::value::js_nanbox_pointer(buf as i64)
 }
 
-#[no_mangle]
-pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
-    if !is_js_string_value(path_f64) {
-        throw_invalid_url_arg(path_f64, false);
-    }
-    let path = get_string_content(path_f64);
-    let path = crate::path::resolve_posix_str(&path);
+/// Percent-encode a file-URL path component (after separator normalization),
+/// keeping the WHATWG path-safe set plus `/` and `:` (drive-letter colon).
+fn encode_file_url_path(path: &str) -> String {
     let mut encoded = String::new();
     for b in path.bytes() {
         match b {
-            b'/' => encoded.push('/'),
+            b'/' | b':' => encoded.push(b as char),
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 encoded.push(b as char)
             }
             _ => encoded.push_str(&format!("%{b:02X}")),
         }
     }
-    let href = if encoded.starts_with('/') {
-        format!("file://{}", encoded)
+    encoded
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f64 {
+    if !is_js_string_value(path_f64) {
+        throw_invalid_url_arg(path_f64, false);
+    }
+    let path = get_string_content(path_f64);
+    let windows = options_windows_flag(options_f64);
+
+    let href = if windows {
+        // Win32 (#2975). UNC paths (`\\host\share\...`) become
+        // `file://host/share/...`; everything else is a (drive-letter) path
+        // with `\` separators rewritten to `/`.
+        if let Some(unc) = path.strip_prefix("\\\\") {
+            // First segment after `\\` is the host; the remainder is the path.
+            let (host, rest) = match unc.find('\\') {
+                Some(idx) => (&unc[..idx], &unc[idx..]),
+                None => (unc, ""),
+            };
+            let rest_fwd = rest.replace('\\', "/");
+            format!("file://{}{}", host, encode_file_url_path(&rest_fwd))
+        } else {
+            let fwd = path.replace('\\', "/");
+            let encoded = encode_file_url_path(&fwd);
+            if encoded.starts_with('/') {
+                format!("file://{}", encoded)
+            } else {
+                format!("file:///{}", encoded)
+            }
+        }
     } else {
-        format!("file:///{}", encoded)
+        let resolved = crate::path::resolve_posix_str(&path);
+        let encoded = encode_file_url_path(&resolved);
+        if encoded.starts_with('/') {
+            format!("file://{}", encoded)
+        } else {
+            format!("file:///{}", encoded)
+        }
     };
     let obj = create_url_object(&href);
     crate::value::js_nanbox_pointer(obj as i64)
@@ -298,51 +405,110 @@ fn json_to_value(json: serde_json::Value) -> f64 {
     unsafe { f64::from_bits(crate::json::js_json_parse(ptr).bits()) }
 }
 
+/// `url.urlToHttpOptions(url)` (#2976). Mirrors Node's shape exactly:
+///
+/// ```js
+/// const options = {
+///   __proto__: null,
+///   ...url,                 // copy user-added enumerable own props first
+///   protocol, hostname, hash, search, pathname,
+///   path: `${pathname}${search}`, href,
+/// };
+/// if (port !== '') options.port = Number(port);
+/// if (username || password) options.auth = `${decode(username)}:${decode(password)}`;
+/// ```
+///
+/// Node throws `ERR_INVALID_ARG_TYPE` for non-object input rather than
+/// returning an empty object. `auth` is percent-decoded; `port` is numeric.
 #[no_mangle]
 pub extern "C" fn js_url_to_http_options(url_f64: f64) -> f64 {
-    let undef_f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
     let Some(obj) = object_from_f64(url_f64) else {
-        let empty = js_object_alloc(0, 0);
-        return crate::value::js_nanbox_pointer(empty as i64);
+        // Node: `if (url == null || typeof url !== 'object')` → ERR_INVALID_ARG_TYPE.
+        let message = format!(
+            "The \"url\" argument must be of type object. Received {}",
+            url_received(url_f64)
+        );
+        throw_url_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     };
+
+    // Standard URL component names. In Node these live on the URL prototype as
+    // getters, so the `...url` spread copies only *user-added* own props. Perry
+    // stores them as own fields, so we must skip them when replicating the
+    // spread — otherwise we'd duplicate them (out of order) ahead of the fixed set.
+    const URL_OWN: &[&str] = &[
+        "href",
+        "protocol",
+        "host",
+        "hostname",
+        "port",
+        "pathname",
+        "search",
+        "hash",
+        "origin",
+        "searchParams",
+        "username",
+        "password",
+    ];
+
     let protocol = object_prop_string(obj, "protocol");
     let hostname = object_prop_string(obj, "hostname");
-    let port_s = object_prop_string(obj, "port");
-    let pathname = object_prop_string(obj, "pathname");
+    let hash = object_prop_string(obj, "hash");
     let search = object_prop_string(obj, "search");
+    let pathname = object_prop_string(obj, "pathname");
+    let port_s = object_prop_string(obj, "port");
+    let href = object_prop_string(obj, "href");
     let username = object_prop_string(obj, "username");
     let password = object_prop_string(obj, "password");
     let path = format!("{}{}", pathname, search);
 
-    // Per Node, `auth` is undefined when no userinfo; `"user:"` when username
-    // is set but password is empty; `"user:pass"` otherwise. `port` is the
-    // numeric value when set, undefined when empty.
-    let has_userinfo = !username.is_empty() || !password.is_empty();
-    let auth_f64 = if !has_userinfo {
-        undef_f64
-    } else {
-        create_string_f64(&format!("{}:{}", username, password))
-    };
-    let port_f64 = match port_s.parse::<u32>() {
-        Ok(p) => p as f64,
-        Err(_) => undef_f64,
-    };
+    let obj_out = js_object_alloc(0, 0);
 
-    let field_count: u32 = 5;
-    let obj_out = js_object_alloc(0, field_count);
-    let mut keys = js_array_alloc(field_count);
-    keys = js_array_push_f64(keys, create_string_f64("protocol"));
-    keys = js_array_push_f64(keys, create_string_f64("hostname"));
-    keys = js_array_push_f64(keys, create_string_f64("port"));
-    keys = js_array_push_f64(keys, create_string_f64("path"));
-    keys = js_array_push_f64(keys, create_string_f64("auth"));
-    js_object_set_keys(obj_out, keys);
-    js_object_set_field_f64(obj_out, 0, create_string_f64(&protocol));
-    js_object_set_field_f64(obj_out, 1, create_string_f64(&hostname));
-    js_object_set_field_f64(obj_out, 2, port_f64);
-    js_object_set_field_f64(obj_out, 3, create_string_f64(&path));
-    js_object_set_field_f64(obj_out, 4, auth_f64);
+    // 1) Copy user-added enumerable own props (`...url`) first, in insertion
+    //    order, skipping the standard URL component names.
+    let keys = crate::object::js_object_keys(obj as *const ObjectHeader);
+    let len = unsafe { (*keys).length };
+    for i in 0..len {
+        let key_f = crate::array::js_array_get_f64(keys, i);
+        let key = get_string_content(key_f);
+        if URL_OWN.contains(&key.as_str()) {
+            continue;
+        }
+        let val = object_prop_f64(obj, &key);
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::js_object_set_field_by_name(obj_out, key_ptr, val);
+    }
+
+    // 2) Fixed fields, in Node's order.
+    set_named(obj_out, "protocol", create_string_f64(&protocol));
+    set_named(obj_out, "hostname", create_string_f64(&hostname));
+    set_named(obj_out, "hash", create_string_f64(&hash));
+    set_named(obj_out, "search", create_string_f64(&search));
+    set_named(obj_out, "pathname", create_string_f64(&pathname));
+    set_named(obj_out, "path", create_string_f64(&path));
+    set_named(obj_out, "href", create_string_f64(&href));
+
+    // 3) Optional numeric `port` when non-empty.
+    if !port_s.is_empty() {
+        if let Ok(p) = port_s.parse::<u32>() {
+            set_named(obj_out, "port", p as f64);
+        }
+    }
+
+    // 4) Optional decoded `auth` when userinfo present. Node uses
+    //    `decodeURIComponent` on each half (`u%20ser` → `u ser`, `p%40w` → `p@w`).
+    if !username.is_empty() || !password.is_empty() {
+        let auth = format!("{}:{}", url_decode(&username), url_decode(&password));
+        set_named(obj_out, "auth", create_string_f64(&auth));
+    }
+
     crate::value::js_nanbox_pointer(obj_out as i64)
+}
+
+/// Set an own property by name on a dynamically-grown object (no fixed key
+/// array). Used by `urlToHttpOptions` where the field set is variable.
+fn set_named(obj: *mut ObjectHeader, key: &str, value: f64) {
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key_ptr, value);
 }
 
 fn legacy_format_from_object(obj: *mut ObjectHeader) -> String {

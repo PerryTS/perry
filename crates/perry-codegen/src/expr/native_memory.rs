@@ -220,6 +220,7 @@ fn is_native_memory_typed_view(ty: Option<&HirType>) -> bool {
                     | "Uint16Array"
                     | "Int32Array"
                     | "Uint32Array"
+                    | "Float16Array"
                     | "Float32Array"
                     | "Float64Array"
             )
