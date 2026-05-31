@@ -509,6 +509,43 @@ pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorD
     ACCESSOR_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
 }
 
+/// #2766: resolve an accessor *getter* closure for `(value, key)` if one is
+/// installed (e.g. an object-literal `get x() {…}` or
+/// `Object.defineProperty(obj, k, { get })`). Returns the NaN-boxed getter
+/// closure bits, or `0` when no getter exists. Used by `Reflect.get(target,
+/// key, receiver)` so it can rebind the getter's `this` to the receiver before
+/// invoking it. Returns `None` (rather than reading the field) when there is no
+/// accessor at all, so the caller falls back to an ordinary field read.
+pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
+    if !ACCESSORS_IN_USE.with(|c| c.get()) {
+        return None;
+    }
+    let obj = unsafe { extract_obj_ptr(value) };
+    if obj.is_null() {
+        return None;
+    }
+    let key_str = crate::builtins::js_string_coerce(key);
+    if key_str.is_null() {
+        return None;
+    }
+    let name = unsafe {
+        let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key_str).byte_len as usize;
+        match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+            Ok(s) => s.to_string(),
+            Err(_) => return None,
+        }
+    };
+    let acc = get_accessor_descriptor(obj as usize, &name)?;
+    if acc.get != 0 {
+        Some(acc.get)
+    } else {
+        // Accessor exists but has no getter → reading yields undefined; signal
+        // that via 0 so the caller returns undefined rather than a field read.
+        Some(0)
+    }
+}
+
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     ACCESSORS_IN_USE.with(|c| c.set(true));

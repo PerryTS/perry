@@ -1353,14 +1353,14 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for AbortSignal.timeout(ms) static method call
+            // Check for AbortSignal static helpers: timeout / abort / any (#2582).
             if obj_ident.sym.as_ref() == "AbortSignal" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
-                    if method_name == "timeout" {
+                    if matches!(method_name, "timeout" | "abort" | "any") {
                         return Ok(Ok(Expr::StaticMethodCall {
                             class_name: "AbortSignal".to_string(),
-                            method_name: "timeout".to_string(),
+                            method_name: method_name.to_string(),
                             args,
                         }));
                     }

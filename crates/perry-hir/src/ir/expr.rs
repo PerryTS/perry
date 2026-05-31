@@ -749,10 +749,24 @@ pub enum Expr {
         source: Box<Expr>,
         dest: Box<Expr>,
     },
-    /// new TextDecoder() or new TextDecoder("utf-8") -> opaque handle
-    TextDecoderNew,
-    /// decoder.decode(buffer) -> string (UTF-8 decode)
-    TextDecoderDecode(Box<Expr>),
+    /// new TextDecoder(label?, { fatal?, ignoreBOM? }) -> opaque handle.
+    /// `label` is undefined for the no-arg form; `fatal`/`ignore_bom`
+    /// default to `false`.
+    TextDecoderNew {
+        label: Box<Expr>,
+        fatal: Box<Expr>,
+        ignore_bom: Box<Expr>,
+    },
+    /// decoder.decode(buffer) -> string. `decoder` carries the encoding
+    /// state (the lowered receiver handle); `input` is the bytes.
+    TextDecoderDecode {
+        decoder: Box<Expr>,
+        input: Box<Expr>,
+    },
+    /// decoder.encoding / .fatal / .ignoreBOM property reads.
+    TextDecoderEncoding(Box<Expr>),
+    TextDecoderFatal(Box<Expr>),
+    TextDecoderIgnoreBom(Box<Expr>),
 
     // URI encoding / decoding
     /// encodeURI(string) -> string
@@ -1879,6 +1893,13 @@ pub enum Expr {
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
 
+    /// `Iterator.from(iterable)` (#2874) — wrap any iterable/iterator in a lazy
+    /// iterator-helper object exposing `.map`/`.filter`/`.take`/`.drop`/
+    /// `.flatMap`/`.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`.
+    /// The helper methods themselves dispatch at runtime through
+    /// `js_native_call_method` (no dedicated HIR variant).
+    IteratorFrom(Box<Expr>),
+
     /// Tagged-template strings literal — codegen builds the cooked-strings
     /// array AND a parallel raw-strings array, registers the (cooked, raw)
     /// pair via `js_tagged_template_register_raw`, and returns the cooked
@@ -2097,6 +2118,9 @@ pub enum Expr {
     ReflectGet {
         target: Box<Expr>,
         key: Box<Expr>,
+        /// #2766: optional `receiver` argument (the `this` binding for accessor
+        /// getters). Lowering supplies `target` when the call omits it.
+        receiver: Box<Expr>,
     },
     ReflectSet {
         target: Box<Expr>,
@@ -2127,6 +2151,13 @@ pub enum Expr {
         descriptor: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
+    /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
+    /// (false when rejected), unlike `Object.setPrototypeOf` which returns the
+    /// object. Lowered separately so it can report failure / throw on bad args.
+    ReflectSetPrototypeOf {
+        target: Box<Expr>,
+        proto: Box<Expr>,
+    },
     // #2762: Reflect.isExtensible / Reflect.preventExtensions have
     // Reflect-specific semantics (boolean result, TypeError on non-object)
     // distinct from the Object.* helpers, so they use dedicated variants.

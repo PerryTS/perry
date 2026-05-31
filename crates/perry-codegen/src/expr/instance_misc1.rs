@@ -500,12 +500,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let result = blk.call(I64, fn_name, &[(I64, &h)]);
                     Ok(nanbox_string_inline(blk, &result))
                 }
-                PathWin32Method::BasenameExt
-                | PathWin32Method::Relative
-                | PathWin32Method::ResolveJoin => {
+                PathWin32Method::Relative => {
+                    // #2995: validate both operands are strings (throwing
+                    // ERR_INVALID_ARG_TYPE on a non-string) before computing
+                    // the relative path. Pass the NaN-boxed doubles so the
+                    // runtime can inspect their type.
+                    let blk = ctx.block();
+                    let result = blk.call(
+                        I64,
+                        "js_path_win32_relative_checked",
+                        &[(DOUBLE, &lowered[0]), (DOUBLE, &lowered[1])],
+                    );
+                    Ok(nanbox_string_inline(blk, &result))
+                }
+                PathWin32Method::BasenameExt | PathWin32Method::ResolveJoin => {
                     let fn_name = match method {
                         PathWin32Method::BasenameExt => "js_path_win32_basename_ext",
-                        PathWin32Method::Relative => "js_path_win32_relative",
                         PathWin32Method::ResolveJoin => "js_path_win32_resolve_join",
                         _ => unreachable!(),
                     };
@@ -567,7 +577,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             if args.is_empty() {
                 let blk = ctx.block();
-                let cb_handle = unbox_to_i64(blk, &cb_box);
+                // #3046: validate the callback (non-callable → Node's
+                // `ERR_INVALID_ARG_TYPE` "callback" message) before queueing.
+                // `js_timer_validate_callback` always reports the "callback"
+                // argument name and returns the closure handle; idx 3 selects
+                // its generic-callback wording branch.
+                let cb_handle = blk.call(
+                    I64,
+                    "js_timer_validate_callback",
+                    &[(DOUBLE, &cb_box), (I32, "3")],
+                );
                 blk.call_void("js_queue_next_tick", &[(I64, &cb_handle)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
@@ -585,7 +604,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ptr_reg, n, buf
             ));
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #3046: same callback validation on the trailing-args path.
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, "3")],
+            );
             blk.call_void(
                 "js_queue_next_tick_args",
                 &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
@@ -654,15 +678,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::PathRelative(from, to) => {
+            // #2995: validate both operands are strings before computing the
+            // relative path. The checked entry point inspects the NaN-boxed
+            // doubles and throws ERR_INVALID_ARG_TYPE for non-strings.
             let f_box = lower_expr(ctx, from)?;
             let t_box = lower_expr(ctx, to)?;
             let blk = ctx.block();
-            let f_handle = unbox_to_i64(blk, &f_box);
-            let t_handle = unbox_to_i64(blk, &t_box);
             let result = blk.call(
                 I64,
-                "js_path_relative",
-                &[(I64, &f_handle), (I64, &t_handle)],
+                "js_path_relative_checked",
+                &[(DOUBLE, &f_box), (DOUBLE, &t_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }

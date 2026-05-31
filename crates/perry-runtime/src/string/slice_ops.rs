@@ -292,6 +292,42 @@ pub extern "C" fn js_string_index_of_from(
     }
 }
 
+/// Convert a `position` argument (a NaN-boxed double) into an `i32` start
+/// index using JS `ToIntegerOrInfinity` + clamp semantics, as used by
+/// `String.prototype.includes(search, position)`:
+/// `NaN`/`-Infinity` → 0, `+Infinity` → `i32::MAX` (past the end → no match),
+/// otherwise truncate toward zero and saturate into `i32` range. This avoids
+/// LLVM `fptosi`'s undefined result on non-finite inputs and matches Node's
+/// behavior (`"ababa".includes("a", Infinity) === false`).
+#[no_mangle]
+pub extern "C" fn js_string_position_to_index(pos_f64: f64) -> i32 {
+    // The typed `includes` lowering passes a raw numeric double here.
+    let n = pos_f64;
+    if n.is_nan() {
+        return 0;
+    }
+    if n == f64::INFINITY {
+        return i32::MAX;
+    }
+    if n == f64::NEG_INFINITY {
+        return 0;
+    }
+    let truncated = n.trunc();
+    if truncated >= i32::MAX as f64 {
+        i32::MAX
+    } else if truncated <= i32::MIN as f64 {
+        i32::MIN
+    } else {
+        truncated as i32
+    }
+}
+
+// `#[used]` keepalive: `js_string_position_to_index` is reached only from
+// generated `.o`, so the auto-optimize whole-program bitcode pass would
+// otherwise dead-strip it.
+#[used]
+static KEEP_POSITION_TO_INDEX: extern "C" fn(f64) -> i32 = js_string_position_to_index;
+
 /// Find the last index of a substring (-1 if not found).
 /// Returns the UTF-16 code unit offset of the LAST occurrence, or -1 if not found.
 /// An empty needle returns the string's UTF-16 length.

@@ -327,7 +327,11 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 // `Array.from(s.values())` drive the iterator protocol.
                 let is_array_iterator = (*obj).class_id == ARRAY_ITERATOR_CLASS_ID
                     || (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
-                    || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID;
+                    || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID
+                    // #2874: lazy iterator-helper objects (`Iterator.from(x).map(f)`)
+                    // dispatch `.next()` via class id, so `[...it]` / `Array.from(it)`
+                    // must drive the iterator protocol.
+                    || (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID;
                 let is_iterable = is_array_iterator || {
                     let iter_sym = crate::symbol::well_known_symbol("iterator");
                     if iter_sym.is_null() {

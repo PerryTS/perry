@@ -443,7 +443,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::GlobalThisExpr
         // Path / encoding / OS leaf intrinsics
         | Expr::PathSep | Expr::PathDelimiter
-        | Expr::TextEncoderNew | Expr::TextDecoderNew
+        | Expr::TextEncoderNew
         | Expr::OsPlatform | Expr::OsArch | Expr::OsHostname | Expr::OsHomedir
         | Expr::OsTmpdir | Expr::OsTotalmem | Expr::OsFreemem | Expr::OsUptime
         | Expr::OsType | Expr::OsRelease | Expr::OsCpus | Expr::OsNetworkInterfaces

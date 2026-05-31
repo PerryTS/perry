@@ -65,7 +65,6 @@ where
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
         | Expr::CryptoRandomUUID
         | Expr::CryptoRandomUUIDv7
         | Expr::OsPlatform
@@ -196,7 +195,9 @@ where
         | Expr::Atob(v)
         | Expr::Btoa(v)
         | Expr::TextEncoderEncode(v)
-        | Expr::TextDecoderDecode(v)
+        | Expr::TextDecoderEncoding(v)
+        | Expr::TextDecoderFatal(v)
+        | Expr::TextDecoderIgnoreBom(v)
         | Expr::EncodeURI(v)
         | Expr::DecodeURI(v)
         | Expr::EncodeURIComponent(v)
@@ -233,6 +234,7 @@ where
         | Expr::StaticPluginResolve(v)
         | Expr::ArrayIsArray(v)
         | Expr::ArrayFrom(v)
+        | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
         | Expr::ForOfToArray(v)
@@ -531,6 +533,19 @@ where
         | Expr::Logical { left, right, .. } => {
             f(left);
             f(right);
+        }
+        Expr::TextDecoderNew {
+            label,
+            fatal,
+            ignore_bom,
+        } => {
+            f(label);
+            f(fatal);
+            f(ignore_bom);
+        }
+        Expr::TextDecoderDecode { decoder, input } => {
+            f(decoder);
+            f(input);
         }
         Expr::TextEncoderEncodeInto { source, dest } => {
             f(source);
@@ -1519,9 +1534,16 @@ where
                 f(a);
             }
         }
-        Expr::ReflectGet { target, key }
-        | Expr::ReflectHas { target, key }
-        | Expr::ReflectDelete { target, key } => {
+        Expr::ReflectGet {
+            target,
+            key,
+            receiver,
+        } => {
+            f(target);
+            f(key);
+            f(receiver);
+        }
+        Expr::ReflectHas { target, key } | Expr::ReflectDelete { target, key } => {
             f(target);
             f(key);
         }
@@ -1529,6 +1551,10 @@ where
             f(target);
             f(key);
             f(value);
+        }
+        Expr::ReflectSetPrototypeOf { target, proto } => {
+            f(target);
+            f(proto);
         }
         Expr::ReflectApply {
             func,

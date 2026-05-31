@@ -232,7 +232,7 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
-    let input = get_string_content(input_f64);
+    let input = string_from_header(js_url_coerce_string(input_f64));
     if input.chars().any(|c| c.is_ascii_whitespace()) {
         return create_string_f64("");
     }
@@ -242,7 +242,7 @@ pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
-    let input = get_string_content(input_f64);
+    let input = string_from_header(js_url_coerce_string(input_f64));
     if input.chars().any(|c| c.is_ascii_whitespace()) {
         return create_string_f64("");
     }
