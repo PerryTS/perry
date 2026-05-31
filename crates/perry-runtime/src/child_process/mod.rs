@@ -18,7 +18,8 @@ pub(crate) use v8_serde::{
     v8_class_deserializer_read_value, v8_class_serializer_new, v8_class_serializer_release,
     v8_class_serializer_write_double, v8_class_serializer_write_header,
     v8_class_serializer_write_raw_bytes, v8_class_serializer_write_uint32,
-    v8_class_serializer_write_uint64, v8_class_serializer_write_value, v8_deserialize, v8_serialize,
+    v8_class_serializer_write_uint64, v8_class_serializer_write_value, v8_deserialize,
+    v8_serialize,
 };
 
 use std::collections::HashMap;

@@ -611,6 +611,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_v8_noop_undefined", DOUBLE, &[]);
     module.declare_function("js_v8_is_building_snapshot", DOUBLE, &[]);
     module.declare_function("js_v8_namespace", DOUBLE, &[PTR, I64]);
+    module.declare_function("js_v8_throw_not_building_snapshot", DOUBLE, &[]);
+    module.declare_function("js_v8_promise_hook_register", DOUBLE, &[]);
     module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_available_memory", DOUBLE, &[]);
     module.declare_function("js_process_constrained_memory", DOUBLE, &[]);

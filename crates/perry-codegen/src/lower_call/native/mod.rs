@@ -198,7 +198,9 @@ pub(crate) fn lower_native_method_call(
             // callables returning `undefined` (Perry has no V8 engine to drive
             // real flag mutation or coverage capture). Args are evaluated for
             // side effects then ignored.
-            "setFlagsFromString" | "takeCoverage" | "stopCoverage"
+            "setFlagsFromString"
+            | "takeCoverage"
+            | "stopCoverage"
             | "setHeapSnapshotNearHeapLimit" => Some(("js_v8_noop_undefined", false)),
             _ => None,
         };
@@ -217,6 +219,30 @@ pub(crate) fn lower_native_method_call(
             }
             for extra in args {
                 let _ = lower_expr(ctx, extra)?;
+            }
+            return Ok(ctx.block().call(DOUBLE, fname, &[]));
+        }
+    }
+
+    // #3679: chained sub-namespace calls fold to a NativeMethodCall with a
+    // `class_name` (`v8.startupSnapshot.isBuildingSnapshot()`,
+    // `v8.promiseHooks.onInit(fn)`). Dispatch them statically.
+    if module == "v8" {
+        let v8_sub = match (class_name, method) {
+            (Some("startupSnapshot"), "isBuildingSnapshot") => Some("js_v8_is_building_snapshot"),
+            (
+                Some("startupSnapshot"),
+                "addSerializeCallback" | "addDeserializeCallback" | "setDeserializeMainFunction",
+            ) => Some("js_v8_throw_not_building_snapshot"),
+            (
+                Some("promiseHooks"),
+                "onInit" | "onBefore" | "onAfter" | "onSettled" | "createHook",
+            ) => Some("js_v8_promise_hook_register"),
+            _ => None,
+        };
+        if let Some(fname) = v8_sub {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
             }
             return Ok(ctx.block().call(DOUBLE, fname, &[]));
         }

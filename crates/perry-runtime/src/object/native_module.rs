@@ -1960,6 +1960,19 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "takeCoverage")
             | ("v8", "stopCoverage")
             | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3679: v8.startupSnapshot / v8.promiseHooks namespace methods read
+            // as callable values (`typeof v8.startupSnapshot.isBuildingSnapshot
+            // === "function"`). Invocation routes through
+            // dispatch_native_module_method on the sub-namespace tag.
+            | ("v8.startupSnapshot", "isBuildingSnapshot")
+            | ("v8.startupSnapshot", "addSerializeCallback")
+            | ("v8.startupSnapshot", "addDeserializeCallback")
+            | ("v8.startupSnapshot", "setDeserializeMainFunction")
+            | ("v8.promiseHooks", "onInit")
+            | ("v8.promiseHooks", "onBefore")
+            | ("v8.promiseHooks", "onAfter")
+            | ("v8.promiseHooks", "onSettled")
+            | ("v8.promiseHooks", "createHook")
     )
 }
 

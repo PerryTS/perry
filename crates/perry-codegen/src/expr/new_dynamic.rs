@@ -219,13 +219,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     let _ = lower_expr(ctx, a)?;
                                 }
                                 let is_default = property == "DefaultSerializer";
-                                let flag = crate::nanbox::double_literal(f64::from_bits(
-                                    if is_default {
+                                let flag =
+                                    crate::nanbox::double_literal(f64::from_bits(if is_default {
                                         0x7FFC_0000_0000_0004 // TAG_TRUE
                                     } else {
                                         crate::nanbox::TAG_UNDEFINED
-                                    },
-                                ));
+                                    }));
                                 return Ok(ctx.block().call(
                                     DOUBLE,
                                     "js_v8_serializer_new",

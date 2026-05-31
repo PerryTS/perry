@@ -55,6 +55,10 @@ static KEEP_V8_NOOP_UNDEFINED: extern "C" fn() -> f64 = js_v8_noop_undefined;
 static KEEP_V8_IS_BUILDING_SNAPSHOT: extern "C" fn() -> f64 = js_v8_is_building_snapshot;
 #[used]
 static KEEP_V8_NAMESPACE: extern "C" fn(*const u8, usize) -> f64 = js_v8_namespace;
+#[used]
+static KEEP_V8_THROW_NOT_BUILDING: extern "C" fn() -> f64 = js_v8_throw_not_building_snapshot;
+#[used]
+static KEEP_V8_PROMISE_HOOK_REGISTER: extern "C" fn() -> f64 = js_v8_promise_hook_register;
 
 const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
 
@@ -414,8 +418,10 @@ pub(crate) fn v8_deserializer_read_double(recv: f64) -> f64 {
 
 pub(crate) fn v8_deserializer_read_raw_bytes(recv: f64, len: f64) -> f64 {
     let n = as_u32(len) as usize;
-    let bytes =
-        crate::child_process::v8_class_deserializer_read_raw_bytes(v8_instance_id_from_value(recv), n);
+    let bytes = crate::child_process::v8_class_deserializer_read_raw_bytes(
+        v8_instance_id_from_value(recv),
+        n,
+    );
     bytes_to_buffer(&bytes)
 }
 
@@ -465,6 +471,25 @@ pub extern "C" fn js_v8_is_building_snapshot() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_v8_namespace(name_ptr: *const u8, name_len: usize) -> f64 {
     crate::object::js_create_native_module_namespace(name_ptr, name_len)
+}
+
+/// `v8.startupSnapshot.addSerializeCallback()` &c. outside a snapshot-building
+/// context — Node throws `ERR_NOT_BUILDING_SNAPSHOT`.
+#[no_mangle]
+pub extern "C" fn js_v8_throw_not_building_snapshot() -> f64 {
+    crate::fs::validate::throw_type_error_with_code(
+        "Operation not allowed when not building startup snapshot.",
+        "ERR_NOT_BUILDING_SNAPSHOT",
+    )
+}
+
+/// `v8.promiseHooks.onInit(fn)` &c. — Node returns a callable that removes the
+/// hook. We have no real promise-lifecycle hooks, so return a no-op callable so
+/// `const stop = onInit(fn); stop()` round-trips.
+#[no_mangle]
+pub extern "C" fn js_v8_promise_hook_register() -> f64 {
+    let c = crate::closure::js_closure_alloc_singleton(js_v8_noop_undefined as *const u8);
+    crate::value::js_nanbox_pointer(c as i64)
 }
 
 /// `(new v8.GCProfiler()).stop()` report object.

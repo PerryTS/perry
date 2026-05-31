@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2196 entries across 99 modules
+// Coverage: 2228 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3285,7 +3285,19 @@ declare module "uuid" {
 
 declare module "v8" {
   /** stdlib */
+  export class DefaultDeserializer { [key: string]: any; }
+  /** stdlib */
+  export class DefaultSerializer { [key: string]: any; }
+  /** stdlib */
+  export class Deserializer { [key: string]: any; }
+  /** stdlib */
   export class GCProfiler { [key: string]: any; }
+  /** stdlib */
+  export class Serializer { [key: string]: any; }
+  /** stdlib */
+  export const promiseHooks: any;
+  /** stdlib */
+  export const startupSnapshot: any;
   /** stdlib */
   export function cachedDataVersionTag(...args: any[]): any;
   /** stdlib */
@@ -3298,6 +3310,14 @@ declare module "v8" {
   export function getHeapStatistics(...args: any[]): any;
   /** stdlib */
   export function serialize(...args: any[]): any;
+  /** stdlib */
+  export function setFlagsFromString(...args: any[]): any;
+  /** stdlib */
+  export function setHeapSnapshotNearHeapLimit(...args: any[]): any;
+  /** stdlib */
+  export function stopCoverage(...args: any[]): any;
+  /** stdlib */
+  export function takeCoverage(...args: any[]): any;
 }
 
 declare module "validator" {
