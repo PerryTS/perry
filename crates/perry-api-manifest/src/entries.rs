@@ -2843,10 +2843,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "resourceUsage", false, None),
     method("process", "getActiveResourcesInfo", false, None),
     method("process", "hrtime", false, None),
-    // #3108 (Node process parity): source-map flag accessor + setter,
-    // dispatched as receiver-less methods via NATIVE_MODULE_TABLE.
-    method("process", "sourceMapsEnabled", false, None),
-    method("process", "setSourceMapsEnabled", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),
