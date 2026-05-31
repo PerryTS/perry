@@ -93,6 +93,8 @@ fn is_headers_method_name(name: &str) -> bool {
             | "has"
             | "keys"
             | "set"
+            | "Symbol.iterator"
+            | "@@iterator"
             | "values"
     )
 }

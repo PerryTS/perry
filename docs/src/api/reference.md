@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1994 entries across 94 modules.
+Total: 2055 entries across 95 modules.
 
 ## Modules
 
@@ -96,6 +96,7 @@ Total: 1994 entries across 94 modules.
 - [`util`](#util)
 - [`util/types`](#util-types)
 - [`uuid`](#uuid)
+- [`v8`](#v8)
 - [`validator`](#validator)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
@@ -833,32 +834,60 @@ Total: 1994 entries across 94 modules.
 ### Properties
 
 - `ADDRCONFIG`
+- `ADDRCONFIG`
+- `ADDRGETNETWORKPARAMS`
 - `ADDRGETNETWORKPARAMS`
 - `ALL`
+- `ALL`
+- `BADFAMILY`
 - `BADFAMILY`
 - `BADFLAGS`
+- `BADFLAGS`
+- `BADHINTS`
 - `BADHINTS`
 - `BADNAME`
+- `BADNAME`
+- `BADQUERY`
 - `BADQUERY`
 - `BADRESP`
+- `BADRESP`
+- `BADSTR`
 - `BADSTR`
 - `CANCELLED`
+- `CANCELLED`
+- `CONNREFUSED`
 - `CONNREFUSED`
 - `DESTRUCTION`
+- `DESTRUCTION`
+- `EOF`
 - `EOF`
 - `FILE`
+- `FILE`
+- `FORMERR`
 - `FORMERR`
 - `LOADIPHLPAPI`
+- `LOADIPHLPAPI`
+- `NODATA`
 - `NODATA`
 - `NOMEM`
+- `NOMEM`
+- `NONAME`
 - `NONAME`
 - `NOTFOUND`
+- `NOTFOUND`
+- `NOTIMP`
 - `NOTIMP`
 - `NOTINITIALIZED`
+- `NOTINITIALIZED`
+- `REFUSED`
 - `REFUSED`
 - `SERVFAIL`
+- `SERVFAIL`
+- `TIMEOUT`
 - `TIMEOUT`
 - `V4MAPPED`
+- `V4MAPPED`
+- `promises`
 
 ## `dns/promises`
 
@@ -892,6 +921,33 @@ Total: 1994 entries across 94 modules.
 - `reverse` — module
 - `setDefaultResultOrder` — module
 - `setServers` — module
+
+### Properties
+
+- `ADDRGETNETWORKPARAMS`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADNAME`
+- `BADQUERY`
+- `BADRESP`
+- `BADSTR`
+- `CANCELLED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `EOF`
+- `FILE`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NOMEM`
+- `NONAME`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `SERVFAIL`
+- `TIMEOUT`
 
 ## `dotenv`
 
@@ -2616,6 +2672,23 @@ Total: 1994 entries across 94 modules.
 - `v4` — module
 - `v7` — module
 - `validate` — module
+
+## `v8`
+
+### Classes
+
+- `GCProfiler`
+
+### Methods
+
+- `cachedDataVersionTag` — module
+- `deserialize` — module
+- `getHeapCodeStatistics` — module
+- `getHeapSpaceStatistics` — module
+- `getHeapStatistics` — module
+- `serialize` — module
+- `start` — instance *(class: `GCProfiler`)*
+- `stop` — instance *(class: `GCProfiler`)*
 
 ## `validator`
 

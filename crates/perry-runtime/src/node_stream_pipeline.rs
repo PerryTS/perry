@@ -488,9 +488,13 @@ pub(super) fn fail_collected_pipeline(stages: &[f64], callback: f64, err: f64) {
     }
 }
 
-pub(super) fn complete_collected_pipeline(callback: f64) {
+pub(super) fn complete_collected_pipeline(callback: f64, value: f64) {
     if is_callable_value(callback) {
-        call_listener_args(f64::from_bits(TAG_UNDEFINED), callback, &[]);
+        call_listener_args(
+            f64::from_bits(TAG_UNDEFINED),
+            callback,
+            &[f64::from_bits(TAG_UNDEFINED), value],
+        );
     }
 }
 
@@ -532,8 +536,10 @@ pub(super) fn run_collected_pipeline(
                             fail_collected_pipeline(stages, callback, err);
                             return last;
                         }
+                        complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
+                    } else {
+                        complete_collected_pipeline(callback, result);
                     }
-                    complete_collected_pipeline(callback);
                     return last;
                 }
                 Ok(result) => match collect_pipeline_chunks(result) {
@@ -558,7 +564,7 @@ pub(super) fn run_collected_pipeline(
                 return last;
             }
             if is_last {
-                complete_collected_pipeline(callback);
+                complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
                 return last;
             }
             match collect_pipeline_chunks(stage) {
@@ -577,13 +583,13 @@ pub(super) fn run_collected_pipeline(
                 }
             }
             if is_last {
-                complete_collected_pipeline(callback);
+                complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
                 return last;
             }
         }
     }
 
-    complete_collected_pipeline(callback);
+    complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
     last
 }
 

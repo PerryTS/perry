@@ -1433,7 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_promises_finished_resolves_for_clean_stub_stream() {
+    fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
         let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
         let end = get_object_property(stream, b"end").expect("stream.end should exist");
         let prev_this = crate::object::js_implicit_this_set(stream);
@@ -1441,8 +1441,17 @@ mod tests {
             let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
         }
         crate::object::js_implicit_this_set(prev_this);
+        let _ = crate::promise::js_promise_run_microtasks();
 
-        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"readable".as_ptr(), 8),
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
         let promise = promise_ptr(promise_value);
 
         assert_eq!(crate::promise::js_promise_state(promise), 1);
@@ -1572,14 +1581,19 @@ mod tests {
     }
 
     #[test]
-    fn stream_promises_finished_with_signal_resolves_for_ended_stub_stream() {
+    fn stream_promises_finished_with_signal_resolves_for_finished_writable_side_stub_stream() {
         let controller = crate::url::js_abort_controller_new();
         let signal = crate::url::js_abort_controller_signal(controller);
-        let opts = js_object_alloc(0, 1);
+        let opts = js_object_alloc(0, 2);
         js_object_set_field_by_name(
             opts,
             js_string_from_bytes(b"signal".as_ptr(), 6),
             boxed_ptr(signal as *const u8),
+        );
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"readable".as_ptr(), 8),
+            f64::from_bits(crate::value::TAG_FALSE),
         );
         let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
         let end = get_object_property(stream, b"end").expect("stream.end should exist");
@@ -1588,6 +1602,7 @@ mod tests {
             let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
         }
         crate::object::js_implicit_this_set(prev_this);
+        let _ = crate::promise::js_promise_run_microtasks();
 
         let promise_value =
             thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));

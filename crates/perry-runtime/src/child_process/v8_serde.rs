@@ -400,7 +400,7 @@ impl Serializer {
 }
 
 /// Serialize a JS value to a V8 structured-clone payload (with header).
-pub(super) fn v8_serialize(value: f64) -> Vec<u8> {
+pub(crate) fn v8_serialize(value: f64) -> Vec<u8> {
     let _gc = GcSuppressGuard::new();
     let mut ser = Serializer::new();
     ser.write_header();
@@ -658,7 +658,7 @@ impl<'a> Deserializer<'a> {
 }
 
 /// Deserialize a V8 structured-clone payload (header optional) to a JS value.
-pub(super) fn v8_deserialize(buf: &[u8]) -> f64 {
+pub(crate) fn v8_deserialize(buf: &[u8]) -> f64 {
     let _gc = GcSuppressGuard::new();
     let mut de = Deserializer::new(buf);
     de.read_header();
