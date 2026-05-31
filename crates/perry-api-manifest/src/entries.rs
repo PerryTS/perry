@@ -2663,6 +2663,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `WebCrypto*` HIR variant. Listing `subtle` here flips the strict
     // strict-API gate (#463) so unimported `crypto.subtle` reads inside
     // an import-style binding don't silently return undefined.
+    property("crypto", "webcrypto"),
     property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
     property("os", "default"),

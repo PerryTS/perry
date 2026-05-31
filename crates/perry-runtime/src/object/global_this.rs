@@ -148,6 +148,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "URLSearchParams",
     "AbortController",
     "AbortSignal",
+    "Crypto",
+    "CryptoKey",
+    "SubtleCrypto",
     "FormData",
     "Blob",
     "File",
@@ -1052,6 +1055,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "length".to_string(),
             super::PropertyAttrs::new(false, false, true),
         );
+        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
@@ -1078,6 +1082,19 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             populate_builtin_prototype_methods(name, proto_obj);
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+            }
+            if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+                let constructor = "constructor";
+                let constructor_key = crate::string::js_string_from_bytes(
+                    constructor.as_ptr(),
+                    constructor.len() as u32,
+                );
+                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    constructor.to_string(),
+                    super::PropertyAttrs::new(true, false, true),
+                );
             }
             // #2145: link per-kind typed-array constructors into the
             // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
@@ -1210,6 +1227,15 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let value = super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton, key, value);
+    }
+    // WebCrypto global — Node exposes `globalThis.crypto` as the same
+    // singleton as `require("node:crypto").webcrypto`, not the full
+    // node:crypto module namespace.
+    {
+        let cname = b"crypto";
+        let ckey = crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);
+        let cval = super::native_module::webcrypto_namespace();
+        js_object_set_field_by_name(singleton, ckey, cval);
     }
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.

@@ -859,6 +859,8 @@ declare module "crypto" {
   /** stdlib */
   export const subtle: any;
   /** stdlib */
+  export const webcrypto: any;
+  /** stdlib */
   export function createCipheriv(...args: any[]): any;
   /** stdlib */
   export function createDecipheriv(...args: any[]): any;

@@ -568,6 +568,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("crypto", "randomFillSync") if args_len >= 1 => {
             crypto_random_fill_sync_dispatch(arg(0), arg(1), arg(2))
         }
+        ("crypto.webcrypto", "getRandomValues") if args_len >= 1 => {
+            let undefined = f64::from_bits(JSValue::undefined().bits());
+            crypto_random_fill_sync_dispatch(arg(0), undefined, undefined)
+        }
 
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
@@ -1544,7 +1548,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // registers at startup via `js_set_native_crypto_dispatch`. Null when
         // stdlib isn't linked (e.g. runtime-only tests) → undefined. The
         // `randomFillSync` arm above is handled inline and never reaches here.
-        ("crypto", _) => {
+        ("crypto" | "crypto.webcrypto", _) => {
             let ptr =
                 crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
             if ptr.is_null() {

@@ -81,6 +81,9 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "AbortController"
             | "AbortSignal"
             | "EventTarget"
+            | "Crypto"
+            | "CryptoKey"
+            | "SubtleCrypto"
             | "FormData"
             | "Blob"
             | "File"
@@ -105,6 +108,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Buffer"
             | "process"
             | "console"
+            | "crypto"
             // #2905: standard global helper functions used as bare values
             // (`const p = parseInt`). Bare CALLS (`parseInt(x)`) are picked
             // off earlier by `try_global_builtins` → `Expr::ParseInt`/etc., so
