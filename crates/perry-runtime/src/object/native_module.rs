@@ -409,6 +409,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"deprecate",
             b"format",
             b"formatWithOptions",
+            b"getCallSites",
             b"getSystemErrorMap",
             b"getSystemErrorName",
             b"getSystemErrorMessage",
@@ -420,6 +421,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"stripVTControlCharacters",
             b"styleText",
             b"toUSVString",
+            b"setTraceSigInt",
             b"types",
             b"parseArgs",
             b"TextDecoder",
@@ -450,7 +452,13 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
-        "assert/strict" | "constants" | "util" | "util.types" | "path.posix" | "path.win32"
+        "assert/strict"
+            | "constants"
+            | "process"
+            | "util"
+            | "util.types"
+            | "path.posix"
+            | "path.win32"
     )
 }
 
@@ -627,6 +635,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
+        ("dns" | "dns/promises", "Resolver") => Some(0),
         _ => None,
     }
 }
@@ -896,60 +905,8 @@ pub(crate) fn util_debuglog_logger_value() -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn fn_value(func_ptr: *const u8, name: &str) -> f64 {
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, name);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
-    let (packed, count) = if name == "WriteStream" {
-        (b"constructor\0hasColors\0getColorDepth\0".as_ptr(), 3)
-    } else {
-        (b"constructor\0".as_ptr(), 1)
-    };
-    let packed_len = if name == "WriteStream" {
-        b"constructor\0hasColors\0getColorDepth\0".len()
-    } else {
-        b"constructor\0".len()
-    };
-    let shape_id = if name == "WriteStream" {
-        0x7FFF_FF32
-    } else {
-        0x7FFF_FF31
-    };
-    let proto = js_object_alloc_with_shape(shape_id, count, packed, packed_len as u32);
-    js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
-    if name == "WriteStream" {
-        js_object_set_field(
-            proto,
-            1,
-            JSValue::from_bits(
-                fn_value(
-                    crate::tty::js_tty_write_stream_has_colors as *const u8,
-                    "hasColors",
-                )
-                .to_bits(),
-            ),
-        );
-        js_object_set_field(
-            proto,
-            2,
-            JSValue::from_bits(
-                fn_value(
-                    crate::tty::js_tty_write_stream_get_color_depth as *const u8,
-                    "getColorDepth",
-                )
-                .to_bits(),
-            ),
-        );
-    }
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    crate::closure::closure_set_dynamic_prop(
-        (constructor_value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
-        "prototype",
-        proto_value,
-    );
+    crate::tty::attach_tty_constructor_prototype(constructor_value, name);
 }
 
 pub(crate) unsafe fn bound_native_callable_module_and_method(
@@ -1070,6 +1027,35 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
     {
         return true;
     }
+    if matches!(module, "dns" | "dns/promises")
+        && matches!(
+            prop,
+            "lookup"
+                | "lookupService"
+                | "resolve"
+                | "resolve4"
+                | "resolve6"
+                | "resolveAny"
+                | "resolveCaa"
+                | "resolveCname"
+                | "resolveMx"
+                | "resolveNaptr"
+                | "resolveNs"
+                | "resolvePtr"
+                | "resolveSoa"
+                | "resolveSrv"
+                | "resolveTlsa"
+                | "resolveTxt"
+                | "reverse"
+                | "getServers"
+                | "setServers"
+                | "setDefaultResultOrder"
+                | "getDefaultResultOrder"
+                | "Resolver"
+        )
+    {
+        return true;
+    }
 
     matches!(
         (module, prop),
@@ -1091,6 +1077,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("dgram", "createSocket")
+            | ("dgram", "Socket")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
@@ -1418,6 +1406,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "aborted")
             | ("util", "debuglog")
+            | ("util", "getCallSites")
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
             | ("util", "getSystemErrorMap")
@@ -1434,6 +1423,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "stripVTControlCharacters")
             | ("util", "styleText")
             | ("util", "toUSVString")
+            | ("util", "setTraceSigInt")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")
@@ -2540,6 +2530,39 @@ pub(crate) unsafe fn get_native_module_constant(
         })
     };
 
+    let dns_const = |prop: &str| -> Option<f64> {
+        Some(match prop {
+            "ADDRCONFIG" => 1024.0,
+            "V4MAPPED" => 2048.0,
+            "ALL" => 256.0,
+            "NODATA" => str_val("ENODATA"),
+            "FORMERR" => str_val("EFORMERR"),
+            "SERVFAIL" => str_val("ESERVFAIL"),
+            "NOTFOUND" => str_val("ENOTFOUND"),
+            "NOTIMP" => str_val("ENOTIMP"),
+            "REFUSED" => str_val("EREFUSED"),
+            "BADQUERY" => str_val("EBADQUERY"),
+            "BADNAME" => str_val("EBADNAME"),
+            "BADFAMILY" => str_val("EBADFAMILY"),
+            "BADRESP" => str_val("EBADRESP"),
+            "CONNREFUSED" => str_val("ECONNREFUSED"),
+            "TIMEOUT" => str_val("ETIMEOUT"),
+            "EOF" => str_val("EOF"),
+            "FILE" => str_val("EFILE"),
+            "NOMEM" => str_val("ENOMEM"),
+            "DESTRUCTION" => str_val("EDESTRUCTION"),
+            "BADSTR" => str_val("EBADSTR"),
+            "BADFLAGS" => str_val("EBADFLAGS"),
+            "NONAME" => str_val("ENONAME"),
+            "BADHINTS" => str_val("EBADHINTS"),
+            "NOTINITIALIZED" => str_val("ENOTINITIALIZED"),
+            "LOADIPHLPAPI" => str_val("ELOADIPHLPAPI"),
+            "ADDRGETNETWORKPARAMS" => str_val("EADDRGETNETWORKPARAMS"),
+            "CANCELLED" => str_val("ECANCELLED"),
+            _ => return None,
+        })
+    };
+
     match module_name {
         // node:punycode (deprecated, #2513) — the bundled punycode.js version
         // and the `ucs2` code-point helper sub-namespace (#2607).
@@ -2735,6 +2758,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
             _ => None,
         },
+        "test" => crate::node_test::property(property),
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(unsafe {
@@ -2824,6 +2848,7 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "http2.constants" => http2_const(property),
+        "dns" => dns_const(property),
         // node:cluster — all property reads are static constants on the
         // primary process. The test fixture only exercises shape, never
         // forks a worker; the `fork` / `disconnect` / `setupPrimary` /

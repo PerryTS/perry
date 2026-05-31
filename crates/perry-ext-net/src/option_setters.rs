@@ -57,6 +57,15 @@ pub extern "C" fn js_net_socket_noop_self(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_net_socket_set_timeout(handle: i64, msecs: f64, _callback_i64: i64) -> i64 {
     unsafe { js_net_validate_socket_timeout(msecs) };
+    // #2549 — record the timeout so `socket.timeout` reflects it. Node clears
+    // (reports `undefined`) when the timeout is set to 0.
+    if let Some(s) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
+        s.timeout = if msecs > 0.0 {
+            Some(msecs as u64)
+        } else {
+            None
+        };
+    }
     handle
 }
 

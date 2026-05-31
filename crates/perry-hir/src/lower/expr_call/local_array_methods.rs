@@ -531,7 +531,27 @@ pub(super) fn try_local_array_methods(
                                 // Fall through to general method dispatch
                             }
                             "copyWithin" => {
-                                if args.len() >= 2 {
+                                // #2879: typed-array receivers must NOT fold to
+                                // `Expr::ArrayCopyWithin` — that path treats the
+                                // receiver as an `ArrayHeader` with boxed f64 slots,
+                                // which is invalid for `TypedArrayHeader` raw
+                                // storage. Fall through so they reach the runtime
+                                // `js_typed_array_copy_within` arm in
+                                // `js_native_call_method`.
+                                let is_typed_array = ctx
+                                    .lookup_local_type(&arr_name)
+                                    .map(|ty| {
+                                        matches!(ty, Type::Named(n) if matches!(
+                                            n.as_str(),
+                                            "Int8Array" | "Int16Array" | "Int32Array"
+                                            | "Uint8Array" | "Uint8ClampedArray"
+                                            | "Uint16Array" | "Uint32Array"
+                                            | "Float32Array" | "Float64Array"
+                                            | "BigInt64Array" | "BigUint64Array"
+                                        ))
+                                    })
+                                    .unwrap_or(false);
+                                if !is_typed_array && args.len() >= 2 {
                                     let mut args_iter = args.into_iter();
                                     let target = args_iter.next().unwrap();
                                     let start = args_iter.next().unwrap();
@@ -586,43 +606,36 @@ pub(super) fn try_local_array_methods(
                                     Some(Type::Union(variants)) => variants.iter().any(ty_is_array),
                                     _ => false,
                                 };
+                                // #2856: Map/Set `entries`/`keys`/`values`
+                                // are NOT folded to the Array-materializing
+                                // `Map*`/`SetValues` HIR variants here. Those
+                                // variants are reserved for the for-of /
+                                // spread fast paths (which iterate the
+                                // collection directly); a *value-level* call
+                                // must return a real iterator OBJECT. Letting
+                                // these fall through to general dispatch routes
+                                // them to codegen's `is_map_expr`/`is_set_expr`
+                                // branch → `js_*_iter_obj`. The `is_map`/
+                                // `is_set` flags are still computed above so
+                                // the array fold below doesn't claim them.
+                                let _ = (is_map, is_set);
                                 match method_name {
                                     "entries" => {
-                                        if is_map {
-                                            return Ok(Ok(Expr::MapEntries(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_known_array {
+                                        if !is_map && !is_set && is_known_array {
                                             return Ok(Ok(Expr::ArrayEntries(Box::new(
                                                 Expr::LocalGet(array_id),
                                             ))));
                                         }
                                     }
                                     "keys" => {
-                                        if is_map {
-                                            return Ok(Ok(Expr::MapKeys(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_known_array {
+                                        if !is_map && !is_set && is_known_array {
                                             return Ok(Ok(Expr::ArrayKeys(Box::new(
                                                 Expr::LocalGet(array_id),
                                             ))));
                                         }
                                     }
                                     "values" => {
-                                        if is_map {
-                                            return Ok(Ok(Expr::MapValues(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_set {
-                                            return Ok(Ok(Expr::SetValues(Box::new(
-                                                Expr::LocalGet(array_id),
-                                            ))));
-                                        }
-                                        if is_known_array {
+                                        if !is_map && !is_set && is_known_array {
                                             return Ok(Ok(Expr::ArrayValues(Box::new(
                                                 Expr::LocalGet(array_id),
                                             ))));
@@ -630,8 +643,9 @@ pub(super) fn try_local_array_methods(
                                     }
                                     _ => unreachable!(),
                                 }
-                                // Fall through: receiver type unknown — let general
-                                // dispatch (js_native_call_method) inspect at runtime.
+                                // Fall through: Map/Set or unknown receiver —
+                                // general dispatch (codegen Map/Set branch or
+                                // runtime `js_native_call_method`) handles it.
                             }
                             // Map methods (only apply to actual Map/Set types)
                             "set" => {
@@ -805,14 +819,16 @@ pub(super) fn try_local_array_methods(
                             .unwrap_or(false);
                         if is_text_decoder {
                             if method_name == "decode" {
-                                if !args.is_empty() {
-                                    return Ok(Ok(Expr::TextDecoderDecode(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
+                                let decoder = lower_expr(ctx, &member.obj)?;
+                                let input = if !args.is_empty() {
+                                    args.into_iter().next().unwrap()
                                 } else {
-                                    // decode() with no args returns empty string
-                                    return Ok(Ok(Expr::String(String::new())));
-                                }
+                                    Expr::Undefined
+                                };
+                                return Ok(Ok(Expr::TextDecoderDecode {
+                                    decoder: Box::new(decoder),
+                                    input: Box::new(input),
+                                }));
                             }
                         }
                     }

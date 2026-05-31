@@ -71,13 +71,19 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
         let translated = js_regex_to_rust(pattern);
         let case_insensitive = flags.contains('i');
         let multiline = flags.contains('m');
-        let regex_pattern = if case_insensitive || multiline {
+        // #2828: the `s` (dotAll) flag maps directly onto the Rust `regex`
+        // crate's `(?s)` inline mode, so `.` matches newlines.
+        let dot_all = flags.contains('s');
+        let regex_pattern = if case_insensitive || multiline || dot_all {
             let mut prefix = String::from("(?");
             if case_insensitive {
                 prefix.push('i');
             }
             if multiline {
                 prefix.push('m');
+            }
+            if dot_all {
+                prefix.push('s');
             }
             prefix.push(')');
             format!("{}{}", prefix, translated)
@@ -124,6 +130,13 @@ pub struct RegExpHeader {
     pub case_insensitive: bool,
     pub global: bool,
     pub multiline: bool,
+    /// #2828: additional observable flags. `sticky`/`unicode`/`has_indices`
+    /// are exposed via getters (matching behavior is scoped — see notes in
+    /// `js_regexp_new`); `dot_all` IS honored at compile time via `(?s)`.
+    pub sticky: bool,
+    pub dot_all: bool,
+    pub unicode: bool,
+    pub has_indices: bool,
     /// lastIndex for global/sticky regexes (byte offset into the string for stateful exec)
     pub last_index: u32,
 }
@@ -232,6 +245,53 @@ fn js_regex_to_rust(pattern: &str) -> String {
     result
 }
 
+/// Throw a `SyntaxError` with the given message and never return.
+fn throw_regexp_syntax_error(message: &str) -> ! {
+    let msg = js_string_from_str(message);
+    let err = crate::error::js_syntaxerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// #2829: validate a RegExp flags string the way the spec's
+/// `RegExpInitialize` does — each flag must be one of `dgimsuvy` and must not
+/// repeat. Returns the flags in canonical (sorted) order, or throws a
+/// `SyntaxError` mirroring Node's "Invalid flags supplied to RegExp
+/// constructor '<flags>'" message.
+///
+/// Note: the `v` flag (unicodeSets) is accepted as a valid flag for parity but
+/// its set-notation matching semantics are not implemented (the regex crate
+/// has no equivalent); it behaves like an ordinary unicode pattern.
+fn validate_and_canonicalize_flags(flags: &str) -> String {
+    // Spec order of the flag bits: d g i m s u v y.
+    const FLAG_ORDER: &[char] = &['d', 'g', 'i', 'm', 's', 'u', 'v', 'y'];
+    let mut seen = [false; 8];
+    for ch in flags.chars() {
+        match FLAG_ORDER.iter().position(|&f| f == ch) {
+            Some(idx) => {
+                if seen[idx] {
+                    throw_regexp_syntax_error(&format!(
+                        "Invalid flags supplied to RegExp constructor '{}'",
+                        flags
+                    ));
+                }
+                seen[idx] = true;
+            }
+            None => {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid flags supplied to RegExp constructor '{}'",
+                    flags
+                ));
+            }
+        }
+    }
+    FLAG_ORDER
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| seen[*i])
+        .map(|(_, c)| *c)
+        .collect()
+}
+
 /// Create a new RegExp from pattern and flags strings
 /// Returns a pointer to RegExpHeader
 ///
@@ -248,15 +308,41 @@ pub extern "C" fn js_regexp_new(
     } else {
         ""
     };
-    let flags_str = if is_valid_ptr(flags) {
+    let raw_flags_str = if is_valid_ptr(flags) {
         string_as_str(flags)
     } else {
         ""
     };
 
+    // #2829: reject duplicate/unknown flags (SyntaxError) and store the
+    // canonical sorted form so `.flags` reflects Node's ordering.
+    let canonical_flags = validate_and_canonicalize_flags(raw_flags_str);
+    let flags_str = canonical_flags.as_str();
+
     let case_insensitive = flags_str.contains('i');
     let global = flags_str.contains('g');
     let multiline = flags_str.contains('m');
+    let sticky = flags_str.contains('y');
+    let dot_all = flags_str.contains('s');
+    let unicode = flags_str.contains('u') || flags_str.contains('v');
+    let has_indices = flags_str.contains('d');
+
+    // #2829: reject invalid pattern syntax with a SyntaxError. A pattern the
+    // `regex` crate rejects is only a real error if `fancy-regex` (which
+    // covers the full JS feature set: lookbehind/lookahead/backreferences)
+    // ALSO rejects it — otherwise it is a valid JS pattern we route through
+    // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
+    // the regex crate fails but fancy-regex succeeds; check both here.
+    {
+        let translated = js_regex_to_rust(pattern_str);
+        if regex::Regex::new(&translated).is_err() && fancy_regex::Regex::new(&translated).is_err()
+        {
+            throw_regexp_syntax_error(&format!(
+                "Invalid regular expression: /{}/: invalid pattern",
+                pattern_str
+            ));
+        }
+    }
 
     // Get or compile the regex from the cache. The returned Arc is stored
     // in the cache indefinitely, so the raw pointer we extract stays valid
@@ -269,6 +355,11 @@ pub extern "C" fn js_regexp_new(
     // leaked every header, which was a 64-byte-per-call leak on top of the
     // (now-fixed) regex object leak.
     let header_size = std::mem::size_of::<RegExpHeader>();
+    // Materialize the canonical flags into a fresh StringHeader so that
+    // `flags_ptr`-keyed lookups (FANCY_CACHE, lookup_fancy_regex) and the
+    // GC-survivable source table all agree on the canonical form, and the
+    // header never holds the caller's possibly-temporary input flags.
+    let canonical_flags_ptr = js_string_from_str(flags_str);
     unsafe {
         let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_OBJECT);
         if raw.is_null() {
@@ -278,10 +369,14 @@ pub extern "C" fn js_regexp_new(
 
         (*ptr).regex_ptr = regex_ptr;
         (*ptr).pattern_ptr = pattern;
-        (*ptr).flags_ptr = flags;
+        (*ptr).flags_ptr = canonical_flags_ptr;
         (*ptr).case_insensitive = case_insensitive;
         (*ptr).global = global;
         (*ptr).multiline = multiline;
+        (*ptr).sticky = sticky;
+        (*ptr).dot_all = dot_all;
+        (*ptr).unicode = unicode;
+        (*ptr).has_indices = has_indices;
         (*ptr).last_index = 0;
 
         // Record the pointer so that js_string_split can detect
@@ -1287,9 +1382,15 @@ pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
     }
 }
 
-/// string.replace(regex, replacerFn) — replace with a callback function
-/// The callback receives (match, p1, p2, ..., offset, string)
-/// We simplify to (match, ...groups, offset) since the full string is rarely needed.
+/// string.replace(regex, replacerFn) — replace with a callback function.
+///
+/// The callback receives the full ECMAScript argument list (#2867):
+///   `(match, p1, p2, ..., offset, string, groups?)`
+/// i.e. the whole match, then every capture group (undefined for
+/// non-participating groups), then the 0-based offset of the match in the
+/// input, then the whole input string, and finally — only when the pattern
+/// has named capture groups — a `groups` object mapping each name to its
+/// captured substring.
 #[no_mangle]
 pub extern "C" fn js_string_replace_regex_fn(
     s: *const StringHeader,
@@ -1329,47 +1430,81 @@ pub extern "C" fn js_string_replace_regex_fn(
             }
         };
 
+        // Does the pattern declare any named capture groups? If so we pass a
+        // trailing `groups` object to the callback (matching Node). Computed
+        // once outside the match loop.
+        let has_named_groups = regex.capture_names().any(|n| n.is_some());
+
         for caps in &captures_iter {
             let full_match = caps.get(0).unwrap();
             result.push_str(&str_data[last_end..full_match.start()]);
 
-            // Calculate char offset for the offset parameter
+            // Calculate char offset for the offset parameter.
             let char_offset = str_data[..full_match.start()].chars().count();
 
-            // Call the closure with (match, ...groups, offset)
-            // We need to use the appropriate js_closure_callN function
-            let match_str = js_string_from_str(full_match.as_str());
-            let match_nanboxed = js_nanbox_string(match_str as i64);
+            // Build the full ECMAScript callback argument list:
+            //   (match, p1, ..., pN, offset, string, groups?)
+            // Root every NaN-boxed value as we go so a GC triggered by a
+            // subsequent string/object/array allocation (or by the callback
+            // dispatch itself) can't reclaim earlier arguments.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let mut arg_handles: Vec<crate::gc::RuntimeHandle<'_>> = Vec::new();
 
+            let match_nanboxed = js_nanbox_string(js_string_from_str(full_match.as_str()) as i64);
+            arg_handles.push(scope.root_nanbox_f64(match_nanboxed));
+
+            // Capture groups 1..=N (undefined for non-participating groups).
             let num_groups = caps.len() - 1; // exclude full match
-            let ret = if num_groups == 0 {
-                // Call with (match, offset)
-                let offset_f64 = char_offset as f64;
-                crate::closure::js_closure_call2(closure_ptr, match_nanboxed, offset_f64)
-            } else if num_groups == 1 {
-                // Call with (match, p1, offset)
-                let p1 = if let Some(m) = caps.get(1) {
+            for gi in 1..=num_groups {
+                let group_val = if let Some(m) = caps.get(gi) {
                     js_nanbox_string(js_string_from_str(m.as_str()) as i64)
                 } else {
                     f64::from_bits(TAG_UNDEFINED)
                 };
-                let offset_f64 = char_offset as f64;
-                crate::closure::js_closure_call3(closure_ptr, match_nanboxed, p1, offset_f64)
-            } else {
-                // For 2+ groups, call with (match, p1, p2, offset)
-                let p1 = if let Some(m) = caps.get(1) {
-                    js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-                } else {
-                    f64::from_bits(TAG_UNDEFINED)
-                };
-                let p2 = if let Some(m) = caps.get(2) {
-                    js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-                } else {
-                    f64::from_bits(TAG_UNDEFINED)
-                };
-                let offset_f64 = char_offset as f64;
-                crate::closure::js_closure_call4(closure_ptr, match_nanboxed, p1, p2, offset_f64)
-            };
+                arg_handles.push(scope.root_nanbox_f64(group_val));
+            }
+
+            // offset (number) then the whole input string.
+            arg_handles.push(scope.root_nanbox_f64(char_offset as f64));
+            let string_nanboxed = js_nanbox_string(js_string_from_str(str_data) as i64);
+            arg_handles.push(scope.root_nanbox_f64(string_nanboxed));
+
+            // groups object (only when the pattern has named captures).
+            if has_named_groups {
+                let groups_obj = crate::object::js_object_alloc(0, 0);
+                let groups_handle = scope.root_raw_mut_ptr(groups_obj);
+                let group_names: Vec<(&str, Option<regex::Match>)> = regex
+                    .capture_names()
+                    .enumerate()
+                    .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
+                    .collect();
+                for (name, m) in &group_names {
+                    let val = if let Some(m) = m {
+                        js_nanbox_string(js_string_from_str(m.as_str()) as i64)
+                    } else {
+                        f64::from_bits(TAG_UNDEFINED)
+                    };
+                    let key_ptr =
+                        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                    crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
+                }
+                // Re-root the (possibly-moved) groups object as a NaN-boxed
+                // pointer value so it lands in the uniform `arg_handles` list
+                // alongside the other NaN-boxed callback args.
+                let groups_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                let groups_value = crate::value::js_nanbox_pointer(groups_ptr as i64);
+                arg_handles.push(scope.root_nanbox_f64(groups_value));
+            }
+
+            let call_args: Vec<f64> = arg_handles.iter().map(|h| h.get_nanbox_f64()).collect();
+            let callback_value =
+                f64::from_bits(crate::value::JSValue::pointer(closure_ptr as *mut u8).bits());
+            let ret = crate::closure::js_native_call_value(
+                callback_value,
+                call_args.as_ptr(),
+                call_args.len(),
+            );
 
             // Convert the NaN-boxed return value to a string. Issue #833:
             // the previous tag-discriminated decode only handled STRING_TAG

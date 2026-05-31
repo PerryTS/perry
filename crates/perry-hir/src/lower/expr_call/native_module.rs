@@ -246,11 +246,16 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ProcessUmask(mask)));
                         }
                         "threadCpuUsage" => {
-                            // process.threadCpuUsage() — CPU time used by
-                            // the current thread, as { user, system } in
-                            // microseconds. Ignores any arguments (Node
-                            // accepts none).
-                            return Ok(Ok(Expr::ProcessThreadCpuUsage));
+                            // process.threadCpuUsage(prior?) — CPU time used
+                            // by the current thread, as { user, system } in
+                            // microseconds. If prior is given, returns the
+                            // validated delta.
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessThreadCpuUsage(prior)));
                         }
                         "availableMemory" => {
                             // process.availableMemory() — free system memory
@@ -564,6 +569,19 @@ pub(super) fn try_native_module_methods(
                     match method_name {
                         "from" => {
                             let data = args.first().cloned().unwrap_or(Expr::Undefined);
+                            // #2774: `Uint8Array.from(src, mapFn, thisArg?)` — run
+                            // the mapped materialization first (which validates
+                            // mapFn + binds thisArg), then truncate to Uint8.
+                            if let Some(map_fn) = args.get(1).cloned() {
+                                let this_arg = args.get(2).cloned().map(Box::new);
+                                return Ok(Ok(Expr::Uint8ArrayFrom(Box::new(
+                                    Expr::ArrayFromMapped {
+                                        iterable: Box::new(data),
+                                        map_fn: Box::new(map_fn),
+                                        this_arg,
+                                    },
+                                ))));
+                            }
                             return Ok(Ok(Expr::Uint8ArrayFrom(Box::new(data))));
                         }
                         // Issue #871 (part 2): `Uint8Array.of(a, b, c, ...)` —
@@ -896,9 +914,14 @@ pub(super) fn try_native_module_methods(
                             let mut it = args.into_iter();
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let key = it.next().unwrap_or(Expr::Undefined);
+                            // #2766: optional `receiver` (3rd arg) used as the
+                            // `this` binding for accessor getters. Default to
+                            // `undefined` — the runtime substitutes `target`.
+                            let receiver = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectGet {
                                 target: Box::new(target),
                                 key: Box::new(key),
+                                receiver: Box::new(receiver),
                             }));
                         }
                         "set" => {
@@ -1057,7 +1080,18 @@ pub(super) fn try_native_module_methods(
                                 property_key,
                             }));
                         }
-                        "setPrototypeOf" => return Ok(Ok(Expr::Bool(true))),
+                        "setPrototypeOf" => {
+                            // #2761: Reflect-specific — boolean result (false on
+                            // rejected change) + TypeError on bad args, distinct
+                            // from Object.setPrototypeOf (returns the object).
+                            let mut it = args.into_iter();
+                            let target = it.next().unwrap_or(Expr::Undefined);
+                            let proto = it.next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::ReflectSetPrototypeOf {
+                                target: Box::new(target),
+                                proto: Box::new(proto),
+                            }));
+                        }
                         "isExtensible" => {
                             // #2762: Reflect-specific semantics (boolean +
                             // TypeError on non-object), NOT Object.isExtensible.
@@ -1104,9 +1138,13 @@ pub(super) fn try_native_module_methods(
                             // variant so codegen can handle Map/Set/Array sources
                             // uniformly (materialize + js_array_map).
                             if let Some(map_fn) = args.get(1).cloned() {
+                                // #2773: carry the optional thisArg (3rd arg) so
+                                // a non-arrow mapFn can bind `this`.
+                                let this_arg = args.get(2).cloned().map(Box::new);
                                 return Ok(Ok(Expr::ArrayFromMapped {
                                     iterable: Box::new(value),
                                     map_fn: Box::new(map_fn),
+                                    this_arg,
                                 }));
                             }
                             // Check if the source is a generator call — use iterator protocol

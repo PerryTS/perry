@@ -19,8 +19,9 @@ pub mod url_class;
 
 pub use self::abort::{
     js_abort_controller_abort, js_abort_controller_abort_reason, js_abort_controller_new,
-    js_abort_controller_signal, js_abort_error_value, js_abort_signal_add_listener,
-    js_abort_signal_is_aborted, js_abort_signal_remove_listener, js_abort_signal_timeout,
+    js_abort_controller_signal, js_abort_error_value, js_abort_signal_abort,
+    js_abort_signal_add_listener, js_abort_signal_any, js_abort_signal_is_aborted,
+    js_abort_signal_remove_listener, js_abort_signal_throw_if_aborted, js_abort_signal_timeout,
 };
 pub use self::node_compat::{
     js_url_domain_to_ascii, js_url_domain_to_unicode, js_url_file_url_to_path,
@@ -33,7 +34,8 @@ pub use self::search_params::{
     js_url_search_params_get_all, js_url_search_params_has, js_url_search_params_has2,
     js_url_search_params_keys_arr, js_url_search_params_new, js_url_search_params_new_any,
     js_url_search_params_new_empty, js_url_search_params_set, js_url_search_params_size,
-    js_url_search_params_sort, js_url_search_params_to_string, js_url_search_params_values_arr,
+    js_url_search_params_sort, js_url_search_params_throw_missing_args,
+    js_url_search_params_to_string, js_url_search_params_values_arr,
 };
 // #1668: crate-internal detector so `Object.fromEntries`/spread can recognise
 // a URLSearchParams (a plain class_id-0 ObjectHeader) and pull its entries.
@@ -149,6 +151,41 @@ pub(crate) fn string_header_to_string(value: *mut crate::StringHeader) -> String
         let slice = std::slice::from_raw_parts(data_ptr, len);
         String::from_utf8_lossy(slice).into_owned()
     }
+}
+
+/// WHATWG host canonicalization via the `url` crate (#3056, #3059).
+///
+/// Perry's URL uses a custom hostname parser that runs only IDNA
+/// (`idna::domain_to_ascii`) — it never applies the WHATWG IPv4 / numeric
+/// host parser, so `123` stayed `"123"` instead of canonicalizing to the
+/// IPv4 address `"0.0.0.123"`, and `0x7f.1` stayed `"0x7f.1"` instead of
+/// `"127.0.0.1"`. We borrow the `url` crate's full WHATWG host parser by
+/// reparsing `http://<host>/` and reading back `host_str()`:
+///
+/// * numeric / IPv4-shorthand hosts → canonical dotted-quad IPv4
+///   (`"123"` → `"0.0.0.123"`, `"0x7f.1"` → `"127.0.0.1"`),
+/// * ordinary registrable hostnames → returned unchanged
+///   (`"example.com"` → `"example.com"`),
+/// * already-punycode IDN labels → returned unchanged
+///   (`"xn--mnchen-3ya.de"` → `"xn--mnchen-3ya.de"`),
+/// * hosts the WHATWG parser rejects (out-of-range numeric like
+///   `"999999999999"`, `"256.256.256.256"`) → `None`.
+///
+/// `host` is expected to already be a candidate host string (post-IDNA for
+/// the domain helpers, or the raw setter value). Callers decide what `None`
+/// means for them (the hostname setter leaves the host unchanged; the
+/// `domainTo*` helpers return `""`), matching Node.
+pub(crate) fn whatwg_canonicalize_host(host: &str) -> Option<String> {
+    url::Url::parse(&format!("http://{host}/"))
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+}
+
+/// True when `host` is a canonical dotted-quad IPv4 literal. Used by
+/// `domainToUnicode` to decide whether to return the canonicalized IPv4
+/// (Node yields the IP for numeric hosts) versus the Unicode IDN form.
+pub(crate) fn is_ipv4_host(host: &str) -> bool {
+    host.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
 #[cfg(test)]

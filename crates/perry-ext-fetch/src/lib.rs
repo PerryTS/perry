@@ -27,6 +27,14 @@ use perry_ffi::{
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+// Web Fetch constructor validation helpers (#2640 / #2643) — split out to
+// keep lib.rs under the 2,000-line lint gate.
+mod validation;
+use validation::{
+    is_forbidden_method, is_null_body_status, is_valid_status_text, normalize_method,
+    throw_range_error, throw_type_error,
+};
+
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -1070,13 +1078,34 @@ pub unsafe extern "C" fn js_response_new(
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
-    let body = read_str(body_ptr).unwrap_or_default().into_bytes();
+    let body_opt = read_str(body_ptr);
+    let body_present = body_opt.is_some();
+    let body = body_opt.unwrap_or_default().into_bytes();
+    // NaN/0.0 are the codegen "no status field" sentinels → default 200.
+    // Otherwise truncate toward zero + range-check 200..=599 (#2640).
     let status = if status.is_nan() || status == 0.0 {
         200
     } else {
-        status as u16
+        let truncated = status.trunc();
+        if !(200.0..=599.0).contains(&truncated) {
+            throw_range_error("init[\"status\"] must be in the range of 200 to 599, inclusive.");
+        }
+        truncated as u16
     };
-    let status_text = read_str(status_text_ptr).unwrap_or_else(|| "OK".to_string());
+    let status_text = match read_str(status_text_ptr) {
+        Some(s) => {
+            if !is_valid_status_text(&s) {
+                throw_type_error("Invalid statusText");
+            }
+            s
+        }
+        None => String::new(),
+    };
+    if body_present && is_null_body_status(status) {
+        throw_type_error(&format!(
+            "Response constructor: Invalid response status code {status}"
+        ));
+    }
     let headers_id = handle_id(headers_handle);
     let headers = if headers_id != 0 {
         HEADERS_HANDLES
@@ -1441,11 +1470,8 @@ pub extern "C" fn js_blob_stream(handle: f64) -> f64 {
 // ── Request ───────────────────────────────────────────────────────
 
 /// `new Request(url, init)` — stores url/method/body. The `headers_handle`
-/// arg matches perry-stdlib's 4-arg shape (declared in
-/// `crates/perry-codegen/src/runtime_decls.rs:1064`); it's currently ignored
-/// at the storage level (perry-ext-fetch's RequestData has no headers field
-/// yet), but accepting the arg keeps the ABI in sync with codegen so the f64
-/// arg lands in the right register.
+/// arg matches perry-stdlib's shape so the f64 arg lands in the right
+/// register (declared in `crates/perry-codegen/src/runtime_decls.rs:1064`).
 ///
 /// # Safety
 /// All string pointers must be null or Perry-runtime `StringHeader`s;
@@ -1468,10 +1494,17 @@ pub unsafe extern "C" fn js_request_new(
     signal: f64,
 ) -> f64 {
     let url = read_str(url_ptr).unwrap_or_default();
-    let method = read_str(method_ptr)
-        .unwrap_or_else(|| "GET".to_string())
-        .to_ascii_uppercase();
+    let raw_method = read_str(method_ptr).unwrap_or_else(|| "GET".to_string());
+    // Forbidden methods rejected case-insensitively; message keeps the
+    // caller's original casing (Node parity). #2643
+    if is_forbidden_method(&raw_method.to_ascii_uppercase()) {
+        throw_type_error(&format!("'{raw_method}' HTTP method is unsupported."));
+    }
+    let method = normalize_method(&raw_method);
     let body = read_str(body_ptr);
+    if body.is_some() && (method == "GET" || method == "HEAD") {
+        throw_type_error("Request with GET/HEAD method cannot have body.");
+    }
     let headers_id = handle_id(headers_handle);
     let headers = if headers_id != 0 {
         HEADERS_HANDLES

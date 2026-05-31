@@ -463,6 +463,25 @@ fn validate_listener_arg(value: f64, name: &str) -> i64 {
     })
 }
 
+/// Validate an EventEmitter instance-method listener argument (#3072).
+///
+/// `listener_bits` is the raw NaN-box bit pattern delivered by the codegen
+/// `NA_JSV` slot. Returns the closure pointer when callable, otherwise throws
+/// `TypeError [ERR_INVALID_ARG_TYPE]`. Delegates to the shared runtime
+/// validator so `on` / `once` / `addListener` / `prependListener` /
+/// `prependOnceListener` / `removeListener` / `off` all produce Node's exact
+/// error class, code and message.
+fn validate_event_listener(listener_bits: i64) -> i64 {
+    const NAME: &[u8] = b"listener";
+    unsafe {
+        perry_runtime::fs::validate::js_validate_event_listener(
+            listener_bits,
+            NAME.as_ptr(),
+            NAME.len() as u32,
+        )
+    }
+}
+
 unsafe fn options_signal_result(options: f64) -> Result<Option<f64>, f64> {
     let jsval = JSValue::from_bits(options.to_bits());
     if jsval.is_undefined() {
@@ -626,6 +645,20 @@ pub unsafe extern "C" fn js_event_emitter_new_with_options(options: f64) -> Hand
     register_handle(emitter)
 }
 
+// `#[used]` keepalive anchors for the EventEmitter constructor entry points.
+// `new EventEmitter()` codegen calls `js_event_emitter_new_with_options`
+// (builtin.rs) which is reachable only from generated `.o`; the default
+// `perry file.ts -o out` auto-optimize whole-program-LLVM rebuild internalizes
+// + dead-strips unreferenced `#[no_mangle]` symbols, so without an anchor the
+// link fails with `Undefined symbols: _js_event_emitter_new_with_options`
+// (see project_auto_optimize_keepalive_3320). Anchoring both constructor
+// shapes keeps `new EventEmitter()` compiling under auto-optimize.
+#[used]
+static KEEP_JS_EVENT_EMITTER_NEW: extern "C" fn() -> Handle = js_event_emitter_new;
+#[used]
+static KEEP_JS_EVENT_EMITTER_NEW_WITH_OPTIONS: unsafe extern "C" fn(f64) -> Handle =
+    js_event_emitter_new_with_options;
+
 pub fn is_event_emitter_handle(handle: Handle) -> bool {
     get_handle::<EventEmitterHandle>(handle).is_some()
 }
@@ -637,16 +670,16 @@ pub fn is_event_emitter_handle(handle: Handle) -> bool {
 pub unsafe extern "C" fn js_event_emitter_on(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    callback_ptr: i64,
+    listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
+    // #3072: throw TypeError [ERR_INVALID_ARG_TYPE] for a non-function
+    // listener before touching the event name (Node validates listener first).
+    let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return handle,
     };
-    if callback_ptr == 0 {
-        return handle;
-    }
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         emitter.add_listener(&event_name, callback_ptr, false, false);
     }
@@ -658,16 +691,14 @@ pub unsafe extern "C" fn js_event_emitter_on(
 pub unsafe extern "C" fn js_event_emitter_once(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    callback_ptr: i64,
+    listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
+    let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return handle,
     };
-    if callback_ptr == 0 {
-        return handle;
-    }
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         emitter.add_listener(&event_name, callback_ptr, true, false);
     }
@@ -679,16 +710,14 @@ pub unsafe extern "C" fn js_event_emitter_once(
 pub unsafe extern "C" fn js_event_emitter_prepend_listener(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    callback_ptr: i64,
+    listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
+    let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return handle,
     };
-    if callback_ptr == 0 {
-        return handle;
-    }
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         emitter.add_listener(&event_name, callback_ptr, false, true);
     }
@@ -700,16 +729,14 @@ pub unsafe extern "C" fn js_event_emitter_prepend_listener(
 pub unsafe extern "C" fn js_event_emitter_prepend_once_listener(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    callback_ptr: i64,
+    listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
+    let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return handle,
     };
-    if callback_ptr == 0 {
-        return handle;
-    }
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         emitter.add_listener(&event_name, callback_ptr, true, true);
     }
@@ -966,8 +993,12 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
 pub unsafe extern "C" fn js_event_emitter_remove_listener(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    callback_ptr: i64,
+    listener_bits: i64,
 ) -> Handle {
+    // #3072: `removeListener`/`off` also require a callable listener; Node
+    // throws TypeError [ERR_INVALID_ARG_TYPE] for non-functions before any
+    // table lookup.
+    let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return handle,

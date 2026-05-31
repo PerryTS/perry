@@ -117,6 +117,58 @@ pub extern "C" fn js_net_validate_socket_timeout(value: f64) {
     }
 }
 
+/// `net.setDefaultAutoSelectFamily(value)` accepts only booleans.
+#[no_mangle]
+pub extern "C" fn js_net_validate_default_auto_select_family(value: f64) -> i32 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_bool() {
+        let message = format!(
+            "The \"value\" argument must be of type boolean. Received {}",
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    if jv.as_bool() {
+        1
+    } else {
+        0
+    }
+}
+
+/// `net.setDefaultAutoSelectFamilyAttemptTimeout(value)` accepts an integer
+/// in `[1, 2147483647]`, then applies Node's effective 10ms minimum.
+#[no_mangle]
+pub extern "C" fn js_net_validate_default_auto_select_family_attempt_timeout(value: f64) -> i32 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !is_numeric(jv) {
+        let message = format!(
+            "The \"value\" argument must be of type number. Received {}",
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !(n.is_finite() && n.fract() == 0.0) {
+        let message = format!(
+            "The value of \"value\" is out of range. It must be an integer. Received {}",
+            format_received_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    if !(1.0..=2147483647.0).contains(&n) {
+        let message = format!(
+            "The value of \"value\" is out of range. It must be >= 1 && <= 2147483647. Received {}",
+            format_received_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    (n as i32).max(10)
+}
+
 /// `net.createServer(options?, connectionListener?)` — the first positional
 /// argument must be either a function (the connection listener) or an object
 /// (the options bag); `null`/`undefined` are accepted as "no options". A
