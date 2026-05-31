@@ -39,11 +39,13 @@ pub struct LoweringContext {
     /// Functions: name -> id
     pub(crate) functions: Vec<(String, FuncId)>,
     /// Function parameter defaults: func_id -> (defaults, param_local_ids)
-    /// Per-function param-default info used by the call-site fill pass:
+    /// Per-function param-default info used by the call-site padding pass:
     /// `(func_id, [Option<default> per param], [LocalId per param], Option<rest_param_index>, has_synthetic_arguments)`.
-    /// The rest-param index (if any) is the position of `...rest`; the fill
+    /// The rest-param index (if any) is the position of `...rest`; the padding
     /// loop must stop before it because rest params get bundled at runtime
-    /// from trailing positional args, not filled with `undefined`.
+    /// from trailing positional args, not filled with `undefined`. Missing
+    /// fixed params are padded with `undefined`; the callee body applies
+    /// default expressions inside the function boundary.
     /// `has_synthetic_arguments` is true when the trailing rest param was
     /// inserted by `append_synthetic_arguments_param` because the body
     /// references the magic `arguments` identifier — in that case the call
