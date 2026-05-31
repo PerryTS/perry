@@ -3220,6 +3220,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- fs (sync surface lowered to Expr::Fs* in expr_call.rs;
     //     async + stream + extra sync helpers route through runtime
     //     externs declared by perry-runtime/src/fs.rs). ---
+    method("fs", "_toUnixTimestamp", false, None),
     method("fs", "readFileSync", false, None),
     method("fs", "writeFileSync", false, None),
     method("fs", "appendFileSync", false, None),

@@ -803,6 +803,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("assert", "ifError") | ("assert/strict", "ifError") => js_assert_if_error(arg(0)),
 
         // ── fs module (args are NaN-boxed f64, booleans return as i32→f64) ──
+        ("fs", "_toUnixTimestamp") => crate::fs::js_fs_to_unix_timestamp(arg(0)),
         ("fs", "existsSync") => bool_to_f64(crate::fs::js_fs_exists_sync(arg(0))),
         ("fs", "readFileSync") => crate::fs::js_fs_read_file_dispatch(arg(0), arg(1)),
         ("fs", "writeFileSync") => bool_to_f64(crate::fs::js_fs_write_file_sync_options(
