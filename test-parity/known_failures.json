@@ -32,12 +32,6 @@
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Net test needs a TLS-capable echo server fixture; not available on CI. Environmental \u2014 needs a CI-side fixture."
   },
-  "test_parity_dgram": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:dgram` (UDP) surface not implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_dns": {
     "issue": "793",
     "added": "2026-05-15",
