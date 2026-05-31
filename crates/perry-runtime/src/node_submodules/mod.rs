@@ -968,7 +968,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
             }
             for (store, transform) in &mut state.stores {
                 visitor.visit_nanbox_f64_slot(store);
-                if let Some(t) = transform.as_mut() {
+                if let StoreTransform::Callable(t) = transform {
                     visitor.visit_nanbox_f64_slot(t);
                 }
             }
