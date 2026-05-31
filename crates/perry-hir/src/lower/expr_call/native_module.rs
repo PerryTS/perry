@@ -909,9 +909,14 @@ pub(super) fn try_native_module_methods(
                             let mut it = args.into_iter();
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let key = it.next().unwrap_or(Expr::Undefined);
+                            // #2766: optional `receiver` (3rd arg) used as the
+                            // `this` binding for accessor getters. Default to
+                            // `undefined` — the runtime substitutes `target`.
+                            let receiver = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectGet {
                                 target: Box::new(target),
                                 key: Box::new(key),
+                                receiver: Box::new(receiver),
                             }));
                         }
                         "set" => {
@@ -1070,7 +1075,18 @@ pub(super) fn try_native_module_methods(
                                 property_key,
                             }));
                         }
-                        "setPrototypeOf" => return Ok(Ok(Expr::Bool(true))),
+                        "setPrototypeOf" => {
+                            // #2761: Reflect-specific — boolean result (false on
+                            // rejected change) + TypeError on bad args, distinct
+                            // from Object.setPrototypeOf (returns the object).
+                            let mut it = args.into_iter();
+                            let target = it.next().unwrap_or(Expr::Undefined);
+                            let proto = it.next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::ReflectSetPrototypeOf {
+                                target: Box::new(target),
+                                proto: Box::new(proto),
+                            }));
+                        }
                         "isExtensible" => {
                             // #2762: Reflect-specific semantics (boolean +
                             // TypeError on non-object), NOT Object.isExtensible.

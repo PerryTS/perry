@@ -2097,6 +2097,9 @@ pub enum Expr {
     ReflectGet {
         target: Box<Expr>,
         key: Box<Expr>,
+        /// #2766: optional `receiver` argument (the `this` binding for accessor
+        /// getters). Lowering supplies `target` when the call omits it.
+        receiver: Box<Expr>,
     },
     ReflectSet {
         target: Box<Expr>,
@@ -2127,6 +2130,13 @@ pub enum Expr {
         descriptor: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
+    /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
+    /// (false when rejected), unlike `Object.setPrototypeOf` which returns the
+    /// object. Lowered separately so it can report failure / throw on bad args.
+    ReflectSetPrototypeOf {
+        target: Box<Expr>,
+        proto: Box<Expr>,
+    },
     // #2762: Reflect.isExtensible / Reflect.preventExtensions have
     // Reflect-specific semantics (boolean result, TypeError on non-object)
     // distinct from the Object.* helpers, so they use dedicated variants.
