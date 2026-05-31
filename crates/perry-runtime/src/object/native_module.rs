@@ -766,6 +766,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             )
         };
     }
+    if module_name == "dns" && property_name == "promises" {
+        crate::dns::dns_promises_init_servers_from_callback_if_unset();
+        let submodule = "dns/promises";
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    }
 
     if module_name == "util" && property_name == "debug" {
         return bound_native_callable_export_value("util", "debuglog");
@@ -3043,7 +3048,10 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "dns" => match property {
-            "promises" => Some(create_sub_namespace("dns/promises")),
+            "promises" => {
+                crate::dns::dns_promises_init_servers_from_callback_if_unset();
+                Some(create_sub_namespace("dns/promises"))
+            }
             _ => dns_lookup_flag_constant(property)
                 .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
         },

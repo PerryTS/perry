@@ -1389,6 +1389,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
 
+        // ── node:dns / node:dns/promises configuration ──
+        ("dns", "getServers") => crate::dns::dns_get_servers_value(),
+        ("dns", "setServers") => crate::dns::dns_set_servers_value(arg(0)),
+        ("dns/promises", "getServers") => crate::dns::dns_promises_get_servers_value(),
+        ("dns/promises", "setServers") => crate::dns::dns_promises_set_servers_value(arg(0)),
+        ("dns" | "dns/promises", "getDefaultResultOrder") => {
+            crate::dns::dns_get_default_result_order_value()
+        }
+        ("dns" | "dns/promises", "setDefaultResultOrder") => {
+            crate::dns::dns_set_default_result_order_value(arg(0))
+        }
+
         // #2130: captured-then-called child_process methods (`const spawn =
         // require('child_process').spawn; spawn(...)`, Node's canonical test
         // idiom). The bound-method closure produced by `cp.spawn` (and the
