@@ -1510,7 +1510,7 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
 /// undefined) for methods we don't have a dedicated thunk for; callers
 /// that want spec-accurate call behavior pass a custom thunk instead
 /// (`array_prototype_slice_thunk`, `object_prototype_to_string_thunk`).
-fn install_proto_method(
+pub(super) fn install_proto_method(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
     func_ptr: *const u8,
@@ -1644,6 +1644,12 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
 /// `try_builtin_prototype_method_apply_call`) — are unaffected.
 fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
+        return;
+    }
+    // #3662: Map/Set/WeakMap/WeakSet prototypes get brand-checking thunks
+    // (own module, to keep this file under the 2000-line gate).
+    if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         return;
     }
     match builtin_name {
@@ -1875,50 +1881,6 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         "TextDecoder" => {
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "Map" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("clear", 0),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("get", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("values", 0),
-                ],
-            );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "Set" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("add", 1),
-                    ("clear", 0),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("values", 0),
-                ],
-            );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "WeakMap" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[("delete", 1), ("get", 1), ("has", 1), ("set", 2)],
-            );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-        }
-        "WeakSet" => {
-            install_noop_proto_methods(proto_obj, &[("add", 1), ("delete", 1), ("has", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"

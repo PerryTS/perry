@@ -337,6 +337,32 @@ pub unsafe fn try_weak_method_dispatch(
     Some(result)
 }
 
+/// Return the reserved WeakMap/WeakSet `class_id` of `receiver` if it is one
+/// of those collections, else `None`. Backs the reflective
+/// `WeakMap.prototype.*` / `WeakSet.prototype.*` thunks so they can perform
+/// the spec brand check (`TypeError` on a non-Weak* receiver) before
+/// dispatching. The `GcHeader.obj_type == GC_TYPE_OBJECT` pre-filter ensures
+/// the pointer is an `ObjectHeader`-backed allocation before `class_id` is
+/// read, so a `Set`/`Map` pointer (different `obj_type`) or a primitive
+/// (`js_nanbox_get_pointer` yields 0) safely resolves to `None`.
+pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
+    let addr = js_nanbox_get_pointer(receiver) as usize;
+    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+        return None;
+    }
+    unsafe {
+        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+        let cid = (*(addr as *const ObjectHeader)).class_id;
+        if cid == CLASS_ID_WEAKMAP || cid == CLASS_ID_WEAKSET {
+            return Some(cid);
+        }
+    }
+    None
+}
+
 unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
     let entries_key = crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18);
     let entries_val = js_object_get_field_by_name(reg, entries_key);
