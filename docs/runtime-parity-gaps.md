@@ -23,9 +23,17 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:http` — 89
-- `node:zlib` — 79
+- `node:zlib` — 78
 - `node:stream` — 76
 - `node:worker_threads` — 60
+
+### Issue #3598 docs/API closure note
+
+Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node globals") was closed on 2026-05-31 as superseded by granular child issues. The submitted child PRs cover runtime slices for DOM events, WebSocket, URL/encoding/microtasks, fetch/body globals and methods, MessageChannel delivery, WebAssembly shape/metadata, WebCrypto, Navigator/URLPattern/encoding streams, structuredClone transfer options, and abort/weakref-related DOM globals.
+
+This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
+
+Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, BroadcastChannel delivery semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, full TextEncoderStream/TextDecoderStream transform behavior, and URLPattern behavior tied to the Node 22 target.
 
 ## Whole-module gaps
 
@@ -818,7 +826,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:zlib
 
-**Gap APIs: 79** · Already covered: 12
+**Gap APIs: 78** · Already covered: 13
 
 #### Missing from Perry
 
@@ -872,7 +880,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `Z_OK`
 - `Z_STREAM_END`
 - `Z_NEED_DICT`
-- … and 29 more (see `runtime-parity.md` for the full list)
+- … and 28 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -882,6 +890,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `zlib.Gzip` | `ffi:js_zlib_gzip` |
 | `zlib.Gunzip` | `ffi:js_zlib_gunzip` |
 | `zlib.Inflate` | `ffi:js_zlib_inflate` |
+| `zlib.codes` | `manifest:zlib.codes` |
 | `zlib.deflate(buffer[, options], callback)` | `ffi:js_zlib_deflate` |
 | `zlib.deflateSync(buffer[, options])` | `ffi:js_zlib_deflate_sync` |
 | `zlib.gzip(buffer[, options], callback)` | `manifest:zlib.gzip` |
@@ -1028,7 +1037,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:net
 
-**Gap APIs: 56** · Already covered: 22
+**Gap APIs: 55** · Already covered: 23
 
 #### Missing from Perry
 
@@ -1082,7 +1091,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `socket.connecting`
 - `socket.destroyed`
 - `socket.localAddress`
-- … and 6 more (see `runtime-parity.md` for the full list)
+- … and 5 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -1102,6 +1111,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `server.listen(path[, backlog][, callback])` | `ffi:js_net_server_listen` |
 | `server.listen([port[, host[, backlog]]][, callback])` | `ffi:js_net_server_listen` |
 | `new net.Socket([options])` | `manifest:net.Socket` |
+| `new net.Stream([options])` | `manifest:net.Stream` |
 | `socket.connect(options[, connectListener])` | `manifest:net.connect` |
 | … | 7 more covered APIs |
 
@@ -1945,12 +1955,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:timers
 
-**Gap APIs: 13** · Already covered: 4
+**Gap APIs: 11** · Already covered: 7
 
 #### Missing from Perry
 
-- `setImmediate(callback[, ...args])`
-- `clearImmediate(immediate)`
 - `immediate.ref()`
 - `immediate.unref()`
 - `immediate.hasRef()`
@@ -1967,8 +1975,11 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 | API | Coverage source |
 |-----|-----------------|
+| `setImmediate(callback[, ...args])` | `manifest:timers.setImmediate` |
 | `setInterval(callback[, delay[, ...args]])` | `ffi:js_interval_timer_*` |
 | `setTimeout(callback[, delay[, ...args]])` | `ffi:js_set_timeout` |
+| `clearImmediate(immediate)` | `manifest:timers.clearImmediate` |
+| `timers.promises` | `manifest:timers.promises` |
 | `clearInterval(timeout)` | `rt:js_interval_timer_*` |
 | `clearTimeout(timeout)` | `rt:js_timer_*` |
 
@@ -2040,6 +2051,8 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 Web-global coverage is determined heuristically — Perry implements many of these via dedicated `Expr::*` lowering (e.g. `Expr::FetchWithOptions`, `Expr::TextEncoderEncode`, `Expr::UrlNew`) and `js_*` FFI surfaces (Headers/Request/Response/Blob via perry-ext-fetch and perry-stdlib). The covered list below is curated; the gap list is everything else in the parity reference's Web / Global APIs section.
 
+The counts above are the last generated parity-gap counts on this branch. They were not manually decremented for #3598 draft PRs because those runtime changes are deliberately not stacked here. Regenerate this section after the child PRs land on `main` so the Web/global counts can move with the code that actually exposes the globals.
+
 ### Web globals — covered (sampled)
 
 | API | Coverage source |
@@ -2048,7 +2061,7 @@ Web-global coverage is determined heuristically — Perry implements many of the
 | `console` | `builtin` |
 | `performance` | `expr:PerformanceNow` |
 | `queueMicrotask(cb)` | `rt:promise microtask queue` |
-| `structuredClone(value, options?)` | `rt:js_structured_clone` |
+| `structuredClone(value, options?)` | `rt:js_structured_clone_with_options` |
 | `atob(b64)` | `expr:Atob` |
 | `btoa(str)` | `expr:Btoa` |
 | `fetch(input, init?)` | `expr:FetchWithOptions` |
@@ -2133,8 +2146,8 @@ Web-global coverage is determined heuristically — Perry implements many of the
 | `AbortSignal.timeout(ms)` | `ffi:js_abort_signal_timeout` |
 | `new TextEncoder()` | `expr:TextEncoderNew` |
 | `new TextDecoder(label?, options?)` | `expr:TextDecoderNew` |
-| `new MessageChannel()` | `partial via worker_threads` |
-| `new BroadcastChannel(name)` | `partial` |
+| `new MessageChannel()` | `rt:js_message_channel_new` |
+| `new BroadcastChannel(name)` | `rt:js_broadcast_channel_new` |
 | `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
 | `crypto.randomUUID()` | `expr:CryptoRandomUUID` |

@@ -292,6 +292,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         | ("http", "Agent")
                                         | ("https", "Agent")
                                         | ("dns" | "dns/promises", "Resolver")
+                                        | ("sqlite", "DatabaseSync")
                                 );
                                 if is_known_native_class {
                                     let (mod_for_class, cls_for_class) = if class_name == "Agent" {
@@ -681,6 +682,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                                 ("mysql2" | "mysql2/promise", "getConnection") => {
                                                     Some("PoolConnection")
                                                 }
+                                                ("better-sqlite3", "prepare") => Some("Statement"),
+                                                ("sqlite", "prepare") => Some("StatementSync"),
+                                                ("sqlite", "createSession") => Some("Session"),
                                                 _ => None,
                                             };
                                         if let Some(class_name) = returns_handle {

@@ -51,6 +51,7 @@ const existingDefaultDescriptor = Object.getOwnPropertyDescriptor(
   fsDefault,
   "readFileSync",
 );
+const openAsBlobDescriptor = Object.getOwnPropertyDescriptor(fs, "openAsBlob");
 console.log(
   "existing readFileSync export:",
   Object.keys(fs).includes("readFileSync"),
@@ -67,6 +68,15 @@ console.log(
   existingDefaultDescriptor?.enumerable,
   existingDefaultDescriptor?.configurable,
   typeof existingDefaultDescriptor?.value,
+);
+console.log(
+  "openAsBlob export:",
+  Object.keys(fs).includes("openAsBlob"),
+  Object.prototype.propertyIsEnumerable.call(fs, "openAsBlob"),
+  !!openAsBlobDescriptor,
+  openAsBlobDescriptor?.enumerable,
+  typeof openAsBlobDescriptor?.value,
+  fs.openAsBlob.length,
 );
 
 function descriptorKind(name: string) {

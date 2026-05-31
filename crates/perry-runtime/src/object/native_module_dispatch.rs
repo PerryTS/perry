@@ -138,6 +138,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
     let module_name = match module_name {
         "path/posix" => "path.posix",
         "path/win32" => "path.win32",
+        "async_hooks.default" => "async_hooks",
+        "os.default" => "os",
+        "path.default" => "path",
+        "querystring.default" => "querystring",
+        "url.default" => "url",
+        "util.default" => "util",
         _ => module_name,
     };
     // Helper: get arg N as f64
@@ -415,6 +421,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 0.0
             }
         }
+        ("buffer", "isAscii") => crate::buffer::js_buffer_is_ascii(arg(0)),
+        ("buffer", "isUtf8") => crate::buffer::js_buffer_is_utf8(arg(0)),
 
         // ── process EventEmitter API ──
         ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
@@ -867,6 +875,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("fs", "symlinkSync") => bool_to_f64(crate::fs::js_fs_symlink_sync(arg(0), arg(1))),
         ("fs", "readlinkSync") => crate::fs::js_fs_readlink_dispatch(arg(0), arg(1)),
         ("fs", "openSync") => crate::fs::js_fs_open_sync(arg(0), arg(1)),
+        ("fs", "openAsBlob") => crate::fs::js_fs_open_as_blob(arg(0), arg(1)),
         ("fs", "closeSync") => bool_to_f64(crate::fs::js_fs_close_sync(arg(0))),
         ("fs", "readSync") if args_len == 3 => {
             crate::fs::js_fs_read_sync_options(arg(0), arg(1), arg(2))
@@ -1574,6 +1583,22 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
                     std::mem::transmute(ptr);
                 dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
+        ("sqlite", _) => {
+            let ptr =
+                crate::value::JS_NATIVE_SQLITE_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: crate::value::JsNativeSqliteDispatchFn = std::mem::transmute(ptr);
+                dispatch(
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args_ptr,
+                    args_len,
+                    0,
+                )
             }
         }
         ("domain", "Domain" | "createDomain" | "create") => {

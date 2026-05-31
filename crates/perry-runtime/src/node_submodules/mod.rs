@@ -104,7 +104,7 @@ macro_rules! thunk {
     };
 }
 
-mod blob;
+pub(crate) mod blob;
 mod consumers;
 mod fs_promises;
 mod hono_jsx;
@@ -741,6 +741,11 @@ thread_local! {
     /// namespace object itself.
     static DEFAULT_OBJECT_SINGLETONS: RefCell<std::collections::HashMap<usize, *mut ObjectHeader>> =
         RefCell::new(std::collections::HashMap::new());
+
+    /// `node:timers/promises.scheduler` is a non-callable object with
+    /// function-valued `wait` and `yield` properties.
+    static TIMERS_PROMISES_SCHEDULER_OBJECT: RefCell<Option<*mut ObjectHeader>> =
+        const { RefCell::new(None) };
 }
 
 // We also need a process-wide "any singleton allocated?" flag so the
@@ -807,9 +812,40 @@ fn fs_constants_namespace_value() -> f64 {
     }
 }
 
+fn timers_promises_scheduler_value() -> f64 {
+    TIMERS_PROMISES_SCHEDULER_OBJECT.with(|slot| {
+        if let Some(cached) = *slot.borrow() {
+            return f64::from_bits(JSValue::pointer(cached as *const u8).bits());
+        }
+
+        let obj = js_object_alloc(0, 2);
+
+        let wait = js_closure_alloc(timers_promises_scheduler_wait as *const u8, 0);
+        crate::closure::js_register_closure_arity(timers_promises_scheduler_wait as *const u8, 2);
+        set_named_value(
+            obj,
+            "wait",
+            f64::from_bits(JSValue::pointer(wait as *const u8).bits()),
+        );
+
+        let yield_fn = js_closure_alloc(timers_promises_scheduler_yield as *const u8, 0);
+        crate::closure::js_register_closure_arity(timers_promises_scheduler_yield as *const u8, 0);
+        set_named_value(
+            obj,
+            "yield",
+            f64::from_bits(JSValue::pointer(yield_fn as *const u8).bits()),
+        );
+
+        *slot.borrow_mut() = Some(obj);
+        ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
+        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    })
+}
+
 fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
     let value = match submod_key {
         "fs_promises" if name == "constants" => Some(fs_constants_namespace_value()),
+        "timers_promises" if name == "scheduler" => Some(timers_promises_scheduler_value()),
         "test" => test::test_special_export_value(name),
         _ => None,
     };
@@ -988,6 +1024,12 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             crate::object::js_object_set_field_by_name(obj, name_header, value);
         }
     }
+    if submod.key == "timers" {
+        let value = crate::object::timers_promises_parent_namespace();
+        let name = b"promises";
+        let name_header = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, name_header, value);
+    }
     if submod.key == "trace_events" {
         let default_obj = js_object_alloc(0, submod.exports.len() as u32);
         for spec in submod.exports {
@@ -1040,6 +1082,11 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
     DEFAULT_OBJECT_SINGLETONS.with(|m| {
         for obj_ptr in m.borrow_mut().values_mut() {
             visitor.visit_raw_mut_ptr_slot(obj_ptr);
+        }
+    });
+    TIMERS_PROMISES_SCHEDULER_OBJECT.with(|slot| {
+        if let Some(ptr) = slot.borrow_mut().as_mut() {
+            visitor.visit_raw_mut_ptr_slot(ptr);
         }
     });
     // #906 follow-up: the no-op closure shared by every TracingChannel /
@@ -1181,6 +1228,9 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
             return value;
         }
     }
+    if submod.key == "timers" && name == "promises" {
+        return crate::object::timers_promises_parent_namespace();
+    }
     if let Some(value) = special_export_value(submod.key, name) {
         return value;
     }
@@ -1255,6 +1305,9 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
         if let Some(value) = submodule_default_object_value(submod) {
             return value;
         }
+    }
+    if submod.key == "timers" && name == "promises" {
+        return crate::object::timers_promises_parent_namespace();
     }
     if let Some(value) = special_export_value(submod.key, name) {
         return value;

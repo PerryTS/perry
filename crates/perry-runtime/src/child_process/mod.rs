@@ -8,6 +8,9 @@ pub mod reactor;
 pub mod fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
 mod v8_serde;
+// #3079: setup-time command/file/args validation (`ERR_INVALID_ARG_TYPE`).
+mod validate;
+pub use validate::{js_child_process_validate_args, js_child_process_validate_command};
 
 // #3137: reuse the codec for the public `node:v8` serialize/deserialize API.
 // #3680: class-based `v8.Serializer` / `v8.Deserializer` builders.
@@ -893,15 +896,99 @@ extern "C" fn cp_method_write2(closure: *const ClosureHeader, chunk: f64, _enc: 
 }
 
 /// `child.send(message[, sendHandle][, options][, callback])` — serialize
-/// `message` and write it to the IPC channel of a `fork()`ed child (#1933). The
-/// `this` is the ChildProcess. Returns `true` (Node returns whether the channel
-/// can take more — always `true` for our synchronous write).
-extern "C" fn cp_method_send(closure: *const ClosureHeader, message: f64, _arg: f64) -> f64 {
+/// `message` and write it to the IPC channel of a `fork()`ed child (#1933 /
+/// #3316). The `this` is the ChildProcess.
+///
+/// Node semantics this matches (`subprocess.send.length === 4`):
+/// - Returns `true` when the message was queued on an open channel, `false`
+///   once the channel is closed (after `disconnect()`).
+/// - The optional trailing `callback` fires asynchronously (on the next tick)
+///   with `null` on success or an `Error [ERR_IPC_CHANNEL_CLOSED]`
+///   (`message: "Channel closed"`) when the channel is closed.
+///
+/// The four value slots map to `message, sendHandle, options, callback`; the
+/// callback is detected as the last *function* argument so the documented
+/// optional `sendHandle` / `options` slots are skipped (those handle-/serialize-
+/// option forms are otherwise no-ops here, matching the prior behavior).
+extern "C" fn cp_method_send(
+    closure: *const ClosureHeader,
+    message: f64,
+    a2: f64,
+    a3: f64,
+    a4: f64,
+) -> f64 {
     let this = cp_this(closure);
-    if let Some(handle) = cp_handle_of(this) {
-        reactor::cp_ipc_send(handle, message);
+
+    // The callback is the last argument when it is a function. dispatch pads
+    // missing slots with `undefined`, so scan slots 4→2 for a closure.
+    let callback = [a4, a3, a2]
+        .into_iter()
+        .find(|v| !crate::fs::extract_closure_ptr(*v).is_null());
+
+    // A closed IPC channel (after `disconnect()`, or never connected) returns
+    // `false` and reports `ERR_IPC_CHANNEL_CLOSED` to the callback.
+    let connected = cp_get_field(this, b"connected");
+    let channel_open = connected.to_bits() == TAG_TRUE_F64.to_bits();
+
+    let ok = if channel_open {
+        match cp_handle_of(this) {
+            Some(handle) => reactor::cp_ipc_send(handle, message),
+            None => false,
+        }
+    } else {
+        false
+    };
+
+    if let Some(cb) = callback {
+        cp_defer_send_callback(cb, ok);
     }
-    TAG_TRUE_F64
+
+    if ok {
+        TAG_TRUE_F64
+    } else {
+        TAG_FALSE_F64
+    }
+}
+
+/// Schedule the `send` callback to fire on the next tick (Node delivers it
+/// asynchronously). `ok` selects the argument: `null` on success, otherwise an
+/// `Error [ERR_IPC_CHANNEL_CLOSED]` (`message: "Channel closed"`). The deferred
+/// closure captures the callback in slot 0 and the success flag in slot 1.
+fn cp_defer_send_callback(cb: f64, ok: bool) {
+    let deferred = js_closure_alloc(cp_send_callback_thunk as *const u8, 2);
+    js_closure_set_capture_ptr(deferred, 0, cb.to_bits() as i64);
+    let flag = if ok { TAG_TRUE_F64 } else { TAG_FALSE_F64 };
+    js_closure_set_capture_ptr(deferred, 1, flag.to_bits() as i64);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+}
+
+/// Deferred `send` callback body. Slot 0 = the user callback; slot 1 = the
+/// success flag. Invokes `callback(null)` on success or `callback(err)` with a
+/// Node-shaped `ERR_IPC_CHANNEL_CLOSED` error on failure.
+extern "C" fn cp_send_callback_thunk(closure: *const ClosureHeader) -> f64 {
+    let cb = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    if crate::fs::extract_closure_ptr(cb).is_null() {
+        return cp_undefined();
+    }
+    let flag = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    let ok = flag.to_bits() == TAG_TRUE_F64.to_bits();
+    let arg = if ok {
+        TAG_NULL_F64
+    } else {
+        cp_channel_closed_error()
+    };
+    let args = [arg];
+    unsafe { js_native_call_value(cb, args.as_ptr(), args.len()) };
+    cp_undefined()
+}
+
+/// Build a Node-shaped `Error [ERR_IPC_CHANNEL_CLOSED]` value (`message:
+/// "Channel closed"`, `code: "ERR_IPC_CHANNEL_CLOSED"`).
+fn cp_channel_closed_error() -> f64 {
+    let msg = js_string_from_bytes(b"Channel closed".as_ptr(), 14);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_IPC_CHANNEL_CLOSED");
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
 /// `child.disconnect()` — close the IPC channel (#1933). Flips `connected` to
@@ -991,6 +1078,10 @@ fn cp_cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> CpFn {
 fn cp_cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }
+#[allow(clippy::missing_transmute_annotations)]
+fn cp_cast4(f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64) -> CpFn {
+    unsafe { std::mem::transmute(f) }
+}
 
 fn cp_register_arities() {
     js_register_closure_arity(cp_method_on as *const u8, 2);
@@ -1004,8 +1095,14 @@ fn cp_register_arities() {
     js_register_closure_arity(cp_method_pipe as *const u8, 1);
     js_register_closure_arity(cp_method_write2 as *const u8, 2);
     js_register_closure_arity(cp_method_stdin_end as *const u8, 1);
-    js_register_closure_arity(cp_method_send as *const u8, 2);
+    // #3316: `send(message, sendHandle, options, callback)` — dispatch with 4
+    // padded slots so the trailing callback is visible regardless of call-site
+    // arity, and report `child.send.length === 4` like Node.
+    js_register_closure_arity(cp_method_send as *const u8, 4);
+    crate::closure::js_register_closure_length(cp_method_send as *const u8, 4);
     js_register_closure_arity(cp_method_disconnect as *const u8, 0);
+    // The deferred send-callback thunk takes no JS args.
+    js_register_closure_arity(cp_send_callback_thunk as *const u8, 0);
 }
 
 /// Allocate a heap object whose method-name fields each hold a closure capturing
@@ -1103,7 +1200,19 @@ unsafe fn cp_read_string_header(ptr: i64) -> String {
 
 unsafe fn cp_read_arg_strings(args_ptr: i64) -> Vec<String> {
     let mut out = Vec::new();
-    if args_ptr == 0 {
+    // `args_ptr` is the unboxed lower-48-bit pointer. Codegen strips the NaN-box
+    // tag, so `null`/`undefined`/a non-array object arrive here as a small or
+    // non-array pointer (e.g. masked `null` == 2). #3079: only dereference it as
+    // an array when it is a real heap array — otherwise treat it as an empty
+    // args list (Node accepts `null`/`undefined`/`{}` as no args). Without this
+    // guard `spawnSync("echo", null)` dereferences a bogus pointer and crashes.
+    let raw = args_ptr as usize;
+    if raw < 0x10000 {
+        return out;
+    }
+    let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let t = (*header).obj_type;
+    if t != crate::gc::GC_TYPE_ARRAY && t != crate::gc::GC_TYPE_LAZY_ARRAY {
         return out;
     }
     let arr = args_ptr as *const crate::array::ArrayHeader;

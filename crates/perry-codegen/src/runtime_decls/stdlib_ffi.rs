@@ -553,6 +553,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],
     );
+    // #3079: setup-time command/file/args validation. The validators receive
+    // the *original* NaN-boxed value (codegen still has it before unboxing to a
+    // raw pointer) and throw `TypeError [ERR_INVALID_ARG_TYPE]` on a bad shape.
+    // `validate_command` takes (value, name_ptr, name_len); `validate_args`
+    // takes (value). Both return the value so the call can sit inline.
+    module.declare_function(
+        "js_child_process_validate_command",
+        DOUBLE,
+        &[DOUBLE, PTR, I32],
+    );
+    module.declare_function("js_child_process_validate_args", DOUBLE, &[DOUBLE]);
 
     // ========== cheerio ==========
     module.declare_function("js_cheerio_load", I64, &[I64]);
@@ -714,6 +725,118 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction_commit", VOID, &[I64]);
     module.declare_function("js_sqlite_transaction_rollback", VOID, &[I64]);
+    module.declare_function("js_node_sqlite_backup", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_database_sync_open", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_close", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_dispose", I32, &[I64]);
+    module.declare_function("js_node_sqlite_database_sync_exec", I32, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_node_sqlite_database_sync_prepare",
+        I64,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_function",
+        I32,
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_aggregate",
+        I32,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_enable_defensive",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_set_authorizer",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_create_tag_store",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_create_session",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_apply_changeset",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_enable_load_extension",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_load_extension",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_database_sync_location",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_sqlite_database_sync_is_open", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_sqlite_database_sync_is_transaction",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function("js_node_sqlite_database_sync_limits", I64, &[I64]);
+    module.declare_function("js_node_sqlite_statement_sync_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_statement_sync_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_statement_sync_run", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_get", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_all", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_iterate", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_columns", I64, &[I64]);
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_read_bigints",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_return_arrays",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_allow_bare_named_parameters",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_allow_unknown_named_parameters",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_sqlite_statement_sync_source_sql", I64, &[I64]);
+    module.declare_function("js_node_sqlite_statement_sync_expanded_sql", I64, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_run", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_get", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_all", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_iterate", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_clear", I32, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_size", DOUBLE, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_capacity", DOUBLE, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_db", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_session_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_session_changeset", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_patchset", I64, &[I64]);
+    module.declare_function("js_node_sqlite_session_close", I32, &[I64]);
+    module.declare_function("js_node_sqlite_session_dispose", I32, &[I64]);
 
     // ========== OS ==========
     module.declare_function("js_os_cpus", I64, &[]);

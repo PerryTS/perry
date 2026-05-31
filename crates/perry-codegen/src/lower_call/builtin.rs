@@ -46,6 +46,8 @@ pub(super) fn lower_builtin_new(
         ("Pool", Some(src)) => src != "pg",
         ("Database", Some(src)) => src != "better-sqlite3",
         ("DatabaseSync", Some(src)) => src != "sqlite",
+        ("Session", Some(src)) => src != "sqlite",
+        ("StatementSync", Some(src)) => src != "sqlite",
         ("Redis", Some(src)) => src != "ioredis" && src != "redis",
         ("MongoClient", Some(src)) => src != "mongodb",
         ("Decimal", Some(src)) => src != "decimal.js",
@@ -247,6 +249,40 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_target_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "MessageChannel" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(DOUBLE, "js_message_channel_new", &[])))
+        }
+        "MessagePort" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_message_port_constructor_error",
+                &[],
+            )))
+        }
+        "BroadcastChannel" => {
+            let name = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_broadcast_channel_new",
+                &[(DOUBLE, &name)],
+            )))
+        }
         "Console" => {
             let opts = if let Some(a) = args.first() {
                 lower_expr(ctx, a)?
@@ -415,14 +451,7 @@ pub(super) fn lower_builtin_new(
         // then unboxes that bogus pointer; `get_handle::<SqliteDbHandle>`
         // returns None; prepare returns -1; every chained `.run()`/`.get()`/
         // `.all()` dispatches against junk and silently produces undefined.
-        // node:sqlite `DatabaseSync` (#3183) shares better-sqlite3's
-        // `Database` lowering: `new DatabaseSync(path)` opens the same
-        // rusqlite connection via `js_sqlite_open`, so all subsequent
-        // `exec`/`prepare`/`close` + `StatementSync` dispatch reuses the
-        // existing handle registry. The `arm_mismatches_source` guard
-        // above keeps this from firing for unrelated `DatabaseSync`
-        // imports.
-        "Database" | "DatabaseSync" => {
+        "Database" => {
             let path_ptr = if let Some(arg) = args.first() {
                 get_raw_string_ptr(ctx, arg)?
             } else {
@@ -430,6 +459,65 @@ pub(super) fn lower_builtin_new(
             };
             let blk = ctx.block();
             let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path_ptr)]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
+        // options so the runtime can preserve Node-shaped validation errors.
+        "DatabaseSync" => {
+            let path_value = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options_value = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_database_sync_new",
+                &[(DOUBLE, &path_value), (DOUBLE, &options_value)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "StatementSync" => {
+            let arg0 = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let arg1 = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_statement_sync_new",
+                &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "Session" => {
+            let arg0 = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let arg1 = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_node_sqlite_session_new",
+                &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
+            );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // mongodb MongoClient — `new MongoClient(uri)` matching npm mongodb's

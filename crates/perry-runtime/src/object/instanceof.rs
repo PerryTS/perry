@@ -9,6 +9,20 @@ use super::*;
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
 
+fn small_native_handle_id(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        let raw = (bits & crate::value::POINTER_MASK) as i64;
+        if raw > 0 && raw < 0x100000 {
+            return Some(raw);
+        }
+    }
+    if value.is_finite() && value > 0.0 && value.fract() == 0.0 && value < 0x100000 as f64 {
+        return Some(value as i64);
+    }
+    None
+}
+
 /// v0.5.749: dynamic instanceof — `value instanceof type` where the
 /// type is a runtime value (function arg holding a class ref). Extracts
 /// the class_id from the INT32 NaN-tag (top16=0x7FFE) and dispatches to
@@ -78,6 +92,18 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        // #2689: `net.Stream` is an alias for `net.Socket`; both should match
+        // a live socket handle via the runtime probe.
+        if module == "net" && matches!(method.as_str(), "Socket" | "Stream") {
+            if let (Some(handle), Some(probe)) = (
+                small_native_handle_id(value),
+                crate::object::net_socket_handle_probe(),
+            ) {
+                if unsafe { probe(handle) } {
+                    return f64::from_bits(crate::value::TAG_TRUE);
+                }
+            }
         }
         if module == "console"
             && method == "Console"

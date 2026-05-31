@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2407 entries across 104 modules.
+Total: 2464 entries across 106 modules.
 
 ## Modules
 
@@ -97,6 +97,8 @@ Total: 2407 entries across 104 modules.
 - [`sys`](#sys)
 - [`test`](#test)
 - [`test/reporters`](#test-reporters)
+- [`timers`](#timers)
+- [`timers/promises`](#timers-promises)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -525,6 +527,7 @@ Total: 2407 entries across 104 modules.
 - `O_NONBLOCK`
 - `O_RDONLY`
 - `O_RDWR`
+- `O_SYMLINK`
 - `O_SYNC`
 - `O_TRUNC`
 - `O_WRONLY`
@@ -559,6 +562,7 @@ Total: 2407 entries across 104 modules.
 - `SIGFPE`
 - `SIGHUP`
 - `SIGILL`
+- `SIGINFO`
 - `SIGINT`
 - `SIGIO`
 - `SIGIOT`
@@ -1252,6 +1256,7 @@ Total: 2407 entries across 104 modules.
 - `mkdtempDisposableSync` — module
 - `mkdtempSync` — module
 - `open` — module
+- `openAsBlob` — module
 - `openSync` — module
 - `opendir` — module
 - `opendirSync` — module
@@ -1759,11 +1764,13 @@ Total: 2407 entries across 104 modules.
 
 - `Server`
 - `Socket`
+- `Stream`
 
 ### Methods
 
 - `Server` — module
 - `Socket` — module
+- `Stream` — module
 - `_createServerHandle` — module
 - `_normalizeArgs` — module
 - `addListener` — instance *(class: `Socket`)*
@@ -2564,17 +2571,63 @@ Total: 2407 entries across 104 modules.
 
 ## `sqlite`
 
+### Classes
+
+- `DatabaseSync`
+- `SQLTagStore`
+- `Session`
+- `StatementSync`
+
 ### Methods
 
+- `@@__perry_wk_dispose` — instance
 - `DatabaseSync` — module
+- `Session` — module
+- `StatementSync` — module
+- `__perry_dispose__` — instance
+- `aggregate` — instance *(class: `DatabaseSync`)*
+- `all` — instance *(class: `SQLTagStore`)*
 - `all` — instance
+- `applyChangeset` — instance
+- `backup` — module
+- `capacity` — instance *(class: `SQLTagStore`)*
+- `changeset` — instance
+- `clear` — instance *(class: `SQLTagStore`)*
 - `close` — instance
 - `columns` — instance
+- `createSession` — instance
+- `createTagStore` — instance *(class: `DatabaseSync`)*
+- `db` — instance *(class: `SQLTagStore`)*
+- `enableDefensive` — instance *(class: `DatabaseSync`)*
+- `enableLoadExtension` — instance
 - `exec` — instance
+- `expandedSQL` — instance
+- `function` — instance *(class: `DatabaseSync`)*
+- `get` — instance *(class: `SQLTagStore`)*
 - `get` — instance
+- `isOpen` — instance
+- `isTransaction` — instance
+- `iterate` — instance *(class: `SQLTagStore`)*
 - `iterate` — instance
+- `limits` — instance
+- `loadExtension` — instance
+- `location` — instance
+- `open` — instance
+- `patchset` — instance
 - `prepare` — instance
+- `run` — instance *(class: `SQLTagStore`)*
 - `run` — instance
+- `setAllowBareNamedParameters` — instance
+- `setAllowUnknownNamedParameters` — instance
+- `setAuthorizer` — instance *(class: `DatabaseSync`)*
+- `setReadBigInts` — instance
+- `setReturnArrays` — instance
+- `size` — instance *(class: `SQLTagStore`)*
+- `sourceSQL` — instance
+
+### Properties
+
+- `constants`
 
 ## `stream`
 
@@ -2815,6 +2868,33 @@ Total: 2407 entries across 104 modules.
 ### Properties
 
 - `default`
+
+## `timers`
+
+### Methods
+
+- `clearImmediate` — module
+- `clearInterval` — module
+- `clearTimeout` — module
+- `setImmediate` — module
+- `setInterval` — module
+- `setTimeout` — module
+
+### Properties
+
+- `promises`
+
+## `timers/promises`
+
+### Methods
+
+- `setImmediate` — module
+- `setInterval` — module
+- `setTimeout` — module
+
+### Properties
+
+- `scheduler`
 
 ## `tls`
 
@@ -3214,4 +3294,5 @@ Total: 2407 entries across 104 modules.
 
 ### Properties
 
+- `codes`
 - `constants`

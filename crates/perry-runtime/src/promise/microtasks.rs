@@ -123,466 +123,511 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
         }
     }
 
-    // Drain queued microtasks (from queueMicrotask() calls) under the same
-    // trap used for Promise callbacks so context is restored if a callback
-    // throws through the runtime.
-    crate::builtins::js_drain_queued_microtasks();
-
     // Cached profile flag — set once by mt_profile_register() above.
     // Reading the env var directly here was ~30 ns per microtask drain;
     // the atomic load is ~1 ns.
     let prof = mt_profile_enabled();
     loop {
-        let t0 = if prof {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
-        let task = TASK_QUEUE.with(|q| q.borrow_mut().pop_front());
-        if let Some(t) = t0 {
-            MT_TIME_NS_QUEUE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        }
+        let ran_before_checkpoint = ran;
 
-        match task {
-            None => break,
-            Some(Task::Promise(promise, value, is_fulfilled, task_context)) => {
-                bump(&MT_RUN_COUNT);
-                enter_microtask_context(&task_context);
-                unsafe {
-                    let callback = if is_fulfilled {
-                        (*promise).on_fulfilled
-                    } else {
-                        (*promise).on_rejected
-                    };
+        // Node runs process.nextTick jobs before regular microtasks, while
+        // queueMicrotask jobs share FIFO order with Promise reactions.
+        ran += crate::builtins::drain_queued_microtasks_count();
 
-                    // No callback registered → propagate the value/reason
-                    // to the next promise without invoking anything.
-                    if callback.is_null() {
+        loop {
+            let t0 = if prof {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
+            let task = TASK_QUEUE.with(|q| q.borrow_mut().pop_front());
+            if let Some(t) = t0 {
+                MT_TIME_NS_QUEUE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            }
+
+            match task {
+                None => break,
+                Some(Task::Promise(promise, value, is_fulfilled, task_context)) => {
+                    bump(&MT_RUN_COUNT);
+                    enter_microtask_context(&task_context);
+                    unsafe {
+                        let callback = if is_fulfilled {
+                            (*promise).on_fulfilled
+                        } else {
+                            (*promise).on_rejected
+                        };
+
+                        // No callback registered → propagate the value/reason
+                        // to the next promise without invoking anything.
+                        if callback.is_null() {
+                            CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
+                            CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
+                            CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
+                            if !(*promise).next.is_null() {
+                                if is_fulfilled {
+                                    js_promise_resolve((*promise).next, value);
+                                } else {
+                                    js_promise_reject((*promise).next, value);
+                                }
+                            }
+                            let promise =
+                                CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
+                            CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+                            CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
+                            clear_promise_context(promise);
+                            restore_microtask_context();
+                            ran += 1;
+                            continue;
+                        }
+
+                        // Record the running promise so the trap (above)
+                        // can reject its `next` if the callback throws.
+                        //
+                        // #1663: the callback can re-entrantly drain the
+                        // microtask queue — a non-transformed async closure's
+                        // `await` busy-waits on `js_promise_run_microtasks`, and
+                        // each nested `Task::Promise` dispatch overwrites these
+                        // same TLS cells (and clears them on exit). Reloading
+                        // `promise` / `next` from the cells after the callback
+                        // would then observe a stale or NULL pointer; the very
+                        // next line dereferences `(*promise).async_id` (offset
+                        // 0x30) and segfaults. Root our promise + next in a
+                        // handle scope so we reload the GC-updated pointers from
+                        // there, and save/restore the previous cell values so a
+                        // nested drain leaves the enclosing arm — and its
+                        // exception-trap routing — intact. This mirrors the
+                        // INLINE_TRAP save/restore in the Inline/AsyncStep arms.
+                        let scope = crate::gc::RuntimeHandleScope::new();
+                        let promise_handle = scope.root_raw_mut_ptr(promise);
+                        let next_handle = scope.root_raw_mut_ptr((*promise).next);
+                        let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
+                        let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
+                        let prev_value = CURRENT_MICROTASK_VALUE.with(|c| c.get());
+                        let prev_next = CURRENT_MICROTASK_NEXT.with(|c| c.get());
+                        let prev_promise_handle = scope.root_raw_mut_ptr(prev_promise);
+                        let prev_next_handle = scope.root_raw_mut_ptr(prev_next);
+
                         CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
+                        CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
                         CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
                         CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
-                        if !(*promise).next.is_null() {
+
+                        let t1 = if prof {
+                            Some(std::time::Instant::now())
+                        } else {
+                            None
+                        };
+                        // #1663: capture async_id + trigger as plain values BEFORE
+                        // the callback. They are immutable for the promise's life,
+                        // and the callback can re-entrantly drain microtasks (which
+                        // can move the promise via GC or realloc the GC-root handle
+                        // stack). Reading `(*promise).async_id` AFTER the callback
+                        // to feed `after()` was the exact deref that segfaulted; use
+                        // the captured value so `after()` needs no live promise.
+                        let async_id = (*promise).async_id;
+                        let trigger_async_id = (*promise).trigger_async_id;
+                        crate::async_hooks::before(async_id, trigger_async_id);
+                        let result = crate::closure::js_closure_call1(callback, value);
+                        // Keep the callback result rooted across `after()` (which
+                        // can run JS when async_hooks are active) via the value
+                        // cell, then reload promise/next from our handles — never
+                        // the TLS cells, which a re-entrant drain may have nulled.
+                        // The reload goes through the out-of-line `get_raw_mut_ptr`
+                        // (#1663) so it re-resolves the handle stack after the
+                        // callback instead of reading a stale cached slot address.
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
+                        let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+                        let next = next_handle.get_raw_mut_ptr::<Promise>();
+                        crate::async_hooks::after(async_id);
+                        if let Some(t) = t1 {
+                            MT_TIME_NS_CALLBACK
+                                .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                        }
+
+                        let t2 = if prof {
+                            Some(std::time::Instant::now())
+                        } else {
+                            None
+                        };
+                        if !next.is_null() {
+                            let result = CURRENT_MICROTASK_VALUE.with(|c| c.get());
+                            propagate_callback_result(result, next);
+                        }
+                        clear_promise_context(promise);
+                        if let Some(t) = t2 {
+                            MT_TIME_NS_RESOLVE
+                                .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                        }
+
+                        // Restore the previous CURRENT_MICROTASK_* cells so an
+                        // enclosing (re-entrant) dispatch resumes with its own
+                        // promise/next/value for settlement and trap routing,
+                        // instead of the NULLs this arm would otherwise leave.
+                        CURRENT_MICROTASK_PROMISE
+                            .with(|c| c.set(prev_promise_handle.get_raw_mut_ptr::<Promise>()));
+                        CURRENT_MICROTASK_CALLBACK.with(|c| c.set(prev_callback));
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(prev_value));
+                        CURRENT_MICROTASK_NEXT
+                            .with(|c| c.set(prev_next_handle.get_raw_mut_ptr::<Promise>()));
+                    }
+                    restore_microtask_context();
+                    ran += 1;
+                }
+                Some(Task::PromiseAll(state, value, is_fulfilled, task_context)) => {
+                    bump(&MT_RUN_COUNT);
+                    enter_microtask_context(&task_context);
+                    combinators::promise_all_settle(state, value, is_fulfilled);
+                    restore_microtask_context();
+                    ran += 1;
+                }
+                Some(Task::Inline(callback, value, next, is_fulfilled, task_context)) => {
+                    bump(&MT_RUN_COUNT);
+                    enter_microtask_context(&task_context);
+                    // Inline tasks are produced by `js_promise_resolved_then`
+                    // (the `Promise.resolve(<primitive>).then(cb_f, cb_e)`
+                    // fast path). We've already skipped allocating the
+                    // source promise — now dispatch directly: invoke the
+                    // stored callback, propagate the result to `next`.
+                    if callback.is_null() {
+                        if !next.is_null() {
                             if is_fulfilled {
-                                js_promise_resolve((*promise).next, value);
+                                js_promise_resolve(next, value);
                             } else {
-                                js_promise_reject((*promise).next, value);
+                                js_promise_reject(next, value);
                             }
                         }
-                        let promise =
-                            CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
-                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
-                        CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
-                        clear_promise_context(promise);
                         restore_microtask_context();
                         ran += 1;
                         continue;
                     }
 
-                    // Record the running promise so the trap (above)
-                    // can reject its `next` if the callback throws.
+                    // For exception unwinding, mirror the Promise variant:
+                    // store a fake `cur` whose `.next` is what we want to
+                    // reject if the callback throws. Allocate a minimal
+                    // stub on the GC heap so the trap path still finds a
+                    // valid `*mut Promise`. This is rarely hit (only on
+                    // user-throw inside the inline callback) and we can
+                    // afford the alloc on the slow path.
                     //
-                    // #1663: the callback can re-entrantly drain the
-                    // microtask queue — a non-transformed async closure's
-                    // `await` busy-waits on `js_promise_run_microtasks`, and
-                    // each nested `Task::Promise` dispatch overwrites these
-                    // same TLS cells (and clears them on exit). Reloading
-                    // `promise` / `next` from the cells after the callback
-                    // would then observe a stale or NULL pointer; the very
-                    // next line dereferences `(*promise).async_id` (offset
-                    // 0x30) and segfaults. Root our promise + next in a
-                    // handle scope so we reload the GC-updated pointers from
-                    // there, and save/restore the previous cell values so a
-                    // nested drain leaves the enclosing arm — and its
-                    // exception-trap routing — intact. This mirrors the
-                    // INLINE_TRAP save/restore in the Inline/AsyncStep arms.
-                    let scope = crate::gc::RuntimeHandleScope::new();
-                    let promise_handle = scope.root_raw_mut_ptr(promise);
-                    let next_handle = scope.root_raw_mut_ptr((*promise).next);
-                    let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
-                    let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
-                    let prev_value = CURRENT_MICROTASK_VALUE.with(|c| c.get());
-                    let prev_next = CURRENT_MICROTASK_NEXT.with(|c| c.get());
-                    let prev_promise_handle = scope.root_raw_mut_ptr(prev_promise);
-                    let prev_next_handle = scope.root_raw_mut_ptr(prev_next);
-
-                    CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
+                    // Issue #748: same save/restore reasoning as the
+                    // Task::AsyncStep arm below — preserve any outer
+                    // INLINE_TRAP (set by an enclosing `js_async_first_call`)
+                    // when the runner is invoked re-entrantly from inside
+                    // a non-transformed async closure's busy-wait.
+                    let prev_trap = INLINE_TRAP.with(|c| c.get());
+                    let trap_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
+                    let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
+                        prev_trap.current_step as *const crate::closure::ClosureHeader,
+                    );
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
-                    CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
+                    CURRENT_MICROTASK_NEXT.with(|c| c.set(next));
+                    INLINE_TRAP.with(|c| {
+                        c.set(InlineTrap {
+                            trap_next: next,
+                            current_step: 0,
+                        })
+                    });
 
                     let t1 = if prof {
                         Some(std::time::Instant::now())
                     } else {
                         None
                     };
-                    // #1663: capture async_id + trigger as plain values BEFORE
-                    // the callback. They are immutable for the promise's life,
-                    // and the callback can re-entrantly drain microtasks (which
-                    // can move the promise via GC or realloc the GC-root handle
-                    // stack). Reading `(*promise).async_id` AFTER the callback
-                    // to feed `after()` was the exact deref that segfaulted; use
-                    // the captured value so `after()` needs no live promise.
-                    let async_id = (*promise).async_id;
-                    let trigger_async_id = (*promise).trigger_async_id;
-                    crate::async_hooks::before(async_id, trigger_async_id);
                     let result = crate::closure::js_closure_call1(callback, value);
-                    // Keep the callback result rooted across `after()` (which
-                    // can run JS when async_hooks are active) via the value
-                    // cell, then reload promise/next from our handles — never
-                    // the TLS cells, which a re-entrant drain may have nulled.
-                    // The reload goes through the out-of-line `get_raw_mut_ptr`
-                    // (#1663) so it re-resolves the handle stack after the
-                    // callback instead of reading a stale cached slot address.
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
-                    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
-                    let next = next_handle.get_raw_mut_ptr::<Promise>();
-                    crate::async_hooks::after(async_id);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
+
+                    INLINE_TRAP.with(|c| {
+                        c.set(InlineTrap {
+                            trap_next: prev_trap_next_handle.get_raw_mut_ptr::<Promise>(),
+                            current_step: prev_trap_step_handle
+                                .get_raw_const_ptr::<crate::closure::ClosureHeader>()
+                                as usize,
+                        })
+                    });
+                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 
                     let t2 = if prof {
                         Some(std::time::Instant::now())
                     } else {
                         None
                     };
+                    let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
                     if !next.is_null() {
-                        let result = CURRENT_MICROTASK_VALUE.with(|c| c.get());
+                        let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
                         propagate_callback_result(result, next);
+                    } else {
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     }
-                    clear_promise_context(promise);
                     if let Some(t) = t2 {
                         MT_TIME_NS_RESOLVE
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
-
-                    // Restore the previous CURRENT_MICROTASK_* cells so an
-                    // enclosing (re-entrant) dispatch resumes with its own
-                    // promise/next/value for settlement and trap routing,
-                    // instead of the NULLs this arm would otherwise leave.
+                    restore_microtask_context();
+                    ran += 1;
+                }
+                Some(Task::Microtask {
+                    callback,
+                    context,
+                    async_id,
+                    trigger_async_id,
+                }) => {
+                    bump(&MT_RUN_COUNT);
+                    enter_microtask_context(&context);
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
+                    let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
+                    let prev_value = CURRENT_MICROTASK_VALUE.with(|c| c.get());
+                    let prev_next = CURRENT_MICROTASK_NEXT.with(|c| c.get());
+                    let prev_promise_handle = scope.root_raw_mut_ptr(prev_promise);
+                    let prev_next_handle = scope.root_raw_mut_ptr(prev_next);
+                    CURRENT_MICROTASK_PROMISE.with(|c| c.set(std::ptr::null_mut()));
+                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+                    CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
+                    crate::async_hooks::before(async_id, trigger_async_id);
+                    crate::closure::js_closure_call0(callback);
+                    crate::async_hooks::after(async_id);
+                    crate::async_hooks::destroy(async_id);
                     CURRENT_MICROTASK_PROMISE
                         .with(|c| c.set(prev_promise_handle.get_raw_mut_ptr::<Promise>()));
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(prev_callback));
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(prev_value));
                     CURRENT_MICROTASK_NEXT
                         .with(|c| c.set(prev_next_handle.get_raw_mut_ptr::<Promise>()));
-                }
-                restore_microtask_context();
-                ran += 1;
-            }
-            Some(Task::PromiseAll(state, value, is_fulfilled, task_context)) => {
-                bump(&MT_RUN_COUNT);
-                enter_microtask_context(&task_context);
-                combinators::promise_all_settle(state, value, is_fulfilled);
-                restore_microtask_context();
-                ran += 1;
-            }
-            Some(Task::Inline(callback, value, next, is_fulfilled, task_context)) => {
-                bump(&MT_RUN_COUNT);
-                enter_microtask_context(&task_context);
-                // Inline tasks are produced by `js_promise_resolved_then`
-                // (the `Promise.resolve(<primitive>).then(cb_f, cb_e)`
-                // fast path). We've already skipped allocating the
-                // source promise — now dispatch directly: invoke the
-                // stored callback, propagate the result to `next`.
-                if callback.is_null() {
-                    if !next.is_null() {
-                        if is_fulfilled {
-                            js_promise_resolve(next, value);
-                        } else {
-                            js_promise_reject(next, value);
-                        }
-                    }
                     restore_microtask_context();
                     ran += 1;
-                    continue;
                 }
-
-                // For exception unwinding, mirror the Promise variant:
-                // store a fake `cur` whose `.next` is what we want to
-                // reject if the callback throws. Allocate a minimal
-                // stub on the GC heap so the trap path still finds a
-                // valid `*mut Promise`. This is rarely hit (only on
-                // user-throw inside the inline callback) and we can
-                // afford the alloc on the slow path.
-                //
-                // Issue #748: same save/restore reasoning as the
-                // Task::AsyncStep arm below — preserve any outer
-                // INLINE_TRAP (set by an enclosing `js_async_first_call`)
-                // when the runner is invoked re-entrantly from inside
-                // a non-transformed async closure's busy-wait.
-                let prev_trap = INLINE_TRAP.with(|c| c.get());
-                let trap_scope = crate::gc::RuntimeHandleScope::new();
-                let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
-                let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
-                    prev_trap.current_step as *const crate::closure::ClosureHeader,
-                );
-                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
-                CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
-                CURRENT_MICROTASK_NEXT.with(|c| c.set(next));
-                INLINE_TRAP.with(|c| {
-                    c.set(InlineTrap {
-                        trap_next: next,
-                        current_step: 0,
-                    })
-                });
-
-                let t1 = if prof {
-                    Some(std::time::Instant::now())
-                } else {
-                    None
-                };
-                let result = crate::closure::js_closure_call1(callback, value);
-                CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
-                if let Some(t) = t1 {
-                    MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                }
-
-                INLINE_TRAP.with(|c| {
-                    c.set(InlineTrap {
-                        trap_next: prev_trap_next_handle.get_raw_mut_ptr::<Promise>(),
-                        current_step: prev_trap_step_handle
-                            .get_raw_const_ptr::<crate::closure::ClosureHeader>()
-                            as usize,
-                    })
-                });
-                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
-
-                let t2 = if prof {
-                    Some(std::time::Instant::now())
-                } else {
-                    None
-                };
-                let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
-                if !next.is_null() {
-                    let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
-                    propagate_callback_result(result, next);
-                } else {
-                    CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
-                }
-                if let Some(t) = t2 {
-                    MT_TIME_NS_RESOLVE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                }
-                restore_microtask_context();
-                ran += 1;
-            }
-            Some(Task::AsyncStep(step_closure, value, next, is_error, task_context)) => {
-                bump(&MT_RUN_COUNT);
-                enter_microtask_context(&task_context);
-                // Direct dispatch of the async-step closure. Skips the
-                // then_v_arrow / then_e_arrow wrapper that would
-                // otherwise be invoked as the on_fulfilled / on_rejected
-                // callback — the wrapper just calls
-                // `__step(value, is_error)` which is exactly what we do
-                // here with two fewer indirections (closure alloc +
-                // closure call).
-                if step_closure.is_null() {
-                    if !next.is_null() {
-                        if is_error {
-                            js_promise_reject(next, value);
-                        } else {
-                            js_promise_resolve(next, value);
+                Some(Task::AsyncStep(step_closure, value, next, is_error, task_context)) => {
+                    bump(&MT_RUN_COUNT);
+                    enter_microtask_context(&task_context);
+                    // Direct dispatch of the async-step closure. Skips the
+                    // then_v_arrow / then_e_arrow wrapper that would
+                    // otherwise be invoked as the on_fulfilled / on_rejected
+                    // callback — the wrapper just calls
+                    // `__step(value, is_error)` which is exactly what we do
+                    // here with two fewer indirections (closure alloc +
+                    // closure call).
+                    if step_closure.is_null() {
+                        if !next.is_null() {
+                            if is_error {
+                                js_promise_reject(next, value);
+                            } else {
+                                js_promise_resolve(next, value);
+                            }
                         }
+                        restore_microtask_context();
+                        ran += 1;
+                        continue;
                     }
-                    restore_microtask_context();
-                    ran += 1;
-                    continue;
-                }
-                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(step_closure));
-                CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
-                CURRENT_MICROTASK_NEXT.with(|c| c.set(next));
-                // Issue #712 + #921 + #922 defensive guard. Track
-                // consecutive is_error=true dispatches; reject the
-                // chain if it crosses ASYNC_STEP_REENTRY_BOUND.
-                //
-                // Originally (#712) the guard required SAME `step_closure`
-                // to count up — but the #921/#922 production loops
-                // (gscmaster-api Fastify route handlers) alternate
-                // between two async-step closures (route handler ↔
-                // middleware ↔ inner await), each one rethrowing the
-                // same TypeError. With the same-closure check, the
-                // counter resets every other dispatch and the loop
-                // never trips the guard — the user observed 5.7M
-                // identical `value is not a function` lines before PM2
-                // restarted the process.
-                //
-                // Drop the same-closure check: count ANY consecutive
-                // run of `is_error=true` dispatches. A legitimate
-                // throw-in-a-loop pattern interleaves `is_error=false`
-                // steps (the loop's post-catch state) between throws,
-                // so its consecutive count never grows beyond 1.
-                if is_error {
-                    let prev = ASYNC_STEP_GUARD.with(|c| c.get());
-                    let new_count = prev.consecutive_error_count.saturating_add(1);
-                    if new_count > ASYNC_STEP_REENTRY_BOUND {
+                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(step_closure));
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
+                    CURRENT_MICROTASK_NEXT.with(|c| c.set(next));
+                    // Issue #712 + #921 + #922 defensive guard. Track
+                    // consecutive is_error=true dispatches; reject the
+                    // chain if it crosses ASYNC_STEP_REENTRY_BOUND.
+                    //
+                    // Originally (#712) the guard required SAME `step_closure`
+                    // to count up — but the #921/#922 production loops
+                    // (gscmaster-api Fastify route handlers) alternate
+                    // between two async-step closures (route handler ↔
+                    // middleware ↔ inner await), each one rethrowing the
+                    // same TypeError. With the same-closure check, the
+                    // counter resets every other dispatch and the loop
+                    // never trips the guard — the user observed 5.7M
+                    // identical `value is not a function` lines before PM2
+                    // restarted the process.
+                    //
+                    // Drop the same-closure check: count ANY consecutive
+                    // run of `is_error=true` dispatches. A legitimate
+                    // throw-in-a-loop pattern interleaves `is_error=false`
+                    // steps (the loop's post-catch state) between throws,
+                    // so its consecutive count never grows beyond 1.
+                    if is_error {
+                        let prev = ASYNC_STEP_GUARD.with(|c| c.get());
+                        let new_count = prev.consecutive_error_count.saturating_add(1);
+                        if new_count > ASYNC_STEP_REENTRY_BOUND {
+                            ASYNC_STEP_GUARD.with(|c| {
+                                c.set(AsyncStepGuard {
+                                    last_closure: 0,
+                                    consecutive_error_count: 0,
+                                })
+                            });
+                            if !next.is_null() {
+                                let msg = b"async step driver detected runaway re-entry (issue #712/#921/#922 guard); rejecting Promise to prevent unbounded loop. Common cause: throw across an await boundary inside try/catch; convert to a result-tag pattern.";
+                                let msg_str = crate::string::js_string_from_bytes(
+                                    msg.as_ptr(),
+                                    msg.len() as u32,
+                                );
+                                let err = crate::error::js_typeerror_new(msg_str);
+                                let err_val = crate::value::js_nanbox_pointer(err as i64);
+                                let next = CURRENT_MICROTASK_NEXT
+                                    .with(|c| c.replace(std::ptr::null_mut()));
+                                js_promise_reject(next, err_val);
+                            }
+                            CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
+                            CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+                            CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
+                            restore_microtask_context();
+                            ran += 1;
+                            continue;
+                        }
+                        ASYNC_STEP_GUARD.with(|c| {
+                            c.set(AsyncStepGuard {
+                                last_closure: step_closure as usize,
+                                consecutive_error_count: new_count,
+                            })
+                        });
+                    } else {
                         ASYNC_STEP_GUARD.with(|c| {
                             c.set(AsyncStepGuard {
                                 last_closure: 0,
                                 consecutive_error_count: 0,
                             })
                         });
-                        if !next.is_null() {
-                            let msg = b"async step driver detected runaway re-entry (issue #712/#921/#922 guard); rejecting Promise to prevent unbounded loop. Common cause: throw across an await boundary inside try/catch; convert to a result-tag pattern.";
-                            let msg_str =
-                                crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-                            let err = crate::error::js_typeerror_new(msg_str);
-                            let err_val = crate::value::js_nanbox_pointer(err as i64);
-                            let next =
-                                CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
-                            js_promise_reject(next, err_val);
-                        }
-                        CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
-                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
-                        CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
-                        restore_microtask_context();
-                        ran += 1;
-                        continue;
+                        // Issue #922: a non-error step dispatched, signalling
+                        // forward progress through the user's async state
+                        // machine. Reset the throw_not_callable counter so a
+                        // legitimate later throw-in-a-loop doesn't trip the
+                        // circuit breaker just because the program threw
+                        // 100_000 cumulative times across the whole run.
+                        crate::closure::reset_throw_not_callable_counter();
                     }
-                    ASYNC_STEP_GUARD.with(|c| {
-                        c.set(AsyncStepGuard {
-                            last_closure: step_closure as usize,
-                            consecutive_error_count: new_count,
+                    // Stash both trap_next + current_step in a single TLS
+                    // write so the hot path doesn't pay two `.with()` calls
+                    // per microtask. `current_step` gates the
+                    // `js_async_step_chain` / `js_async_step_done` reuse
+                    // path: nested async-fn calls pass a DIFFERENT step
+                    // closure → fail the gate → alloc their own next, so
+                    // their settlement can't collapse onto the parent's.
+                    //
+                    // Issue #748: save the previous INLINE_TRAP value and
+                    // restore it after step dispatch. The microtask runner
+                    // can be called RE-ENTRANTLY from inside an outer
+                    // async-step body — specifically when a non-transformed
+                    // async closure's `await` busy-waits on
+                    // `js_promise_run_microtasks()`. The outer body
+                    // (e.g. a top-level async function's state machine
+                    // closure) was entered via `js_async_first_call` which
+                    // set INLINE_TRAP to `{trap_next: null, current_step:
+                    // outer_step}`. Without save/restore, clearing to empty
+                    // after the inner Task::AsyncStep dispatch would leak
+                    // back to the outer body — `Expr::CurrentStepClosure`
+                    // (lowered to `js_get_current_step_closure`) returns
+                    // NULL after control returns from the busy-wait, and
+                    // the outer's `AsyncStepChain` queues a Task::AsyncStep
+                    // with step=NULL. That task hits the null-step short
+                    // circuit (line 1316) which only propagates the value
+                    // to `next` without ever calling the outer step body's
+                    // state-1 code — symptom: the outer body's post-await
+                    // statements never execute and the returned Promise
+                    // settles with the awaited value rather than the
+                    // explicit return expression.
+                    let prev_trap = INLINE_TRAP.with(|c| c.get());
+                    let trap_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
+                    let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
+                        prev_trap.current_step as *const crate::closure::ClosureHeader,
+                    );
+                    INLINE_TRAP.with(|c| {
+                        c.set(InlineTrap {
+                            trap_next: next,
+                            current_step: step_closure as usize,
                         })
                     });
-                } else {
-                    ASYNC_STEP_GUARD.with(|c| {
-                        c.set(AsyncStepGuard {
-                            last_closure: 0,
-                            consecutive_error_count: 0,
-                        })
-                    });
-                    // Issue #922: a non-error step dispatched, signalling
-                    // forward progress through the user's async state
-                    // machine. Reset the throw_not_callable counter so a
-                    // legitimate later throw-in-a-loop doesn't trip the
-                    // circuit breaker just because the program threw
-                    // 100_000 cumulative times across the whole run.
-                    crate::closure::reset_throw_not_callable_counter();
-                }
-                // Stash both trap_next + current_step in a single TLS
-                // write so the hot path doesn't pay two `.with()` calls
-                // per microtask. `current_step` gates the
-                // `js_async_step_chain` / `js_async_step_done` reuse
-                // path: nested async-fn calls pass a DIFFERENT step
-                // closure → fail the gate → alloc their own next, so
-                // their settlement can't collapse onto the parent's.
-                //
-                // Issue #748: save the previous INLINE_TRAP value and
-                // restore it after step dispatch. The microtask runner
-                // can be called RE-ENTRANTLY from inside an outer
-                // async-step body — specifically when a non-transformed
-                // async closure's `await` busy-waits on
-                // `js_promise_run_microtasks()`. The outer body
-                // (e.g. a top-level async function's state machine
-                // closure) was entered via `js_async_first_call` which
-                // set INLINE_TRAP to `{trap_next: null, current_step:
-                // outer_step}`. Without save/restore, clearing to empty
-                // after the inner Task::AsyncStep dispatch would leak
-                // back to the outer body — `Expr::CurrentStepClosure`
-                // (lowered to `js_get_current_step_closure`) returns
-                // NULL after control returns from the busy-wait, and
-                // the outer's `AsyncStepChain` queues a Task::AsyncStep
-                // with step=NULL. That task hits the null-step short
-                // circuit (line 1316) which only propagates the value
-                // to `next` without ever calling the outer step body's
-                // state-1 code — symptom: the outer body's post-await
-                // statements never execute and the returned Promise
-                // settles with the awaited value rather than the
-                // explicit return expression.
-                let prev_trap = INLINE_TRAP.with(|c| c.get());
-                let trap_scope = crate::gc::RuntimeHandleScope::new();
-                let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
-                let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
-                    prev_trap.current_step as *const crate::closure::ClosureHeader,
-                );
-                INLINE_TRAP.with(|c| {
-                    c.set(InlineTrap {
-                        trap_next: next,
-                        current_step: step_closure as usize,
-                    })
-                });
 
-                let t1 = if prof {
-                    Some(std::time::Instant::now())
-                } else {
-                    None
-                };
-                let is_error_bits = if is_error {
-                    f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
-                } else {
-                    f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
-                };
-                // #789: bracket the await continuation with async_hooks
-                // before/after so `executionAsyncId()` reflects the async
-                // function's resource id during its resumed body and the
-                // before/after hooks fire — mirroring the `Task::Promise`
-                // arm above. Capture the result promise's ids as plain
-                // values BEFORE the callback (a re-entrant drain can move
-                // `next` via GC, #1663) and feed the same id to `after()`.
-                // `before`/`after` early-return on id 0, so this is a no-op
-                // when async_hooks are inactive.
-                let step_async_id = if next.is_null() {
-                    0
-                } else {
-                    unsafe { (*next).async_id }
-                };
-                let step_trigger_id = if next.is_null() {
-                    0
-                } else {
-                    unsafe { (*next).trigger_async_id }
-                };
-                crate::async_hooks::before(step_async_id, step_trigger_id);
-                let result = call_async_step_direct(step_closure, value, is_error_bits);
-                CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
-                if let Some(t) = t1 {
-                    MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                }
-
-                INLINE_TRAP.with(|c| {
-                    c.set(InlineTrap {
-                        trap_next: prev_trap_next_handle.get_raw_mut_ptr::<Promise>(),
-                        current_step: prev_trap_step_handle
-                            .get_raw_const_ptr::<crate::closure::ClosureHeader>()
-                            as usize,
-                    })
-                });
-                // #789: pair the `before()` above — fires the after hook and
-                // pops the execution-id stack using the captured id.
-                crate::async_hooks::after(step_async_id);
-                CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
-
-                let t2 = if prof {
-                    Some(std::time::Instant::now())
-                } else {
-                    None
-                };
-                // Self-chain marker: when `js_async_step_chain` reused
-                // our `next` Promise (the steady-state primitive-await
-                // path), the result is the same Promise pointer. The
-                // next iteration's `Task::AsyncStep` is already on the
-                // queue carrying the same `next`; nothing to propagate
-                // here.
-                let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
-                if !next.is_null() {
-                    let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
-                    let result_is_self_chain = if js_value_is_promise(result) != 0 {
-                        crate::value::js_nanbox_get_pointer(result) as *mut Promise == next
+                    let t1 = if prof {
+                        Some(std::time::Instant::now())
                     } else {
-                        false
+                        None
                     };
-                    if !result_is_self_chain {
-                        propagate_callback_result(result, next);
+                    let is_error_bits = if is_error {
+                        f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
+                    } else {
+                        f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
+                    };
+                    // #789: bracket the await continuation with async_hooks
+                    // before/after so `executionAsyncId()` reflects the async
+                    // function's resource id during its resumed body and the
+                    // before/after hooks fire — mirroring the `Task::Promise`
+                    // arm above. Capture the result promise's ids as plain
+                    // values BEFORE the callback (a re-entrant drain can move
+                    // `next` via GC, #1663) and feed the same id to `after()`.
+                    // `before`/`after` early-return on id 0, so this is a no-op
+                    // when async_hooks are inactive.
+                    let step_async_id = if next.is_null() {
+                        0
+                    } else {
+                        unsafe { (*next).async_id }
+                    };
+                    let step_trigger_id = if next.is_null() {
+                        0
+                    } else {
+                        unsafe { (*next).trigger_async_id }
+                    };
+                    crate::async_hooks::before(step_async_id, step_trigger_id);
+                    let result = call_async_step_direct(step_closure, value, is_error_bits);
+                    CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
+                    if let Some(t) = t1 {
+                        MT_TIME_NS_CALLBACK
+                            .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
-                } else {
-                    CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+
+                    INLINE_TRAP.with(|c| {
+                        c.set(InlineTrap {
+                            trap_next: prev_trap_next_handle.get_raw_mut_ptr::<Promise>(),
+                            current_step: prev_trap_step_handle
+                                .get_raw_const_ptr::<crate::closure::ClosureHeader>()
+                                as usize,
+                        })
+                    });
+                    // #789: pair the `before()` above — fires the after hook and
+                    // pops the execution-id stack using the captured id.
+                    crate::async_hooks::after(step_async_id);
+                    CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
+
+                    let t2 = if prof {
+                        Some(std::time::Instant::now())
+                    } else {
+                        None
+                    };
+                    // Self-chain marker: when `js_async_step_chain` reused
+                    // our `next` Promise (the steady-state primitive-await
+                    // path), the result is the same Promise pointer. The
+                    // next iteration's `Task::AsyncStep` is already on the
+                    // queue carrying the same `next`; nothing to propagate
+                    // here.
+                    let next = CURRENT_MICROTASK_NEXT.with(|c| c.replace(std::ptr::null_mut()));
+                    if !next.is_null() {
+                        let result = CURRENT_MICROTASK_VALUE.with(|c| c.replace(0.0));
+                        let result_is_self_chain = if js_value_is_promise(result) != 0 {
+                            crate::value::js_nanbox_get_pointer(result) as *mut Promise == next
+                        } else {
+                            false
+                        };
+                        if !result_is_self_chain {
+                            propagate_callback_result(result, next);
+                        }
+                    } else {
+                        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+                    }
+                    if let Some(t) = t2 {
+                        MT_TIME_NS_RESOLVE
+                            .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    }
+                    restore_microtask_context();
+                    ran += 1;
                 }
-                if let Some(t) = t2 {
-                    MT_TIME_NS_RESOLVE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                }
-                restore_microtask_context();
-                ran += 1;
             }
+        }
+
+        if ran == ran_before_checkpoint {
+            break;
         }
     }
 
@@ -592,7 +637,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     // those drain on the next pump iteration before newly due timers.
     ran += crate::timer::js_timer_tick();
     ran += crate::timer::js_callback_timer_tick();
-    crate::builtins::js_drain_queued_microtasks();
+    ran += crate::builtins::drain_queued_microtasks_count();
     ran += crate::timer::js_interval_timer_tick();
 
     crate::exception::js_try_end();

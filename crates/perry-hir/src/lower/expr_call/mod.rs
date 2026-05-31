@@ -83,6 +83,21 @@ use textencoder::try_textencoder_decoder;
 use url_date_instance::try_url_date_weakref_instance;
 use wasm_exports::try_wasm_instance_exports;
 
+fn unwrap_call_callee_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::TsAs(x) => cur = &x.expr,
+            ast::Expr::TsNonNull(x) => cur = &x.expr,
+            ast::Expr::TsSatisfies(x) => cur = &x.expr,
+            ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+            ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+            ast::Expr::Paren(x) => cur = &x.expr,
+            _ => return cur,
+        }
+    }
+}
+
 /// Issue #1132 — scope the native-instance param tags that
 /// `lower_call_inner`'s pre-scans register (createServer's
 /// `(req, res)`, http.get's `(res)`, fastify's `(req, reply)`, the
@@ -217,6 +232,28 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         .iter()
         .map(|arg| lower_expr(ctx, &arg.expr))
         .collect::<Result<Vec<_>>>()?;
+
+    if !has_spread {
+        if let ast::Callee::Expr(callee_expr) = &call.callee {
+            if let ast::Expr::Ident(ident) = unwrap_call_callee_ts_wrappers(callee_expr.as_ref()) {
+                if let Some((module_name, Some(method_name))) =
+                    ctx.lookup_native_module(ident.sym.as_ref())
+                {
+                    if module_name.strip_prefix("node:").unwrap_or(module_name) == "sqlite"
+                        && method_name == "DatabaseSync"
+                    {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "sqlite".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "DatabaseSync".to_string(),
+                            args,
+                        });
+                    }
+                }
+            }
+        }
+    }
 
     // #1723: `<stdlib-ns>[dynamicKey].method(args)` — a method call whose
     // receiver is a dynamic stdlib SUB-namespace selection (`path.win32` /

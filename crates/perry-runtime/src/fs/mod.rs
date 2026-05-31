@@ -33,7 +33,9 @@ mod stats;
 pub use stats::*;
 mod dirent;
 pub use dirent::*;
+mod open_as_blob;
 mod time;
+pub use open_as_blob::*;
 pub mod validate;
 pub use time::js_fs_to_unix_timestamp;
 

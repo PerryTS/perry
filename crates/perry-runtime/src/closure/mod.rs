@@ -42,7 +42,9 @@ pub use dispatch::{
     js_closure_call8, js_closure_call9, js_closure_call_apply_with_spread, js_closure_call_array,
     js_function_bind, js_native_call_value, throw_not_callable,
 };
-pub(crate) use dispatch::{reset_throw_not_callable_counter, resolve_call2_direct};
+pub(crate) use dispatch::{
+    reify_function_method_value, reset_throw_not_callable_counter, resolve_call2_direct,
+};
 
 #[cfg(test)]
 pub(crate) use dynamic_props::test_clear_closure_side_tables;
