@@ -33,3 +33,20 @@ pub(crate) fn normalize_method(raw: &str) -> String {
         _ => raw.to_string(),
     }
 }
+
+pub(crate) fn canonical_reason(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "",
+    }
+}

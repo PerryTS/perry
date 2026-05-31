@@ -32,7 +32,8 @@ pub use body_metadata::*;
 // keep this file under the 2,000-line lint gate.
 mod validation;
 use validation::{
-    is_forbidden_method, is_null_body_status, is_valid_status_text, normalize_method,
+    canonical_reason, is_forbidden_method, is_null_body_status, is_valid_status_text,
+    normalize_method,
 };
 
 // Response handle storage
@@ -1248,23 +1249,6 @@ pub unsafe extern "C" fn js_response_new(
         body,
         body_present,
     ))
-}
-
-fn canonical_reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        301 => "Moved Permanently",
-        302 => "Found",
-        304 => "Not Modified",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "",
-    }
 }
 
 /// response.headers — returns a Headers handle (f64). Lazily allocates a Headers entry
