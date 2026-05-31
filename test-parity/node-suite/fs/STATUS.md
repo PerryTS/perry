@@ -4,9 +4,9 @@ This split suite replaces the legacy monolithic `test-files/test_parity_fs.ts` a
 
 ## Current coverage
 
-- `node:fs`: 108 TypeScript parity cases
-- `node:fs/promises`: 55 TypeScript parity cases
-- Total: 163 TypeScript parity cases
+- `node:fs`: 126 TypeScript parity cases
+- `node:fs/promises`: 62 TypeScript parity cases
+- Total: 188 TypeScript parity cases
 
 The suite was built from deterministic behavior in:
 
@@ -25,13 +25,13 @@ These areas are intentionally left as follow-up work because they require larger
 3. Full FileHandle coverage such as readline integration and more stream lifecycle/error cases.
 4. `writeFile` and FileHandle write inputs from streams, async iterables, iterables, and abort signals.
 5. Node-perfect `cp` behavior for async filters, exact validation/errors, symlink cycles, subdirectory guards, mode/reflink semantics, and conflict handling.
-6. Node-perfect errors across fs APIs: exact error type, `code`, `errno`, `path`, `dest`, and `syscall` fields.
+6. Node-perfect errors across the remaining fs APIs: exact error type, `code`, `errno`, `path`, `dest`, and `syscall` fields. Path-pair mutators (`rename`, `copyFile`, `link`, `symlink`) plus `readlink` now propagate deterministic syscall errors across sync, callback, and `node:fs/promises` surfaces.
 7. Remaining Stats timestamp precision edge cases. Numeric, bigint, and Date-valued timestamp aliases are covered for the main stat/lstat/fstat paths.
 8. Stream edge cases: backpressure, `autoClose`, `emitClose`, destroy/error ordering, and fd lifecycle parity.
 9. URL/path edge cases, especially full compatibility with `pathToFileURL()`-generated objects.
 10. Additional platform- and permission-sensitive behavior once the parity runner can model those deterministically.
 11. Real streaming for `createReadStream`/`createWriteStream`. The current implementation eagerly loads the source file into memory and emits one `data` chunk; arbitrary `highWaterMark`, mid-stream `pause`/`resume`, and backpressure-driven `drain` events are not yet modeled.
-12. Callback-style fs APIs now invoke `cb(err, …)` with a real `Error` carrying `err.code` (`"ENOENT"`, `"EACCES"`, `"EEXIST"`, …), `err.syscall`, and `err.path` — values are registered in per-message side tables (`register_error_code_pub` / `register_error_syscall` / `register_error_path`) and surfaced by the `OBJECT_TYPE_ERROR` getters in `object::field_get_set`. Errors raised inside the syscall after the pre-flight probe succeeds still surface as sentinel values (a deeper fix needs typed-error propagation through LLVM). `fs/promises.open` now rejects failed direct opens, including read-only and create/write-style flags, instead of resolving with `fd === -1`.
+12. Callback-style fs APIs now invoke `cb(err, …)` with a real `Error` carrying `err.code` (`"ENOENT"`, `"EACCES"`, `"EEXIST"`, …), `err.syscall`, `err.path`, and `err.dest` for two-path operations. Values are registered in per-message side tables (`register_error_code_pub` / `register_error_syscall` / `register_error_path` / `register_error_dest`) and surfaced by the `OBJECT_TYPE_ERROR` getters in `object::field_get_set`. `fs/promises.open` now rejects failed direct opens, including read-only and create/write-style flags, instead of resolving with `fd === -1`.
 13. `FileHandle` and the numeric-fd registry are `thread_local` — handles cannot be shared across threads spawned with `perry/thread` or `parallelMap`. The same fd in another thread is treated as missing.
 14. On POSIX, `ctime` is now read from `MetadataExt::ctime` (plus `ctime_nsec`) and the bigint `atimeNs`/`mtimeNs`/`ctimeNs` fields use real `*time_nsec` counters — so sub-millisecond precision is preserved. Windows still falls back to the millisecond×1e6 approximation.
 15. `mkdtemp` returns an empty path on exhaustion (after 64 collision retries) instead of throwing — once typed error propagation lands, promote this to a real ENOSPC/EACCES rejection.

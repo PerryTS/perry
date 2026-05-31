@@ -160,6 +160,12 @@ pub(super) fn register_stub_arities() {
     register(pipeline_success_callback as *const u8, 0);
     register(pipeline_error_callback as *const u8, 1);
     register(pipeline_close_callback as *const u8, 0);
+    register(compose_stage_error_callback as *const u8, 1);
+    register(compose_source_data_callback as *const u8, 1);
+    register(compose_source_end_callback as *const u8, 0);
+    register(compose_source_error_callback as *const u8, 1);
+    register(compose_duplex_write_callback as *const u8, 3);
+    register(compose_duplex_final_callback as *const u8, 1);
     register(ns_write3 as *const u8, 3);
     register(ns_end3 as *const u8, 3);
     register(ns_cork0 as *const u8, 0);
