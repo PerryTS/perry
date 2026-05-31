@@ -187,15 +187,22 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // runtime's `node:dgram`/network stack handles it) —
                     // the literal mirrors what we actually link in.
                     "features" => return Ok(process_features_literal()),
-                    // #1400: process.sourceMapsEnabled — boolean indicating
-                    // whether the runtime's source-map support is on. Perry
-                    // compiles AOT and doesn't ship a source-map resolver,
-                    // so the value is always false. Without this arm the
-                    // bare read returned a 0 sentinel — falsy in a boolean
-                    // context but `typeof` was `"number"`, so libraries
-                    // doing `typeof process.sourceMapsEnabled === "boolean"`
-                    // bailed out (e.g. some Vitest stack-trace formatters).
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #1400 / #3108: process.sourceMapsEnabled — live boolean
+                    // reflecting setSourceMapsEnabled(). Perry compiles AOT
+                    // and ships no source-map resolver, so the flag drives
+                    // nothing observable, but it round-trips through the
+                    // setter (starting `false`) so `typeof ... === "boolean"`
+                    // holds and toggles are observable. Lower to a 0-arg
+                    // native getter that reads the runtime flag.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     // #1412: `process.moduleLoadList` is Node's list of
                     // built-in modules already loaded into the
                     // interpreter. Perry AOT-compiles every reachable
@@ -384,7 +391,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ]));
                     }
                     "features" => return Ok(process_features_literal()),
-                    "sourceMapsEnabled" => return Ok(Expr::Bool(false)),
+                    // #3108: live boolean toggle — see the matching arm above.
+                    "sourceMapsEnabled" => {
+                        return Ok(Expr::NativeMethodCall {
+                            module: "process".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "sourceMapsEnabled".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     "moduleLoadList" => return Ok(Expr::Array(vec![])),
                     "finalization" => {
                         return Ok(Expr::Object(vec![
