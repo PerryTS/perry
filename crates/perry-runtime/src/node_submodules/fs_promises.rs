@@ -413,7 +413,7 @@ pub(crate) extern "C" fn thunk_fs_promises_watch(
     path: f64,
     options: f64,
 ) -> f64 {
-    crate::fs::js_fs_watch(path, options, f64::from_bits(crate::value::TAG_UNDEFINED))
+    crate::fs::js_fs_promises_watch(path, options)
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_access(
