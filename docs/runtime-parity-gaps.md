@@ -2058,7 +2058,7 @@ The counts above are the last generated parity-gap counts on this branch. They w
 | `console` | `builtin` |
 | `performance` | `expr:PerformanceNow` |
 | `queueMicrotask(cb)` | `rt:promise microtask queue` |
-| `structuredClone(value, options?)` | `rt:js_structured_clone` |
+| `structuredClone(value, options?)` | `rt:js_structured_clone_with_options` |
 | `atob(b64)` | `expr:Atob` |
 | `btoa(str)` | `expr:Btoa` |
 | `fetch(input, init?)` | `expr:FetchWithOptions` |

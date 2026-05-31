@@ -283,8 +283,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_string_replace_all_string_fn", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_replace_regex_fn", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_replace_all_regex_fn", I64, &[I64, I64, DOUBLE]);
-    // structuredClone(v) — real deep copy, was stubbed as passthrough.
+    // structuredClone(v[, options]) — real deep copy, with ArrayBuffer transfer.
     module.declare_function("js_structured_clone", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_structured_clone_with_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // WeakRef / FinalizationRegistry (weakref.rs). `js_weakref_new` /
     // `js_finreg_new` return raw `*mut ObjectHeader` (i64 pointer, must be
     // POINTER_TAG-boxed at the call site). The deref/register/unregister

@@ -201,7 +201,6 @@ where
         | Expr::DecodeURI(v)
         | Expr::EncodeURIComponent(v)
         | Expr::DecodeURIComponent(v)
-        | Expr::StructuredClone(v)
         | Expr::QueueMicrotask(v)
         | Expr::IterResultSet(v, _)
         | Expr::CryptoRandomBytes(v)
@@ -1058,6 +1057,10 @@ where
             if let Some(e) = encoding {
                 f(e);
             }
+        }
+        Expr::StructuredClone { value, options } => {
+            f(value);
+            f(options);
         }
         Expr::BufferFromArrayBuffer {
             data,

@@ -778,8 +778,11 @@ pub enum Expr {
     /// decodeURIComponent(string) -> string
     DecodeURIComponent(Box<Expr>),
 
-    /// structuredClone(value) -> deep-cloned value
-    StructuredClone(Box<Expr>),
+    /// structuredClone(value[, options]) -> deep-cloned value
+    StructuredClone {
+        value: Box<Expr>,
+        options: Box<Expr>,
+    },
     /// queueMicrotask(callback) -> void
     QueueMicrotask(Box<Expr>),
 

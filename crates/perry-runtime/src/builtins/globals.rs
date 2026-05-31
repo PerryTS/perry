@@ -171,6 +171,14 @@ pub extern "C" fn js_decode_uri_component(value: f64) -> i64 {
 thread_local! {
     static STRUCTURED_CLONE_IN_PROGRESS: std::cell::RefCell<std::collections::HashSet<usize>>
         = std::cell::RefCell::new(std::collections::HashSet::new());
+    static STRUCTURED_CLONE_TRANSFER_STATE: std::cell::RefCell<Option<StructuredCloneTransferState>>
+        = std::cell::RefCell::new(None);
+}
+
+#[derive(Default)]
+struct StructuredCloneTransferState {
+    transferables: std::collections::HashSet<usize>,
+    clones: std::collections::HashMap<usize, usize>,
 }
 
 fn structured_clone_seen(ptr: usize) -> bool {
@@ -198,10 +206,225 @@ impl Drop for CloneCycleGuard {
     }
 }
 
+struct CloneTransferStateGuard(Option<StructuredCloneTransferState>);
+impl Drop for CloneTransferStateGuard {
+    fn drop(&mut self) {
+        STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
+            *state.borrow_mut() = self.0.take();
+        });
+    }
+}
+
+fn throw_structured_clone_type_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn throw_data_clone_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_error_new_with_name_message(b"DataCloneError", msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn pointer_addr(value: f64) -> Option<usize> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        Some((jv.bits() & crate::value::POINTER_MASK) as usize)
+    } else {
+        None
+    }
+}
+
+fn gc_type_for_pointer(addr: usize) -> Option<u8> {
+    if addr < 0x10000
+        || crate::buffer::is_registered_buffer(addr)
+        || crate::symbol::is_registered_symbol(addr)
+        || crate::set::is_registered_set(addr)
+    {
+        return None;
+    }
+    unsafe { Some(*((addr as *const u8).sub(crate::gc::GC_HEADER_SIZE))) }
+}
+
+fn is_array_value(value: f64) -> bool {
+    pointer_addr(value)
+        .is_some_and(|addr| gc_type_for_pointer(addr) == Some(crate::gc::GC_TYPE_ARRAY))
+}
+
+fn get_object_property(value: f64, name: &[u8]) -> f64 {
+    let Some(addr) = pointer_addr(value) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    if gc_type_for_pointer(addr) != Some(crate::gc::GC_TYPE_OBJECT) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val =
+        crate::object::js_object_get_field_by_name(addr as *mut crate::object::ObjectHeader, key);
+    f64::from_bits(val.bits())
+}
+
+fn transfer_existing_clone(addr: usize) -> Option<usize> {
+    STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.clones.get(&addr).copied())
+    })
+}
+
+fn transfer_requested(addr: usize) -> bool {
+    STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .is_some_and(|state| state.transferables.contains(&addr))
+    })
+}
+
+fn record_transfer_clone(src: usize, cloned: usize) {
+    STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
+        if let Some(state) = state.borrow_mut().as_mut() {
+            state.clones.insert(src, cloned);
+        }
+    });
+}
+
+fn detach_unseen_transferables() {
+    STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
+        if let Some(state) = state.borrow().as_ref() {
+            for addr in &state.transferables {
+                if state.clones.contains_key(addr) {
+                    continue;
+                }
+                unsafe {
+                    let src = *addr as *mut crate::buffer::BufferHeader;
+                    (*src).length = 0;
+                    (*src).capacity = 0;
+                }
+            }
+        }
+    });
+}
+
+fn clone_buffer_header(addr: usize, detach_source: bool) -> f64 {
+    if detach_source {
+        if let Some(existing) = transfer_existing_clone(addr) {
+            return crate::value::js_nanbox_pointer(existing as i64);
+        }
+    }
+
+    let src = addr as *mut crate::buffer::BufferHeader;
+    let src_len = unsafe { (*src).length };
+    let dst = crate::buffer::buffer_alloc(src_len);
+    unsafe {
+        (*dst).length = src_len;
+        if src_len > 0 {
+            std::ptr::copy_nonoverlapping(
+                crate::buffer::buffer_data(src),
+                crate::buffer::buffer_data_mut(dst),
+                src_len as usize,
+            );
+        }
+    }
+
+    let dst_addr = dst as usize;
+    if crate::buffer::is_array_buffer(addr) {
+        crate::buffer::mark_as_array_buffer(dst_addr);
+    } else if crate::buffer::is_shared_array_buffer(addr) {
+        crate::buffer::mark_as_shared_array_buffer(dst_addr);
+    } else if crate::buffer::is_data_view(addr) {
+        crate::buffer::mark_as_data_view(dst_addr);
+        crate::buffer::set_buffer_ab_alias(dst_addr, crate::buffer::resolve_buffer_ab_alias(addr));
+    } else if crate::buffer::is_uint8array_buffer(addr) {
+        crate::buffer::mark_as_uint8array(dst_addr);
+        crate::buffer::set_buffer_ab_alias(dst_addr, crate::buffer::resolve_buffer_ab_alias(addr));
+    } else {
+        crate::buffer::set_buffer_ab_alias(dst_addr, crate::buffer::resolve_buffer_ab_alias(addr));
+    }
+
+    if detach_source {
+        record_transfer_clone(addr, dst_addr);
+        unsafe {
+            (*src).length = 0;
+            (*src).capacity = 0;
+        }
+    }
+
+    crate::value::js_nanbox_pointer(dst_addr as i64)
+}
+
+fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
+    let options_value = crate::value::JSValue::from_bits(options.to_bits());
+    if options_value.is_undefined() || options_value.is_null() {
+        return std::collections::HashSet::new();
+    }
+    if !options_value.is_pointer() {
+        throw_structured_clone_type_error(
+            "Failed to execute 'structuredClone': Options cannot be converted to a dictionary",
+        );
+    }
+
+    let transfer = get_object_property(options, b"transfer");
+    if crate::value::JSValue::from_bits(transfer.to_bits()).is_undefined() {
+        return std::collections::HashSet::new();
+    }
+    if !is_array_value(transfer) {
+        throw_structured_clone_type_error(
+            "Failed to execute 'structuredClone': transfer in Options can not be converted to sequence",
+        );
+    }
+
+    let transfer_addr = pointer_addr(transfer).unwrap_or(0);
+    let transfer_arr = transfer_addr as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(transfer_arr);
+    let mut out = std::collections::HashSet::new();
+    for i in 0..len {
+        let item = crate::array::js_array_get_f64(transfer_arr, i);
+        let Some(item_addr) = pointer_addr(item) else {
+            throw_data_clone_error("Found invalid value in transferList");
+        };
+        if !crate::buffer::is_array_buffer(item_addr)
+            || crate::buffer::is_shared_array_buffer(item_addr)
+        {
+            throw_data_clone_error("Found invalid value in transferList");
+        }
+        if !out.insert(item_addr) {
+            throw_data_clone_error("Transfer list contains duplicate ArrayBuffer");
+        }
+    }
+    out
+}
+
 /// structuredClone(value) -> deep-cloned value
 /// Handles numbers (pass-through), strings (copy), arrays/objects (shallow for now)
 #[no_mangle]
 pub extern "C" fn js_structured_clone(value: f64) -> f64 {
+    js_structured_clone_inner(value)
+}
+
+/// structuredClone(value, options) -> deep-cloned value with supported transfers.
+#[no_mangle]
+pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> f64 {
+    let transferables = collect_transfer_list(options);
+    let previous = STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
+        state.borrow_mut().replace(StructuredCloneTransferState {
+            transferables,
+            clones: std::collections::HashMap::new(),
+        })
+    });
+    let _guard = CloneTransferStateGuard(previous);
+    let cloned = js_structured_clone_inner(value);
+    detach_unseen_transferables();
+    cloned
+}
+
+fn js_structured_clone_inner(value: f64) -> f64 {
+    if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
+        throw_data_clone_error("Function could not be cloned");
+    }
+
     let bits = value.to_bits();
     // Pass through primitives (undefined, null, true, false)
     if bits == 0x7FFC_0000_0000_0001
@@ -242,19 +465,32 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
             if (ptr as usize) < 0x10000 {
                 return value;
             }
+            let addr = ptr as usize;
+            if crate::symbol::is_registered_symbol(addr) {
+                throw_data_clone_error("Symbol could not be cloned");
+            }
+            if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
+                throw_data_clone_error("Function could not be cloned");
+            }
+            if crate::closure::is_closure_ptr(addr) {
+                throw_data_clone_error("Function could not be cloned");
+            }
+            if crate::buffer::is_registered_buffer(addr) {
+                return clone_buffer_header(addr, transfer_requested(addr));
+            }
             // #1512: short-circuit on cycle so `o.self = o` doesn't infinite-
             // recurse. The cycle edge resolves to the original value, not
             // the clone — that breaks full reference-identity preservation
             // but keeps cycles from stack-overflowing the runtime.
-            if structured_clone_seen(ptr as usize) {
+            if structured_clone_seen(addr) {
                 return value;
             }
-            structured_clone_mark(ptr as usize);
-            let _guard = CloneCycleGuard(ptr as usize);
+            structured_clone_mark(addr);
+            let _guard = CloneCycleGuard(addr);
             // Set is tracked in SET_REGISTRY (not GC_TYPE_SET since it has
             // no GC header). Check the registry BEFORE touching the GC
             // header bytes — they'd be garbage for raw-allocated sets.
-            if crate::set::is_registered_set(ptr as usize) {
+            if crate::set::is_registered_set(addr) {
                 let src = ptr as *const crate::set::SetHeader;
                 let size = crate::set::js_set_size(src);
                 let scope = crate::gc::RuntimeHandleScope::new();

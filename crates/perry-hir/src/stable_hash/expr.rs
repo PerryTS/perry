@@ -236,7 +236,7 @@ impl SH for Expr {
             Expr::DecodeURI(e) => { tag(h, 184); e.as_ref().hash(h); }
             Expr::EncodeURIComponent(e) => { tag(h, 185); e.as_ref().hash(h); }
             Expr::DecodeURIComponent(e) => { tag(h, 186); e.as_ref().hash(h); }
-            Expr::StructuredClone(e) => { tag(h, 187); e.as_ref().hash(h); }
+            Expr::StructuredClone { value, options } => { tag(h, 187); value.as_ref().hash(h); options.as_ref().hash(h); }
             Expr::QueueMicrotask(e) => { tag(h, 188); e.as_ref().hash(h); }
             Expr::IterResultSet(e, b) => { tag(h, 189); e.as_ref().hash(h); b.hash(h); }
             Expr::IterResultGetValue => tag(h, 190),

@@ -110,8 +110,11 @@ their APIs behave as expected — `set` / `get` / `has` / `delete`, `add`,
 never collide on the same slot.
 
 The one caveat is that Perry's garbage collector does not yet treat these
-references as *weak*, so targets are **retained rather than collected**. In
-practice:
+references as *weak*, so targets are **retained rather than collected**. The
+current runtime stores `WeakRef` targets and `FinalizationRegistry`
+registrations in ordinary object/array fields (`crates/perry-runtime/src/weakref.rs`),
+and the adjacent GC root scanners do not have a weak-slot clearing/finalizer
+queue hook yet. In practice:
 
 - `WeakRef.deref()` always returns the original target (it is never reported as
   collected).
