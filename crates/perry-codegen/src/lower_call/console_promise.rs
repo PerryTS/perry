@@ -106,6 +106,12 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
         "isGeneratorObject" => Some("js_util_types_is_generator_object"),
         "isNativeError" => Some("js_util_types_is_native_error"),
+        // #3678: predicate tail.
+        "isDataView" => Some("js_util_types_is_data_view"),
+        "isFloat16Array" => Some("js_util_types_is_float16_array"),
+        "isWeakMap" => Some("js_util_types_is_weak_map"),
+        "isWeakSet" => Some("js_util_types_is_weak_set"),
+        "isExternal" => Some("js_util_types_is_external"),
         _ => None,
     }) else {
         return Ok(None);

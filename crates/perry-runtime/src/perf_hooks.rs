@@ -987,8 +987,8 @@ pub extern "C" fn js_perf_timerify(fn_value: f64, _options: f64) -> f64 {
         crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(name_value.bits()));
 
         if let Some(target) = closure_ptr_from_value(fn_value) {
-            if let Some(arity) = crate::closure::closure_arity(target) {
-                crate::object::set_builtin_closure_length(closure as usize, arity);
+            if let Some(length) = crate::closure::closure_length(target) {
+                crate::object::set_builtin_closure_length(closure as usize, length);
             }
         }
 

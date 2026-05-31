@@ -339,7 +339,7 @@ pub(crate) fn lower_module_decl(
                         rest_idx,
                         has_synth_args,
                     ));
-                    module.functions.push(func);
+                    push_function_decl_dedup(module, func);
                     // Track in exports
                     module.exports.push(Export::Named {
                         local: func_name.clone(),
@@ -1366,7 +1366,7 @@ pub(crate) fn lower_module_decl(
                                 rest_idx,
                                 has_synth_args,
                             ));
-                            module.functions.push(func);
+                            push_function_decl_dedup(module, func);
                             // Register under both names: callable locally as
                             // `<ident>` (some modules also `export { foo }`
                             // or call themselves by name) AND as the
@@ -1445,7 +1445,7 @@ pub(crate) fn lower_module_decl(
                             rest_idx,
                             has_synth_args,
                         ));
-                        module.functions.push(func);
+                        push_function_decl_dedup(module, func);
                         // Both the named export entry (so the importer's
                         // namespace populator sees `default`) and the
                         // `exported_functions` registry (so codegen's

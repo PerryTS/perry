@@ -36,6 +36,80 @@ pub(crate) fn lower_top_level_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Resu
     lower_stmts_inner(ctx, stmts, true)
 }
 
+pub(crate) fn lower_async_rejecting_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
+    lower_async_rejecting_stmts_inner(ctx, stmts, false)
+}
+
+pub(crate) fn lower_async_rejecting_top_level_stmts(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+) -> Result<()> {
+    lower_async_rejecting_stmts_inner(ctx, stmts, true)
+}
+
+fn lower_async_rejecting_stmts_inner(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+    emit_shadow_clears: bool,
+) -> Result<()> {
+    use crate::types::{I32, I64, PTR};
+
+    // Direct async functions that were not rewritten into generator state
+    // machines still need the ECMAScript async boundary: any abrupt
+    // completion before the first await rejects the returned Promise instead
+    // of escaping as a host exception.
+    ctx.func.has_try = true;
+
+    let body_idx = ctx.new_block("async.body");
+    let catch_idx = ctx.new_block("async.catch");
+    let merge_idx = ctx.new_block("async.merge");
+
+    let body_label = ctx.block_label(body_idx);
+    let catch_label = ctx.block_label(catch_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let blk = ctx.block();
+    let jmpbuf = blk.call(PTR, "js_try_push", &[]);
+    let sjr_reg = blk.next_reg();
+    if cfg!(target_os = "windows") {
+        blk.emit_raw(format!(
+            "{} = call i32 @_setjmp(ptr {}, ptr null) #0",
+            sjr_reg, jmpbuf
+        ));
+    } else if cfg!(target_vendor = "apple") {
+        blk.emit_raw(format!(
+            "{} = call i32 @_setjmp(ptr {}) #0",
+            sjr_reg, jmpbuf
+        ));
+    } else {
+        blk.emit_raw(format!("{} = call i32 @setjmp(ptr {}) #0", sjr_reg, jmpbuf));
+    }
+    let is_exc = blk.icmp_ne(I32, &sjr_reg, "0");
+    blk.cond_br(&is_exc, &catch_label, &body_label);
+
+    ctx.current_block = body_idx;
+    ctx.try_depth += 1;
+    lower_stmts_inner(ctx, stmts, emit_shadow_clears)?;
+    ctx.try_depth -= 1;
+    if !ctx.block().is_terminated() {
+        ctx.block().call_void("js_try_end", &[]);
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = catch_idx;
+    ctx.block().call_void("js_try_end", &[]);
+    let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+    let handle = ctx
+        .block()
+        .call(I64, "js_promise_rejected", &[(DOUBLE, &exc)]);
+    ctx.block().call_void("js_clear_exception", &[]);
+    let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
+    ctx.block().ret(DOUBLE, &boxed);
+
+    ctx.current_block = merge_idx;
+    Ok(())
+}
+
 fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bool) -> Result<()> {
     let mut i = 0;
     while i < stmts.len() {

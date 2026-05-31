@@ -568,9 +568,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Void,
     ),
-    // node:dns is currently a runtime-only shape stub: deterministic
-    // inventory helpers, constants, Resolver method shapes, and a local-only
-    // promises lookup for `localhost`. It does not perform external DNS IO.
+    // node:dns is currently runtime-only and deterministic: inventory
+    // helpers, constants, Resolver method shapes, and lookup/lookupService
+    // for localhost/loopback. It does not perform external DNS IO.
     method("dns", "lookup", false, None),
     method("dns", "lookupService", false, None),
     method("dns", "resolve", false, None),
@@ -594,6 +594,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns", "getDefaultResultOrder", false, None),
     class("dns", "Resolver"),
     method("dns", "Resolver", false, None),
+    method("dns", "resolve", true, Some("Resolver")),
+    method("dns", "resolve4", true, Some("Resolver")),
+    method("dns", "resolve6", true, Some("Resolver")),
+    method("dns", "resolveAny", true, Some("Resolver")),
+    method("dns", "resolveCaa", true, Some("Resolver")),
+    method("dns", "resolveCname", true, Some("Resolver")),
+    method("dns", "resolveMx", true, Some("Resolver")),
+    method("dns", "resolveNaptr", true, Some("Resolver")),
+    method("dns", "resolveNs", true, Some("Resolver")),
+    method("dns", "resolvePtr", true, Some("Resolver")),
+    method("dns", "resolveSoa", true, Some("Resolver")),
+    method("dns", "resolveSrv", true, Some("Resolver")),
+    method("dns", "resolveTlsa", true, Some("Resolver")),
+    method("dns", "resolveTxt", true, Some("Resolver")),
+    method("dns", "reverse", true, Some("Resolver")),
     method("dns", "cancel", true, Some("Resolver")),
     method("dns", "getServers", true, Some("Resolver")),
     method("dns", "setServers", true, Some("Resolver")),
@@ -648,8 +663,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns/promises", "getDefaultResultOrder", false, None),
     class("dns/promises", "Resolver"),
     method("dns/promises", "Resolver", false, None),
+    method("dns/promises", "resolve", true, Some("Resolver")),
+    method("dns/promises", "resolve4", true, Some("Resolver")),
+    method("dns/promises", "resolve6", true, Some("Resolver")),
+    method("dns/promises", "resolveAny", true, Some("Resolver")),
+    method("dns/promises", "resolveCaa", true, Some("Resolver")),
+    method("dns/promises", "resolveCname", true, Some("Resolver")),
+    method("dns/promises", "resolveMx", true, Some("Resolver")),
+    method("dns/promises", "resolveNaptr", true, Some("Resolver")),
+    method("dns/promises", "resolveNs", true, Some("Resolver")),
+    method("dns/promises", "resolvePtr", true, Some("Resolver")),
+    method("dns/promises", "resolveSoa", true, Some("Resolver")),
+    method("dns/promises", "resolveSrv", true, Some("Resolver")),
+    method("dns/promises", "resolveTlsa", true, Some("Resolver")),
+    method("dns/promises", "resolveTxt", true, Some("Resolver")),
+    method("dns/promises", "reverse", true, Some("Resolver")),
     method("dns/promises", "cancel", true, Some("Resolver")),
     method("dns/promises", "getServers", true, Some("Resolver")),
+    method("dns/promises", "setServers", true, Some("Resolver")),
+    method("dns/promises", "setLocalAddress", true, Some("Resolver")),
     // node:dgram UDP support is currently a runtime-only shape stub:
     // createSocket returns a socket-like object with callable methods so
     // feature detection and inventory probes compile without claiming packet IO.
@@ -859,6 +891,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "removeAllListeners", true, None),
     // EventEmitter additions wired in v0.5.922 (issue #850).
     property("events", "defaultMaxListeners"),
+    property("events", "usingDomains"),
     property("events", "errorMonitor"),
     property("events", "captureRejections"),
     property("events", "captureRejectionSymbol"),
@@ -882,6 +915,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "listenerCount", false, None),
     method("events", "getMaxListeners", false, None),
     method("events", "setMaxListeners", false, None),
+    method("events", "init", false, None),
     // Module-level `events.on(emitter, name)` — async-iterable queue,
     // PR #1257.
     method("events", "on", false, None),
@@ -2771,6 +2805,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "cwd", false, None),
     method("process", "uptime", false, None),
     method("process", "memoryUsage", false, None),
+    // #3108 (shipped in #3684): manifest rows for the source-map toggle
+    // implemented in the native dispatch table. Without these the
+    // manifest-consistency drift check fails.
+    method("process", "sourceMapsEnabled", false, None),
+    method("process", "setSourceMapsEnabled", false, None),
     method("process", "nextTick", false, None),
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
@@ -2784,6 +2823,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
             name: "path",
             ty: TypeSpec::Any,
             optional: true,
+        }],
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "process",
+        "sourceMapsEnabled",
+        false,
+        None,
+        &[],
+        TypeSpec::Bool,
+    ),
+    method_sig(
+        "process",
+        "setSourceMapsEnabled",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "enabled",
+            ty: TypeSpec::Bool,
+            optional: false,
         }],
         TypeSpec::Void,
     ),
@@ -2823,10 +2882,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "resourceUsage", false, None),
     method("process", "getActiveResourcesInfo", false, None),
     method("process", "hrtime", false, None),
-    // #3108 (Node process parity): source-map flag accessor + setter,
-    // dispatched as receiver-less methods via NATIVE_MODULE_TABLE.
-    method("process", "sourceMapsEnabled", false, None),
-    method("process", "setSourceMapsEnabled", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),
@@ -3158,6 +3213,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isStringObject", false, None),
     method("util/types", "isBooleanObject", false, None),
     method("util/types", "isBoxedPrimitive", false, None),
+    // #3678: predicate tail beyond Perry's previously-claimed subset. Only the
+    // predicates Perry can correctly back are exposed — isBigIntObject /
+    // isSymbolObject / isArgumentsObject / isModuleNamespaceObject / isKeyObject
+    // / isCryptoKey are omitted because Perry has no distinct backing value type
+    // for them and a `false`-always stub would lie about Node's positive cases.
+    method("util/types", "isDataView", false, None),
+    method("util/types", "isFloat16Array", false, None),
+    method("util/types", "isWeakMap", false, None),
+    method("util/types", "isWeakSet", false, None),
+    method("util/types", "isExternal", false, None),
     // --- sys: deprecated alias for node:util. Keep this module-level
     // surface aligned with the public `util` manifest rows above; the
     // runtime routes `node:sys` through the util namespace.
