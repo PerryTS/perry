@@ -931,6 +931,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "dns" | "dns/promises")
+                    && class_name == "Resolver"
+                    && is_dns_resolver_method_name(&property_name)
+                {
+                    // `dns.Resolver`/`dns/promises.Resolver` instances expose
+                    // callable method-valued fields. A bare method read
+                    // (`typeof r.resolve4`) returns that closure rather than
+                    // invoking the receiver stub as a 0-arg getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "dgram"
                     && class_name == "Socket"
                     && is_dgram_socket_method_name(&property_name)
@@ -1838,6 +1851,13 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "removeAllListeners"
             | "setMaxListeners"
             | "getMaxListeners"
+    )
+}
+
+fn is_dns_resolver_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "cancel" | "getServers" | "setServers" | "setLocalAddress"
     )
 }
 

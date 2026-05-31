@@ -289,6 +289,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         // dispatch correctly.
                                         | ("http", "Agent")
                                         | ("https", "Agent")
+                                        | ("dns" | "dns/promises", "Resolver")
                                 );
                                 if is_known_native_class {
                                     let (mod_for_class, cls_for_class) = if class_name == "Agent" {
@@ -408,6 +409,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         // Map factory functions to their class names
                                         let class_name = match (module_name, method_name) {
                                             ("async_hooks", "createHook") => Some("AsyncHook"),
+                                            ("dns" | "dns/promises", "Resolver") => {
+                                                Some("Resolver")
+                                            }
                                             ("mysql2" | "mysql2/promise", "createPool") => {
                                                 Some("Pool")
                                             }
@@ -576,6 +580,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
                                     ("async_hooks", "createHook") => Some("AsyncHook"),
+                                    ("dns" | "dns/promises", "Resolver") => Some("Resolver"),
                                     _ => None,
                                 };
                                 if let Some(cn) = http_class {

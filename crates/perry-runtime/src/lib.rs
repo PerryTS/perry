@@ -40,6 +40,7 @@ pub mod color_parse;
 pub mod date;
 pub mod dgram;
 pub mod disposable;
+pub mod dns;
 pub mod error;
 pub mod event_pump;
 pub mod event_target;
