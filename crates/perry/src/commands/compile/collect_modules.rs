@@ -148,6 +148,8 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         // run if the class is called *without* `new`.
         "stream/web" => Some("stream_web"),
         "sys" => Some("sys"),
+        "test" => Some("test"),
+        "test/reporters" => Some("test_reporters"),
         // Pino downstream (#906 follow-up): `require('node:diagnostics_channel')`
         // returns the module exports object. The CJS-wrap rewrites this as
         // `import diagChan from 'node:diagnostics_channel'`. Pre-fix the

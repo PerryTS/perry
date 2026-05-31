@@ -447,7 +447,10 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(set, ctx, lookup);
         }
         // JSON operations
-        Expr::JsonParse(expr) | Expr::JsonStringify(expr) => {
+        Expr::JsonParse(expr)
+        | Expr::JsonStringify(expr)
+        | Expr::JsonRawJson(expr)
+        | Expr::JsonIsRawJson(expr) => {
             update_call_sites_in_expr(expr, ctx, lookup);
         }
         // Math operations

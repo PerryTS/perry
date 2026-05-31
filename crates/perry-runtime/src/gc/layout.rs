@@ -1146,6 +1146,14 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             crate::object::visit_overflow_field_slots_mut(user_ptr as usize, |slot| {
                 visit(fixed_slot(slot));
             });
+            // #2820: the recorded `Object.setPrototypeOf` value is a live
+            // reference; rewrite it if the prototype object moved.
+            crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
+                user_ptr as usize,
+                |slot| {
+                    visit(fixed_slot(slot));
+                },
+            );
         }
         GcRewriteDescriptorKind::Closure => {
             visit_gc_layout_slot_descriptors(header, &mut visit);

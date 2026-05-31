@@ -38,6 +38,9 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
     use crate::value::{js_nanbox_pointer, JSValue};
 
     let jsv = JSValue::from_bits(val_f64.to_bits());
+    if let Some(entries) = entries_array_for_small_handle_value(val_f64) {
+        return js_nanbox_pointer(entries as i64);
+    }
 
     // Strings: iterate by code point. `is_any_string` covers both heap
     // STRING_TAG and inline SSO short strings. `js_get_string_pointer_unified`
@@ -107,6 +110,31 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
             js_nanbox_pointer(arr as i64)
         }
     }
+}
+
+pub(crate) fn entries_array_for_small_handle_value(value: f64) -> Option<*mut ArrayHeader> {
+    let bits = value.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return None;
+    }
+    entries_array_for_small_handle_id((bits & crate::value::POINTER_MASK) as i64)
+}
+
+pub(crate) fn entries_array_for_small_handle_id(id: i64) -> Option<*mut ArrayHeader> {
+    if id <= 0 || id >= 0x100000 {
+        return None;
+    }
+    let dispatch = crate::object::handle_method_dispatch()?;
+    let prop = b"entries";
+    let entries = unsafe { dispatch(id, prop.as_ptr(), prop.len(), std::ptr::null(), 0) };
+    if entries.to_bits() == crate::value::TAG_UNDEFINED {
+        return None;
+    }
+    if js_array_is_array(entries).to_bits() != crate::value::TAG_TRUE {
+        return None;
+    }
+    let ptr = crate::value::js_nanbox_get_pointer(entries) as *mut ArrayHeader;
+    (!ptr.is_null()).then_some(ptr)
 }
 
 /// Thin wrappers so this module can reach the Map/Set materializers

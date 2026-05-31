@@ -109,8 +109,11 @@ mod consumers;
 mod fs_promises;
 mod hono_jsx;
 mod stream_promises;
+mod test;
 mod timers;
 mod trace_events;
+mod zlib;
+pub use zlib::js_zlib_resolve_level;
 
 // #1671: hono/jsx/server + hono/jsx/streaming. Re-export the stream-creation
 // registration so perry-stdlib's `bundled-streams` init can wire it up.
@@ -143,6 +146,10 @@ use fs_promises::{
     thunk_readline_createInterface,
 };
 use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
+use test::{
+    thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
+    thunk_reporter_tap, thunk_test, thunk_test_hook, thunk_test_run,
+};
 use timers::{
     timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
     timers_ns_set_immediate, timers_ns_set_interval, timers_ns_set_timeout,
@@ -621,6 +628,81 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             },
         ],
     },
+    SubmoduleSpec {
+        key: "test",
+        exports: &[
+            ExportSpec {
+                name: "default",
+                thunk: ExportThunk::Fn3(thunk_test),
+            },
+            ExportSpec {
+                name: "test",
+                thunk: ExportThunk::Fn3(thunk_test),
+            },
+            ExportSpec {
+                name: "describe",
+                thunk: ExportThunk::Fn3(thunk_test),
+            },
+            ExportSpec {
+                name: "it",
+                thunk: ExportThunk::Fn3(thunk_test),
+            },
+            ExportSpec {
+                name: "before",
+                thunk: ExportThunk::Fn1(thunk_test_hook),
+            },
+            ExportSpec {
+                name: "after",
+                thunk: ExportThunk::Fn1(thunk_test_hook),
+            },
+            ExportSpec {
+                name: "beforeEach",
+                thunk: ExportThunk::Fn1(thunk_test_hook),
+            },
+            ExportSpec {
+                name: "afterEach",
+                thunk: ExportThunk::Fn1(thunk_test_hook),
+            },
+            ExportSpec {
+                name: "run",
+                thunk: ExportThunk::Fn1(thunk_test_run),
+            },
+            // Object-valued exports are handled by `special_export_value`.
+            ExportSpec {
+                name: "mock",
+                thunk: ExportThunk::Fn1(thunk_test_run),
+            },
+            ExportSpec {
+                name: "snapshot",
+                thunk: ExportThunk::Fn1(thunk_test_run),
+            },
+        ],
+    },
+    SubmoduleSpec {
+        key: "test_reporters",
+        exports: &[
+            ExportSpec {
+                name: "spec",
+                thunk: ExportThunk::Fn1(thunk_reporter_spec),
+            },
+            ExportSpec {
+                name: "tap",
+                thunk: ExportThunk::Fn1(thunk_reporter_tap),
+            },
+            ExportSpec {
+                name: "dot",
+                thunk: ExportThunk::Fn1(thunk_reporter_dot),
+            },
+            ExportSpec {
+                name: "junit",
+                thunk: ExportThunk::Fn1(thunk_reporter_junit),
+            },
+            ExportSpec {
+                name: "lcov",
+                thunk: ExportThunk::Fn1(thunk_reporter_lcov),
+            },
+        ],
+    },
 ];
 
 fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
@@ -693,6 +775,18 @@ fn sys_util_export_value(name: &str) -> Option<f64> {
     } else {
         Some(value)
     }
+}
+
+fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
+    let value = match submod_key {
+        "test" => test::test_special_export_value(name),
+        "test_reporters" => test::test_reporters_special_export_value(name),
+        _ => None,
+    };
+    if value.is_some() {
+        ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
+    }
+    value
 }
 
 fn ensure_export_singleton(
@@ -785,6 +879,8 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
                 let closure_ptr = ensure_export_singleton(submod, spec);
                 f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
             })
+        } else if let Some(value) = special_export_value(submod.key, spec.name) {
+            value
         } else {
             let closure_ptr = ensure_export_singleton(submod, spec);
             f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
@@ -819,6 +915,10 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             name_header,
             f64::from_bits(JSValue::pointer(default_obj as *const u8).bits()),
         );
+    }
+    if submod.key == "test_reporters" {
+        let value = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+        test::populate_reporters_default(obj, value);
     }
     NAMESPACE_SINGLETONS.with(|m| {
         m.borrow_mut().insert(key, obj);
@@ -868,7 +968,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
             }
             for (store, transform) in &mut state.stores {
                 visitor.visit_nanbox_f64_slot(store);
-                if let Some(t) = transform.as_mut() {
+                if let StoreTransform::Callable(t) = transform {
                     visitor.visit_nanbox_f64_slot(t);
                 }
             }
@@ -880,6 +980,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
         }
     });
     trace_events::scan_trace_events_roots_mut(visitor);
+    test::scan_test_module_roots_mut(visitor);
 }
 
 #[cfg(test)]
@@ -974,6 +1075,13 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, name_header);
         return value;
     }
+    if submod.key == "test_reporters" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if let Some(value) = special_export_value(submod.key, name) {
+        return value;
+    }
     let export = match find_export(submod, name) {
         Some(e) => e,
         None => return f64::from_bits(JSValue::bool(true).bits()),
@@ -1031,6 +1139,13 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
         let obj = ensure_namespace_singleton(submod);
         let name_header = js_string_from_bytes(b"default".as_ptr(), 7);
         let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, name_header);
+        return value;
+    }
+    if submod.key == "test_reporters" && name == "default" {
+        let obj = ensure_namespace_singleton(submod);
+        return f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if let Some(value) = special_export_value(submod.key, name) {
         return value;
     }
     let export = match find_export(submod, name) {
@@ -1318,7 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_promises_finished_resolves_for_clean_stub_stream() {
+    fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
         let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
         let end = get_object_property(stream, b"end").expect("stream.end should exist");
         let prev_this = crate::object::js_implicit_this_set(stream);
@@ -1326,8 +1441,17 @@ mod tests {
             let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
         }
         crate::object::js_implicit_this_set(prev_this);
+        let _ = crate::promise::js_promise_run_microtasks();
 
-        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"readable".as_ptr(), 8),
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+
+        let promise_value =
+            thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
         let promise = promise_ptr(promise_value);
 
         assert_eq!(crate::promise::js_promise_state(promise), 1);
@@ -1457,14 +1581,19 @@ mod tests {
     }
 
     #[test]
-    fn stream_promises_finished_with_signal_resolves_for_ended_stub_stream() {
+    fn stream_promises_finished_with_signal_resolves_for_finished_writable_side_stub_stream() {
         let controller = crate::url::js_abort_controller_new();
         let signal = crate::url::js_abort_controller_signal(controller);
-        let opts = js_object_alloc(0, 1);
+        let opts = js_object_alloc(0, 2);
         js_object_set_field_by_name(
             opts,
             js_string_from_bytes(b"signal".as_ptr(), 6),
             boxed_ptr(signal as *const u8),
+        );
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(b"readable".as_ptr(), 8),
+            f64::from_bits(crate::value::TAG_FALSE),
         );
         let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
         let end = get_object_property(stream, b"end").expect("stream.end should exist");
@@ -1473,6 +1602,7 @@ mod tests {
             let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
         }
         crate::object::js_implicit_this_set(prev_this);
+        let _ = crate::promise::js_promise_run_microtasks();
 
         let promise_value =
             thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));

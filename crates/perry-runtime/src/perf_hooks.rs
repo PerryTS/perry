@@ -25,7 +25,7 @@ use crate::string::StringHeader;
 use crate::value::JSValue;
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const ENTRY_TYPE_MARK: u8 = 0;
 const ENTRY_TYPE_MEASURE: u8 = 1;
@@ -168,18 +168,42 @@ pub fn performance_namespace() -> f64 {
     ns
 }
 
-/// `performance.timeOrigin` — ms since the Unix epoch captured at first read.
-/// Node fixes this at process start; capturing it lazily (process-global via
-/// `OnceLock`) is close enough and is always a positive number.
-static TIME_ORIGIN_MS: OnceLock<f64> = OnceLock::new();
+struct PerfClock {
+    monotonic_start: Instant,
+    time_origin_ms: f64,
+}
+
+/// Shared clock for `performance.timeOrigin` and `performance.now()`.
+///
+/// `init_time_origin()` is called from runtime initialization so user code
+/// observes a process-start origin. The `OnceLock` fallback keeps direct unit
+/// tests and unusual embedder paths well-defined.
+static PERF_CLOCK: OnceLock<PerfClock> = OnceLock::new();
+
+fn wall_clock_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+
+fn perf_clock() -> &'static PerfClock {
+    PERF_CLOCK.get_or_init(|| PerfClock {
+        monotonic_start: Instant::now(),
+        time_origin_ms: wall_clock_ms(),
+    })
+}
+
+pub(crate) fn init_time_origin() {
+    let _ = perf_clock();
+}
 
 pub(crate) fn time_origin_ms() -> f64 {
-    *TIME_ORIGIN_MS.get_or_init(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs_f64() * 1000.0)
-            .unwrap_or(0.0)
-    })
+    perf_clock().time_origin_ms
+}
+
+pub(crate) fn performance_now_ms() -> f64 {
+    perf_clock().monotonic_start.elapsed().as_secs_f64() * 1000.0
 }
 
 /// Read a `*StringHeader` into an owned `String`.
@@ -242,6 +266,27 @@ fn throw_type_error(msg: &str) -> ! {
     crate::exception::js_throw(f64::from_bits(err_value))
 }
 
+fn throw_type_error_with_code(msg: &str, code: &'static str) -> ! {
+    crate::fs::validate::throw_type_error_with_code(msg, code)
+}
+
+fn throw_syntax_error_with_code(msg: &str, code: &'static str) -> ! {
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_str, code);
+    let err_ptr = crate::error::js_syntaxerror_new(msg_str);
+    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
+fn validate_user_timing_timestamp(value: f64) {
+    if value < 0.0 || !value.is_finite() {
+        throw_type_error_with_code(
+            &format!("{value} is not a valid timestamp"),
+            "ERR_PERFORMANCE_INVALID_TIMESTAMP",
+        );
+    }
+}
+
 /// Build a NaN-boxed string value from a Rust `&str`.
 fn str_value(s: &str) -> JSValue {
     let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -280,22 +325,23 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
 }
 
 /// `performance.now()` reading used for default mark startTimes / measure
-/// endpoints. Mirrors `js_performance_now` (ms since epoch); the absolute
-/// origin is irrelevant to User Timing arithmetic since marks share it.
+/// endpoints: monotonic milliseconds since `performance.timeOrigin`.
 fn perf_now() -> f64 {
-    crate::date::js_performance_now()
+    performance_now_ms()
 }
 
-/// Read an option field that may be a number or a mark-name string and
-/// resolve it to a timeline value. Returns `None` when the field is absent
-/// (undefined). Strings resolve to the most-recent same-named mark's
-/// startTime (0 if not found, matching nothing-thrown lenient behavior).
+unsafe fn option_value(options_obj: *const crate::object::ObjectHeader, key: &str) -> JSValue {
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    js_object_get_field_by_name(options_obj, key_ptr)
+}
+
+/// Read an option field that may be a non-negative timestamp or a mark-name
+/// string and resolve it to a timeline value. Returns `None` when absent.
 unsafe fn resolve_option_endpoint(
     options_obj: *const crate::object::ObjectHeader,
     key: &str,
 ) -> Option<f64> {
-    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    let v = js_object_get_field_by_name(options_obj, key_ptr);
+    let v = option_value(options_obj, key);
     if v.is_undefined() {
         return None;
     }
@@ -304,11 +350,21 @@ unsafe fn resolve_option_endpoint(
 
 unsafe fn resolve_endpoint_value(v: JSValue) -> f64 {
     if let Some(n) = num_of(v) {
+        validate_user_timing_timestamp(n);
         n
     } else if let Some(name) = string_of(v) {
-        lookup_mark_start(&name).unwrap_or(0.0)
+        match lookup_mark_start(&name) {
+            Some(t) => t,
+            None => throw_syntax_error_with_code(
+                &format!("The \"{name}\" performance mark has not been set"),
+                "12",
+            ),
+        }
     } else {
-        0.0
+        throw_type_error_with_code(
+            "The User Timing endpoint must be a number or a performance mark name",
+            "ERR_INVALID_ARG_TYPE",
+        )
     }
 }
 
@@ -342,19 +398,15 @@ fn lookup_mark_start(name: &str) -> Option<f64> {
 }
 
 unsafe fn option_number(options_obj: *const crate::object::ObjectHeader, key: &str) -> Option<f64> {
-    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    num_of(js_object_get_field_by_name(options_obj, key_ptr))
+    num_of(option_value(options_obj, key))
 }
 
 unsafe fn option_present(options_obj: *const crate::object::ObjectHeader, key: &str) -> bool {
-    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    !js_object_get_field_by_name(options_obj, key_ptr).is_undefined()
+    !option_value(options_obj, key).is_undefined()
 }
 
 unsafe fn option_detail_bits(options_obj: *const crate::object::ObjectHeader) -> u64 {
-    let key = b"detail";
-    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    let v = js_object_get_field_by_name(options_obj, key_ptr);
+    let v = option_value(options_obj, "detail");
     if v.is_undefined() {
         JSValue::null().bits()
     } else {
@@ -378,11 +430,38 @@ unsafe fn option_detail_bits(options_obj: *const crate::object::ObjectHeader) ->
 
 fn as_object_ptr(v: f64) -> Option<*const crate::object::ObjectHeader> {
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_pointer() {
-        Some(jv.as_pointer::<crate::object::ObjectHeader>() as *const _)
-    } else {
-        None
+    if !jv.is_pointer() {
+        return None;
     }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    unsafe {
+        let header = &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+    }
+    Some(ptr as *const crate::object::ObjectHeader)
+}
+
+fn is_array_value(v: JSValue) -> bool {
+    if !v.is_pointer() {
+        return false;
+    }
+    let ptr = v.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    unsafe {
+        let header = &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+        header.obj_type == crate::gc::GC_TYPE_ARRAY
+    }
+}
+
+fn array_ptr_from_value(v: JSValue) -> *const crate::array::ArrayHeader {
+    v.as_pointer::<crate::array::ArrayHeader>()
 }
 
 // ── performance.mark(name, options?) ─────────────────────────────────────────
@@ -402,8 +481,14 @@ pub extern "C" fn js_perf_mark(name_val: f64, options_val: f64) -> f64 {
             // ERR_INVALID_ARG_TYPE → a TypeError).
             if option_present(opts, "startTime") {
                 match option_number(opts, "startTime") {
-                    Some(st) => start_time = st,
-                    None => throw_type_error("The \"startTime\" option must be of type number"),
+                    Some(st) => {
+                        validate_user_timing_timestamp(st);
+                        start_time = st;
+                    }
+                    None => throw_type_error_with_code(
+                        "The \"startTime\" option must be of type number",
+                        "ERR_INVALID_ARG_TYPE",
+                    ),
                 }
             }
             detail_bits = option_detail_bits(opts);
@@ -428,7 +513,13 @@ pub extern "C" fn js_perf_mark(name_val: f64, options_val: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perf_measure(name_val: f64, arg2: f64, arg3: f64) -> f64 {
     unsafe {
-        let name = coerce_to_string(name_val);
+        let name_jv = JSValue::from_bits(name_val.to_bits());
+        let Some(name) = string_of(name_jv) else {
+            throw_type_error_with_code(
+                "The \"name\" argument must be of type string",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        };
         let arg2_jv = JSValue::from_bits(arg2.to_bits());
 
         let (start_time, duration);
@@ -436,7 +527,27 @@ pub extern "C" fn js_perf_measure(name_val: f64, arg2: f64, arg3: f64) -> f64 {
             // Options form: { start?, end?, duration?, detail? }
             let start_present = option_present(opts, "start");
             let end_present = option_present(opts, "end");
-            let dur = option_number(opts, "duration");
+            let duration_present = option_present(opts, "duration");
+            if start_present && end_present && duration_present {
+                throw_type_error_with_code(
+                    "Must not have options.start, options.end, and options.duration specified",
+                    "ERR_PERFORMANCE_MEASURE_INVALID_OPTIONS",
+                );
+            }
+            let dur = if duration_present {
+                match option_number(opts, "duration") {
+                    Some(d) => {
+                        validate_user_timing_timestamp(d);
+                        Some(d)
+                    }
+                    None => throw_type_error_with_code(
+                        "The \"duration\" option must be of type number",
+                        "ERR_INVALID_ARG_TYPE",
+                    ),
+                }
+            } else {
+                None
+            };
 
             let start_resolved = resolve_option_endpoint(opts, "start");
             let end_resolved = resolve_option_endpoint(opts, "end");
@@ -610,10 +721,10 @@ pub extern "C" fn js_perf_clear_measures(name_val: f64) -> f64 {
 
 // ── eventLoopUtilization ─────────────────────────────────────────────────────
 // Perry has no libuv event loop to instrument, so report a stable cumulative
-// idle/active split anchored to wall-clock since timeOrigin. The result keeps
-// Node's object shape and the diff form's utilization in [0, 1].
+// idle/active split anchored to performance.timeOrigin. The result keeps
+// Node's object shape and the diff forms' utilization in [0, 1].
 fn cumulative_idle_active() -> (f64, f64) {
-    let elapsed = (perf_now() - time_origin_ms()).max(0.0);
+    let elapsed = perf_now().max(0.0);
     let active = elapsed * 0.05;
     let idle = elapsed - active;
     (idle, active)
@@ -633,22 +744,29 @@ unsafe fn make_elu_object(idle: f64, active: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_perf_event_loop_utilization(prev: f64) -> f64 {
+pub extern "C" fn js_perf_event_loop_utilization(util1: f64, util2: f64) -> f64 {
     unsafe {
         let (idle, active) = cumulative_idle_active();
-        if !JSValue::from_bits(prev.to_bits()).is_undefined() {
-            if let Some(prev_obj) = as_object_ptr(prev) {
-                let pk = |k: &[u8]| -> f64 {
-                    let kp = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
-                    num_of(js_object_get_field_by_name(prev_obj, kp)).unwrap_or(0.0)
-                };
-                let pidle = pk(b"idle");
-                let pactive = pk(b"active");
-                return make_elu_object((idle - pidle).max(0.0), (active - pactive).max(0.0));
+        if let Some((u1_idle, u1_active)) = read_elu_idle_active(util1) {
+            if let Some((u2_idle, u2_active)) = read_elu_idle_active(util2) {
+                return make_elu_object(
+                    (u1_idle - u2_idle).max(0.0),
+                    (u1_active - u2_active).max(0.0),
+                );
             }
+            return make_elu_object((idle - u1_idle).max(0.0), (active - u1_active).max(0.0));
         }
         make_elu_object(idle, active)
     }
+}
+
+unsafe fn read_elu_idle_active(value: f64) -> Option<(f64, f64)> {
+    let obj = as_object_ptr(value)?;
+    let field = |name: &[u8]| -> f64 {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        num_of(js_object_get_field_by_name(obj, key)).unwrap_or(0.0)
+    };
+    Some((field(b"idle"), field(b"active")))
 }
 
 // ── performance.toJSON() ─────────────────────────────────────────────────────
@@ -693,11 +811,7 @@ pub extern "C" fn js_perf_node_timing() -> f64 {
         js_object_set_field(obj, 5, JSValue::number(0.0)); // v8Start
         js_object_set_field(obj, 6, JSValue::number(0.0)); // bootstrapComplete
         js_object_set_field(obj, 7, JSValue::number(0.0)); // environment
-        js_object_set_field(
-            obj,
-            8,
-            JSValue::number((perf_now() - time_origin_ms()).max(0.0)),
-        ); // loopStart
+        js_object_set_field(obj, 8, JSValue::number(perf_now().max(0.0))); // loopStart
         js_object_set_field(obj, 9, JSValue::number(-1.0)); // loopExit (loop running)
         js_object_set_field(obj, 10, JSValue::number(0.0)); // idleTime
         crate::value::js_nanbox_pointer(obj as i64)
@@ -830,39 +944,75 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
     unsafe {
         let id = observer_id_from_value(obs_val);
         let mut types: Vec<u8> = Vec::new();
-        let mut buffered = false;
-        if let Some(opts_obj) = as_object_ptr(opts) {
-            // entryTypes: string[]
-            let key = b"entryTypes";
-            let kp = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            let arr_v = js_object_get_field_by_name(opts_obj, kp);
-            if arr_v.is_pointer() {
-                let arr = arr_v.as_pointer::<crate::array::ArrayHeader>();
-                let len = crate::array::js_array_length(arr);
-                for i in 0..len {
-                    let el = crate::array::js_array_get(arr, i);
-                    if let Some(s) = string_of(el) {
-                        if let Some(code) = entry_type_code(&s) {
-                            types.push(code);
-                        }
-                    }
-                }
+        let opts_jv = JSValue::from_bits(opts.to_bits());
+        if opts_jv.is_undefined() {
+            throw_type_error_with_code(
+                "The \"options\" argument must be specified",
+                "ERR_MISSING_ARGS",
+            );
+        }
+        let Some(opts_obj) = as_object_ptr(opts) else {
+            throw_type_error_with_code(
+                "The \"options\" argument must be of type object",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        };
+
+        let entry_types_v = option_value(opts_obj, "entryTypes");
+        let type_v = option_value(opts_obj, "type");
+        let has_entry_types = !entry_types_v.is_undefined();
+        let has_type = !type_v.is_undefined();
+        if !has_entry_types && !has_type {
+            throw_type_error_with_code(
+                "The \"options.entryTypes\" or \"options.type\" argument must be specified",
+                "ERR_MISSING_ARGS",
+            );
+        }
+        if has_entry_types && has_type {
+            throw_type_error_with_code(
+                "The \"options.entryTypes\" and \"options.type\" arguments cannot both be specified",
+                "ERR_INVALID_ARG_VALUE",
+            );
+        }
+
+        if has_entry_types {
+            if !is_array_value(entry_types_v) {
+                throw_type_error_with_code(
+                    "The \"options.entryTypes\" argument must be an instance of Array",
+                    "ERR_INVALID_ARG_TYPE",
+                );
             }
-            // type: string (single-type form)
-            let tkey = b"type";
-            let tkp = crate::string::js_string_from_bytes(tkey.as_ptr(), tkey.len() as u32);
-            let t_v = js_object_get_field_by_name(opts_obj, tkp);
-            if let Some(s) = string_of(t_v) {
+            let arr = array_ptr_from_value(entry_types_v);
+            let len = crate::array::js_array_length(arr);
+            for i in 0..len {
+                let el = crate::array::js_array_get(arr, i);
+                let Some(s) = string_of(el) else {
+                    throw_type_error_with_code(
+                        "The \"options.entryTypes\" argument must be an array of strings",
+                        "ERR_INVALID_ARG_TYPE",
+                    );
+                };
                 if let Some(code) = entry_type_code(&s) {
                     types.push(code);
                 }
             }
-            // buffered: boolean — also deliver entries already on the timeline.
-            let bkey = b"buffered";
-            let bkp = crate::string::js_string_from_bytes(bkey.as_ptr(), bkey.len() as u32);
-            let b_v = js_object_get_field_by_name(opts_obj, bkp);
-            buffered = crate::value::js_is_truthy(f64::from_bits(b_v.bits())) != 0;
         }
+
+        if has_type {
+            let Some(s) = string_of(type_v) else {
+                throw_type_error_with_code(
+                    "The \"options.type\" argument must be of type string",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            };
+            if let Some(code) = entry_type_code(&s) {
+                types.push(code);
+            }
+        }
+
+        // buffered: boolean — also deliver entries already on the timeline.
+        let b_v = option_value(opts_obj, "buffered");
+        let buffered = crate::value::js_is_truthy(f64::from_bits(b_v.bits())) != 0;
         let observed = types.clone();
         OBSERVERS.with(|o| {
             if let Some(obs) = o.borrow_mut().get_mut(id) {

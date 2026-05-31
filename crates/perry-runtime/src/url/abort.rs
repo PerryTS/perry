@@ -311,3 +311,119 @@ pub extern "C" fn js_abort_signal_remove_listener(
 pub extern "C" fn js_abort_signal_timeout(_ms: f64) -> *mut ObjectHeader {
     alloc_abort_signal()
 }
+
+/// Mark a signal as aborted with `reason` and fire its listeners. Idempotent:
+/// re-aborting an already-aborted signal is a no-op (Node behavior). Shared by
+/// `AbortSignal.abort()` and the `AbortSignal.any()` propagation listener.
+fn abort_signal_set_aborted(signal: *mut ObjectHeader, reason: f64) {
+    if signal.is_null() || abort_signal_is_aborted(signal) {
+        return;
+    }
+    js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
+    js_object_set_field_f64(signal, 1, reason);
+    fire_abort_listeners(signal);
+}
+
+/// `AbortSignal.abort(reason?)` — returns an already-aborted signal whose
+/// `.reason` is `reason` (or an `AbortError` when omitted, matching Node).
+#[no_mangle]
+pub extern "C" fn js_abort_signal_abort(reason: f64) -> *mut ObjectHeader {
+    let signal = alloc_abort_signal();
+    let reason_bits = reason.to_bits();
+    // Node defaults the reason to an AbortError when none is supplied.
+    let effective = if reason_bits == TAG_UNDEFINED_AC {
+        js_abort_error_value()
+    } else {
+        reason
+    };
+    js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
+    js_object_set_field_f64(signal, 1, effective);
+    signal
+}
+
+/// `abortSignal.throwIfAborted()` — throws `abortSignal.reason` when the
+/// signal is aborted, otherwise returns undefined (no-op).
+#[no_mangle]
+pub extern "C" fn js_abort_signal_throw_if_aborted(signal: *mut ObjectHeader) -> f64 {
+    if abort_signal_is_aborted(signal) {
+        let reason = crate::object::js_object_get_field_f64(signal, 1);
+        // Node throws the stored reason verbatim (which is the AbortError
+        // default when none was provided).
+        crate::exception::js_throw(reason);
+    }
+    f64::from_bits(TAG_UNDEFINED_AC)
+}
+
+extern "C" fn abort_any_propagate_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    // capture 0 = combined signal pointer (NaN-boxed), capture 1 = source signal.
+    let combined_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let source_bits = crate::closure::js_closure_get_capture_ptr(closure, 1) as u64;
+    let combined =
+        crate::value::js_nanbox_get_pointer(f64::from_bits(combined_bits)) as *mut ObjectHeader;
+    let source =
+        crate::value::js_nanbox_get_pointer(f64::from_bits(source_bits)) as *mut ObjectHeader;
+    let reason = if source.is_null() {
+        f64::from_bits(TAG_UNDEFINED_AC)
+    } else {
+        crate::object::js_object_get_field_f64(source, 1)
+    };
+    abort_signal_set_aborted(combined, reason);
+    f64::from_bits(TAG_UNDEFINED_AC)
+}
+
+/// `AbortSignal.any(signals)` — returns a signal that aborts as soon as any of
+/// the input `signals` aborts, adopting that signal's `reason`. If any input is
+/// already aborted, the combined signal is returned pre-aborted.
+///
+/// `signals_arr` is the raw `*mut ArrayHeader` (i64 handle) for the input
+/// iterable already materialized as an array.
+#[no_mangle]
+pub extern "C" fn js_abort_signal_any(
+    signals_arr: *mut crate::array::ArrayHeader,
+) -> *mut ObjectHeader {
+    let combined = alloc_abort_signal();
+    if signals_arr.is_null() {
+        return combined;
+    }
+    let len = crate::array::js_array_length(signals_arr);
+    let combined_box = crate::value::js_nanbox_pointer(combined as i64);
+    for i in 0..len {
+        let elem = crate::array::js_array_get_f64(signals_arr, i);
+        let Some(source) = abort_signal_ptr_from_value(elem) else {
+            continue;
+        };
+        if abort_signal_is_aborted(source) {
+            // Adopt the first already-aborted source's reason immediately.
+            let reason = crate::object::js_object_get_field_f64(source, 1);
+            abort_signal_set_aborted(combined, reason);
+            return combined;
+        }
+        // Register a propagation listener that adopts this source's reason
+        // when it later aborts.
+        let func = abort_any_propagate_thunk as *const u8;
+        crate::closure::js_register_closure_arity(func, 1);
+        let closure = crate::closure::js_closure_alloc(func, 2);
+        crate::closure::js_closure_set_capture_ptr(closure, 0, combined_box.to_bits() as i64);
+        crate::closure::js_closure_set_capture_ptr(closure, 1, elem.to_bits() as i64);
+        let listener = crate::value::js_nanbox_pointer(closure as i64);
+        let abort_evt = create_string_f64("abort");
+        js_abort_signal_add_listener(source, abort_evt, listener);
+    }
+    combined
+}
+
+// #2582: keepalive anchors so the auto-optimize whole-program LLVM bitcode
+// rebuild doesn't internalize + dead-strip these codegen-only `#[no_mangle]`
+// entry points (see project_auto_optimize_keepalive_3320). These are only
+// referenced from generated `.o`, so without `#[used]` they vanish.
+#[used]
+static KEEP_ABORT_SIGNAL_ABORT: extern "C" fn(f64) -> *mut ObjectHeader = js_abort_signal_abort;
+#[used]
+static KEEP_ABORT_SIGNAL_ANY: extern "C" fn(*mut crate::array::ArrayHeader) -> *mut ObjectHeader =
+    js_abort_signal_any;
+#[used]
+static KEEP_ABORT_SIGNAL_THROW_IF_ABORTED: extern "C" fn(*mut ObjectHeader) -> f64 =
+    js_abort_signal_throw_if_aborted;

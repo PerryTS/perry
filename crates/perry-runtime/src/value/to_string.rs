@@ -329,14 +329,212 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
     }
 }
 
-/// Convert a NaN-boxed f64 value to a string with the given radix.
-/// Handles BigInt (uses bigint_to_string_radix), numbers, strings, etc.
+/// ECMAScript `ToNumber` for a radix argument value (NaN-boxed f64). Numbers
+/// pass through; strings are parsed with `Number()` semantics (trim + full
+/// numeric parse, NOT `parseFloat` prefix parse — `"16px"` → NaN); booleans →
+/// 0/1; null → 0; undefined → NaN (signals "use the default radix 10").
+/// Returns NaN for anything that does not coerce to a finite number.
+unsafe fn radix_arg_to_number(radix_value: f64) -> f64 {
+    let jsval = JSValue::from_bits(radix_value.to_bits());
+    if jsval.is_int32() {
+        jsval.as_int32() as f64
+    } else if jsval.is_bool() {
+        if jsval.as_bool() {
+            1.0
+        } else {
+            0.0
+        }
+    } else if jsval.is_null() {
+        0.0
+    } else if jsval.is_undefined() {
+        // Signals the "no radix supplied" / default path.
+        f64::NAN
+    } else if jsval.is_any_string() {
+        let s_ptr = js_jsvalue_to_string(radix_value);
+        if s_ptr.is_null() {
+            return f64::NAN;
+        }
+        let len = (*s_ptr).byte_len as usize;
+        let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len);
+        let trimmed = std::str::from_utf8(bytes).unwrap_or("").trim();
+        if trimmed.is_empty() {
+            // `Number("")` === 0
+            0.0
+        } else {
+            trimmed.parse::<f64>().unwrap_or(f64::NAN)
+        }
+    } else {
+        // Plain f64 number (or some other heap pointer that does not coerce
+        // to a finite radix — treat as NaN so it triggers RangeError).
+        if jsval.is_number() {
+            radix_value
+        } else {
+            f64::NAN
+        }
+    }
+}
+
+/// Coerce + validate a radix argument per ECMAScript `Number.prototype.toString`
+/// (and `BigInt.prototype.toString`). Returns the validated integer radix in
+/// `2..=36`, or `None` when the argument was `undefined` (caller uses the
+/// default radix 10). Throws (diverges via `js_throw`) with a `RangeError` for
+/// any other out-of-range / non-coercible value, matching Node.
+pub(crate) unsafe fn coerce_validate_radix(radix_value: f64) -> Option<i32> {
+    let n = radix_arg_to_number(radix_value);
+    if n.is_nan() {
+        // `undefined` → default radix (None); everything else NaN → RangeError.
+        if JSValue::from_bits(radix_value.to_bits()).is_undefined() {
+            return None;
+        }
+        throw_radix_range_error();
+    }
+    // ToInteger: truncate toward zero.
+    let r = n.trunc();
+    if !(2.0..=36.0).contains(&r) {
+        throw_radix_range_error();
+    }
+    Some(r as i32)
+}
+
+fn throw_radix_range_error() -> ! {
+    let message = b"toString() radix must be between 2 and 36";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// V8-style `DoubleToRadixCString`: render a finite, non-integer f64 in
+/// `radix` (2..=36) producing the shortest digit sequence that round-trips
+/// back to the same double. Mirrors ECMAScript `Number::toString` for
+/// non-decimal radices, including the fractional part (`(10.5).toString(2)`
+/// === `"1010.1"`). Assumes `radix` is already validated.
+fn double_to_radix_string(value: f64, radix: u32) -> String {
+    debug_assert!((2..=36).contains(&radix));
+    const CHARS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+    let negative = value < 0.0;
+    let abs = value.abs();
+
+    // Split into integer and fractional parts.
+    let mut integer = abs.floor();
+    let mut fraction = abs - integer;
+
+    // `delta` is half the distance to the next representable double, the
+    // tolerance used to decide when enough fractional digits have been
+    // emitted to uniquely identify `value` (shortest round-trip).
+    let mut delta = 0.5 * (next_double(abs) - abs);
+    delta = next_double(0.0).max(delta);
+
+    let mut frac_buf = String::new();
+    if fraction >= delta {
+        frac_buf.push('.');
+        loop {
+            // Shift up by the radix.
+            fraction *= radix as f64;
+            delta *= radix as f64;
+            // Extract the digit.
+            let digit = fraction.floor() as usize;
+            frac_buf.push(CHARS[digit] as char);
+            fraction -= digit as f64;
+            if fraction >= 0.5 && fraction > delta {
+                // Round up: carry into the already-emitted digits.
+                if fraction + delta > 1.0 {
+                    // Propagate the carry through fraction digits, possibly
+                    // into the integer part.
+                    loop {
+                        // Pop the last char; if it was '.', carry into integer.
+                        let last = frac_buf.pop();
+                        match last {
+                            None => {
+                                integer += 1.0;
+                                break;
+                            }
+                            Some('.') => {
+                                frac_buf.push('.');
+                                integer += 1.0;
+                                break;
+                            }
+                            Some(c) => {
+                                let idx = CHARS.iter().position(|&b| b as char == c).unwrap();
+                                if idx + 1 < radix as usize {
+                                    frac_buf.push(CHARS[idx + 1] as char);
+                                    break;
+                                }
+                                // Was the max digit (e.g. 'f' in hex): becomes
+                                // '0' and the carry continues leftward.
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+            if fraction < delta {
+                break;
+            }
+        }
+        // A trailing '.' with no fraction digits (carry consumed all) is junk.
+        if frac_buf == "." {
+            frac_buf.clear();
+        }
+    }
+
+    // Integer part: repeated division. `integer` may have grown via carry.
+    let mut int_buf = String::new();
+    if integer == 0.0 {
+        int_buf.push('0');
+    } else {
+        while integer >= 1.0 {
+            let remainder = (integer % radix as f64) as usize;
+            int_buf.push(CHARS[remainder] as char);
+            integer = (integer / radix as f64).floor();
+        }
+    }
+    let int_part: String = int_buf.chars().rev().collect();
+
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+    result.push_str(&int_part);
+    result.push_str(&frac_buf);
+    result
+}
+
+/// Smallest representable double strictly greater than `x` (for finite `x`).
+fn next_double(x: f64) -> f64 {
+    if x.is_nan() || x == f64::INFINITY {
+        return x;
+    }
+    let bits = x.to_bits();
+    let next = if x >= 0.0 {
+        bits + 1
+    } else if bits == (1u64 << 63) {
+        // -0.0 → smallest positive subnormal
+        1
+    } else {
+        bits - 1
+    };
+    f64::from_bits(next)
+}
+
+/// Convert a NaN-boxed f64 value to a string with the given radix argument.
+/// `radix_value` is the *raw* NaN-boxed radix argument (number/string/bool/
+/// undefined); it is ToNumber/ToInteger-coerced and validated to `2..=36`
+/// here, throwing `RangeError` for out-of-range values (#2864). Handles
+/// BigInt (uses bigint_to_string_radix), numbers, strings, etc.
 #[no_mangle]
 pub extern "C" fn js_jsvalue_to_string_radix(
     value: f64,
-    radix: i32,
+    radix_value: f64,
 ) -> *mut crate::string::StringHeader {
     let jsval = JSValue::from_bits(value.to_bits());
+
+    // Coerce + validate the radix once up front. `None` → default radix 10.
+    let radix = match unsafe { coerce_validate_radix(radix_value) } {
+        Some(r) => r,
+        None => 10,
+    };
 
     if jsval.is_bigint() {
         let ptr = jsval.as_bigint_ptr();
@@ -345,33 +543,11 @@ pub extern "C" fn js_jsvalue_to_string_radix(
         jsval.as_string_ptr() as *mut crate::string::StringHeader
     } else if jsval.is_int32() {
         let n = jsval.as_int32();
-        let s = if radix == 16 {
-            format!("{:x}", n)
-        } else if radix == 10 || radix == 0 {
-            n.to_string()
-        } else {
-            // General radix conversion
-            let mut result = String::new();
-            let mut val = if n < 0 { -(n as i64) as u64 } else { n as u64 };
-            let r = radix as u64;
-            if val == 0 {
-                return crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
-            }
-            while val > 0 {
-                let digit = (val % r) as u8;
-                result.push(if digit < 10 {
-                    (b'0' + digit) as char
-                } else {
-                    (b'a' + digit - 10) as char
-                });
-                val /= r;
-            }
-            if n < 0 {
-                result.push('-');
-            }
-            let s: String = result.chars().rev().collect();
+        if radix == 10 {
+            let s = n.to_string();
             return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        };
+        }
+        let s = double_to_radix_string(n as f64, radix as u32);
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     } else {
         // Regular f64 number
@@ -386,42 +562,10 @@ pub extern "C" fn js_jsvalue_to_string_radix(
                 return crate::string::js_string_from_bytes(b"-Infinity".as_ptr(), 9);
             }
         }
-        if radix == 10 || radix == 0 {
+        if radix == 10 {
             return crate::string::js_number_to_string(value);
         }
-        // For hex and other radixes, convert via integer
-        let n_i64 = n as i64;
-        let s = if radix == 16 {
-            if n_i64 < 0 {
-                format!("-{:x}", -n_i64)
-            } else {
-                format!("{:x}", n_i64)
-            }
-        } else {
-            let mut result = String::new();
-            let mut val = if n_i64 < 0 {
-                (-n_i64) as u64
-            } else {
-                n_i64 as u64
-            };
-            let r = radix as u64;
-            if val == 0 {
-                return crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
-            }
-            while val > 0 {
-                let digit = (val % r) as u8;
-                result.push(if digit < 10 {
-                    (b'0' + digit) as char
-                } else {
-                    (b'a' + digit - 10) as char
-                });
-                val /= r;
-            }
-            if n_i64 < 0 {
-                result.push('-');
-            }
-            result.chars().rev().collect()
-        };
+        let s = double_to_radix_string(n, radix as u32);
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     }
 }
@@ -488,6 +632,66 @@ mod error_subclass_tostring_tests {
                 Some("hi")
             );
             assert_eq!(object_field_to_owned_string(obj, b"missing"), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod radix_tostring_tests {
+    use super::*;
+
+    #[test]
+    fn integer_radix_formatting() {
+        assert_eq!(double_to_radix_string(255.0, 16), "ff");
+        assert_eq!(double_to_radix_string(10.0, 2), "1010");
+        assert_eq!(double_to_radix_string(255.0, 2), "11111111");
+        assert_eq!(double_to_radix_string(-255.0, 16), "-ff");
+        assert_eq!(double_to_radix_string(0.0, 2), "0");
+        assert_eq!(double_to_radix_string(35.0, 36), "z");
+    }
+
+    #[test]
+    fn fractional_radix_formatting_matches_v8() {
+        // Terminating fractions.
+        assert_eq!(double_to_radix_string(10.5, 2), "1010.1");
+        assert_eq!(double_to_radix_string(10.5, 16), "a.8");
+        assert_eq!(double_to_radix_string(10.5, 36), "a.i");
+        assert_eq!(double_to_radix_string(-10.5, 2), "-1010.1");
+        assert_eq!(double_to_radix_string(255.5, 16), "ff.8");
+        assert_eq!(double_to_radix_string(1.5, 2), "1.1");
+        assert_eq!(double_to_radix_string(100.25, 2), "1100100.01");
+        // Repeating fraction — shortest round-trip (matches Node v25).
+        assert_eq!(
+            double_to_radix_string(0.1, 2),
+            "0.0001100110011001100110011001100110011001100110011001101"
+        );
+    }
+
+    #[test]
+    fn coerce_validate_radix_semantics() {
+        unsafe {
+            // undefined → None (default radix path).
+            assert_eq!(
+                coerce_validate_radix(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                None
+            );
+            // Plain number radices.
+            assert_eq!(coerce_validate_radix(16.0), Some(16));
+            assert_eq!(coerce_validate_radix(2.0), Some(2));
+            assert_eq!(coerce_validate_radix(36.0), Some(36));
+            // ToInteger truncation.
+            assert_eq!(coerce_validate_radix(2.9), Some(2));
+            // int32-boxed radix.
+            assert_eq!(
+                coerce_validate_radix(f64::from_bits(JSValue::int32(16).bits())),
+                Some(16)
+            );
+            // String radix coerces via ToNumber.
+            let s = crate::string::js_string_from_bytes(b"16".as_ptr(), 2);
+            assert_eq!(
+                coerce_validate_radix(crate::value::js_nanbox_string(s as i64)),
+                Some(16)
+            );
         }
     }
 }
