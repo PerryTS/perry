@@ -33,15 +33,24 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
         remaining = &remaining[..query_idx];
     }
 
-    // Extract protocol
+    // Track whether the `file:` URL carried a `//` authority marker so the
+    // file branch below can split out a UNC-style host (`file://host/path`)
+    // from a hostless path (`file:///path`, `file:/path`). #2975
+    let mut file_had_authority = false;
+
+    // Extract protocol. WHATWG canonicalization lowercases the scheme, so
+    // `HTTP://...` parses identically to `http://...` (and default-port
+    // stripping / special-scheme detection below see the lowered form). #2974
     if let Some(proto_idx) = remaining.find("://") {
-        protocol = format!("{}:", &remaining[..proto_idx]);
+        protocol = format!("{}:", remaining[..proto_idx].to_ascii_lowercase());
+        file_had_authority = protocol == "file:";
         remaining = &remaining[proto_idx + 3..];
     } else if remaining.starts_with("file:") {
         protocol = "file:".to_string();
         remaining = remaining.strip_prefix("file:").unwrap_or(remaining);
         // Handle file:/// paths
         if remaining.starts_with("//") {
+            file_had_authority = true;
             remaining = remaining.strip_prefix("//").unwrap_or(remaining);
         }
     } else if let Some(colon_idx) = remaining.find(':') {
@@ -58,7 +67,7 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
         if scheme_ok {
-            protocol = format!("{}:", scheme);
+            protocol = format!("{}:", scheme.to_ascii_lowercase());
             pathname = remaining[colon_idx + 1..].to_string();
             return (
                 protocol,
@@ -72,17 +81,38 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
         }
     }
 
-    // For file: URLs, the rest is the pathname
+    // For file: URLs, the rest is the pathname — unless an authority was
+    // present and its first segment is a non-empty host (`file://host/path`,
+    // i.e. a UNC share). `file:///path` / `file:/path` are hostless. #2975
     if protocol == "file:" {
-        pathname = if remaining.is_empty() {
-            "/".to_string()
-        } else if remaining.starts_with('/') {
-            remaining.to_string()
+        if file_had_authority && !remaining.is_empty() && !remaining.starts_with('/') {
+            let host_end = remaining.find('/').unwrap_or(remaining.len());
+            let file_host = remaining[..host_end].to_string();
+            let rest = &remaining[host_end..];
+            pathname = if rest.is_empty() {
+                "/".to_string()
+            } else {
+                rest.to_string()
+            };
+            // WHATWG normalizes a `localhost` file host to the empty host.
+            if file_host.eq_ignore_ascii_case("localhost") {
+                host = String::new();
+                hostname = String::new();
+            } else {
+                host = file_host.clone();
+                hostname = file_host;
+            }
         } else {
-            format!("/{}", remaining)
-        };
-        host = String::new();
-        hostname = String::new();
+            pathname = if remaining.is_empty() {
+                "/".to_string()
+            } else if remaining.starts_with('/') {
+                remaining.to_string()
+            } else {
+                format!("/{}", remaining)
+            };
+            host = String::new();
+            hostname = String::new();
+        }
     } else {
         // Extract host and pathname. IPv6 hostnames are bracketed (`[::1]`);
         // the `:` inside brackets must not be mistaken for a port separator,
@@ -301,6 +331,28 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         } else {
             rest
         };
+    }
+
+    // WHATWG host canonicalization (#2974): special schemes lowercase the
+    // host and IDNA/punycode-encode Unicode labels (`bücher.example` →
+    // `xn--bcher-kva.example`, `EXAMPLE.COM` → `example.com`). Numeric /
+    // IPv4-shorthand hosts also canonicalize to dotted-quad. We reuse the
+    // `url`-crate-backed `whatwg_canonicalize_host` (reparses `http://<host>/`),
+    // which is the same path the hostname setter uses. Only special hierarchical
+    // schemes get host canonicalization; opaque schemes have no host.
+    let is_special = matches!(
+        protocol.as_str(),
+        "http:" | "https:" | "ws:" | "wss:" | "ftp:"
+    );
+    if is_special && !hostname.is_empty() {
+        if let Some(canon) = super::whatwg_canonicalize_host(&hostname) {
+            hostname = canon.clone();
+            host = if port.is_empty() {
+                canon
+            } else {
+                format!("{}:{}", canon, port)
+            };
+        }
     }
 
     // Construct the full href (now includes userinfo when present, per

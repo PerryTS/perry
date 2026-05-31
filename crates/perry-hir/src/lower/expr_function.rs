@@ -28,15 +28,46 @@ use crate::lower_patterns::{
 
 use super::{lower_expr, LoweringContext};
 
+fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
+    let ast::Stmt::Expr(expr_stmt) = stmt else {
+        return None;
+    };
+    let mut expr = expr_stmt.expr.as_ref();
+    while let ast::Expr::Paren(paren) = expr {
+        expr = paren.expr.as_ref();
+    }
+    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
+        return None;
+    };
+    s.value.as_str()
+}
+
+fn block_has_use_strict(block: Option<&ast::BlockStmt>) -> bool {
+    let Some(block) = block else {
+        return false;
+    };
+    for stmt in &block.stmts {
+        let Some(directive) = stmt_is_string_directive(stmt) else {
+            break;
+        };
+        if directive == "use strict" {
+            return true;
+        }
+    }
+    false
+}
+
+fn arrow_body_has_use_strict(body: &ast::BlockStmtOrExpr) -> bool {
+    match body {
+        ast::BlockStmtOrExpr::BlockStmt(block) => block_has_use_strict(Some(block)),
+        ast::BlockStmtOrExpr::Expr(_) => false,
+    }
+}
+
 pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> Result<Expr> {
     // Lower arrow function to a closure
     let func_id = ctx.fresh_func();
     let scope_mark = ctx.enter_scope();
-    let parent_strict = ctx.strict_mode;
-    if let ast::BlockStmtOrExpr::BlockStmt(block) = &*arrow.body {
-        ctx.strict_mode =
-            parent_strict || crate::lower::block_has_use_strict_directive(&block.stmts);
-    }
 
     // Enter a type-parameter scope for arrow generics — `<T extends string>
     // (self: T) => ...`. Without this scope the `T` reference in `self: T`
@@ -187,6 +218,10 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         }
     }
 
+    let outer_strict = ctx.current_strict;
+    let is_strict = outer_strict || arrow_body_has_use_strict(&arrow.body);
+    ctx.current_strict = is_strict;
+
     // Lower body with JS function hoisting.
     // Only `var` declarations and function declarations are hoisted
     // to the top per JS semantics — `let`/`const` MUST remain at their
@@ -243,6 +278,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             vec![Stmt::Return(Some(return_expr))]
         }
     };
+    ctx.current_strict = outer_strict;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {
@@ -267,7 +303,6 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     }
 
     ctx.exit_scope(scope_mark);
-    ctx.strict_mode = parent_strict;
 
     // Exit the type-parameter scope opened at the top of `lower_arrow`.
     // Paired with `enter_type_param_scope` above so nested generic
@@ -297,6 +332,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         enclosing_class,
         is_async: arrow.is_async,
         is_generator: false,
+        is_strict,
     })
 }
 
@@ -306,11 +342,6 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // `this` binding determined by how they're called).
     let func_id = ctx.fresh_func();
     let scope_mark = ctx.enter_scope();
-    let parent_strict = ctx.strict_mode;
-    if let Some(block) = fn_expr.function.body.as_ref() {
-        ctx.strict_mode =
-            parent_strict || crate::lower::block_has_use_strict_directive(&block.stmts);
-    }
 
     // Track which locals exist before entering the closure scope
     let outer_locals: Vec<(String, LocalId)> = ctx
@@ -379,6 +410,10 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     if needs_arguments_synth {
         crate::lower_decl::append_synthetic_arguments_param(ctx, &mut params);
     }
+
+    let outer_strict = ctx.current_strict;
+    let is_strict = outer_strict || block_has_use_strict(fn_expr.function.body.as_ref());
+    ctx.current_strict = is_strict;
 
     // Generate Let statements for destructuring patterns BEFORE lowering body
     let mut destructuring_stmts = Vec::new();
@@ -541,6 +576,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     } else {
         Vec::new()
     };
+    ctx.current_strict = outer_strict;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {
@@ -558,7 +594,6 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     }
 
     ctx.exit_scope(scope_mark);
-    ctx.strict_mode = parent_strict;
 
     let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
 
@@ -583,6 +618,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         enclosing_class: None,
         is_async: fn_expr.function.is_async,
         is_generator: fn_expr.function.is_generator,
+        is_strict,
     })
 }
 

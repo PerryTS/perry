@@ -6,17 +6,17 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 18 | 472 | n/a |
-| Partial-module gaps | 29 | 1643 | 374 |
+| Whole-module gaps (zero coverage) | 16 | 427 | n/a |
+| Partial-module gaps | 31 | 1656 | 406 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2397** |  |
+| **Total true gaps** |  | **2365** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
 - `Web / Global APIs` — 282
 - `node:os` — 195
-- `node:fs` — 139
+- `node:fs` — 133
 - `node:crypto` — 128
 - `node:process (and global `process`)` — 99
 - `node:util` — 92
@@ -90,26 +90,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `dns.resolveNs(hostname, callback)`
 - `dns.resolvePtr(hostname, callback)`
 - … and 41 more
-
-### node:module
-
-**Total APIs: 39** · Perry covers: 0 · Gap: 39
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `Module.builtinModules`
-- `Module.createRequire(filename)`
-- `Module.findPackageJSON(specifier[, base])`
-- `Module.findSourceMap(path)`
-- `Module.flushCompileCache()`
-- `Module.getCompileCacheDir()`
-- `Module.getSourceMapsSupport()`
-- `Module.isBuiltin(moduleName)`
-- `Module.register(specifier[, parentURL][, options])`
-- `Module.registerHooks(options)`
-- `Module.runMain()`
-- `Module.setSourceMapsSupport(enabled[, options])`
-- … and 27 more
 
 ### node:cluster
 
@@ -303,19 +283,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `stringDecoder.lastNeed`
 - `stringDecoder.lastTotal`
 
-### node:wasi
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `new WASI([options])`
-- `wasi.getImportObject()`
-- `wasi.start(instance)`
-- `wasi.initialize(instance)`
-- `wasi.finalizeBindings(instance[, options])`
-- `wasi.wasiImport`
-
 ### node:timers/promises
 
 **Total APIs: 5** · Perry covers: 0 · Gap: 5
@@ -411,7 +378,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs
 
-**Gap APIs: 139** · Already covered: 40
+**Gap APIs: 133** · Already covered: 46
 
 #### Missing from Perry
 
@@ -428,7 +395,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `fs.glob(pattern[, options], callback)`
 - `fs.lchmod(path, mode, callback)`
 - `fs.lchown(path, uid, gid, callback)`
-- `fs.link(existingPath, newPath, callback)`
 - `fs.lstat(path[, options], callback)`
 - `fs.lutimes(path, atime, mtime, callback)`
 - `fs.open(path[, flags[, mode]], callback)`
@@ -437,11 +403,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `fs.read(fd, buffer, offset, length, position, callback)`
 - `fs.read(fd[, options], callback)`
 - `fs.read(fd, buffer[, options], callback)`
-- `fs.readlink(path[, options], callback)`
 - `fs.readv(fd, buffers[, position], callback)`
 - `fs.realpath.native(path[, options], callback)`
 - `fs.statfs(path[, options], callback)`
-- `fs.symlink(target, path[, type], callback)`
 - `fs.truncate(path[, len], callback)`
 - `fs.utimes(path, atime, mtime, callback)`
 - `fs.watch(filename[, options][, listener])`
@@ -462,10 +426,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `fs.globSync(pattern[, options])`
 - `fs.lchmodSync(path, mode)`
 - `fs.lchownSync(path, uid, gid)`
-- `fs.linkSync(existingPath, newPath)`
 - `fs.lutimesSync(path, atime, mtime)`
 - `fs.mkdtempDisposableSync(prefix[, options])`
-- … and 89 more (see `runtime-parity.md` for the full list)
+- … and 87 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -478,14 +441,20 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `fs.createReadStream(path[, options])` | `manifest:fs.createReadStream` |
 | `fs.createWriteStream(path[, options])` | `manifest:fs.createWriteStream` |
 | `fs.exists(path, callback)` | `ffi:js_fs_exists_sync` |
+| `fs.link(existingPath, newPath, callback)` | `ffi:js_fs_link_sync` |
+| `fs.linkSync(existingPath, newPath)` | `ffi:js_fs_link_sync` |
 | `fs.mkdir(path[, options], callback)` | `manifest:fs.mkdir` |
 | `fs.mkdtemp(prefix[, options], callback)` | `ffi:js_fs_mkdtemp_sync` |
 | `fs.readdir(path[, options], callback)` | `manifest:fs.readdir` |
 | `fs.readFile(path[, options], callback)` | `manifest:fs.readFile` |
+| `fs.readlink(path[, options], callback)` | `ffi:js_fs_readlink_dispatch` |
+| `fs.readlinkSync(path[, options])` | `ffi:js_fs_readlink_dispatch` |
 | `fs.realpath(path[, options], callback)` | `ffi:js_fs_realpath_sync` |
 | `fs.rename(oldPath, newPath, callback)` | `ffi:js_fs_rename_sync` |
 | `fs.rm(path[, options], callback)` | `manifest:fs.rm` |
 | `fs.rmdir(path[, options], callback)` | `ffi:js_fs_rmdir_sync` |
+| `fs.symlink(target, path[, type], callback)` | `ffi:js_fs_symlink_sync` |
+| `fs.symlinkSync(target, path[, type])` | `ffi:js_fs_symlink_sync` |
 | … | 25 more covered APIs |
 
 ### node:crypto
@@ -1344,31 +1313,26 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs/promises
 
-**Gap APIs: 46** · Already covered: 15
+**Gap APIs: 41** · Already covered: 20
 
 #### Missing from Perry
 
 - `fsPromises.access(path[, mode])`
 - `fsPromises.chmod(path, mode)`
 - `fsPromises.chown(path, uid, gid)`
-- `fsPromises.copyFile(src, dest[, mode])`
 - `fsPromises.cp(src, dest[, options])`
 - `fsPromises.glob(pattern[, options])`
 - `fsPromises.lchmod(path, mode)`
 - `fsPromises.lchown(path, uid, gid)`
-- `fsPromises.link(existingPath, newPath)`
 - `fsPromises.lstat(path[, options])`
 - `fsPromises.lutimes(path, atime, mtime)`
 - `fsPromises.mkdtemp(prefix[, options])`
 - `fsPromises.mkdtempDisposable(prefix[, options])`
 - `fsPromises.open(path, flags[, mode])`
 - `fsPromises.opendir(path[, options])`
-- `fsPromises.readlink(path[, options])`
 - `fsPromises.realpath(path[, options])`
-- `fsPromises.rename(oldPath, newPath)`
 - `fsPromises.rmdir(path[, options])`
 - `fsPromises.statfs(path[, options])`
-- `fsPromises.symlink(target, path[, type])`
 - `fsPromises.truncate(path[, len])`
 - `fsPromises.utimes(path, atime, mtime)`
 - `fsPromises.watch(filename[, options])`
@@ -1400,11 +1364,16 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `fsPromises.appendFile(path, data[, options])` | `manifest:fs.appendFile` |
+| `fsPromises.copyFile(src, dest[, mode])` | `manifest:fs.copyFile` |
+| `fsPromises.link(existingPath, newPath)` | `manifest:fs.link` |
 | `fsPromises.mkdir(path[, options])` | `manifest:fs.mkdir` |
 | `fsPromises.readdir(path[, options])` | `manifest:fs.readdir` |
 | `fsPromises.readFile(path[, options])` | `manifest:fs.readFile` |
+| `fsPromises.readlink(path[, options])` | `manifest:fs.readlink` |
+| `fsPromises.rename(oldPath, newPath)` | `manifest:fs.rename` |
 | `fsPromises.rm(path[, options])` | `manifest:fs.rm` |
 | `fsPromises.stat(path[, options])` | `manifest:fs.stat` |
+| `fsPromises.symlink(target, path[, type])` | `manifest:fs.symlink` |
 | `fsPromises.unlink(path)` | `manifest:fs.unlink` |
 | `fsPromises.writeFile(file, data[, options])` | `manifest:fs.writeFile` |
 | `filehandle.appendFile(data[, options])` | `manifest:fs.appendFile` |
@@ -1751,29 +1720,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:readline
 
-**Gap APIs: 26** · Already covered: 3
+**Gap APIs: 10** · Already covered: 19
 
 #### Missing from Perry
 
-- `readline.clearLine(stream, dir[, callback])`
-- `readline.clearScreenDown(stream[, callback])`
-- `readline.cursorTo(stream, x[, y][, callback])`
-- `readline.moveCursor(stream, dx, dy[, callback])`
-- `readline.emitKeypressEvents(stream[, interface])`
 - `rl[Symbol.dispose]()`
-- `rl.pause()`
-- `rl.resume()`
-- `rl.prompt([preserveCursor])`
-- `rl.setPrompt(prompt)`
-- `rl.getPrompt()`
-- `rl.write(data[, key])`
-- `rl.getCursorPos()`
 - `rl[Symbol.asyncIterator]()`
-- `rl.line`
 - `rl.cursor`
-- `rl.terminal`
-- `'line'`
-- `'close'`
 - `'pause'`
 - `'resume'`
 - `'history'`
@@ -1787,8 +1740,24 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `readline.createInterface(options)` | `ffi:js_readline_create_interface` |
+| `readline.clearLine(stream, dir[, callback])` | `rt:js_readline_clear_line_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.clearScreenDown(stream[, callback])` | `rt:js_readline_clear_screen_down_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.cursorTo(stream, x[, y][, callback])` | `rt:js_readline_cursor_to_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.moveCursor(stream, dx, dy[, callback])` | `rt:js_readline_move_cursor_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.emitKeypressEvents(stream[, interface])` | `rt:js_readline_emit_keypress_events_args`; `test-parity/node-suite/readline/helpers/emit-keypress-events.ts` |
 | `rl.close()` | `manifest:readline.close` |
+| `rl.pause()` | `ffi:js_readline_pause`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.resume()` | `ffi:js_readline_resume`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.prompt([preserveCursor])` | `ffi:js_readline_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.setPrompt(prompt)` | `ffi:js_readline_set_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getPrompt()` | `ffi:js_readline_get_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
 | `rl.question(query[, options], callback)` | `manifest:readline.question` |
+| `rl.write(data[, key])` | `ffi:js_readline_write`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getCursorPos()` | `ffi:js_readline_get_cursor_pos`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.line` | `ffi:js_readline_line`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.terminal` | `ffi:js_readline_terminal`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `'line'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
+| `'close'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
 
 ### node:async_hooks
 
@@ -1830,6 +1799,75 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `als.exit(callback, ...args)` | `manifest:async_hooks.exit` |
 | `als.enterWith(store)` | `manifest:async_hooks.enterWith` |
 | `als.disable()` | `manifest:async_hooks.disable` |
+
+### node:wasi
+
+**Gap APIs: 3** · Already covered: 3
+
+#### Missing from Perry
+
+- `wasi.start(instance)`
+- `wasi.initialize(instance)`
+- `wasi.finalizeBindings(instance[, options])`
+
+#### Covered (sampled)
+
+| API | Coverage source |
+|-----|-----------------|
+| `new WASI([options])` | `manifest:wasi.WASI`; `test-parity/node-suite/wasi/classes/constructor-validation.ts` |
+| `wasi.getImportObject()` | `manifest:wasi.getImportObject`; `test-parity/node-suite/wasi/classes/import-object.ts` |
+| `wasi.wasiImport` | `manifest:wasi.wasiImport`; `test-parity/node-suite/wasi/classes/import-object.ts` |
+
+### node:module
+
+**Gap APIs: 26** · Already covered: 13
+
+#### Missing from Perry
+
+- `Module.createRequire(filename)`
+- `Module.getSourceMapsSupport()`
+- `Module.register(specifier[, parentURL][, options])`
+- `Module.registerHooks(options)`
+- `Module.runMain()`
+- `Module.setSourceMapsSupport(enabled[, options])`
+- `Module.stripTypeScriptTypes(code[, options])`
+- `Module.syncBuiltinESMExports()`
+- `Module.wrap(code)`
+- `Module.wrapper`
+- `module.children`
+- `module.exports`
+- `module.filename`
+- `module.id`
+- `module.loaded`
+- `module.parent`
+- `module.path`
+- `module.paths`
+- `module.isPreloading`
+- `module.require(id)`
+- `module.load()`
+- `require.cache` overrides
+- `module._extensions`
+- `module._cache`
+- `module._pathCache`
+- Customization hook callbacks
+
+#### Covered (sampled)
+
+| API | Coverage source |
+|-----|-----------------|
+| `Module.builtinModules` | `manifest:module.builtinModules`; `runtime:js_module_builtin_modules` |
+| `Module.findPackageJSON(specifier[, base])` | `manifest:module.findPackageJSON`; `runtime:js_module_find_package_json` |
+| `Module.findSourceMap(path)` | `manifest:module.findSourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
+| `Module.flushCompileCache()` | `manifest:module.flushCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.getCompileCacheDir()` | `manifest:module.getCompileCacheDir`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.isBuiltin(moduleName)` | `manifest:module.isBuiltin`; `test-parity/node-suite/module/methods/is-builtin.ts` |
+| `Module.constants.compileCacheStatus` | `manifest:module.constants`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.enableCompileCache([cacheDir])` | `manifest:module.enableCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `new SourceMap(payload[, options])` | `manifest:module.SourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
+| `sourceMap.payload` | `test-parity/node-suite/module/source-map/basic.ts` |
+| `sourceMap.findEntry(lineOffset, columnOffset)` | `test-parity/node-suite/module/source-map/basic.ts` |
+| `sourceMap.findOrigin(lineNumber, columnNumber)` | `test-parity/node-suite/module/source-map/basic.ts` |
+| Module namespace callable helper exports | `test-parity/node-suite/module/namespace/helper-shape.ts` |
 
 ### node:tty
 

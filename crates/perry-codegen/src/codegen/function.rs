@@ -178,6 +178,7 @@ pub(super) fn compile_function(
         current_closure_ptr: None,
         enums,
         is_async_fn: f.is_async,
+        is_strict_fn: f.is_strict,
         static_field_globals,
         class_ids,
         class_keys_globals: &cross_module.class_keys_globals,
@@ -328,8 +329,13 @@ pub(super) fn compile_function(
         );
     }
 
-    stmt::lower_top_level_stmts(&mut ctx, &f.body)
-        .with_context(|| format!("lowering body of '{}'", f.name))?;
+    if f.is_async {
+        stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
+            .with_context(|| format!("lowering async body of '{}'", f.name))?;
+    } else {
+        stmt::lower_top_level_stmts(&mut ctx, &f.body)
+            .with_context(|| format!("lowering body of '{}'", f.name))?;
+    }
 
     // A function that falls off the end without an explicit `return`
     // returns `undefined` in JS — emit the NaN-boxed TAG_UNDEFINED

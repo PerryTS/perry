@@ -31,15 +31,61 @@ use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use perry_runtime::closure::{js_closure_call0, js_closure_call1, js_closure_call2, ClosureHeader};
+use perry_runtime::closure::{
+    get_valid_func_ptr, js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2,
+    js_closure_get_capture_f64, js_closure_set_capture_f64, js_native_call_value, ClosureHeader,
+};
+use perry_runtime::object::{
+    js_object_alloc_with_shape, js_object_get_field_by_name_f64, js_object_set_field, ObjectHeader,
+};
 use perry_runtime::string::{js_string_from_bytes, StringHeader};
-use perry_runtime::value::{js_nanbox_pointer, JSValue};
+use perry_runtime::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
 
-/// Singleton handle for the readline interface. createInterface always
-/// returns this — Node also tolerates multiple createInterface calls on
-/// the same input, but for v1 we treat it as a process-wide singleton
-/// since stdin can only have one consumer at a time anyway.
-const READLINE_HANDLE: i64 = 1;
+/// Singleton handle for the legacy stdin-backed readline interface.
+const STDIN_READLINE_HANDLE: i64 = 1;
+
+#[derive(Clone)]
+struct ReadlineInterfaceState {
+    input: f64,
+    output: f64,
+    prompt: String,
+    line: String,
+    pending: String,
+    line_callback: Option<i64>,
+    close_callback: Option<i64>,
+    question_callback: Option<i64>,
+    terminal: bool,
+    closed: bool,
+    cursor_cols: i32,
+    cursor_rows: i32,
+    uses_custom_stream: bool,
+}
+
+impl ReadlineInterfaceState {
+    fn new(
+        input: f64,
+        output: f64,
+        prompt: String,
+        terminal: bool,
+        uses_custom_stream: bool,
+    ) -> Self {
+        Self {
+            input,
+            output,
+            prompt,
+            line: String::new(),
+            pending: String::new(),
+            line_callback: None,
+            close_callback: None,
+            question_callback: None,
+            terminal,
+            closed: false,
+            cursor_cols: 0,
+            cursor_rows: 0,
+            uses_custom_stream,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Cross-thread state — touched by the reader thread AND the main thread, so
@@ -70,6 +116,9 @@ static READER_STARTED: AtomicBool = AtomicBool::new(false);
 // ---------------------------------------------------------------------------
 
 thread_local! {
+    static READLINE_INTERFACES: RefCell<Vec<Option<ReadlineInterfaceState>>> =
+        const { RefCell::new(Vec::new()) };
+    static NEXT_READLINE_HANDLE: RefCell<i64> = const { RefCell::new(2) };
     /// One-shot callback registered by `rl.question(prompt, cb)`.
     static QUESTION_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
     /// Persistent callback registered by `rl.on('line', cb)`.
@@ -96,6 +145,297 @@ thread_local! {
 fn try_register_pump() {
     #[cfg(feature = "async-runtime")]
     crate::common::async_bridge::ensure_pump_registered();
+}
+
+fn undefined() -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+fn boxed_str(bytes: &[u8]) -> f64 {
+    let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn string_header_to_string(ptr: *const StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn value_to_string(value: f64) -> String {
+    let ptr = js_jsvalue_to_string(value) as *const StringHeader;
+    string_header_to_string(ptr)
+}
+
+fn object_ptr_from_value(value: f64) -> Option<*const ObjectHeader> {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let ptr = js.as_pointer::<ObjectHeader>();
+    if (ptr as usize) < 0x10000 {
+        None
+    } else {
+        Some(ptr)
+    }
+}
+
+fn raw_ptr_from_value(value: f64) -> Option<i64> {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let raw = js.as_pointer::<u8>() as i64;
+    if raw >= 0x10000 {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+fn key_ptr(key: &[u8]) -> *mut StringHeader {
+    js_string_from_bytes(key.as_ptr(), key.len() as u32)
+}
+
+fn object_field(value: f64, key: &[u8]) -> Option<f64> {
+    let obj = object_ptr_from_value(value)?;
+    let field = js_object_get_field_by_name_f64(obj, key_ptr(key));
+    if JSValue::from_bits(field.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(field)
+    }
+}
+
+fn is_callable(value: f64) -> bool {
+    raw_ptr_from_value(value)
+        .map(|raw| !get_valid_func_ptr(raw as *const ClosureHeader).is_null())
+        .unwrap_or(false)
+}
+
+fn throw_type_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = perry_runtime::error::js_typeerror_new(msg);
+    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+}
+
+fn bool_to_f64(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+fn is_true_value(value: f64) -> bool {
+    let js = JSValue::from_bits(value.to_bits());
+    js.is_bool() && js.as_bool()
+}
+
+fn stream_is_readable(value: f64) -> bool {
+    is_true_value(perry_runtime::node_stream::js_node_stream_is_readable(
+        value,
+    ))
+}
+
+fn stream_is_writable(value: f64) -> bool {
+    is_true_value(perry_runtime::node_stream::js_node_stream_is_writable(
+        value,
+    ))
+}
+
+fn call_write_value(output: f64, text: &str) {
+    let chunk = boxed_str(text.as_bytes());
+    if stream_is_writable(output) {
+        if let Some(raw) = raw_ptr_from_value(output) {
+            let _ = perry_runtime::node_stream::js_node_stream_method_write(
+                raw,
+                chunk,
+                undefined(),
+                undefined(),
+            );
+            return;
+        }
+    }
+    if let Some(write) = object_field(output, b"write").filter(|v| is_callable(*v)) {
+        let args = [chunk];
+        unsafe {
+            let _ = js_native_call_value(write, args.as_ptr(), args.len());
+        }
+        return;
+    }
+    let stdout = io::stdout();
+    let mut h = stdout.lock();
+    let _ = h.write_all(text.as_bytes());
+    let _ = h.flush();
+}
+
+fn allocate_interface(state: ReadlineInterfaceState) -> i64 {
+    READLINE_INTERFACES.with(|interfaces| {
+        let mut interfaces = interfaces.borrow_mut();
+        let handle = if state.uses_custom_stream {
+            NEXT_READLINE_HANDLE.with(|next| {
+                let handle = *next.borrow();
+                *next.borrow_mut() = handle + 1;
+                handle
+            })
+        } else {
+            STDIN_READLINE_HANDLE
+        };
+        let index = handle as usize;
+        if interfaces.len() <= index {
+            interfaces.resize_with(index + 1, || None);
+        }
+        interfaces[index] = Some(state);
+        handle
+    })
+}
+
+fn with_interface_mut<R>(
+    handle: i64,
+    f: impl FnOnce(&mut ReadlineInterfaceState) -> R,
+) -> Option<R> {
+    READLINE_INTERFACES.with(|interfaces| {
+        let mut interfaces = interfaces.borrow_mut();
+        interfaces
+            .get_mut(handle as usize)
+            .and_then(|slot| slot.as_mut())
+            .map(f)
+    })
+}
+
+fn with_interface<R>(handle: i64, f: impl FnOnce(&ReadlineInterfaceState) -> R) -> Option<R> {
+    READLINE_INTERFACES.with(|interfaces| {
+        let interfaces = interfaces.borrow();
+        interfaces
+            .get(handle as usize)
+            .and_then(|slot| slot.as_ref())
+            .map(f)
+    })
+}
+
+fn callback_arg(line: &str) -> f64 {
+    boxed_str(line.as_bytes())
+}
+
+fn fire_line_or_question(state: &mut ReadlineInterfaceState, line: String) {
+    state.line.clear();
+    let arg = callback_arg(&line);
+    if let Some(cb_i64) = state.question_callback.take() {
+        js_closure_call1(cb_i64 as *const ClosureHeader, arg);
+        return;
+    }
+    if let Some(cb_i64) = state.line_callback {
+        js_closure_call1(cb_i64 as *const ClosureHeader, arg);
+    }
+}
+
+fn close_custom_interface(handle: i64) {
+    let cb = with_interface_mut(handle, |state| {
+        if state.closed {
+            None
+        } else {
+            state.closed = true;
+            state.close_callback.take()
+        }
+    })
+    .flatten();
+    if let Some(cb_i64) = cb {
+        js_closure_call0(cb_i64 as *const ClosureHeader);
+    }
+}
+
+fn append_custom_input(handle: i64, chunk: f64) {
+    let text = value_to_string(chunk);
+    with_interface_mut(handle, |state| {
+        state.pending.push_str(&text);
+        while let Some(pos) = state.pending.find('\n') {
+            let mut line: String = state.pending.drain(..=pos).collect();
+            if line.ends_with('\n') {
+                line.pop();
+            }
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            fire_line_or_question(state, line);
+        }
+    });
+}
+
+extern "C" fn custom_input_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    let handle = js_closure_get_capture_f64(closure, 0) as i64;
+    append_custom_input(handle, chunk);
+    undefined()
+}
+
+extern "C" fn custom_input_close(closure: *const ClosureHeader) -> f64 {
+    let handle = js_closure_get_capture_f64(closure, 0) as i64;
+    close_custom_interface(handle);
+    undefined()
+}
+
+fn attach_custom_input(handle: i64, input: f64) {
+    let Some(raw) = raw_ptr_from_value(input) else {
+        return;
+    };
+    let data = js_closure_alloc(custom_input_data as *const u8, 1);
+    js_closure_set_capture_f64(data, 0, handle as f64);
+    let data_value = f64::from_bits(JSValue::pointer(data as *const u8).bits());
+    let close = js_closure_alloc(custom_input_close as *const u8, 1);
+    js_closure_set_capture_f64(close, 0, handle as f64);
+    let close_value = f64::from_bits(JSValue::pointer(close as *const u8).bits());
+    let data_event = boxed_str(b"data");
+    let end_event = boxed_str(b"end");
+    let close_event = boxed_str(b"close");
+    let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, data_event, data_value);
+    let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, end_event, close_value);
+    let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, close_event, close_value);
+}
+
+fn prompt_from_options(opts: f64) -> String {
+    object_field(opts, b"prompt")
+        .map(value_to_string)
+        .unwrap_or_else(|| "> ".to_string())
+}
+
+fn terminal_from_options(opts: f64) -> bool {
+    object_field(opts, b"terminal")
+        .map(|v| perry_runtime::value::js_is_truthy(v) != 0)
+        .unwrap_or(false)
+}
+
+fn create_interface_from_options(opts: f64) -> i64 {
+    let Some(_) = object_ptr_from_value(opts) else {
+        return allocate_interface(ReadlineInterfaceState::new(
+            undefined(),
+            undefined(),
+            "> ".to_string(),
+            false,
+            false,
+        ));
+    };
+    let Some(input) = object_field(opts, b"input") else {
+        throw_type_error("input.on is not a function");
+    };
+    if !stream_is_readable(input) && !object_field(input, b"on").is_some_and(is_callable) {
+        throw_type_error("input.on is not a function");
+    }
+    let output = object_field(opts, b"output").unwrap_or_else(undefined);
+    let prompt = prompt_from_options(opts);
+    let terminal = terminal_from_options(opts);
+    let uses_custom_stream = stream_is_readable(input);
+    let handle = allocate_interface(ReadlineInterfaceState::new(
+        input,
+        output,
+        prompt,
+        terminal,
+        uses_custom_stream,
+    ));
+    if uses_custom_stream {
+        attach_custom_input(handle, input);
+    }
+    handle
 }
 
 // ---------------------------------------------------------------------------
@@ -322,15 +662,19 @@ mod termios_impl {
 // ---------------------------------------------------------------------------
 
 /// readline.createInterface(opts) — returns a NaN-boxed POINTER handle
-/// pointing at the singleton interface. The opts argument is accepted
-/// for shape compatibility with Node but currently ignored.
+/// pointing at an interface handle. Explicit Node stream inputs are
+/// wired through their data/end events; the legacy no-options path keeps
+/// the stdin-backed singleton behavior.
 #[no_mangle]
-pub extern "C" fn js_readline_create_interface(_opts: f64) -> i64 {
+pub extern "C" fn js_readline_create_interface(opts: f64) -> i64 {
     CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
     CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     try_register_pump();
-    ensure_reader_started();
-    READLINE_HANDLE
+    let handle = create_interface_from_options(opts);
+    if !with_interface(handle, |state| state.uses_custom_stream).unwrap_or(false) {
+        ensure_reader_started();
+    }
+    handle
 }
 
 /// rl.question(prompt, callback) — write `prompt` to stdout (no
@@ -338,45 +682,64 @@ pub extern "C" fn js_readline_create_interface(_opts: f64) -> i64 {
 /// the next line read.
 #[no_mangle]
 pub extern "C" fn js_readline_question(
-    _handle: i64,
+    handle: i64,
     prompt_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
-    if !prompt_ptr.is_null() {
-        unsafe {
-            let len = (*prompt_ptr).byte_len as usize;
-            let data = (prompt_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            let stdout = io::stdout();
-            let mut h = stdout.lock();
-            let _ = h.write_all(bytes);
-            let _ = h.flush();
+    let prompt = string_header_to_string(prompt_ptr);
+    if with_interface_mut(handle, |state| {
+        if state.uses_custom_stream {
+            call_write_value(state.output, &prompt);
+            state.question_callback = Some(callback);
+            true
+        } else {
+            false
         }
+    })
+    .unwrap_or(false)
+    {
+        return undefined();
+    }
+    if !prompt.is_empty() {
+        let stdout = io::stdout();
+        let mut h = stdout.lock();
+        let _ = h.write_all(prompt.as_bytes());
+        let _ = h.flush();
     }
     QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = Some(callback));
     try_register_pump();
     ensure_reader_started();
-    f64::from_bits(JSValue::undefined().bits())
+    undefined()
 }
 
 /// rl.on(event, callback) — register a persistent callback for the
 /// `'line'` or `'close'` event.
 #[no_mangle]
 pub extern "C" fn js_readline_on(
-    _handle: i64,
+    handle: i64,
     event_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
     if event_ptr.is_null() {
-        return f64::from_bits(JSValue::undefined().bits());
+        return undefined();
     }
-    let event = unsafe {
-        let len = (*event_ptr).byte_len as usize;
-        let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let slice = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8(slice).unwrap_or("")
-    };
-    match event {
+    let event = string_header_to_string(event_ptr);
+    if with_interface_mut(handle, |state| {
+        if !state.uses_custom_stream {
+            return false;
+        }
+        match event.as_str() {
+            "line" => state.line_callback = Some(callback),
+            "close" => state.close_callback = Some(callback),
+            _ => {}
+        }
+        true
+    })
+    .unwrap_or(false)
+    {
+        return undefined();
+    }
+    match event.as_str() {
         "line" => {
             LINE_CALLBACK.with(|cb| *cb.borrow_mut() = Some(callback));
             try_register_pump();
@@ -387,13 +750,17 @@ pub extern "C" fn js_readline_on(
         }
         _ => {}
     }
-    f64::from_bits(JSValue::undefined().bits())
+    undefined()
 }
 
 /// rl.close() — synchronously fire the close callback (matching Node's
 /// `Interface.close()` semantics) and mark the interface as EOF.
 #[no_mangle]
 pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
+    if with_interface(_handle, |state| state.uses_custom_stream).unwrap_or(false) {
+        close_custom_interface(_handle);
+        return undefined();
+    }
     EOF_REACHED.store(true, Ordering::Release);
     let already = CLOSE_FIRED.with(|f| {
         let was = *f.borrow();
@@ -407,7 +774,82 @@ pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
             js_closure_call0(closure);
         }
     }
-    f64::from_bits(JSValue::undefined().bits())
+    undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_pause(handle: i64) -> i64 {
+    if let Some(input) = with_interface(handle, |state| state.input) {
+        if let Some(raw) = raw_ptr_from_value(input) {
+            let _ = perry_runtime::node_stream::js_node_stream_method_pause(raw);
+        }
+    }
+    handle
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_resume(handle: i64) -> i64 {
+    if let Some(input) = with_interface(handle, |state| state.input) {
+        if let Some(raw) = raw_ptr_from_value(input) {
+            let _ = perry_runtime::node_stream::js_node_stream_method_resume(raw);
+        }
+    }
+    handle
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_prompt(handle: i64) -> f64 {
+    with_interface_mut(handle, |state| {
+        call_write_value(state.output, &state.prompt);
+        state.cursor_cols = state.prompt.chars().count() as i32;
+    });
+    undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_set_prompt(handle: i64, prompt_ptr: *const StringHeader) -> f64 {
+    let prompt = string_header_to_string(prompt_ptr);
+    with_interface_mut(handle, |state| {
+        state.prompt = prompt;
+    });
+    undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_get_prompt(handle: i64) -> *mut StringHeader {
+    let prompt = with_interface(handle, |state| state.prompt.clone()).unwrap_or_default();
+    js_string_from_bytes(prompt.as_ptr(), prompt.len() as u32)
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_write(handle: i64, chunk: f64) -> f64 {
+    let text = value_to_string(chunk);
+    with_interface_mut(handle, |state| {
+        state.cursor_cols = state.cursor_cols.max(text.chars().count() as i32);
+    });
+    undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_get_cursor_pos(handle: i64) -> i64 {
+    let (cols, rows) =
+        with_interface(handle, |state| (state.cursor_cols, state.cursor_rows)).unwrap_or((0, 0));
+    let packed = b"cols\0rows\0";
+    let obj = js_object_alloc_with_shape(0x7FFF_FF49, 2, packed.as_ptr(), packed.len() as u32);
+    js_object_set_field(obj, 0, JSValue::number(cols as f64));
+    js_object_set_field(obj, 1, JSValue::number(rows as f64));
+    obj as i64
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_line(handle: i64) -> *mut StringHeader {
+    let line = with_interface(handle, |state| state.line.clone()).unwrap_or_default();
+    js_string_from_bytes(line.as_ptr(), line.len() as u32)
+}
+
+#[no_mangle]
+pub extern "C" fn js_readline_terminal(handle: i64) -> f64 {
+    bool_to_f64(with_interface(handle, |state| state.terminal).unwrap_or(false))
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +876,7 @@ pub extern "C" fn js_readline_set_raw_mode(enabled: f64) -> f64 {
     // Return a pointer-tagged handle so the chain `process.stdin.setRawMode(true)`
     // could be extended later (Node returns `this`); for now any non-undefined
     // value is fine.
-    js_nanbox_pointer(READLINE_HANDLE)
+    js_nanbox_pointer(STDIN_READLINE_HANDLE)
 }
 
 /// process.stdin.on(event, callback) — register a callback for raw-mode
@@ -444,7 +886,7 @@ pub extern "C" fn js_readline_set_raw_mode(enabled: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback: i64) -> f64 {
     if event_ptr.is_null() {
-        return f64::from_bits(JSValue::undefined().bits());
+        return undefined();
     }
     let event = unsafe {
         let len = (*event_ptr).byte_len as usize;
@@ -470,7 +912,7 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
         }
         _ => {}
     }
-    f64::from_bits(JSValue::undefined().bits())
+    undefined()
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +1156,8 @@ mod tests {
         EOF_REACHED.store(false, Ordering::Release);
         CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
         RAW_MODE.store(false, Ordering::Release);
+        READLINE_INTERFACES.with(|interfaces| interfaces.borrow_mut().clear());
+        NEXT_READLINE_HANDLE.with(|next| *next.borrow_mut() = 2);
         // READER_STARTED stays sticky once set in a test process.
         guard
     }
@@ -722,7 +1166,7 @@ mod tests {
     fn close_without_callbacks_is_noop() {
         let _g = reset();
         let h = js_readline_create_interface(0.0);
-        assert_eq!(h, READLINE_HANDLE);
+        assert_eq!(h, STDIN_READLINE_HANDLE);
         js_readline_close(h);
         assert_eq!(js_readline_process_pending(), 0);
         assert_eq!(js_readline_process_pending(), 0);

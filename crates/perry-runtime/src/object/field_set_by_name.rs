@@ -191,6 +191,23 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
+    // Property writes to primitive values operate on temporary wrapper objects
+    // and do not persist. More importantly for Perry's raw-f64 numbers, they
+    // must never fall through to the ObjectHeader dereference path below.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let jv = JSValue::from_bits(bits);
+        if (jv.is_number() && top16 != 0)
+            || jv.is_bool()
+            || jv.is_any_string()
+            || jv.is_undefined()
+            || jv.is_null()
+            || jv.is_bigint()
+        {
+            return;
+        }
+    }
     // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. Setting
     // an arbitrary property on it (`date.foo = x`) must NOT deref the small
     // cell as an `ObjectHeader` below (memory corruption). Perry doesn't model
@@ -760,8 +777,8 @@ pub extern "C" fn js_object_set_field_by_name(
                     crate::error::throw_immutable_write(0, &key_str);
                 }
                 // Accessor short-circuit: if a setter is registered, invoke
-                // it instead of writing the slot. A property with `get` but
-                // no `set` silently ignores the write (non-strict mode).
+                // it instead of writing the slot. A getter-only accessor is
+                // read-only under Perry's strict-by-default TS semantics.
                 if ACCESSORS_IN_USE.with(|c| c.get()) {
                     if let Some(ref k) = incoming_key_str {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
@@ -771,6 +788,8 @@ pub extern "C" fn js_object_set_field_by_name(
                                 if !closure.is_null() {
                                     crate::closure::js_closure_call1(closure, value);
                                 }
+                            } else {
+                                crate::error::throw_immutable_write(0, k);
                             }
                             return;
                         }

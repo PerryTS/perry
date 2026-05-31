@@ -256,6 +256,7 @@ fn lower_method_prop(
             body,
             is_async: method.function.is_async,
             is_generator: false,
+            is_strict: ctx.current_strict,
             was_plain_async: false,
             was_unrolled: false,
             is_exported: false,
@@ -292,6 +293,7 @@ fn lower_method_prop(
             enclosing_class,
             is_async: method.function.is_async,
             is_generator: false,
+            is_strict: ctx.current_strict,
         }
     };
     Ok(Some((method_key, value_expr, uses_this)))
@@ -411,6 +413,7 @@ fn lower_accessor_prop(
         enclosing_class,
         is_async: false,
         is_generator: false,
+        is_strict: ctx.current_strict,
     };
     Ok(Some((accessor_key, closure)))
 }
@@ -839,6 +842,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             enclosing_class: None,
             is_async: false,
             is_generator: false,
+            is_strict: ctx.current_strict,
         };
         return Ok(Expr::Call {
             callee: Box::new(closure),
@@ -1052,6 +1056,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         enclosing_class: None,
         is_async: false,
         is_generator: false,
+        is_strict: ctx.current_strict,
     };
     Ok(Expr::Call {
         callee: Box::new(closure),

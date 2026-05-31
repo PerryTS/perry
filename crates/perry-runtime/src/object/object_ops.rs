@@ -517,6 +517,20 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
+        // #3655: functions/closures carry built-in own `name`/`length`
+        // (and `prototype` for constructors) plus any user-attached props.
+        // Route them here instead of through `extract_obj_ptr`/`own_key_present`,
+        // which would read `keys_array` off a closure (out of bounds).
+        if obj_js.is_pointer() {
+            let ptr = obj_js.as_pointer::<u8>() as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                let present = super::has_own_helpers::str_from_string_header(key_str)
+                    .map(|k| super::has_own_helpers::closure_own_key_present(ptr, k))
+                    .unwrap_or(false);
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) < 0x10000 {
             return f64::from_bits(TAG_FALSE);
@@ -577,6 +591,27 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                 .map(|s| s == "length")
                 .unwrap_or(false);
             return f64::from_bits(if is_length { TAG_FALSE } else { TAG_TRUE });
+        }
+
+        // #3655: functions/closures. Built-in `name`/`length`/`prototype` are
+        // non-enumerable; user-attached props default to enumerable.
+        if obj_jv.is_pointer() {
+            let ptr = obj_jv.as_pointer::<u8>() as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
+                    return f64::from_bits(TAG_FALSE);
+                };
+                if !super::has_own_helpers::closure_own_key_present(ptr, key_name) {
+                    return f64::from_bits(TAG_FALSE);
+                }
+                if matches!(key_name, "name" | "length" | "prototype") {
+                    return f64::from_bits(TAG_FALSE);
+                }
+                let enumerable = super::get_property_attrs(ptr, key_name)
+                    .map(|attrs| attrs.enumerable())
+                    .unwrap_or(true);
+                return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
+            }
         }
 
         let obj = extract_obj_ptr(obj_value);

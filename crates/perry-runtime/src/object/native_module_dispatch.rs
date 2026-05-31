@@ -446,12 +446,47 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
+        ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
+        ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
+        ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
+        ("module", "getSourceMapsSupport") => crate::process::js_module_get_source_maps_support(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
+        ("module", "setSourceMapsSupport") => {
+            crate::process::js_module_set_source_maps_support(arg(0), arg(1))
+        }
+        ("module", "stripTypeScriptTypes") => {
+            crate::process::js_module_strip_typescript_types(arg(0), arg(1))
+        }
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
         ("process", "threadCpuUsage") => crate::process::js_process_thread_cpu_usage(arg(0)),
+        ("process", "availableMemory") => crate::process::js_process_available_memory(),
+        ("process", "constrainedMemory") => crate::process::js_process_constrained_memory(),
+        ("process", "resourceUsage") => crate::process::js_process_resource_usage(),
+        ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
+        ("process", "getuid") => crate::process::js_process_getuid(),
+        ("process", "geteuid") => crate::process::js_process_geteuid(),
+        ("process", "getgid") => crate::process::js_process_getgid(),
+        ("process", "getegid") => crate::process::js_process_getegid(),
+        ("process", "sourceMapsEnabled") => crate::process::js_process_source_maps_enabled(),
+        ("process", "setSourceMapsEnabled") => {
+            crate::process::js_process_set_source_maps_enabled(arg(0))
+        }
+        ("process", "hasUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_has_uncaught_exception_capture_callback()
+        }
+        ("process", "setUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_set_uncaught_exception_capture_callback(arg(0))
+        }
+        ("process", "addUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_add_uncaught_exception_capture_callback(arg(0))
+        }
         ("process", "nextTick") => {
             // Validate the callback and forward trailing args (#3046).
             unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
@@ -471,6 +506,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("process", "getgroups") => crate::process::js_process_getgroups(),
         ("process", "setuid") => {
             crate::process::js_process_setuid(arg(0));
@@ -501,6 +537,23 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_exit(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+        ("process", "abort") => {
+            crate::process::js_process_abort();
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "umask") => {
+            let mask = arg(0);
+            let mask_value = JSValue::from_bits(mask.to_bits());
+            if mask_value.is_undefined() {
+                crate::process::js_process_umask()
+            } else {
+                crate::process::js_process_umask_set(mask)
+            }
+        }
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
         ("process", "hrtime") => crate::os::js_process_hrtime(arg(0)),
         ("process", "cpuUsage") => crate::process::js_process_cpu_usage(arg(0)),
         // ── crypto module ──
@@ -512,6 +565,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
+
+        // ── wasi module ──
+        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
@@ -897,7 +953,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             JSValue::pointer(crate::os::js_os_network_interfaces() as *const u8).bits(),
         ),
         ("os", "userInfo") => {
-            f64::from_bits(JSValue::pointer(crate::os::js_os_user_info() as *const u8).bits())
+            // #3004 — honor a runtime `options.encoding === "buffer"` value
+            // (variable / function-return / computed-key options object).
+            let opts_bits = arg(0).to_bits() as i64;
+            f64::from_bits(
+                JSValue::pointer(crate::os::js_os_user_info_options(opts_bits) as *const u8).bits(),
+            )
         }
         ("os", "getPriority") => crate::os::js_os_get_priority(arg(0)),
         ("os", "setPriority") => crate::os::js_os_set_priority(arg(0), arg(1)),
@@ -1090,76 +1151,54 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
 
         // ── util.types namespace ──
-        ("util.types", "isPromise") => {
-            let v = JSValue::from_bits(arg(0).to_bits());
-            bool_tag(
-                v.is_pointer()
-                    && crate::promise::js_is_promise(
-                        v.as_pointer::<crate::promise::Promise>() as *mut crate::promise::Promise
-                    ) != 0,
-            )
+        ("util.types", "isArgumentsObject") => {
+            crate::object::js_util_types_is_arguments_object(arg(0))
         }
-        ("util.types", "isArrayBuffer") => {
-            bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0))))
-        }
+        ("util.types", "isPromise") => crate::object::js_util_types_is_promise(arg(0)),
+        ("util.types", "isBigIntObject") => crate::object::js_util_types_is_big_int_object(arg(0)),
+        ("util.types", "isArrayBuffer") => crate::object::js_util_types_is_array_buffer(arg(0)),
         ("util.types", "isSharedArrayBuffer") => {
-            bool_tag(crate::buffer::is_shared_array_buffer(ptr_addr(arg(0))))
+            crate::object::js_util_types_is_shared_array_buffer(arg(0))
         }
         ("util.types", "isAnyArrayBuffer") => {
-            bool_tag(crate::buffer::is_any_array_buffer(ptr_addr(arg(0))))
+            crate::object::js_util_types_is_any_array_buffer(arg(0))
         }
         ("util.types", "isArrayBufferView") => {
-            let addr = ptr_addr(arg(0));
-            bool_tag(
-                crate::buffer::is_uint8array_buffer(addr)
-                    || crate::buffer::is_data_view(addr)
-                    || typed_kind(arg(0)).is_some(),
-            )
+            crate::object::js_util_types_is_array_buffer_view(arg(0))
         }
-        ("util.types", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
-        ("util.types", "isUint8Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
-        }
-        ("util.types", "isInt8Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
-        }
-        ("util.types", "isInt16Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
-        }
-        ("util.types", "isUint16Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
-        }
-        ("util.types", "isInt32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
-        }
-        ("util.types", "isUint32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
-        }
-        ("util.types", "isFloat32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
-        }
-        ("util.types", "isFloat64Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
-        }
+        ("util.types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util.types", "isTypedArray") => crate::object::js_util_types_is_typed_array(arg(0)),
+        ("util.types", "isUint8Array") => crate::object::js_util_types_is_uint8_array(arg(0)),
+        ("util.types", "isInt8Array") => crate::object::js_util_types_is_int8_array(arg(0)),
+        ("util.types", "isInt16Array") => crate::object::js_util_types_is_int16_array(arg(0)),
+        ("util.types", "isUint16Array") => crate::object::js_util_types_is_uint16_array(arg(0)),
+        ("util.types", "isInt32Array") => crate::object::js_util_types_is_int32_array(arg(0)),
+        ("util.types", "isUint32Array") => crate::object::js_util_types_is_uint32_array(arg(0)),
+        ("util.types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util.types", "isFloat32Array") => crate::object::js_util_types_is_float32_array(arg(0)),
+        ("util.types", "isFloat64Array") => crate::object::js_util_types_is_float64_array(arg(0)),
         ("util.types", "isUint8ClampedArray") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
+            crate::object::js_util_types_is_uint8_clamped_array(arg(0))
         }
         ("util.types", "isBigInt64Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGINT64))
+            crate::object::js_util_types_is_big_int64_array(arg(0))
         }
         ("util.types", "isBigUint64Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGUINT64))
+            crate::object::js_util_types_is_big_uint64_array(arg(0))
         }
-        ("util.types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
+        ("util.types", "isMap") => crate::object::js_util_types_is_map(arg(0)),
         ("util.types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
         ("util.types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
-        ("util.types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
-        ("util.types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
-        ("util.types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
-        ("util.types", "isRegExp") => {
-            let v = JSValue::from_bits(arg(0).to_bits());
-            bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
+        ("util.types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
+        ("util.types", "isModuleNamespaceObject") => {
+            crate::object::js_util_types_is_module_namespace_object(arg(0))
         }
+        ("util.types", "isSet") => crate::object::js_util_types_is_set(arg(0)),
+        ("util.types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
+        ("util.types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util.types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util.types", "isDate") => crate::object::js_util_types_is_date(arg(0)),
+        ("util.types", "isRegExp") => crate::object::js_util_types_is_reg_exp(arg(0)),
         ("util.types", "isAsyncFunction") => crate::object::js_util_types_is_async_function(arg(0)),
         ("util.types", "isGeneratorFunction") => {
             crate::object::js_util_types_is_generator_function(arg(0))
@@ -1168,84 +1207,65 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::object::js_util_types_is_generator_object(arg(0))
         }
         ("util.types", "isNativeError") => crate::object::js_util_types_is_native_error(arg(0)),
+        ("util.types", "isKeyObject") => crate::object::js_util_types_is_key_object(arg(0)),
+        ("util.types", "isCryptoKey") => crate::object::js_util_types_is_crypto_key(arg(0)),
         ("util.types", "isNumberObject") => crate::object::js_util_types_is_number_object(arg(0)),
         ("util.types", "isStringObject") => crate::object::js_util_types_is_string_object(arg(0)),
         ("util.types", "isBooleanObject") => crate::object::js_util_types_is_boolean_object(arg(0)),
+        ("util.types", "isSymbolObject") => crate::object::js_util_types_is_symbol_object(arg(0)),
         ("util.types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
 
         // ── node:util/types direct module ──
-        ("util/types", "isPromise") => {
-            let v = JSValue::from_bits(arg(0).to_bits());
-            bool_tag(
-                v.is_pointer()
-                    && crate::promise::js_is_promise(
-                        v.as_pointer::<crate::promise::Promise>() as *mut crate::promise::Promise
-                    ) != 0,
-            )
+        ("util/types", "isArgumentsObject") => {
+            crate::object::js_util_types_is_arguments_object(arg(0))
         }
-        ("util/types", "isArrayBuffer") => {
-            bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0))))
-        }
+        ("util/types", "isPromise") => crate::object::js_util_types_is_promise(arg(0)),
+        ("util/types", "isBigIntObject") => crate::object::js_util_types_is_big_int_object(arg(0)),
+        ("util/types", "isArrayBuffer") => crate::object::js_util_types_is_array_buffer(arg(0)),
         ("util/types", "isSharedArrayBuffer") => {
-            bool_tag(crate::buffer::is_shared_array_buffer(ptr_addr(arg(0))))
+            crate::object::js_util_types_is_shared_array_buffer(arg(0))
         }
         ("util/types", "isAnyArrayBuffer") => {
-            bool_tag(crate::buffer::is_any_array_buffer(ptr_addr(arg(0))))
+            crate::object::js_util_types_is_any_array_buffer(arg(0))
         }
         ("util/types", "isArrayBufferView") => {
-            let addr = ptr_addr(arg(0));
-            bool_tag(
-                crate::buffer::is_uint8array_buffer(addr)
-                    || crate::buffer::is_data_view(addr)
-                    || typed_kind(arg(0)).is_some(),
-            )
+            crate::object::js_util_types_is_array_buffer_view(arg(0))
         }
-        ("util/types", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
-        ("util/types", "isUint8Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
-        }
-        ("util/types", "isInt8Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
-        }
-        ("util/types", "isInt16Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
-        }
-        ("util/types", "isUint16Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
-        }
-        ("util/types", "isInt32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
-        }
-        ("util/types", "isUint32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
-        }
-        ("util/types", "isFloat32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
-        }
-        ("util/types", "isFloat64Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
-        }
+        ("util/types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util/types", "isTypedArray") => crate::object::js_util_types_is_typed_array(arg(0)),
+        ("util/types", "isUint8Array") => crate::object::js_util_types_is_uint8_array(arg(0)),
+        ("util/types", "isInt8Array") => crate::object::js_util_types_is_int8_array(arg(0)),
+        ("util/types", "isInt16Array") => crate::object::js_util_types_is_int16_array(arg(0)),
+        ("util/types", "isUint16Array") => crate::object::js_util_types_is_uint16_array(arg(0)),
+        ("util/types", "isInt32Array") => crate::object::js_util_types_is_int32_array(arg(0)),
+        ("util/types", "isUint32Array") => crate::object::js_util_types_is_uint32_array(arg(0)),
+        ("util/types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util/types", "isFloat32Array") => crate::object::js_util_types_is_float32_array(arg(0)),
+        ("util/types", "isFloat64Array") => crate::object::js_util_types_is_float64_array(arg(0)),
         ("util/types", "isUint8ClampedArray") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
+            crate::object::js_util_types_is_uint8_clamped_array(arg(0))
         }
         ("util/types", "isBigInt64Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGINT64))
+            crate::object::js_util_types_is_big_int64_array(arg(0))
         }
         ("util/types", "isBigUint64Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_BIGUINT64))
+            crate::object::js_util_types_is_big_uint64_array(arg(0))
         }
-        ("util/types", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
+        ("util/types", "isMap") => crate::object::js_util_types_is_map(arg(0)),
         ("util/types", "isMapIterator") => crate::object::js_util_types_is_map_iterator(arg(0)),
         ("util/types", "isProxy") => crate::object::js_util_types_is_proxy(arg(0)),
-        ("util/types", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),
-        ("util/types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
-        ("util/types", "isDate") => bool_tag(crate::date::is_date_value(arg(0))),
-        ("util/types", "isRegExp") => {
-            let v = JSValue::from_bits(arg(0).to_bits());
-            bool_tag(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
+        ("util/types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
+        ("util/types", "isModuleNamespaceObject") => {
+            crate::object::js_util_types_is_module_namespace_object(arg(0))
         }
+        ("util/types", "isSet") => crate::object::js_util_types_is_set(arg(0)),
+        ("util/types", "isSetIterator") => crate::object::js_util_types_is_set_iterator(arg(0)),
+        ("util/types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util/types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util/types", "isDate") => crate::object::js_util_types_is_date(arg(0)),
+        ("util/types", "isRegExp") => crate::object::js_util_types_is_reg_exp(arg(0)),
         ("util/types", "isAsyncFunction") => crate::object::js_util_types_is_async_function(arg(0)),
         ("util/types", "isGeneratorFunction") => {
             crate::object::js_util_types_is_generator_function(arg(0))
@@ -1254,22 +1274,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::object::js_util_types_is_generator_object(arg(0))
         }
         ("util/types", "isNativeError") => crate::object::js_util_types_is_native_error(arg(0)),
+        ("util/types", "isKeyObject") => crate::object::js_util_types_is_key_object(arg(0)),
+        ("util/types", "isCryptoKey") => crate::object::js_util_types_is_crypto_key(arg(0)),
         ("util/types", "isNumberObject") => crate::object::js_util_types_is_number_object(arg(0)),
         ("util/types", "isStringObject") => crate::object::js_util_types_is_string_object(arg(0)),
         ("util/types", "isBooleanObject") => crate::object::js_util_types_is_boolean_object(arg(0)),
+        ("util/types", "isSymbolObject") => crate::object::js_util_types_is_symbol_object(arg(0)),
         ("util/types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
         // ── url module (module-level functions return NaN-boxed JS values) ──
-        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
-        ("url", "fileURLToPathBuffer") => crate::url::js_url_file_url_to_path_buffer(arg(0)),
-        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
+        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("url", "fileURLToPathBuffer") => {
+            crate::url::js_url_file_url_to_path_buffer(arg(0), arg(1))
+        }
+        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
+        ("url", "Url") => crate::url::js_url_legacy_url_new(),
         ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
         ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),
         ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
+        ("url", "resolveObject") => crate::url::js_url_legacy_resolve_object(arg(0), arg(1)),
 
         // ── punycode module (deprecated, #2513) ──
         ("punycode", "decode") => crate::punycode::js_punycode_decode(arg(0)),
@@ -1371,74 +1398,32 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
-        ("v8", "serialize") => crate::v8::js_v8_serialize(arg(0)),
-        ("v8", "deserialize") => crate::v8::js_v8_deserialize(arg(0)),
-        ("v8", "cachedDataVersionTag") => crate::v8::js_v8_cached_data_version_tag(arg(0)),
-        ("v8", "getHeapStatistics") => crate::v8::js_v8_get_heap_statistics(arg(0)),
-        ("v8", "getHeapCodeStatistics") => {
-            crate::v8::js_v8_get_heap_code_statistics(arg(0), arg(1))
+        ("readline", "clearLine") => {
+            crate::readline_helpers::js_readline_clear_line_args(pack_args())
         }
-        ("v8", "getHeapSpaceStatistics") => crate::v8::js_v8_get_heap_space_statistics(arg(0)),
-        ("v8", "Serializer") => crate::v8::js_v8_serializer_new(),
-        ("v8", "DefaultSerializer") => crate::v8::js_v8_default_serializer_new(),
-        ("v8", "Deserializer") => crate::v8::js_v8_deserializer_new(arg(0)),
-        ("v8", "DefaultDeserializer") => crate::v8::js_v8_default_deserializer_new(arg(0)),
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeHeader") => {
-            crate::v8::js_v8_serializer_write_header(obj as i64)
+        ("readline", "clearScreenDown") => {
+            crate::readline_helpers::js_readline_clear_screen_down_args(pack_args())
         }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeValue") => {
-            crate::v8::js_v8_serializer_write_value(obj as i64, arg(0))
+        ("readline", "cursorTo") => {
+            crate::readline_helpers::js_readline_cursor_to_args(pack_args())
         }
-        ("v8.Serializer" | "v8.DefaultSerializer", "releaseBuffer") => {
-            crate::v8::js_v8_serializer_release_buffer(obj as i64)
+        ("readline", "moveCursor") => {
+            crate::readline_helpers::js_readline_move_cursor_args(pack_args())
         }
-        ("v8.Serializer" | "v8.DefaultSerializer", "transferArrayBuffer") => {
-            crate::v8::js_v8_serializer_transfer_array_buffer(obj as i64, arg(0), arg(1))
+        ("readline", "emitKeypressEvents") => {
+            crate::readline_helpers::js_readline_emit_keypress_events_args(pack_args())
         }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeUint32") => {
-            crate::v8::js_v8_serializer_write_uint32(obj as i64, arg(0))
+
+        // ── node:dns / node:dns/promises configuration ──
+        ("dns", "getServers") => crate::dns::dns_get_servers_value(),
+        ("dns", "setServers") => crate::dns::dns_set_servers_value(arg(0)),
+        ("dns/promises", "getServers") => crate::dns::dns_promises_get_servers_value(),
+        ("dns/promises", "setServers") => crate::dns::dns_promises_set_servers_value(arg(0)),
+        ("dns" | "dns/promises", "getDefaultResultOrder") => {
+            crate::dns::dns_get_default_result_order_value()
         }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeUint64") => {
-            crate::v8::js_v8_serializer_write_uint64(obj as i64, arg(0), arg(1))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeDouble") => {
-            crate::v8::js_v8_serializer_write_double(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "writeRawBytes") => {
-            crate::v8::js_v8_serializer_write_raw_bytes(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "_getDataCloneError") => {
-            crate::v8::js_v8_serializer_get_data_clone_error(obj as i64, arg(0))
-        }
-        ("v8.Serializer" | "v8.DefaultSerializer", "_setTreatArrayBufferViewsAsHostObjects") => {
-            crate::v8::js_v8_serializer_set_treat_array_buffer_views_as_host_objects(
-                obj as i64,
-                arg(0),
-            )
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readHeader") => {
-            crate::v8::js_v8_deserializer_read_header(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readValue") => {
-            crate::v8::js_v8_deserializer_read_value(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "transferArrayBuffer") => {
-            crate::v8::js_v8_deserializer_transfer_array_buffer(obj as i64, arg(0), arg(1))
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "getWireFormatVersion") => {
-            crate::v8::js_v8_deserializer_get_wire_format_version(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint32") => {
-            crate::v8::js_v8_deserializer_read_uint32(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint64") => {
-            crate::v8::js_v8_deserializer_read_uint64(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readDouble") => {
-            crate::v8::js_v8_deserializer_read_double(obj as i64)
-        }
-        ("v8.Deserializer" | "v8.DefaultDeserializer", "readRawBytes") => {
-            crate::v8::js_v8_deserializer_read_raw_bytes(obj as i64, arg(0))
+        ("dns" | "dns/promises", "setDefaultResultOrder") => {
+            crate::dns::dns_set_default_result_order_value(arg(0))
         }
 
         // #2130: captured-then-called child_process methods (`const spawn =

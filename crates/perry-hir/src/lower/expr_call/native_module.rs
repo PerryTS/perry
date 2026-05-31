@@ -140,14 +140,21 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "setSourceMapsEnabled" => {
-                            // #1400: process.setSourceMapsEnabled(bool) —
-                            // toggles runtime source-map resolution in Node.
-                            // Perry compiles AOT and has no resolver to
-                            // toggle, so the call is a no-op returning
-                            // undefined. Without this, framework startup
-                            // code that conditionally enables maps crashes
-                            // on "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            // #1400 / #3108: process.setSourceMapsEnabled(bool)
+                            // toggles the live source-map flag. Perry compiles
+                            // AOT and has no resolver, so the flag drives
+                            // nothing observable — but it round-trips through
+                            // process.sourceMapsEnabled and validates that the
+                            // argument is a boolean (else ERR_INVALID_ARG_TYPE),
+                            // matching Node. Lower to the runtime setter,
+                            // passing the original argument for validation.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setSourceMapsEnabled".to_string(),
+                                args,
+                            }));
                         }
                         "getBuiltinModule" => {
                             return Ok(Ok(Expr::NativeMethodCall {
@@ -174,20 +181,24 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "hasUncaughtExceptionCaptureCallback" => {
-                            // #1406: returns a boolean indicating whether
-                            // a capture callback has been installed via
-                            // setUncaughtExceptionCaptureCallback. Perry
-                            // doesn't expose that hook, so the answer is
-                            // always `false`.
-                            return Ok(Ok(Expr::Bool(false)));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "hasUncaughtExceptionCaptureCallback".to_string(),
+                                args,
+                            }));
                         }
-                        "setUncaughtExceptionCaptureCallback" => {
-                            // #1406: installs a single callback that
-                            // intercepts uncaught exceptions before they
-                            // reach the `uncaughtException` event. Perry
-                            // doesn't have the hook to install — the call
-                            // is a no-op returning undefined.
-                            return Ok(Ok(Expr::Undefined));
+                        "setUncaughtExceptionCaptureCallback"
+                        | "addUncaughtExceptionCaptureCallback" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
                         }
                         "loadEnvFile" => {
                             // #1399 / #2135: process.loadEnvFile(path?)
@@ -404,7 +415,7 @@ pub(super) fn try_native_module_methods(
                         "version" => return Ok(Ok(Expr::OsVersion)),
                         "cpus" => return Ok(Ok(Expr::OsCpus)),
                         "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call))),
+                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                         "getPriority" | "setPriority" => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "os".to_string(),

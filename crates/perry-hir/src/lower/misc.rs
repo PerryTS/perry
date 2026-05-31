@@ -14,20 +14,17 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-pub(crate) fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
+fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
     let ast::Stmt::Expr(expr_stmt) = stmt else {
         return None;
     };
     let ast::Expr::Lit(ast::Lit::Str(str_lit)) = expr_stmt.expr.as_ref() else {
         return None;
     };
-    let Some(raw) = str_lit.raw.as_ref() else {
-        return Some(false);
-    };
-    Some(raw.as_ref() == "\"use strict\"" || raw.as_ref() == "'use strict'")
+    Some(str_lit.value.as_str() == Some("use strict"))
 }
 
-pub(crate) fn block_has_use_strict_directive(stmts: &[ast::Stmt]) -> bool {
+pub(crate) fn stmt_list_starts_with_use_strict_directive(stmts: &[ast::Stmt]) -> bool {
     for stmt in stmts {
         match is_use_strict_directive_stmt(stmt) {
             Some(true) => return true,
@@ -38,7 +35,7 @@ pub(crate) fn block_has_use_strict_directive(stmts: &[ast::Stmt]) -> bool {
     false
 }
 
-pub(crate) fn module_has_use_strict_directive(module: &ast::Module) -> bool {
+pub(crate) fn module_starts_with_use_strict_directive(module: &ast::Module) -> bool {
     for item in &module.body {
         match item {
             ast::ModuleItem::Stmt(stmt) => match is_use_strict_directive_stmt(stmt) {
@@ -103,6 +100,21 @@ pub(crate) fn native_instance_from_return_type(ty: &Type) -> Option<(&'static st
 pub(crate) fn push_class_dedup(module: &mut Module, class: Class) {
     if !module.classes.iter().any(|c| c.name == class.name) {
         module.classes.push(class);
+    }
+}
+
+/// Function declarations with the same name in the same scope follow JS's
+/// "last declaration wins" semantics. Keep the latest HIR body and avoid
+/// emitting duplicate LLVM symbols for the same scoped function name.
+pub(crate) fn push_function_decl_dedup(module: &mut Module, func: Function) {
+    if let Some(existing) = module
+        .functions
+        .iter_mut()
+        .find(|existing| existing.name == func.name)
+    {
+        *existing = func;
+    } else {
+        module.functions.push(func);
     }
 }
 

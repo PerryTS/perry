@@ -42,11 +42,13 @@ pub struct LoweringContext {
     /// Functions: name -> id
     pub(crate) functions: Vec<(String, FuncId)>,
     /// Function parameter defaults: func_id -> (defaults, param_local_ids)
-    /// Per-function param-default info used by the call-site fill pass:
+    /// Per-function param-default info used by the call-site padding pass:
     /// `(func_id, [Option<default> per param], [LocalId per param], Option<rest_param_index>, has_synthetic_arguments)`.
-    /// The rest-param index (if any) is the position of `...rest`; the fill
+    /// The rest-param index (if any) is the position of `...rest`; the padding
     /// loop must stop before it because rest params get bundled at runtime
-    /// from trailing positional args, not filled with `undefined`.
+    /// from trailing positional args, not filled with `undefined`. Missing
+    /// fixed params are padded with `undefined`; the callee body applies
+    /// default expressions inside the function boundary.
     /// `has_synthetic_arguments` is true when the trailing rest param was
     /// inserted by `append_synthetic_arguments_param` because the body
     /// references the magic `arguments` identifier — in that case the call
@@ -147,6 +149,8 @@ pub struct LoweringContext {
     /// Native class instances: local_name -> (module_name, class_name)
     /// Tracks variables that hold instances of native module classes (e.g., EventEmitter)
     pub(crate) native_instances: Vec<(String, String, String)>,
+    /// True while lowering code governed by ECMAScript strict mode.
+    pub(crate) current_strict: bool,
     /// #1483: type-only perry/ui widget import aliases — local_name ->
     /// canonical widget name. `import { type Canvas as CanvasType }` records
     /// `CanvasType -> Canvas` so a `canvas: CanvasType` parameter can be
@@ -200,6 +204,10 @@ pub struct LoweringContext {
     /// Current function/closure nesting depth (`enter_scope` bumps this,
     /// `exit_scope` decrements). 0 == still at module top level.
     pub(crate) scope_depth: usize,
+    /// Stack of local-vector marks for active function/closure/catch scopes.
+    /// Function-body var prebinding uses the top mark to distinguish
+    /// parameters/current-scope locals from outer captures with the same name.
+    pub(crate) scope_local_marks: Vec<usize>,
     /// Block scope nesting counter (for bare `{}`, `if`, loops, try/finally).
     /// A local only counts as module-level when both `scope_depth == 0` and
     /// `inside_block_scope == 0`; `const captured = i` inside a top-level for
@@ -226,6 +234,10 @@ pub struct LoweringContext {
     /// (clears) it on read so a dynamic key *inside the index* (`ns[fs[evil]]`)
     /// is still refused.
     pub(crate) suppress_stdlib_dispatch_guard_once: bool,
+    /// Compatibility escape hatch for legacy member/global lowering. Bare
+    /// unresolvable identifiers throw ReferenceError, but member receivers are
+    /// still allowed to use the existing GlobalGet sentinel path.
+    pub(crate) unresolved_ident_as_global: bool,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
@@ -432,8 +444,4 @@ pub struct LoweringContext {
     /// observe the failure instead of rejecting the whole user source at
     /// compile time. Outside try blocks, `require(literal)` still hard-errors.
     pub(crate) optional_require_try_depth: u32,
-    /// True while lowering code governed by strict mode. Module source goals
-    /// and exact `"use strict"` directive prologues set this; nested function
-    /// bodies inherit it unless they are sloppy script functions.
-    pub(crate) strict_mode: bool,
 }

@@ -48,6 +48,11 @@ extern crate perry_ext_http_server as _server_link;
 mod agent;
 pub use agent::*;
 
+// Client factory overload normalization (#3226 / #3227 / #3228) —
+// extracted from this file to stay under the 2000-line lint cap.
+mod client_overload;
+use client_overload::{merge_url_and_options, method_for_overload, parse_client_args};
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -1072,6 +1077,53 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
     get_common(arg_f64, callback_i64, "https")
 }
 
+// ------------------------------------------------------------------
+// FFI: overload-normalizing client factories (#3226 / #3227 / #3228)
+//
+// Codegen routes `http.request` / `http.get` / `https.request` /
+// `https.get` to these `*_overload` entry points with a single
+// `NA_VARARGS` argument — a JS array holding every user argument.
+// `parse_client_args` resolves `(url, options, callback)` by value
+// type so all overloads work: `(url[, cb])`, `(options[, cb])`, and
+// `(url, options[, cb])`. The URL supplies protocol/host/port/path;
+// options override method/headers/timeout/agent (and any explicitly
+// set protocol/host/port/path).
+// ------------------------------------------------------------------
+
+unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
+    ensure_gc_scanner_registered();
+    let parsed = parse_client_args(args_array);
+    let method = method_for_overload(parsed.opts, force_get);
+    let (url, headers, timeout, agent_handle) =
+        merge_url_and_options(parsed.url, parsed.opts, default_protocol);
+    let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    if force_get {
+        // `get()` auto-`end()`s, kicking off the request.
+        js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
+    }
+    handle
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", true)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", true)
+}
+
 // http.Agent / https.Agent (#2129 / #2154) lives in `agent.rs`.
 
 // ------------------------------------------------------------------
@@ -1240,6 +1292,78 @@ pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle 
         req.timeout_ms = Some(ms.max(0.0) as u64);
     });
     handle
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_method(handle: Handle) -> *mut StringHeader {
+    let method = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.method.clone())
+        .unwrap_or_default();
+    alloc_string(&method).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut StringHeader {
+    let protocol = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .map(|u| format!("{}:", u.scheme()))
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&protocol).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHeader {
+    let host = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .ok()
+            .and_then(|u| u.host_str().map(|s| s.to_string()))
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&host).as_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_client_request_path(handle: Handle) -> *mut StringHeader {
+    let path = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        reqwest::Url::parse(&req.url)
+            .map(|u| {
+                let mut path = u.path().to_string();
+                if path.is_empty() {
+                    path.push('/');
+                }
+                if let Some(q) = u.query() {
+                    path.push('?');
+                    path.push_str(q);
+                }
+                path
+            })
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    alloc_string(&path).as_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_listener_count(
+    handle: Handle,
+    event_ptr: *const StringHeader,
+) -> f64 {
+    let event = match read_str(event_ptr) {
+        Some(e) => e,
+        None => return 0.0,
+    };
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
+        let implicit_response = if event == "response" && req.response_callback != 0 {
+            1
+        } else {
+            0
+        };
+        (explicit + implicit_response) as f64
+    })
+    .unwrap_or(0.0)
 }
 
 // ------------------------------------------------------------------
@@ -1678,8 +1802,23 @@ mod force_link_http_server {
         pub fn js_node_https_create_server();
         pub fn js_node_https_server_listen();
         pub fn js_node_https_server_close();
+        pub fn js_node_https_server_close_all_connections();
+        pub fn js_node_https_server_close_idle_connections();
         pub fn js_node_https_server_on();
         pub fn js_node_https_server_address_json();
+        pub fn js_node_https_server_headers_timeout();
+        pub fn js_node_https_server_set_headers_timeout();
+        pub fn js_node_https_server_keep_alive_timeout();
+        pub fn js_node_https_server_set_keep_alive_timeout();
+        pub fn js_node_https_server_request_timeout();
+        pub fn js_node_https_server_set_request_timeout();
+        pub fn js_node_https_server_idle_timeout();
+        pub fn js_node_https_server_set_idle_timeout();
+        pub fn js_node_https_server_max_headers_count();
+        pub fn js_node_https_server_set_max_headers_count();
+        pub fn js_node_https_server_max_requests_per_socket();
+        pub fn js_node_https_server_set_max_requests_per_socket();
+        pub fn js_node_https_server_set_timeout_method();
         // http2 secure server.
         pub fn js_node_http2_create_secure_server();
         pub fn js_node_http2_server_listen();
@@ -1749,8 +1888,23 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_https_create_server,
         js_node_https_server_listen,
         js_node_https_server_close,
+        js_node_https_server_close_all_connections,
+        js_node_https_server_close_idle_connections,
         js_node_https_server_on,
         js_node_https_server_address_json,
+        js_node_https_server_headers_timeout,
+        js_node_https_server_set_headers_timeout,
+        js_node_https_server_keep_alive_timeout,
+        js_node_https_server_set_keep_alive_timeout,
+        js_node_https_server_request_timeout,
+        js_node_https_server_set_request_timeout,
+        js_node_https_server_idle_timeout,
+        js_node_https_server_set_idle_timeout,
+        js_node_https_server_max_headers_count,
+        js_node_https_server_set_max_headers_count,
+        js_node_https_server_max_requests_per_socket,
+        js_node_https_server_set_max_requests_per_socket,
+        js_node_https_server_set_timeout_method,
         js_node_http2_create_secure_server,
         js_node_http2_server_listen,
         js_node_http2_server_close,

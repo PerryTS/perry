@@ -14,7 +14,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
+    module.declare_function("js_http_client_request_method", I64, &[I64]);
+    module.declare_function("js_http_client_request_protocol", I64, &[I64]);
+    module.declare_function("js_http_client_request_host", I64, &[I64]);
+    module.declare_function("js_http_client_request_path", I64, &[I64]);
+    module.declare_function("js_http_client_request_listener_count", DOUBLE, &[I64, I64]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
+    // #3226/#3227/#3228 — overload-normalizing client factories take a
+    // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a
+    // ClientRequest handle.
+    module.declare_function("js_http_get_overload", I64, &[I64]);
+    module.declare_function("js_http_request_overload", I64, &[I64]);
+    module.declare_function("js_https_get_overload", I64, &[I64]);
+    module.declare_function("js_https_request_overload", I64, &[I64]);
     module.declare_function("js_http_on", I64, &[I64, I64, I64]);
     module.declare_function("js_http_request", I64, &[DOUBLE, I64]);
     module.declare_function("js_http_request_body", I64, &[I64]);
@@ -63,6 +75,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_agent_keep_alive_msecs", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_keep_alive", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_protocol", I64, &[I64]);
+    module.declare_function("js_http_agent_default_port", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_set_protocol", VOID, &[I64, I64]);
     // #2154
     module.declare_function("js_http_agent_destroy", I64, &[I64]);
@@ -145,8 +158,55 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_https_create_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_https_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_https_server_close", VOID, &[I64, I64]);
+    module.declare_function("js_node_https_server_close_all_connections", VOID, &[I64]);
+    module.declare_function("js_node_https_server_close_idle_connections", VOID, &[I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_node_https_server_headers_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_headers_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_keep_alive_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_keep_alive_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_request_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_request_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_idle_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_idle_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_max_headers_count", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_max_headers_count",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_max_requests_per_socket",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_node_https_server_set_max_requests_per_socket",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_set_timeout_method",
+        I64,
+        &[I64, DOUBLE, I64],
+    );
     // node:http2 secure server (HTTP/2 with ALPN):
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);
@@ -530,8 +590,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     //   js_url_search_params_to_string(*mut ObjectHeader)     -> *mut StringHeader
     //   js_url_search_params_get_all(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (NaN-boxed array)
-    module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_get_hash", DOUBLE, &[I64]);
     module.declare_function("js_url_get_host", DOUBLE, &[I64]);
     module.declare_function("js_url_get_hostname", DOUBLE, &[I64]);
@@ -590,13 +650,15 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // `String(value)` coercion (throws TypeError for Symbols) for WHATWG URL
     // arguments — #3054/#3055. Returns a `*mut StringHeader` (I64).
     module.declare_function("js_url_coerce_string", I64, &[DOUBLE]);
-    module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_legacy_url_new", DOUBLE, &[]);
     module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_resolve_object", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========
     module.declare_function("js_ws_close", VOID, &[I64]);
@@ -661,6 +723,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_os_uptime", DOUBLE, &[]);
     module.declare_function("js_os_user_info", I64, &[]);
     module.declare_function("js_os_user_info_buffer", I64, &[]);
+    // #3004 — dynamic-options form: inspects `options.encoding` at runtime.
+    module.declare_function("js_os_user_info_options", I64, &[I64]);
 
     // ========== Crypto ==========
     module.declare_function("js_crypto_aes256_decrypt", I64, &[I64, I64, I64]);
@@ -1034,6 +1098,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_init", DOUBLE, &[]);
 
     // ========== StringDecoder (issue #848) ==========
     // `js_string_decoder_new` allocates a real handle; `write` / `end`
@@ -1403,6 +1468,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // closure-typed class field method-style. `Expr::This` codegen reads
     // this when the lexical this_stack is empty.
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
+    module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
 
     // ========== Runtime init / module loader ==========

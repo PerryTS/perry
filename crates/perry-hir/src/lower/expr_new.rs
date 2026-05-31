@@ -77,6 +77,7 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
     let helper = match name {
         "Symbol" => "js_throw_symbol_constructor_type_error",
         "BigInt" => "js_throw_bigint_constructor_type_error",
+        "Math" => "js_throw_math_constructor_type_error",
         _ => unreachable!(),
     };
     let throw_expr = Expr::Call {
@@ -95,26 +96,6 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
         args.push(throw_expr);
         Expr::Sequence(args)
     }
-}
-
-fn lower_args(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Vec<Expr>> {
-    new_expr
-        .args
-        .as_ref()
-        .map(|args| {
-            args.iter()
-                .map(|a| lower_expr(ctx, &a.expr))
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()
-        .map(|args| args.unwrap_or_default())
-}
-
-fn is_v8_serializer_class(name: &str) -> bool {
-    matches!(
-        name,
-        "Serializer" | "Deserializer" | "DefaultSerializer" | "DefaultDeserializer"
-    )
 }
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
@@ -194,6 +175,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            let is_url_module =
+                obj_name == "url" || ctx.lookup_builtin_module_alias(obj_name) == Some("url");
+            if is_url_module && prop_ident.sym.as_ref() == "Url" {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
             let dns_module =
                 if obj_name == "dns" || ctx.lookup_builtin_module_alias(obj_name) == Some("dns") {
                     Some("dns".to_string())
@@ -256,20 +248,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
             let module_alias = obj_ident.sym.as_ref();
-            let member_class_name = prop_ident.sym.as_ref();
-            let member_module = ctx
-                .lookup_native_module(module_alias)
-                .map(|(module_name, _)| module_name)
-                .or_else(|| ctx.lookup_builtin_module_alias(module_alias));
-            if member_module == Some("v8") && is_v8_serializer_class(member_class_name) {
-                return Ok(Expr::NativeMethodCall {
-                    module: "v8".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: member_class_name.to_string(),
-                    args: lower_args(ctx, new_expr)?,
-                });
-            }
             let is_worker_threads_module = module_alias == "worker_threads"
                 || ctx.lookup_builtin_module_alias(module_alias) == Some("worker_threads")
                 || match ctx.lookup_native_module(module_alias) {
@@ -428,16 +406,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     match callee_expr {
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
-            if let Some(("v8", Some(imported))) = ctx.lookup_native_module(&class_name) {
-                if is_v8_serializer_class(imported) {
-                    return Ok(Expr::NativeMethodCall {
-                        module: "v8".to_string(),
-                        class_name: None,
-                        object: None,
-                        method: imported.to_string(),
-                        args: lower_args(ctx, new_expr)?,
-                    });
-                }
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("url", Some("Url")))
+            ) {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
             }
 
             // #1677 `new Function(...)` handling, when `Function` is not
@@ -614,7 +593,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
-            if matches!(class_name.as_str(), "Symbol" | "BigInt") {
+            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1175,7 +1154,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Symbol" | "BigInt")
+                    && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
