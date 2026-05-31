@@ -1104,6 +1104,19 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "debuglog") | ("util", "debug") => {
             crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
         }
+        ("util", "_extend") => crate::util_mime::js_util_extend(arg(0), arg(1)),
+        ("util", "_errnoException") => {
+            crate::util_mime::js_util_errno_exception(arg(0), arg(1), arg(2))
+        }
+        ("util", "_exceptionWithHostPort") => crate::util_mime::js_util_exception_with_host_port(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+        ),
+        ("util", "MIMEType") => crate::util_mime::js_util_mime_type_new(arg(0)),
+        ("util", "MIMEParams") => crate::util_mime::js_util_mime_params_new(),
         ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {

@@ -3415,6 +3415,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "promisify", false, None),
     method("util", "callbackify", false, None),
     method("util", "debuglog", false, None),
+    method("util", "_extend", false, None),
+    method("util", "_errnoException", false, None),
+    method("util", "_exceptionWithHostPort", false, None),
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method_sig(
@@ -3429,6 +3432,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
     method("util", "styleText", false, None),
+    // MIMEType/MIMEParams are exposed both as classes (for `new`) and as
+    // bare-call native dispatch rows in NODE_CORE_ROWS; the method twin
+    // satisfies the dispatch-counterpart drift guard.
+    method("util", "MIMEType", false, None),
+    method("util", "MIMEParams", false, None),
+    class("util", "MIMEType"),
+    class("util", "MIMEParams"),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. The
@@ -3502,6 +3512,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "promisify", false, None),
     method("sys", "callbackify", false, None),
     method("sys", "debuglog", false, None),
+    method("sys", "_extend", false, None),
+    method("sys", "_errnoException", false, None),
+    method("sys", "_exceptionWithHostPort", false, None),
     method("sys", "deprecate", false, None),
     method("sys", "inherits", false, None),
     method_sig(
@@ -3518,6 +3531,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
     method("sys", "setTraceSigInt", false, None),
+    method("sys", "MIMEType", false, None),
+    method("sys", "MIMEParams", false, None),
+    class("sys", "MIMEType"),
+    class("sys", "MIMEParams"),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),
@@ -4485,6 +4502,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "resume", true, Some("IncomingMessage")),
     method("http", "destroy", true, Some("IncomingMessage")),
     method("http", "read", true, Some("IncomingMessage")),
+    method("http", "setEncoding", true, Some("IncomingMessage")),
     // Issue #769 — `ClientRequest.setTimeout(ms)` for `http.request` /
     // `http.get` returns. Class filter differs from any existing http
     // method, so the manifest-consistency drift guard requires a row

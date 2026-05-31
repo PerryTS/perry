@@ -75,6 +75,7 @@ extern "C" {
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
     fn js_node_http_im_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
+    fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
     fn js_node_http_im_read(handle: i64) -> f64;
 
     fn js_node_http_res_set_status(handle: i64, code: f64);
@@ -345,6 +346,13 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             js_node_http_im_on(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
+        "setEncoding" if !args.is_empty() => {
+            let encoding_ptr = string_value_arg(args[0]);
+            if !encoding_ptr.is_null() {
+                js_node_http_im_set_encoding(handle, encoding_ptr);
+            }
+            self_ref
+        }
         "pause" => {
             js_node_http_im_pause(handle);
             self_ref
@@ -366,6 +374,10 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
         "__get_complete" => bool_value(js_node_http_im_complete(handle) != 0),
         "__get_aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
         "__get_destroyed" => bool_value(js_node_http_im_destroyed(handle) != 0),
+        "__get_headers" | "headers" => json_string_value(js_node_http_im_headers_json(handle)),
+        "__get_rawHeaders" | "rawHeaders" => {
+            json_string_value(js_node_http_im_raw_headers_json(handle))
+        }
         _ => undef,
     }
 }
@@ -651,6 +663,7 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
     match name {
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "setEncoding" => Some(b"setEncoding"),
         "pause" => Some(b"pause"),
         "resume" => Some(b"resume"),
         "destroy" => Some(b"destroy"),

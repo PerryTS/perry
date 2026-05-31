@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2373 entries across 104 modules.
+Total: 2388 entries across 104 modules.
 
 ## Modules
 
@@ -1443,6 +1443,7 @@ Total: 2373 entries across 104 modules.
 - `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
 - `reuseSocket` — instance *(class: `Agent`)*
+- `setEncoding` — instance *(class: `IncomingMessage`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `HttpServer`)*
@@ -2712,11 +2713,18 @@ Total: 2373 entries across 104 modules.
 
 ### Classes
 
+- `MIMEParams`
+- `MIMEType`
 - `TextDecoder`
 - `TextEncoder`
 
 ### Methods
 
+- `MIMEParams` — module
+- `MIMEType` — module
+- `_errnoException` — module
+- `_exceptionWithHostPort` — module
+- `_extend` — module
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
@@ -2883,11 +2891,18 @@ Total: 2373 entries across 104 modules.
 
 ### Classes
 
+- `MIMEParams`
+- `MIMEType`
 - `TextDecoder`
 - `TextEncoder`
 
 ### Methods
 
+- `MIMEParams` — module
+- `MIMEType` — module
+- `_errnoException` — module
+- `_exceptionWithHostPort` — module
+- `_extend` — module
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
