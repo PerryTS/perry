@@ -1,7 +1,7 @@
 import tty from "node:tty";
 
-// Mirrors Deno's node/tty checks for WriteStream color helpers without
-// requiring a real TTY-backed stream instance.
+// WriteStream color helpers are available without requiring a real TTY-backed
+// stream instance.
 console.log("hasColors function:", typeof tty.WriteStream.prototype?.hasColors === "function");
 console.log("getColorDepth function:", typeof tty.WriteStream.prototype?.getColorDepth === "function");
 try {

@@ -132,6 +132,18 @@ pub extern "C" fn js_throw(value: f64) -> ! {
             std::process::exit(1);
         }
 
+        // Issue #2780: this throw is going to be CAUGHT by an open `try`
+        // (try_depth > 0), so it is not a runaway uncaught loop. Reset the
+        // `throw_not_callable` circuit-breaker counter so that valid JS which
+        // throws-and-catches a non-callable many times (e.g. a route-handler
+        // / retry loop doing `try { (undefined as any)() } catch {}` 200k
+        // times) completes instead of tripping the abort at 100k. The
+        // breaker is meant to catch genuinely *uncaught* runaway throw loops;
+        // those still hit the `try_depth == 0` path above and abort there /
+        // the async-step guards in `promise/microtasks.rs` still cover
+        // unbounded async re-entry.
+        crate::closure::reset_throw_not_callable_counter();
+
         let depth = (*s).try_depth - 1;
         // Drop the shadow-stack frames of the functions we are about to
         // unwind past. `longjmp` skips their epilogues (and therefore their

@@ -133,6 +133,12 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     if arr.is_null() {
         return arr;
     }
+    // #3148: TypedArray receiver — reverse over element-typed storage.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_reverse(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+        ) as *mut ArrayHeader;
+    }
     unsafe {
         let len = (*arr).length as usize;
         if len <= 1 {
@@ -161,6 +167,17 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
+    }
+    // #3148: TypedArray receiver — fill the whole array, element-typed.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_fill(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+            value,
+            0,
+            0.0,
+            0,
+            0.0,
+        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as usize;
@@ -191,6 +208,17 @@ pub extern "C" fn js_array_fill_range(
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
+    }
+    // #3148: TypedArray receiver — fill [start, end) over element-typed storage.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_fill(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+            value,
+            1,
+            start,
+            1,
+            end,
+        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as i64;

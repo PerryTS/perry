@@ -115,10 +115,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Runtime returns an already NaN-boxed pointer (f64).
             Ok(ctx.block().call(DOUBLE, "js_process_memory_usage", &[]))
         }
-        Expr::ProcessThreadCpuUsage => {
+        Expr::ProcessThreadCpuUsage(prior) => {
             // Runtime returns an already NaN-boxed pointer (f64) for
             // { user, system }.
-            Ok(ctx.block().call(DOUBLE, "js_process_thread_cpu_usage", &[]))
+            let prior_val = if let Some(e) = prior {
+                lower_expr(ctx, e)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_process_thread_cpu_usage",
+                &[(DOUBLE, &prior_val)],
+            ))
         }
         Expr::ProcessAvailableMemory => {
             Ok(ctx.block().call(DOUBLE, "js_process_available_memory", &[]))

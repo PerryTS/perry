@@ -50,6 +50,22 @@ use super::{
     TypedFeedbackKind,
 };
 
+fn is_headers_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertyGet { object, property }
@@ -590,7 +606,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // arrives. Other property shapes still fall through to
             // `0.0`.
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
-                if property == "captureStackTrace" {
+                // #2904: V8/Node static Error members read as values
+                // (`typeof Error.isError`, `Error.stackTraceLimit`, …). The
+                // HIR collapses every builtin global receiver to
+                // `GlobalGet(0)`, so route by property name alone: resolve the
+                // real `Error` constructor closure and read the named field
+                // off it (where `install_error_static_methods` stored them).
+                if matches!(
+                    property.as_str(),
+                    "captureStackTrace" | "isError" | "stackTraceLimit" | "prepareStackTrace"
+                ) {
                     let error_idx = ctx.strings.intern("Error");
                     let error_bytes_global =
                         format!("@{}", ctx.strings.entry(error_idx).bytes_global);
@@ -1000,6 +1025,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // synthesized __get_<property> method instead of doing a
             // raw field load.
             if let Some(class_name) = receiver_class_name(ctx, object) {
+                if class_name == "Headers"
+                    && matches!(
+                        property.as_str(),
+                        "append"
+                            | "delete"
+                            | "entries"
+                            | "forEach"
+                            | "get"
+                            | "getSetCookie"
+                            | "has"
+                            | "keys"
+                            | "set"
+                            | "Symbol.iterator"
+                            | "@@iterator"
+                            | "values"
+                    )
+                {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(property);
+                    let entry = ctx.strings.entry(key_idx);
+                    let bytes_global = format!("@{}", entry.bytes_global);
+                    let len_str = entry.byte_len.to_string();
+                    let blk = ctx.block();
+                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_headers_method_value",
+                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
+                    ));
+                }
                 let getter_key = (class_name.clone(), format!("__get_{}", property));
                 if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
                     let recv_box = lower_expr(ctx, object)?;
@@ -1027,6 +1082,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "write" | "close" | "abort" | "releaseLock"
                         )
                 );
+                if class_name == "Headers" && is_headers_method_name(property) {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &obj_bits), (I64, &key_handle)],
+                    ));
+                }
                 if is_web_stream_method {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);

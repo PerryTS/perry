@@ -21,12 +21,30 @@ enum OptionKind {
 
 struct OptionSpec {
     kind: OptionKind,
+    multiple: bool,
+    default_value: Option<f64>,
 }
 
 #[derive(Default)]
 struct ParseSpecs {
     options: HashMap<String, OptionSpec>,
     short_to_long: HashMap<char, String>,
+    order: Vec<String>,
+}
+
+#[derive(Clone)]
+struct ArgValue {
+    value: f64,
+    text: Option<String>,
+}
+
+impl ArgValue {
+    fn result_value(&self) -> f64 {
+        match &self.text {
+            Some(text) => string_value(text),
+            None => self.value,
+        }
+    }
 }
 
 #[no_mangle]
@@ -60,7 +78,32 @@ pub extern "C" fn js_util_parse_args(config_value: f64) -> f64 {
     while i < args.len() {
         let arg = &args[i];
 
-        if arg == "--" {
+        let Some(arg_text) = arg.text.as_deref() else {
+            if !allow_positionals {
+                throw_parse_args_error(
+                    "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL",
+                    "Unexpected positional argument",
+                );
+            }
+            push_positional(&positionals_handle, arg);
+            if return_tokens {
+                push_token(
+                    &tokens_handle,
+                    TokenParts {
+                        kind: "positional",
+                        name: None,
+                        raw_name: None,
+                        value: Some(arg.result_value()),
+                        index: i,
+                        inline_value: None,
+                    },
+                );
+            }
+            i += 1;
+            continue;
+        };
+
+        if arg_text == "--" {
             if return_tokens {
                 push_token(
                     &tokens_handle,
@@ -84,7 +127,7 @@ pub extern "C" fn js_util_parse_args(config_value: f64) -> f64 {
                             kind: "positional",
                             name: None,
                             raw_name: None,
-                            value: Some(&args[i]),
+                            value: Some(args[i].result_value()),
                             index: i,
                             inline_value: None,
                         },
@@ -95,12 +138,11 @@ pub extern "C" fn js_util_parse_args(config_value: f64) -> f64 {
             break;
         }
 
-        if let Some(long) = arg.strip_prefix("--") {
+        if let Some(long) = arg_text.strip_prefix("--") {
             parse_long_option(
                 &args,
                 &mut i,
                 long,
-                arg,
                 &specs,
                 allow_negative,
                 strict,
@@ -115,11 +157,11 @@ pub extern "C" fn js_util_parse_args(config_value: f64) -> f64 {
             continue;
         }
 
-        if arg.starts_with('-') && arg.len() > 1 {
+        if arg_text.starts_with('-') && arg_text.len() > 1 {
             parse_short_option(
                 &args,
                 &mut i,
-                arg,
+                arg_text,
                 &specs,
                 strict,
                 &values_handle,
@@ -147,7 +189,7 @@ pub extern "C" fn js_util_parse_args(config_value: f64) -> f64 {
                     kind: "positional",
                     name: None,
                     raw_name: None,
-                    value: Some(arg),
+                    value: Some(arg.result_value()),
                     index: i,
                     inline_value: None,
                 },
@@ -155,6 +197,8 @@ pub extern "C" fn js_util_parse_args(config_value: f64) -> f64 {
         }
         i += 1;
     }
+
+    apply_defaults(&values_handle, &specs);
 
     set_prop_on_obj(
         result_handle.get_raw_mut_ptr(),
@@ -178,10 +222,9 @@ pub extern "C" fn js_util_parse_args(config_value: f64) -> f64 {
 }
 
 fn parse_long_option(
-    args: &[String],
+    args: &[ArgValue],
     index: &mut usize,
     long: &str,
-    raw_name: &str,
     specs: &ParseSpecs,
     allow_negative: bool,
     strict: bool,
@@ -192,14 +235,15 @@ fn parse_long_option(
         if allow_negative {
             if let Some(spec) = specs.options.get(negative_name) {
                 if spec.kind == OptionKind::Boolean {
-                    set_value(values, negative_name, bool_value(false));
+                    let raw_negative = format!("--no-{negative_name}");
+                    set_option_value(values, negative_name, bool_value(false), spec);
                     if let Some(tokens) = tokens {
                         push_token(
                             tokens,
                             TokenParts {
                                 kind: "option",
                                 name: Some(negative_name),
-                                raw_name: Some(raw_name),
+                                raw_name: Some(&raw_negative),
                                 value: None,
                                 index: *index,
                                 inline_value: None,
@@ -211,7 +255,7 @@ fn parse_long_option(
             }
         }
         if strict {
-            throw_unknown_option(raw_name);
+            throw_unknown_option(&format!("--{long}"));
         }
     }
 
@@ -219,9 +263,28 @@ fn parse_long_option(
         Some((name, value)) => (name, Some(value)),
         None => (long, None),
     };
+    let raw_name = format!("--{name}");
     let Some(spec) = specs.options.get(name) else {
         if strict {
-            throw_unknown_option(raw_name);
+            throw_unknown_option(&raw_name);
+        }
+        let value = match inline_value {
+            Some(value) => string_value(value),
+            None => bool_value(true),
+        };
+        set_value(values, name, value);
+        if let Some(tokens) = tokens {
+            push_token(
+                tokens,
+                TokenParts {
+                    kind: "option",
+                    name: Some(name),
+                    raw_name: Some(&raw_name),
+                    value: inline_value.map(string_value),
+                    index: *index,
+                    inline_value: inline_value.map(|_| true),
+                },
+            );
         }
         return;
     };
@@ -229,16 +292,16 @@ fn parse_long_option(
     match spec.kind {
         OptionKind::Boolean => {
             if inline_value.is_some() {
-                throw_invalid_option_value(raw_name);
+                throw_invalid_option_value(&raw_name);
             }
-            set_value(values, name, bool_value(true));
+            set_option_value(values, name, bool_value(true), spec);
             if let Some(tokens) = tokens {
                 push_token(
                     tokens,
                     TokenParts {
                         kind: "option",
                         name: Some(name),
-                        raw_name: Some(raw_name),
+                        raw_name: Some(&raw_name),
                         value: None,
                         index: *index,
                         inline_value: None,
@@ -248,24 +311,27 @@ fn parse_long_option(
         }
         OptionKind::String => {
             let (value, inline) = match inline_value {
-                Some(value) => (value.to_string(), Some(true)),
+                Some(value) => (string_value(value), Some(true)),
                 None => {
                     if *index + 1 >= args.len() {
-                        throw_invalid_option_value(raw_name);
+                        throw_invalid_option_value(&raw_name);
                     }
                     *index += 1;
-                    (args[*index].clone(), Some(false))
+                    if args[*index].text.is_none() {
+                        throw_invalid_option_value(&raw_name);
+                    }
+                    (args[*index].result_value(), Some(false))
                 }
             };
-            set_value(values, name, string_value(&value));
+            set_option_value(values, name, value, spec);
             if let Some(tokens) = tokens {
                 push_token(
                     tokens,
                     TokenParts {
                         kind: "option",
                         name: Some(name),
-                        raw_name: Some(raw_name),
-                        value: Some(&value),
+                        raw_name: Some(&raw_name),
+                        value: Some(value),
                         index: *index - usize::from(!inline.unwrap_or(false)),
                         inline_value: inline,
                     },
@@ -276,7 +342,7 @@ fn parse_long_option(
 }
 
 fn parse_short_option(
-    args: &[String],
+    args: &[ArgValue],
     index: &mut usize,
     arg: &str,
     specs: &ParseSpecs,
@@ -284,30 +350,23 @@ fn parse_short_option(
     values: &crate::gc::RuntimeHandle<'_>,
     tokens: Option<&crate::gc::RuntimeHandle<'_>>,
 ) {
-    let mut chars = arg[1..].chars();
-    let Some(short) = chars.next() else {
-        return;
-    };
-    let Some(long_name) = specs.short_to_long.get(&short) else {
-        if strict {
-            throw_unknown_option(arg);
-        }
-        return;
-    };
-    let spec = specs
-        .options
-        .get(long_name)
-        .expect("short option must resolve to an option spec");
-    let raw_short = format!("-{short}");
-    match spec.kind {
-        OptionKind::Boolean => {
-            set_value(values, long_name, bool_value(true));
+    let chars: Vec<(usize, char)> = arg[1..].char_indices().collect();
+    let mut pos = 0usize;
+    while pos < chars.len() {
+        let (byte_offset, short) = chars[pos];
+        let raw_short = format!("-{short}");
+        let Some(long_name) = specs.short_to_long.get(&short) else {
+            if strict {
+                throw_unknown_option(&raw_short);
+            }
+            let unknown_name = short.to_string();
+            set_value(values, &unknown_name, bool_value(true));
             if let Some(tokens) = tokens {
                 push_token(
                     tokens,
                     TokenParts {
                         kind: "option",
-                        name: Some(long_name),
+                        name: Some(&unknown_name),
                         raw_name: Some(&raw_short),
                         value: None,
                         index: *index,
@@ -315,31 +374,61 @@ fn parse_short_option(
                     },
                 );
             }
-        }
-        OptionKind::String => {
-            let rest = chars.as_str();
-            let (value, inline) = if rest.is_empty() {
-                if *index + 1 >= args.len() {
-                    throw_invalid_option_value(arg);
+            pos += 1;
+            continue;
+        };
+        let spec = specs
+            .options
+            .get(long_name)
+            .expect("short option must resolve to an option spec");
+        match spec.kind {
+            OptionKind::Boolean => {
+                set_option_value(values, long_name, bool_value(true), spec);
+                if let Some(tokens) = tokens {
+                    push_token(
+                        tokens,
+                        TokenParts {
+                            kind: "option",
+                            name: Some(long_name),
+                            raw_name: Some(&raw_short),
+                            value: None,
+                            index: *index,
+                            inline_value: None,
+                        },
+                    );
                 }
-                *index += 1;
-                (args[*index].clone(), Some(false))
-            } else {
-                (rest.to_string(), Some(true))
-            };
-            set_value(values, long_name, string_value(&value));
-            if let Some(tokens) = tokens {
-                push_token(
-                    tokens,
-                    TokenParts {
-                        kind: "option",
-                        name: Some(long_name),
-                        raw_name: Some(&raw_short),
-                        value: Some(&value),
-                        index: *index - usize::from(!inline.unwrap_or(false)),
-                        inline_value: inline,
-                    },
-                );
+                pos += 1;
+            }
+            OptionKind::String => {
+                let rest_start = 1 + byte_offset + short.len_utf8();
+                let rest = &arg[rest_start..];
+                let (value, inline) = if rest.is_empty() {
+                    if *index + 1 >= args.len() {
+                        throw_invalid_option_value(&raw_short);
+                    }
+                    *index += 1;
+                    if args[*index].text.is_none() {
+                        throw_invalid_option_value(&raw_short);
+                    }
+                    (args[*index].result_value(), Some(false))
+                } else {
+                    (string_value(rest), Some(true))
+                };
+                set_option_value(values, long_name, value, spec);
+                if let Some(tokens) = tokens {
+                    push_token(
+                        tokens,
+                        TokenParts {
+                            kind: "option",
+                            name: Some(long_name),
+                            raw_name: Some(&raw_short),
+                            value: Some(value),
+                            index: *index - usize::from(!inline.unwrap_or(false)),
+                            inline_value: inline,
+                        },
+                    );
+                }
+                break;
             }
         }
     }
@@ -408,13 +497,81 @@ fn specs_from_value(options_value: f64) -> ParseSpecs {
                 );
             }
         }
-        specs.options.insert(name, OptionSpec { kind });
+        let multiple = get_bool_prop(desc_value, b"multiple").unwrap_or(false);
+        let default_value = default_from_descriptor(&name, desc_value, kind, multiple);
+        specs.order.push(name.clone());
+        specs.options.insert(
+            name,
+            OptionSpec {
+                kind,
+                multiple,
+                default_value,
+            },
+        );
     }
     specs
 }
 
-fn args_from_value(args_value: f64) -> Vec<String> {
-    if is_nullish(args_value) {
+fn default_from_descriptor(
+    name: &str,
+    desc_value: f64,
+    kind: OptionKind,
+    multiple: bool,
+) -> Option<f64> {
+    if !object_has_own_property(object_ptr(desc_value)?, b"default") {
+        return None;
+    }
+    let default_value = get_prop(desc_value, b"default");
+    if JSValue::from_bits(default_value.to_bits()).is_undefined() {
+        return None;
+    }
+
+    if multiple {
+        let Some(arr) = array_ptr(default_value) else {
+            throw_invalid_arg_type(
+                &format!("The \"options.{name}.default\" property must be an instance of Array"),
+                default_value,
+            );
+        };
+        let len = js_array_length(arr) as usize;
+        for i in 0..len {
+            let value = js_array_get_f64(arr, i as u32);
+            validate_default_element(name, kind, value);
+        }
+        return Some(default_value);
+    }
+
+    validate_default_element(name, kind, default_value);
+    Some(default_value)
+}
+
+fn validate_default_element(name: &str, kind: OptionKind, value: f64) {
+    match kind {
+        OptionKind::String => {
+            if string_ptr_from_value(value).is_none() {
+                throw_invalid_arg_type(
+                    &format!("The \"options.{name}.default\" property must be of type string"),
+                    value,
+                );
+            }
+        }
+        OptionKind::Boolean => {
+            if !JSValue::from_bits(value.to_bits()).is_bool() {
+                throw_invalid_arg_type(
+                    &format!("The \"options.{name}.default\" property must be of type boolean"),
+                    value,
+                );
+            }
+        }
+    }
+}
+
+fn args_from_value(args_value: f64) -> Vec<ArgValue> {
+    let jsvalue = JSValue::from_bits(args_value.to_bits());
+    if jsvalue.is_undefined() {
+        return process_argv_args();
+    }
+    if jsvalue.is_null() {
         return Vec::new();
     }
     let Some(args_ptr) = array_ptr(args_value) else {
@@ -427,16 +584,37 @@ fn args_from_value(args_value: f64) -> Vec<String> {
     let mut args = Vec::with_capacity(len);
     for i in 0..len {
         let value = js_array_get_f64(args_ptr, i as u32);
-        args.push(string_from_value(value).unwrap_or_default());
+        args.push(arg_from_value(value));
     }
     args
+}
+
+fn process_argv_args() -> Vec<ArgValue> {
+    let argv = crate::os::js_process_argv();
+    if argv.is_null() {
+        return Vec::new();
+    }
+    let len = js_array_length(argv) as usize;
+    let mut args = Vec::with_capacity(len.saturating_sub(2));
+    for i in 2..len {
+        let value = js_array_get_f64(argv, i as u32);
+        args.push(arg_from_value(value));
+    }
+    args
+}
+
+fn arg_from_value(value: f64) -> ArgValue {
+    ArgValue {
+        value,
+        text: string_from_value(value),
+    }
 }
 
 struct TokenParts<'a> {
     kind: &'a str,
     name: Option<&'a str>,
     raw_name: Option<&'a str>,
-    value: Option<&'a str>,
+    value: Option<f64>,
     index: usize,
     inline_value: Option<bool>,
 }
@@ -466,11 +644,7 @@ fn push_token(tokens: &crate::gc::RuntimeHandle<'_>, parts: TokenParts<'_>) {
         );
     }
     if let Some(value) = parts.value {
-        set_prop_on_obj(
-            token_handle.get_raw_mut_ptr(),
-            b"value",
-            string_value(value),
-        );
+        set_prop_on_obj(token_handle.get_raw_mut_ptr(), b"value", value);
     }
     if let Some(inline_value) = parts.inline_value {
         set_prop_on_obj(
@@ -485,8 +659,8 @@ fn push_token(tokens: &crate::gc::RuntimeHandle<'_>, parts: TokenParts<'_>) {
     );
 }
 
-fn push_positional(positionals: &crate::gc::RuntimeHandle<'_>, value: &str) {
-    push_array_value(positionals, string_value(value));
+fn push_positional(positionals: &crate::gc::RuntimeHandle<'_>, value: &ArgValue) {
+    push_array_value(positionals, value.result_value());
 }
 
 fn push_array_value(arr_handle: &crate::gc::RuntimeHandle<'_>, value: f64) {
@@ -497,6 +671,53 @@ fn push_array_value(arr_handle: &crate::gc::RuntimeHandle<'_>, value: f64) {
 
 fn set_value(values: &crate::gc::RuntimeHandle<'_>, name: &str, value: f64) {
     set_prop_on_obj(values.get_raw_mut_ptr(), name.as_bytes(), value);
+}
+
+fn set_option_value(
+    values: &crate::gc::RuntimeHandle<'_>,
+    name: &str,
+    value: f64,
+    spec: &OptionSpec,
+) {
+    if !spec.multiple {
+        set_value(values, name, value);
+        return;
+    }
+
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let current = js_object_get_field_by_name_f64(values.get_raw_mut_ptr(), key);
+    if let Some(arr) = array_ptr(current) {
+        let pushed = js_array_push_f64(arr as *mut crate::array::ArrayHeader, value);
+        set_prop_on_obj(
+            values.get_raw_mut_ptr(),
+            name.as_bytes(),
+            boxed_ptr(pushed as *const u8),
+        );
+        return;
+    }
+
+    let arr = js_array_alloc(0);
+    let arr = js_array_push_f64(arr, value);
+    set_prop_on_obj(
+        values.get_raw_mut_ptr(),
+        name.as_bytes(),
+        boxed_ptr(arr as *const u8),
+    );
+}
+
+fn apply_defaults(values: &crate::gc::RuntimeHandle<'_>, specs: &ParseSpecs) {
+    for name in &specs.order {
+        let Some(spec) = specs.options.get(name) else {
+            continue;
+        };
+        let Some(default_value) = spec.default_value else {
+            continue;
+        };
+        if object_has_own_property(values.get_raw_mut_ptr(), name.as_bytes()) {
+            continue;
+        }
+        set_value(values, name, default_value);
+    }
 }
 
 fn get_prop(value: f64, name: &[u8]) -> f64 {
