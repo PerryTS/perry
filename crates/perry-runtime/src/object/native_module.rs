@@ -447,6 +447,22 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
         ]),
+        "events" => Some(&[
+            b"EventEmitter",
+            b"defaultMaxListeners",
+            b"usingDomains",
+            b"captureRejections",
+            b"captureRejectionSymbol",
+            b"errorMonitor",
+            b"init",
+            b"listenerCount",
+            b"on",
+            b"once",
+            b"addAbortListener",
+            b"getEventListeners",
+            b"getMaxListeners",
+            b"setMaxListeners",
+        ]),
         _ => None,
     }
 }
@@ -604,6 +620,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     if module_name == "events" && property_name == "EventEmitter" {
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "usingDomains",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "init",
+            bound_native_callable_export_value("events", "init"),
+        );
     }
 
     if module_name == "util" && property_name == "promisify" {
@@ -644,6 +670,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "_createServerHandle") => Some(5),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        ("events", "init") => Some(0),
         _ => None,
     }
 }
@@ -1162,6 +1189,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "fork")
             | ("events", "EventEmitter")
             | ("events", "on")
+            | ("events", "init")
             | ("stream", "compose")
             | ("stream", "duplexPair")
             | ("stream", "pipeline")
@@ -2823,11 +2851,13 @@ pub(crate) unsafe fn get_native_module_constant(
         "crypto.constants" => crypto_const(property),
         "events" => match property {
             "defaultMaxListeners" => Some(10.0),
+            "usingDomains" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "errorMonitor" => Some(crate::symbol::js_symbol_for(str_val("events.errorMonitor"))),
             "captureRejectionSymbol" => {
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
+            "init" => Some(bound_native_callable_export_value("events", "init")),
             _ => None,
         },
         // node:worker_threads value-shaped exports. Perry doesn't spawn JS

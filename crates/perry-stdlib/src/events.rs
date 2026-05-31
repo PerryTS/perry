@@ -26,7 +26,10 @@ use perry_runtime::{
     js_promise_reject, js_promise_resolve, js_string_from_bytes, ArrayHeader, ClosureHeader,
     JSValue, ObjectHeader, Promise, StringHeader,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+mod warnings;
+use warnings::maybe_emit_max_listeners_warning;
 
 const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
 const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
@@ -243,10 +246,11 @@ pub struct EventEmitterHandle {
     /// Per-event pending `events.once(em, name)` promises. Resolved on
     /// the next `emit(name, ...)` with the emitted args array.
     pending_once_promises: HashMap<String, Vec<PendingOnce>>,
-    /// `setMaxListeners` ceiling. Node's default is 10 but we don't warn
-    /// when the count exceeds it — `getMaxListeners()` just reads back
-    /// whatever was written.
+    /// `setMaxListeners` ceiling. Node's default is 10.
     max_listeners: f64,
+    /// Event names whose current listener vector has already produced the
+    /// MaxListenersExceededWarning. Cleared when that vector is drained.
+    warned_events: HashSet<String>,
     /// Constructor-level `{ captureRejections: true }` flag. When enabled,
     /// rejected promises returned from listeners are routed to `"error"`.
     capture_rejections: bool,
@@ -319,6 +323,7 @@ impl EventEmitterHandle {
             // Node's default is 10. We mirror it so `getMaxListeners()`
             // on a fresh emitter returns 10 (matching Node).
             max_listeners: 10.0,
+            warned_events: HashSet::new(),
             capture_rejections: false,
         }
     }
@@ -336,6 +341,7 @@ impl EventEmitterHandle {
         };
         if drop_it {
             self.events.remove(name);
+            self.warned_events.remove(name);
             if let Some(pos) = self.event_order.iter().position(|s| s == name) {
                 self.event_order.remove(pos);
             }
@@ -385,6 +391,7 @@ impl EventEmitterHandle {
         } else {
             vec.push(listener);
         }
+        maybe_emit_max_listeners_warning(self, handle, name);
     }
 }
 
@@ -1179,6 +1186,7 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
                 .collect();
             emitter.events.clear();
             emitter.event_order.clear();
+            emitter.warned_events.clear();
             for (name, callback) in removed {
                 emitter.emit_meta_event("removeListener", &name, callback);
             }
@@ -1191,6 +1199,7 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
                 .map(|listeners| listeners.iter().map(|listener| listener.callback).collect())
                 .unwrap_or_default();
             emitter.events.remove(&event_name);
+            emitter.warned_events.remove(&event_name);
             if let Some(pos) = emitter.event_order.iter().position(|s| s == &event_name) {
                 emitter.event_order.remove(pos);
             }
@@ -1940,6 +1949,12 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
         }
     }
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
+}
+
+/// Legacy `events.init()` no-op export retained for Node surface parity.
+#[no_mangle]
+pub extern "C" fn js_events_init() -> f64 {
+    undefined_value()
 }
 
 #[cfg(test)]

@@ -1788,6 +1788,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_VARARGS],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "events",
+        has_receiver: false,
+        method: "init",
+        class_filter: None,
+        runtime: "js_events_init",
+        args: &[],
+        ret: NR_F64,
+    },
     // ========== StringDecoder (issue #848) ==========
     // The typed-receiver path: `const d = new StringDecoder("utf8");
     // d.write(buf)` enters here because `d` is registered as a native
