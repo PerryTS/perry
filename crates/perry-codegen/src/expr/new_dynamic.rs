@@ -206,6 +206,54 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new v8.Serializer()` / `new v8.Deserializer(buf)` (and the
+            // `Default*` subclasses) (#3680) — route to the runtime
+            // constructors that allocate a codec-backed instance object whose
+            // methods dispatch through the native-module method table.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                    if mod_name == "v8" {
+                        match property.as_str() {
+                            "Serializer" | "DefaultSerializer" => {
+                                for a in args {
+                                    let _ = lower_expr(ctx, a)?;
+                                }
+                                let is_default = property == "DefaultSerializer";
+                                let flag =
+                                    crate::nanbox::double_literal(f64::from_bits(if is_default {
+                                        0x7FFC_0000_0000_0004 // TAG_TRUE
+                                    } else {
+                                        crate::nanbox::TAG_UNDEFINED
+                                    }));
+                                return Ok(ctx.block().call(
+                                    DOUBLE,
+                                    "js_v8_serializer_new",
+                                    &[(DOUBLE, &flag)],
+                                ));
+                            }
+                            "Deserializer" | "DefaultDeserializer" => {
+                                let buf = if let Some(first) = args.first() {
+                                    lower_expr(ctx, first)?
+                                } else {
+                                    crate::nanbox::double_literal(f64::from_bits(
+                                        crate::nanbox::TAG_UNDEFINED,
+                                    ))
+                                };
+                                for extra in args.iter().skip(1) {
+                                    let _ = lower_expr(ctx, extra)?;
+                                }
+                                return Ok(ctx.block().call(
+                                    DOUBLE,
+                                    "js_v8_deserializer_new",
+                                    &[(DOUBLE, &buf)],
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
             // `new (PerformanceObserver as any)(cb?)` — the `as any` cast
             // (used because no-arg construction is a TS type error) strips the
             // bare identifier, so the constructor arrives as

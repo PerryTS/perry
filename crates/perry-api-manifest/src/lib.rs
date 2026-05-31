@@ -203,6 +203,170 @@ pub fn module_has_symbol(module: &str, name: &str) -> Option<&'static ApiEntry> 
     })
 }
 
+/// True if a module exposes a public ESM named export.
+///
+/// This is deliberately narrower than [`module_has_symbol`]. The manifest
+/// also stores receiver methods, class-filtered dispatch helpers, and a few
+/// object/static member shims so Perry can lower valid member access such as
+/// `Buffer.alloc()` or `performance.mark()`. Those rows must not make
+/// `import { alloc } from "node:buffer"` compile, because Node rejects that
+/// at module instantiation.
+pub fn module_has_public_named_export(module: &str, name: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    if name == "default" && is_node_core_module(module) {
+        return true;
+    }
+    API_MANIFEST.iter().any(|entry| {
+        entry.module == module && entry.name == name && entry_is_public_named_export(entry)
+    })
+}
+
+/// True for Node.js built-in module specifiers that should use Node's public
+/// named-export surface when validating static imports.
+pub fn is_node_core_module(module: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    matches!(
+        module,
+        "assert"
+            | "assert/strict"
+            | "async_hooks"
+            | "buffer"
+            | "child_process"
+            | "cluster"
+            | "console"
+            | "constants"
+            | "crypto"
+            | "dgram"
+            | "diagnostics_channel"
+            | "dns"
+            | "dns/promises"
+            | "events"
+            | "fs"
+            | "fs/promises"
+            | "http"
+            | "http2"
+            | "https"
+            | "module"
+            | "net"
+            | "os"
+            | "path"
+            | "path/posix"
+            | "path/win32"
+            | "perf_hooks"
+            | "process"
+            | "punycode"
+            | "querystring"
+            | "readline"
+            | "readline/promises"
+            | "stream"
+            | "stream/consumers"
+            | "stream/promises"
+            | "stream/web"
+            | "string_decoder"
+            | "sys"
+            | "test"
+            | "test/reporters"
+            | "timers"
+            | "timers/promises"
+            | "tls"
+            | "tty"
+            | "url"
+            | "util"
+            | "util/types"
+            | "v8"
+            | "vm"
+            | "wasi"
+            | "worker_threads"
+            | "zlib"
+    )
+}
+
+/// Public named-export filter shared by the import gate and docs emitters.
+pub(crate) fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
+    if is_node_core_private_named_export(entry.module, entry.name) {
+        return false;
+    }
+    match entry.kind {
+        ApiKind::Method {
+            has_receiver: false,
+            class_filter: None,
+        }
+        | ApiKind::Property
+        | ApiKind::Class => true,
+        ApiKind::Method { .. } => false,
+    }
+}
+
+fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    if !is_node_core_module(module) {
+        return false;
+    }
+    match module {
+        "buffer" => matches!(
+            name,
+            "alloc"
+                | "allocUnsafe"
+                | "allocUnsafeSlow"
+                | "byteLength"
+                | "concat"
+                | "copyBytesFrom"
+                | "from"
+                | "fromBase64"
+                | "fromHex"
+                | "isBuffer"
+                | "isEncoding"
+                | "of"
+        ),
+        "crypto" => matches!(name, "md5" | "randomUUIDv7" | "sha256"),
+        "perf_hooks" => matches!(
+            name,
+            "clearMarks"
+                | "clearMeasures"
+                | "clearResourceTimings"
+                | "getEntries"
+                | "getEntriesByName"
+                | "getEntriesByType"
+                | "mark"
+                | "markResourceTiming"
+                | "measure"
+                | "nodeTiming"
+                | "now"
+                | "setResourceTimingBufferSize"
+                | "supportedEntryTypes"
+                | "timeOrigin"
+                | "toJSON"
+        ),
+        "string_decoder" => matches!(name, "encoding" | "lastChar" | "lastNeed" | "lastTotal"),
+        "process" => matches!(
+            name,
+            "addListener"
+                | "emit"
+                | "eventNames"
+                | "getMaxListeners"
+                | "listenerCount"
+                | "listeners"
+                | "off"
+                | "on"
+                | "once"
+                | "prependListener"
+                | "prependOnceListener"
+                | "rawListeners"
+                | "removeAllListeners"
+                | "removeListener"
+                | "setMaxListeners"
+        ),
+        "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
+        "worker_threads" => name == "getWorkerData",
+        "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
+        "http2" => name == "Http2SecureServer",
+        "child_process" => name == "Stream",
+        "cluster" => matches!(name, "addListener" | "on" | "worker"),
+        "stream" => matches!(name, "from" | "fromWeb" | "prototype" | "toWeb"),
+        _ => false,
+    }
+}
+
 /// True if `path` resolves to a Perry-implemented native module.
 /// Strips `node:` prefix. This is the migrated home of the
 /// `is_native_module` check that previously lived in
@@ -297,6 +461,68 @@ mod tests {
         ));
         assert_eq!(entry.params.len(), 1);
         assert!(matches!(entry.returns, TypeSpec::Bool));
+    }
+
+    #[test]
+    fn node_core_named_export_view_rejects_member_only_rows() {
+        for (module, name) in [
+            ("node:buffer", "alloc"),
+            ("node:buffer", "from"),
+            ("node:perf_hooks", "mark"),
+            ("node:perf_hooks", "supportedEntryTypes"),
+            ("node:string_decoder", "encoding"),
+            ("node:tty", "clearLine"),
+            ("node:process", "on"),
+            ("node:process", "emit"),
+            ("node:url", "createObjectURL"),
+            ("node:worker_threads", "getWorkerData"),
+            ("node:https", "ClientRequest"),
+            ("node:http2", "Http2SecureServer"),
+            ("node:child_process", "Stream"),
+            ("node:cluster", "worker"),
+            ("node:stream", "fromWeb"),
+            ("node:crypto", "sha256"),
+        ] {
+            assert!(
+                !module_has_public_named_export(module, name),
+                "{module} should not expose invalid named export {name}"
+            );
+            assert!(
+                module_has_symbol(module, name).is_some(),
+                "{module}.{name} should remain available to member/dispatch checks"
+            );
+        }
+    }
+
+    #[test]
+    fn node_core_named_export_view_keeps_real_exports() {
+        for (module, name) in [
+            ("node:buffer", "Buffer"),
+            ("node:buffer", "atob"),
+            ("node:perf_hooks", "performance"),
+            ("node:perf_hooks", "timerify"),
+            ("node:string_decoder", "StringDecoder"),
+            ("node:tty", "ReadStream"),
+            ("node:process", "cwd"),
+            ("node:process", "env"),
+            ("node:url", "URL"),
+            ("node:url", "fileURLToPath"),
+            ("node:worker_threads", "workerData"),
+            ("node:path", "default"),
+            ("node:https", "Agent"),
+            ("node:https", "request"),
+            ("node:http2", "Http2ServerRequest"),
+            ("node:child_process", "ChildProcess"),
+            ("node:cluster", "workers"),
+            ("node:stream", "Readable"),
+            ("node:stream", "compose"),
+            ("node:crypto", "randomUUID"),
+        ] {
+            assert!(
+                module_has_public_named_export(module, name),
+                "{module} should expose real named export {name}"
+            );
+        }
     }
 
     #[test]

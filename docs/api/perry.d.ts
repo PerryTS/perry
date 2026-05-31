@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2234 entries across 99 modules
+// Coverage: 2289 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -242,37 +242,13 @@ declare module "buffer" {
   /** stdlib */
   export const kStringMaxLength: any;
   /** stdlib */
-  export function alloc(...args: any[]): any;
-  /** stdlib */
-  export function allocUnsafe(...args: any[]): any;
-  /** stdlib */
-  export function allocUnsafeSlow(...args: any[]): any;
-  /** stdlib */
   export function atob(...args: any[]): any;
   /** stdlib */
   export function btoa(...args: any[]): any;
   /** stdlib */
-  export function byteLength(...args: any[]): any;
-  /** stdlib */
-  export function concat(...args: any[]): any;
-  /** stdlib */
-  export function copyBytesFrom(...args: any[]): any;
-  /** stdlib */
-  export function from(...args: any[]): any;
-  /** stdlib */
-  export function fromBase64(...args: any[]): any;
-  /** stdlib */
-  export function fromHex(...args: any[]): any;
-  /** stdlib */
   export function isAscii(...args: any[]): any;
   /** stdlib */
-  export function isBuffer(...args: any[]): any;
-  /** stdlib */
-  export function isEncoding(...args: any[]): any;
-  /** stdlib */
   export function isUtf8(...args: any[]): any;
-  /** stdlib */
-  export function of(...args: any[]): any;
   /** stdlib */
   export function resolveObjectURL(...args: any[]): any;
   /** stdlib */
@@ -287,8 +263,6 @@ declare module "cheerio" {
 declare module "child_process" {
   /** stdlib */
   export class ChildProcess { [key: string]: any; }
-  /** stdlib */
-  export const Stream: any;
   /** stdlib */
   export function exec(...args: any[]): any;
   /** stdlib */
@@ -313,21 +287,15 @@ declare module "cluster" {
   /** stdlib */
   export const SCHED_RR: any;
   /** stdlib */
-  export const addListener: any;
-  /** stdlib */
   export const isMaster: any;
   /** stdlib */
   export const isPrimary: any;
   /** stdlib */
   export const isWorker: any;
   /** stdlib */
-  export const on: any;
-  /** stdlib */
   export const schedulingPolicy: any;
   /** stdlib */
   export const settings: any;
-  /** stdlib */
-  export const worker: any;
   /** stdlib */
   export const workers: any;
   /** stdlib */
@@ -920,8 +888,6 @@ declare module "crypto" {
   /** stdlib */
   export function hkdfSync(...args: any[]): any;
   /** stdlib */
-  export function md5(...args: any[]): any;
-  /** stdlib */
   export function pbkdf2(...args: any[]): any;
   /** stdlib */
   export function pbkdf2Sync(...args: any[]): any;
@@ -944,11 +910,7 @@ declare module "crypto" {
   /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
-  export function randomUUIDv7(...args: any[]): any;
-  /** stdlib */
   export function scryptSync(...args: any[]): any;
-  /** stdlib */
-  export function sha256(...args: any[]): any;
   /** stdlib */
   export function sign(...args: any[]): any;
   /** stdlib */
@@ -1622,8 +1584,6 @@ declare module "http" {
 
 declare module "http2" {
   /** stdlib */
-  export class Http2SecureServer { [key: string]: any; }
-  /** stdlib */
   export class Http2ServerRequest { [key: string]: any; }
   /** stdlib */
   export class Http2ServerResponse { [key: string]: any; }
@@ -1643,15 +1603,9 @@ declare module "https" {
   /** stdlib */
   export class Agent { [key: string]: any; }
   /** stdlib */
-  export class ClientRequest { [key: string]: any; }
-  /** stdlib */
-  export class IncomingMessage { [key: string]: any; }
-  /** stdlib */
   export class Server { [key: string]: any; }
   /** stdlib */
   export class Server { [key: string]: any; }
-  /** stdlib */
-  export class ServerResponse { [key: string]: any; }
   /** stdlib */
   export const globalAgent: any;
   /** stdlib */
@@ -1758,6 +1712,10 @@ declare module "module" {
   export const builtinModules: any;
   /** stdlib */
   export const constants: any;
+  /** stdlib */
+  export const wrap: any;
+  /** stdlib */
+  export const wrapper: any;
   /** stdlib */
   export function SourceMap(...args: any[]): any;
   /** stdlib */
@@ -2057,45 +2015,15 @@ declare module "perf_hooks" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
-  export const nodeTiming: any;
-  /** stdlib */
   export const performance: any;
-  /** stdlib */
-  export const supportedEntryTypes: any;
-  /** stdlib */
-  export const timeOrigin: any;
-  /** stdlib */
-  export function clearMarks(...args: any[]): any;
-  /** stdlib */
-  export function clearMeasures(...args: any[]): any;
-  /** stdlib */
-  export function clearResourceTimings(...args: any[]): any;
   /** stdlib */
   export function createHistogram(...args: any[]): any;
   /** stdlib */
   export function eventLoopUtilization(...args: any[]): any;
   /** stdlib */
-  export function getEntries(...args: any[]): any;
-  /** stdlib */
-  export function getEntriesByName(...args: any[]): any;
-  /** stdlib */
-  export function getEntriesByType(...args: any[]): any;
-  /** stdlib */
-  export function mark(...args: any[]): any;
-  /** stdlib */
-  export function markResourceTiming(...args: any[]): any;
-  /** stdlib */
-  export function measure(...args: any[]): any;
-  /** stdlib */
   export function monitorEventLoopDelay(...args: any[]): any;
   /** stdlib */
-  export function now(...args: any[]): any;
-  /** stdlib */
-  export function setResourceTimingBufferSize(...args: any[]): any;
-  /** stdlib */
   export function timerify(...args: any[]): any;
-  /** stdlib */
-  export function toJSON(...args: any[]): any;
 }
 
 declare module "perry/ads" {
@@ -2769,8 +2697,6 @@ declare module "process" {
   /** stdlib */
   export function abort(...args: any[]): any;
   /** stdlib */
-  export function addListener(...args: any[]): any;
-  /** stdlib */
   export function addUncaughtExceptionCaptureCallback(...args: any[]): any;
   /** stdlib */
   export function availableMemory(...args: any[]): any;
@@ -2783,19 +2709,13 @@ declare module "process" {
   /** stdlib */
   export function cwd(...args: any[]): any;
   /** stdlib */
-  export function emit(...args: any[]): any;
-  /** stdlib */
   export function emitWarning(...args: any[]): any;
-  /** stdlib */
-  export function eventNames(...args: any[]): any;
   /** stdlib */
   export function exit(...args: any[]): any;
   /** stdlib */
   export function getActiveResourcesInfo(...args: any[]): any;
   /** stdlib */
   export function getBuiltinModule(...args: any[]): any;
-  /** stdlib */
-  export function getMaxListeners(...args: any[]): any;
   /** stdlib */
   export function getegid(...args: any[]): any;
   /** stdlib */
@@ -2815,35 +2735,13 @@ declare module "process" {
   /** stdlib */
   export function kill(...args: any[]): any;
   /** stdlib */
-  export function listenerCount(...args: any[]): any;
-  /** stdlib */
-  export function listeners(...args: any[]): any;
-  /** stdlib */
   export function loadEnvFile(path?: any): void;
   /** stdlib */
   export function memoryUsage(...args: any[]): any;
   /** stdlib */
   export function nextTick(...args: any[]): any;
   /** stdlib */
-  export function off(...args: any[]): any;
-  /** stdlib */
-  export function on(...args: any[]): any;
-  /** stdlib */
-  export function once(...args: any[]): any;
-  /** stdlib */
-  export function prependListener(...args: any[]): any;
-  /** stdlib */
-  export function prependOnceListener(...args: any[]): any;
-  /** stdlib */
-  export function rawListeners(...args: any[]): any;
-  /** stdlib */
-  export function removeAllListeners(...args: any[]): any;
-  /** stdlib */
-  export function removeListener(...args: any[]): any;
-  /** stdlib */
   export function resourceUsage(...args: any[]): any;
-  /** stdlib */
-  export function setMaxListeners(...args: any[]): any;
   /** stdlib */
   export function setSourceMapsEnabled(...args: any[]): any;
   /** stdlib */
@@ -2977,8 +2875,6 @@ declare module "stream" {
   /** stdlib */
   export const promises: any;
   /** stdlib */
-  export const prototype: any;
-  /** stdlib */
   export function addAbortSignal(...args: any[]): any;
   /** stdlib */
   export function compose(...args: any[]): any;
@@ -2988,10 +2884,6 @@ declare module "stream" {
   export function duplexPair(...args: any[]): any;
   /** stdlib */
   export function finished(...args: any[]): any;
-  /** stdlib */
-  export function from(...args: any[]): any;
-  /** stdlib */
-  export function fromWeb(...args: any[]): any;
   /** stdlib */
   export function getDefaultHighWaterMark(...args: any[]): any;
   /** stdlib */
@@ -3006,8 +2898,6 @@ declare module "stream" {
   export function pipeline(...args: any[]): any;
   /** stdlib */
   export function setDefaultHighWaterMark(...args: any[]): any;
-  /** stdlib */
-  export function toWeb(...args: any[]): any;
 }
 
 declare module "stream/consumers" {
@@ -3054,14 +2944,6 @@ declare module "streams" {
 declare module "string_decoder" {
   /** stdlib */
   export class StringDecoder { [key: string]: any; }
-  /** stdlib */
-  export const encoding: any;
-  /** stdlib */
-  export const lastChar: any;
-  /** stdlib */
-  export const lastNeed: any;
-  /** stdlib */
-  export const lastTotal: any;
 }
 
 declare module "sys" {
@@ -3183,7 +3065,9 @@ declare module "url" {
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
-  export function createObjectURL(...args: any[]): any;
+  export class Url { [key: string]: any; }
+  /** stdlib */
+  export function Url(...args: any[]): any;
   /** stdlib */
   export function domainToASCII(...args: any[]): any;
   /** stdlib */
@@ -3201,7 +3085,7 @@ declare module "url" {
   /** stdlib */
   export function resolve(...args: any[]): any;
   /** stdlib */
-  export function revokeObjectURL(...args: any[]): any;
+  export function resolveObject(...args: any[]): any;
   /** stdlib */
   export function urlToHttpOptions(...args: any[]): any;
 }
@@ -3271,6 +3155,8 @@ declare module "util/types" {
   /** stdlib */
   export function isAnyArrayBuffer(...args: any[]): any;
   /** stdlib */
+  export function isArgumentsObject(...args: any[]): any;
+  /** stdlib */
   export function isArrayBuffer(...args: any[]): any;
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
@@ -3279,11 +3165,15 @@ declare module "util/types" {
   /** stdlib */
   export function isBigInt64Array(...args: any[]): any;
   /** stdlib */
+  export function isBigIntObject(...args: any[]): any;
+  /** stdlib */
   export function isBigUint64Array(...args: any[]): any;
   /** stdlib */
   export function isBooleanObject(...args: any[]): any;
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
+  /** stdlib */
+  export function isCryptoKey(...args: any[]): any;
   /** stdlib */
   export function isDataView(...args: any[]): any;
   /** stdlib */
@@ -3307,9 +3197,13 @@ declare module "util/types" {
   /** stdlib */
   export function isInt8Array(...args: any[]): any;
   /** stdlib */
+  export function isKeyObject(...args: any[]): any;
+  /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
   export function isMapIterator(...args: any[]): any;
+  /** stdlib */
+  export function isModuleNamespaceObject(...args: any[]): any;
   /** stdlib */
   export function isNativeError(...args: any[]): any;
   /** stdlib */
@@ -3328,6 +3222,8 @@ declare module "util/types" {
   export function isSharedArrayBuffer(...args: any[]): any;
   /** stdlib */
   export function isStringObject(...args: any[]): any;
+  /** stdlib */
+  export function isSymbolObject(...args: any[]): any;
   /** stdlib */
   export function isTypedArray(...args: any[]): any;
   /** stdlib */
@@ -3357,7 +3253,19 @@ declare module "uuid" {
 
 declare module "v8" {
   /** stdlib */
+  export class DefaultDeserializer { [key: string]: any; }
+  /** stdlib */
+  export class DefaultSerializer { [key: string]: any; }
+  /** stdlib */
+  export class Deserializer { [key: string]: any; }
+  /** stdlib */
   export class GCProfiler { [key: string]: any; }
+  /** stdlib */
+  export class Serializer { [key: string]: any; }
+  /** stdlib */
+  export const promiseHooks: any;
+  /** stdlib */
+  export const startupSnapshot: any;
   /** stdlib */
   export function cachedDataVersionTag(...args: any[]): any;
   /** stdlib */
@@ -3370,6 +3278,14 @@ declare module "v8" {
   export function getHeapStatistics(...args: any[]): any;
   /** stdlib */
   export function serialize(...args: any[]): any;
+  /** stdlib */
+  export function setFlagsFromString(...args: any[]): any;
+  /** stdlib */
+  export function setHeapSnapshotNearHeapLimit(...args: any[]): any;
+  /** stdlib */
+  export function stopCoverage(...args: any[]): any;
+  /** stdlib */
+  export function takeCoverage(...args: any[]): any;
 }
 
 declare module "validator" {
@@ -3427,8 +3343,6 @@ declare module "worker_threads" {
   export function MessageChannel(...args: any[]): any;
   /** stdlib */
   export function getEnvironmentData(p0: any): any;
-  /** stdlib */
-  export function getWorkerData(...args: any[]): any;
   /** stdlib */
   export function isMarkedAsUntransferable(p0: any): boolean;
   /** stdlib */

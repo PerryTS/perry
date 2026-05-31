@@ -114,6 +114,19 @@ pub(crate) fn lower_module_decl(
                             })
                             .unwrap_or_else(|| local.clone());
                         if is_native {
+                            let is_node_core = perry_api_manifest::is_node_core_module(&source);
+                            if is_node_core
+                                && !perry_api_manifest::module_has_public_named_export(
+                                    &source, &imported,
+                                )
+                            {
+                                crate::lower_bail!(
+                                    named.span,
+                                    "The requested module '{}' does not provide an export named '{}'",
+                                    raw_source,
+                                    imported
+                                );
+                            }
                             // Register as native module function with the original method name
                             // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4.
                             //
@@ -122,7 +135,9 @@ pub(crate) fn lower_module_decl(
                             // `import { types } from "node:util"; types.isX()` uses the same
                             // dispatch as `node:util/types` and `util.types.isX()`.
                             let (native_module, native_method) =
-                                if source == "util" && imported == "types" {
+                                if is_node_core && imported == "default" {
+                                    (source.clone(), None)
+                                } else if source == "util" && imported == "types" {
                                     ("util.types".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
