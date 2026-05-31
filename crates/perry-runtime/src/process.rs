@@ -549,19 +549,6 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
     let Some(module_name) = supported_builtin_module_name(name) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/main
-    if module_name == "constants" {
-        let cjs_default = "constants.default";
-        return crate::object::js_create_native_module_namespace(
-            cjs_default.as_ptr(),
-            cjs_default.len(),
-        );
-<<<<<<< HEAD
-=======
-=======
     if module_name == "timers/promises" {
         return unsafe {
             crate::node_submodules::js_node_submodule_namespace(
@@ -569,8 +556,6 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
                 "timers_promises".len() as u32,
             )
         };
->>>>>>> origin/main
->>>>>>> origin/main
     }
     crate::object::js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
 }
