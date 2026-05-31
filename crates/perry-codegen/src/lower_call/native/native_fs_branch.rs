@@ -262,6 +262,23 @@
                     &[(DOUBLE, &path), (DOUBLE, &options)],
                 ));
             }
+            "openAsBlob" => {
+                let path = if let Some(arg) = args.first() {
+                    lower_expr(ctx, arg)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let options = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_open_as_blob",
+                    &[(DOUBLE, &path), (DOUBLE, &options)],
+                ));
+            }
             "readdirSync" if !args.is_empty() => {
                 // Issue #631: forward the optional `options` arg
                 // (e.g. `{withFileTypes:true}`) so the runtime can

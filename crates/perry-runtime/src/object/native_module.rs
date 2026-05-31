@@ -1066,6 +1066,7 @@ const FS_NAMESPACE_EXPORT_KEYS: &[&[u8]] = &[
     b"mkdtempDisposableSync",
     b"mkdtempSync",
     b"open",
+    b"openAsBlob",
     b"openSync",
     b"readdir",
     b"readdirSync",
@@ -1643,6 +1644,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("fs", "Dir" | "Dirent") => Some(3),
         ("fs", "Stats") => Some(14),
         ("fs", "mkdtempDisposableSync") => Some(2),
+        ("fs", "openAsBlob") => Some(1),
         ("fs", "_toUnixTimestamp") => Some(1),
         ("events", "init") => Some(1),
         ("wasi", "WASI") => Some(0),
@@ -2361,6 +2363,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "mkdtemp")
             | ("fs", "openSync")
             | ("fs", "open")
+            | ("fs", "openAsBlob")
             | ("fs", "opendir")
             | ("fs", "opendirSync")
             | ("fs", "readFile")

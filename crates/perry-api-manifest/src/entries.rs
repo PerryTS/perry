@@ -3230,6 +3230,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "unlinkSync", false, None),
     method("fs", "openSync", false, None),
     method("fs", "open", false, None),
+    method("fs", "openAsBlob", false, None),
     method("fs", "closeSync", false, None),
     method("fs", "close", false, None),
     method("fs", "fstatSync", false, None),

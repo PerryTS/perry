@@ -867,6 +867,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("fs", "symlinkSync") => bool_to_f64(crate::fs::js_fs_symlink_sync(arg(0), arg(1))),
         ("fs", "readlinkSync") => crate::fs::js_fs_readlink_dispatch(arg(0), arg(1)),
         ("fs", "openSync") => crate::fs::js_fs_open_sync(arg(0), arg(1)),
+        ("fs", "openAsBlob") => crate::fs::js_fs_open_as_blob(arg(0), arg(1)),
         ("fs", "closeSync") => bool_to_f64(crate::fs::js_fs_close_sync(arg(0))),
         ("fs", "readSync") if args_len == 3 => {
             crate::fs::js_fs_read_sync_options(arg(0), arg(1), arg(2))

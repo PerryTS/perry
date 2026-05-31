@@ -326,6 +326,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // fs.readFileSync(path, encoding) — returns a raw *mut StringHeader i64.
     module.declare_function("js_fs_read_file_sync", I64, &[DOUBLE]);
     module.declare_function("js_fs_read_file_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_open_as_blob", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_promises_read_file", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_fs_promises_write_file",

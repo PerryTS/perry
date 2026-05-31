@@ -104,7 +104,7 @@ macro_rules! thunk {
     };
 }
 
-mod blob;
+pub(crate) mod blob;
 mod consumers;
 mod fs_promises;
 mod hono_jsx;
