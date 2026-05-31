@@ -625,6 +625,24 @@ pub(super) fn try_global_builtins(
                 }
             }
 
+            // Check if this is a named import from url (e.g., fileURLToPath)
+            if module_name == "url" {
+                match func_name {
+                    "fileURLToPath" => {
+                        // Only the 1-arg form takes the dedicated fast path. The
+                        // 2-arg form `fileURLToPath(url, { windows })` (#2975)
+                        // must fall through to the native dispatch table so the
+                        // options object reaches the runtime.
+                        if args.len() == 1 {
+                            return Ok(Ok(Expr::FileURLToPath(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                    }
+                    _ => {} // Fall through
+                }
+            }
+
             // Check if this is a named import from fs (e.g., existsSync, mkdirSync, etc.)
             if module_name == "fs" {
                 match func_name {

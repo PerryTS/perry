@@ -61,6 +61,7 @@ fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool
                 | "Uint16Array"
                 | "Int32Array"
                 | "Uint32Array"
+                | "Float16Array"
                 | "Float32Array"
                 | "Float64Array"
         )

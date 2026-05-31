@@ -477,6 +477,53 @@ pub(super) fn apply_pkg_and_toml_config(
         ctx.lockdown = true;
     }
 
+    // #3527 (blocker #4): materialize `"*"` / `"@scope/*"` wildcard entries
+    // in `perry.compilePackages` into concrete installed package names.
+    //
+    // The *trust* gate (`allowlist_matches`, used for the #497 check below and
+    // for `perry.allow.compilePackages`) honors `"*"`, but the *routing*
+    // predicates — `is_in_compile_package`, the HIR `COMPILE_PACKAGES_OVERRIDE`
+    // lookup, and the many `ctx.compile_packages.contains(name)` sites — all do
+    // exact package-name matching. So a literal `"*"` passed the trust gate yet
+    // was a silent no-op for compile routing: every dependency still routed to
+    // the (removed) JS runtime. Expanding it here makes "compile everything"
+    // actually compile everything, and removes the need to hand-enumerate every
+    // transitive dependency (the Express tree is 65 packages). This runs after
+    // the env-var overrides so `PERRY_ALLOW_PERRY_FEATURES=1` builds expand too.
+    let has_universal = ctx.compile_packages.iter().any(|p| p == "*");
+    let scope_wildcards: Vec<String> = ctx
+        .compile_packages
+        .iter()
+        .filter_map(|p| p.strip_suffix("/*").map(|s| s.to_string()))
+        .collect();
+    if has_universal || !scope_wildcards.is_empty() {
+        let installed = super::resolve::enumerate_installed_packages(project_root);
+        let mut added = 0usize;
+        for name in installed {
+            let matches = has_universal
+                || scope_wildcards.iter().any(|scope| {
+                    name.strip_prefix(scope.as_str())
+                        .map(|rest| rest.starts_with('/'))
+                        .unwrap_or(false)
+                });
+            if matches && ctx.compile_packages.insert(name) {
+                added += 1;
+            }
+        }
+        // Drop the literal wildcard tokens: they never match a real
+        // node_modules path in the routing predicates, so leaving them in would
+        // just be dead entries (and `is_in_compile_package` would search for a
+        // nonsensical `node_modules/*/` substring).
+        ctx.compile_packages
+            .retain(|p| p != "*" && !p.ends_with("/*"));
+        if let OutputFormat::Text = format {
+            println!(
+                "  Compile package wildcard: expanded to {} installed package(s)",
+                added
+            );
+        }
+    }
+
     // #497: deferred allowlist check for `perry.compilePackages` (the
     // parse loop populated `ctx.compile_packages` above; we validate
     // after env-var overrides). Every entry that flowed in needs a
