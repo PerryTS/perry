@@ -62,11 +62,7 @@ extern "C" {
 }
 
 fn bool_f64(value: bool) -> f64 {
-    if value {
-        1.0
-    } else {
-        0.0
-    }
+    f64::from_bits(JsValue::from_bool(value).bits())
 }
 
 fn bind_agent_method(handle: Handle, name: &'static [u8]) -> i64 {
