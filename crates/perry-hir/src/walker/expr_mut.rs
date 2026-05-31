@@ -65,7 +65,6 @@ where
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
         | Expr::CryptoRandomUUID
         | Expr::CryptoRandomUUIDv7
         | Expr::OsPlatform
@@ -196,7 +195,9 @@ where
         | Expr::Atob(v)
         | Expr::Btoa(v)
         | Expr::TextEncoderEncode(v)
-        | Expr::TextDecoderDecode(v)
+        | Expr::TextDecoderEncoding(v)
+        | Expr::TextDecoderFatal(v)
+        | Expr::TextDecoderIgnoreBom(v)
         | Expr::EncodeURI(v)
         | Expr::DecodeURI(v)
         | Expr::EncodeURIComponent(v)
@@ -535,6 +536,19 @@ where
         Expr::TextEncoderEncodeInto { source, dest } => {
             f(source);
             f(dest);
+        }
+        Expr::TextDecoderNew {
+            label,
+            fatal,
+            ignore_bom,
+        } => {
+            f(label);
+            f(fatal);
+            f(ignore_bom);
+        }
+        Expr::TextDecoderDecode { decoder, input } => {
+            f(decoder);
+            f(input);
         }
         Expr::PropertySet { object, value, .. } => {
             f(object);

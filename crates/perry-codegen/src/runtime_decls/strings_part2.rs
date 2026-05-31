@@ -61,9 +61,14 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // byte). Decode accepts both ArrayHeader (from encode) and
     // BufferHeader (from `new Uint8Array([...])`).
     module.declare_function("js_text_encoder_new", I64, &[]);
-    module.declare_function("js_text_decoder_new", I64, &[]);
+    // new TextDecoder(label, fatal, ignoreBOM) -> handle
+    module.declare_function("js_text_decoder_new", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_text_encoder_encode_llvm", I64, &[DOUBLE]);
-    module.declare_function("js_text_decoder_decode_llvm", I64, &[DOUBLE]);
+    // decode(handle, input) -> string ptr
+    module.declare_function("js_text_decoder_decode_llvm", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_text_decoder_encoding", I64, &[DOUBLE]);
+    module.declare_function("js_text_decoder_fatal", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_text_decoder_ignore_bom", DOUBLE, &[DOUBLE]);
     // Microtask queue (queueMicrotask / process.nextTick).
     module.declare_function("js_queue_microtask", VOID, &[I64]);
     module.declare_function("js_queue_next_tick", VOID, &[I64]);

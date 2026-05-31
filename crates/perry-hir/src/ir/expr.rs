@@ -749,10 +749,24 @@ pub enum Expr {
         source: Box<Expr>,
         dest: Box<Expr>,
     },
-    /// new TextDecoder() or new TextDecoder("utf-8") -> opaque handle
-    TextDecoderNew,
-    /// decoder.decode(buffer) -> string (UTF-8 decode)
-    TextDecoderDecode(Box<Expr>),
+    /// new TextDecoder(label?, { fatal?, ignoreBOM? }) -> opaque handle.
+    /// `label` is undefined for the no-arg form; `fatal`/`ignore_bom`
+    /// default to `false`.
+    TextDecoderNew {
+        label: Box<Expr>,
+        fatal: Box<Expr>,
+        ignore_bom: Box<Expr>,
+    },
+    /// decoder.decode(buffer) -> string. `decoder` carries the encoding
+    /// state (the lowered receiver handle); `input` is the bytes.
+    TextDecoderDecode {
+        decoder: Box<Expr>,
+        input: Box<Expr>,
+    },
+    /// decoder.encoding / .fatal / .ignoreBOM property reads.
+    TextDecoderEncoding(Box<Expr>),
+    TextDecoderFatal(Box<Expr>),
+    TextDecoderIgnoreBom(Box<Expr>),
 
     // URI encoding / decoding
     /// encodeURI(string) -> string

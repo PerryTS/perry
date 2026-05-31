@@ -1698,10 +1698,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SymbolToString(..)
         | Expr::ObjectGetOwnPropertySymbols(..)
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
+        | Expr::TextDecoderNew { .. }
         | Expr::TextEncoderEncode(..)
         | Expr::TextEncoderEncodeInto { .. }
-        | Expr::TextDecoderDecode(..)
+        | Expr::TextDecoderDecode { .. }
+        | Expr::TextDecoderEncoding(..)
+        | Expr::TextDecoderFatal(..)
+        | Expr::TextDecoderIgnoreBom(..)
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
