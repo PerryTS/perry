@@ -106,17 +106,21 @@ fn hex_nibble(b: u8) -> Option<u8> {
 /// Percent-decode a file-URL pathname to its raw byte sequence. Bytes are
 /// returned verbatim (no UTF-8 validation) so `fileURLToPathBuffer` can
 /// preserve paths whose decoded bytes are not valid UTF-8.
-fn decode_file_url_pathname_bytes(pathname: &str) -> Vec<u8> {
+fn decode_file_url_pathname_bytes(pathname: &str, reject_encoded_backslash: bool) -> Vec<u8> {
     let bytes = pathname.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if bytes[i + 1] == b'2' && (bytes[i + 2] | 0x20) == b'f' {
-                throw_url_type_error_with_code(
-                    "File URL path must not include encoded / characters",
-                    "ERR_INVALID_FILE_URL_PATH",
-                );
+            let is_encoded_slash = bytes[i + 1] == b'2' && (bytes[i + 2] | 0x20) == b'f';
+            let is_encoded_backslash = bytes[i + 1] == b'5' && (bytes[i + 2] | 0x20) == b'c';
+            if is_encoded_slash || (reject_encoded_backslash && is_encoded_backslash) {
+                let message = if reject_encoded_backslash {
+                    "File URL path must not include encoded \\ or / characters"
+                } else {
+                    "File URL path must not include encoded / characters"
+                };
+                throw_url_type_error_with_code(message, "ERR_INVALID_FILE_URL_PATH");
             }
             if let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
                 out.push((hi << 4) | lo);
@@ -130,14 +134,73 @@ fn decode_file_url_pathname_bytes(pathname: &str) -> Vec<u8> {
     out
 }
 
-fn decode_file_url_pathname(pathname: &str) -> String {
-    String::from_utf8_lossy(&decode_file_url_pathname_bytes(pathname)).into_owned()
+fn options_windows_mode(options_f64: f64) -> bool {
+    let default_windows = cfg!(windows);
+    let Some(options) = object_from_f64(options_f64) else {
+        return default_windows;
+    };
+    let windows = object_prop_f64(options, "windows");
+    if crate::value::JSValue::from_bits(windows.to_bits()).is_undefined() {
+        default_windows
+    } else {
+        crate::value::js_is_truthy(windows) != 0
+    }
+}
+
+fn split_file_url_authority(after_scheme: &str) -> (&str, &str) {
+    if let Some(authority_and_path) = after_scheme.strip_prefix("//") {
+        let path_start = authority_and_path
+            .find('/')
+            .unwrap_or(authority_and_path.len());
+        (
+            &authority_and_path[..path_start],
+            &authority_and_path[path_start..],
+        )
+    } else {
+        ("", after_scheme)
+    }
+}
+
+fn strip_url_suffix(pathname: &str) -> &str {
+    pathname.split(['?', '#']).next().unwrap_or_default()
+}
+
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3 && bytes[0] == b'\\' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':'
+}
+
+fn file_url_to_path_bytes_posix(after_scheme: &str) -> Vec<u8> {
+    let (host, pathname) = split_file_url_authority(after_scheme);
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        throw_url_type_error_with_code(
+            "File URL host must be \"localhost\" or empty on darwin",
+            "ERR_INVALID_FILE_URL_HOST",
+        );
+    }
+    decode_file_url_pathname_bytes(strip_url_suffix(pathname), false)
+}
+
+fn file_url_to_path_bytes_windows(after_scheme: &str) -> Vec<u8> {
+    let (host, pathname) = split_file_url_authority(after_scheme);
+    let decoded = decode_file_url_pathname_bytes(strip_url_suffix(pathname), true);
+    let path = String::from_utf8_lossy(&decoded).replace('/', "\\");
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        return format!("\\\\{}{}", host, path).into_bytes();
+    }
+    if !is_windows_drive_path(&path) {
+        throw_url_type_error_with_code(
+            "File URL path must be absolute",
+            "ERR_INVALID_FILE_URL_PATH",
+        );
+    }
+    path[1..].as_bytes().to_vec()
 }
 
 /// Shared `file:` URL → path parsing for both `fileURLToPath` (UTF-8 string)
 /// and `fileURLToPathBuffer` (raw bytes). Returns the decoded path bytes,
-/// throwing the same scheme/host/encoded-slash errors as Node.
-fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
+/// throwing the same scheme/host/encoded-separator errors as Node.
+fn file_url_to_path_bytes(url_f64: f64, options_f64: f64) -> Vec<u8> {
     let url_string = if is_js_string_value(url_f64) {
         string_from_js_value(url_f64)
     } else if let Some(obj) = object_from_f64(url_f64) {
@@ -153,23 +216,11 @@ fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
         throw_url_type_error_with_code("The URL must be of scheme file", "ERR_INVALID_URL_SCHEME");
     };
 
-    let pathname = if let Some(authority_and_path) = after_scheme.strip_prefix("//") {
-        let path_start = authority_and_path
-            .find('/')
-            .unwrap_or(authority_and_path.len());
-        let host = &authority_and_path[..path_start];
-        if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
-            throw_url_type_error_with_code(
-                "File URL host must be \"localhost\" or empty on darwin",
-                "ERR_INVALID_FILE_URL_HOST",
-            );
-        }
-        &authority_and_path[path_start..]
+    if options_windows_mode(options_f64) {
+        file_url_to_path_bytes_windows(after_scheme)
     } else {
-        after_scheme
-    };
-    let pathname = pathname.split(['?', '#']).next().unwrap_or_default();
-    decode_file_url_pathname_bytes(pathname)
+        file_url_to_path_bytes_posix(after_scheme)
+    }
 }
 
 /// Resolve a `node:module` "base" argument (file URL object/string or a
@@ -182,13 +233,19 @@ pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
     if is_js_string_value(base_f64) {
         let s = string_from_js_value(base_f64);
         if s.starts_with("file:") {
-            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+            return Some(
+                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, undefined_value()))
+                    .into_owned(),
+            );
         }
         return Some(s);
     }
     if let Some(obj) = object_from_f64(base_f64) {
         if is_url_object_shape(obj) {
-            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+            return Some(
+                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, undefined_value()))
+                    .into_owned(),
+            );
         }
     }
     None
@@ -198,8 +255,9 @@ pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
 /// Strips the "file://" prefix and percent-decodes the result
 /// js_url_file_url_to_path(url_f64: f64) -> f64 (NaN-boxed string)
 #[no_mangle]
-pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
-    let decoded = String::from_utf8_lossy(&file_url_to_path_bytes(url_f64)).into_owned();
+pub extern "C" fn js_url_file_url_to_path(url_f64: f64, options_f64: f64) -> f64 {
+    let decoded =
+        String::from_utf8_lossy(&file_url_to_path_bytes(url_f64, options_f64)).into_owned();
     create_string_f64(&decoded)
 }
 
@@ -210,8 +268,8 @@ pub extern "C" fn js_url_file_url_to_path(url_f64: f64) -> f64 {
 /// validation as `fileURLToPath`.
 /// js_url_file_url_to_path_buffer(url_f64: f64) -> f64 (NaN-boxed Buffer ptr)
 #[no_mangle]
-pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64) -> f64 {
-    let bytes = file_url_to_path_bytes(url_f64);
+pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64, options_f64: f64) -> f64 {
+    let bytes = file_url_to_path_bytes(url_f64, options_f64);
     let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
     unsafe {
         (*buf).length = bytes.len() as u32;
@@ -226,27 +284,101 @@ pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64) -> f64 {
     crate::value::js_nanbox_pointer(buf as i64)
 }
 
-#[no_mangle]
-pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
-    if !is_js_string_value(path_f64) {
-        throw_invalid_url_arg(path_f64, false);
-    }
-    let path = get_string_content(path_f64);
-    let path = crate::path::resolve_posix_str(&path);
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn path_ends_with_posix_separator(path: &str) -> bool {
+    path.ends_with('/')
+}
+
+fn path_ends_with_windows_separator(path: &str) -> bool {
+    path.ends_with('/') || path.ends_with('\\')
+}
+
+fn encode_file_path(path: &str) -> String {
     let mut encoded = String::new();
     for b in path.bytes() {
         match b {
             b'/' => encoded.push('/'),
+            b':' => encoded.push(':'),
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 encoded.push(b as char)
             }
             _ => encoded.push_str(&format!("%{b:02X}")),
         }
     }
-    let href = if encoded.starts_with('/') {
-        format!("file://{}", encoded)
+    encoded
+}
+
+fn resolve_posix_for_file_url(path: &str) -> String {
+    let mut resolved = crate::path::resolve_posix_str(path);
+    if path_ends_with_posix_separator(path) && !resolved.ends_with('/') {
+        resolved.push('/');
+    }
+    resolved
+}
+
+fn strip_windows_extended_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{}", rest)
+    } else if let Some(rest) = path.strip_prefix("\\\\?\\") {
+        rest.to_string()
     } else {
-        format!("file:///{}", encoded)
+        path.to_string()
+    }
+}
+
+fn windows_path_to_file_href(path: &str) -> String {
+    let path = strip_windows_extended_prefix(path);
+    let trailing_sep = path_ends_with_windows_separator(&path);
+    let normalized = path.replace('\\', "/");
+    if let Some(rest) = normalized.strip_prefix("//") {
+        let mut parts = rest.splitn(2, '/');
+        let host = parts.next().unwrap_or_default();
+        let resource = parts.next().unwrap_or_default();
+        let mut encoded_path = encode_file_path(&format!("/{}", resource));
+        if trailing_sep && !encoded_path.ends_with('/') {
+            encoded_path.push('/');
+        }
+        return format!("file://{}{}", host, encoded_path);
+    }
+
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let mut path_part = normalized;
+        if path_part.len() == 2 {
+            path_part.push('/');
+        } else if !path_part.as_bytes().get(2).is_some_and(|b| *b == b'/') {
+            path_part.insert(2, '/');
+        }
+        let mut encoded = encode_file_path(&path_part);
+        if trailing_sep && !encoded.ends_with('/') {
+            encoded.push('/');
+        }
+        return format!("file:///{}", encoded);
+    }
+
+    let posixish = resolve_posix_for_file_url(&normalized);
+    format!("file://{}", encode_file_path(&posixish))
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f64 {
+    if !is_js_string_value(path_f64) {
+        throw_invalid_url_arg(path_f64, false);
+    }
+    let path = get_string_content(path_f64);
+    let href = if options_windows_mode(options_f64) {
+        windows_path_to_file_href(&path)
+    } else {
+        let path = resolve_posix_for_file_url(&path);
+        let encoded = encode_file_path(&path);
+        if encoded.starts_with('/') {
+            format!("file://{}", encoded)
+        } else {
+            format!("file:///{}", encoded)
+        }
     };
     let obj = create_url_object(&href);
     crate::value::js_nanbox_pointer(obj as i64)

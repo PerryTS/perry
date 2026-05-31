@@ -629,7 +629,7 @@ pub(super) fn try_global_builtins(
             if module_name == "url" {
                 match func_name {
                     "fileURLToPath" => {
-                        if !args.is_empty() {
+                        if args.len() == 1 {
                             return Ok(Ok(Expr::FileURLToPath(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));

@@ -50,9 +50,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::FileURLToPath(url) => {
             let v = lower_expr(ctx, url)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_url_file_url_to_path", &[(DOUBLE, &v)]))
+            let options = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_url_file_url_to_path",
+                &[(DOUBLE, &v), (DOUBLE, &options)],
+            ))
         }
 
         Expr::UrlNew { url, base } => {

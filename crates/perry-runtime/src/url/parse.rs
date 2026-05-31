@@ -13,7 +13,7 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
     // writes. Declared without an initial value — Rust will catch any
     // future code path that fails to assign before use.
     let mut host: String;
-    let hostname: String;
+    let mut hostname: String;
     let pathname: String;
     let mut port = String::new();
     let mut search = String::new();
@@ -36,14 +36,14 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
     // Extract protocol
     if let Some(proto_idx) = remaining.find("://") {
         protocol = format!("{}:", &remaining[..proto_idx]);
-        remaining = &remaining[proto_idx + 3..];
+        remaining = if protocol == "file:" {
+            &remaining[proto_idx + 1..]
+        } else {
+            &remaining[proto_idx + 3..]
+        };
     } else if remaining.starts_with("file:") {
         protocol = "file:".to_string();
         remaining = remaining.strip_prefix("file:").unwrap_or(remaining);
-        // Handle file:/// paths
-        if remaining.starts_with("//") {
-            remaining = remaining.strip_prefix("//").unwrap_or(remaining);
-        }
     } else if let Some(colon_idx) = remaining.find(':') {
         // Non-special opaque scheme: `mailto:`, `data:`, `urn:`, etc. The
         // characters before the colon must look like a scheme. The whole
@@ -74,15 +74,26 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
 
     // For file: URLs, the rest is the pathname
     if protocol == "file:" {
-        pathname = if remaining.is_empty() {
-            "/".to_string()
-        } else if remaining.starts_with('/') {
-            remaining.to_string()
-        } else {
-            format!("/{}", remaining)
-        };
         host = String::new();
         hostname = String::new();
+        if let Some(authority_and_path) = remaining.strip_prefix("//") {
+            let path_start = authority_and_path
+                .find('/')
+                .unwrap_or(authority_and_path.len());
+            host = authority_and_path[..path_start].to_string();
+            hostname = host.clone();
+            pathname = if path_start < authority_and_path.len() {
+                authority_and_path[path_start..].to_string()
+            } else {
+                "/".to_string()
+            };
+        } else if remaining.is_empty() {
+            pathname = "/".to_string();
+        } else if remaining.starts_with('/') {
+            pathname = remaining.to_string();
+        } else {
+            pathname = format!("/{}", remaining);
+        }
     } else {
         // Extract host and pathname. IPv6 hostnames are bracketed (`[::1]`);
         // the `:` inside brackets must not be mistaken for a port separator,
