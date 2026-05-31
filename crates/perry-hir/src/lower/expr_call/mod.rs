@@ -31,7 +31,7 @@ mod crypto;
 mod globals;
 mod imported_array_methods;
 mod inline_array_methods;
-mod intrinsics;
+pub(crate) mod intrinsics;
 mod local_array_methods;
 mod module_class_static;
 mod module_static;

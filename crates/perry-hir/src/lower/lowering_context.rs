@@ -294,6 +294,11 @@ pub struct LoweringContext {
     /// HIR variants which read the runtime's thread-local exec metadata.
     pub(crate) regex_exec_locals: HashSet<String>,
     pub(crate) proxy_locals: HashSet<String>,
+    /// #3144: local name -> builtin prototype method name, for bindings like
+    /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
+    /// rewrite recognize `m.call(arr, ...)` (the receiver of `.call` is a plain
+    /// identifier, not a member/literal) and synthesize `arr.map(...)`.
+    pub(crate) builtin_proto_method_locals: HashMap<String, String>,
     /// Issue #76 — locals known to hold a WebAssembly instance handle (i.e.
     /// `const x = WebAssembly.instantiate(...)`). Used to route
     /// `x.exports.<method>(...)` to `Expr::WebAssemblyCallExport` only when
