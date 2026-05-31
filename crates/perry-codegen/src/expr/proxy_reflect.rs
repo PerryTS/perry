@@ -112,11 +112,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::ProxyRevocable { target, handler } => {
+            // #2846: return a real `{ proxy, revoke }` record so `typeof
+            // rec.revoke === "function"`, `rec.proxy.a` forwards, and the
+            // revoke function survives aliasing/storage.
             let t = lower_expr(ctx, target)?;
             let h = lower_expr(ctx, handler)?;
             Ok(ctx
                 .block()
-                .call(DOUBLE, "js_proxy_new", &[(DOUBLE, &t), (DOUBLE, &h)]))
+                .call(DOUBLE, "js_proxy_revocable", &[(DOUBLE, &t), (DOUBLE, &h)]))
         }
         Expr::ProxyRevoke(proxy) => {
             let p = lower_expr(ctx, proxy)?;

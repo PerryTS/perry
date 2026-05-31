@@ -115,8 +115,44 @@ fn lookup(proxy_boxed: f64) -> Option<u64> {
 
 /// Allocate a new proxy. Returns the NaN-boxed POINTER_TAG value holding the
 /// encoded proxy id in the low bits.
+/// `new Proxy(target, handler)` requires both arguments to be objects
+/// (functions count as objects). Node throws
+/// `TypeError: Cannot create proxy with a non-object as target or handler`
+/// when either is a primitive or nullish. (#2846)
+fn proxy_arg_is_object(value: f64) -> bool {
+    let bits = value.to_bits();
+    let top = bits >> 48;
+    // POINTER_TAG heap value (object / function / array).
+    if top == 0x7FFD {
+        let ptr = (bits & POINTER_MASK) as usize;
+        return ptr >= 0x1000;
+    }
+    // Module-level raw-I64 object/array pointers (top16 == 0).
+    if top == 0 && bits > 0x10000 {
+        return true;
+    }
+    // Class refs (INT32-tagged constructors, top16 == 0x7FFE) are callable
+    // objects and are valid proxy targets/handlers.
+    if top == 0x7FFE {
+        return true;
+    }
+    false
+}
+
+fn throw_proxy_non_object() -> ! {
+    let msg = "Cannot create proxy with a non-object as target or handler";
+    let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_handle);
+    let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
+    crate::exception::js_throw(boxed)
+}
+
 #[no_mangle]
 pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
+    // #2846: validate both arguments are objects before allocating.
+    if !proxy_arg_is_object(target) || !proxy_arg_is_object(handler) {
+        throw_proxy_non_object();
+    }
     PROXIES.with(|p| {
         let mut v = p.borrow_mut();
         let id = v.len() as u64;
@@ -1008,6 +1044,61 @@ fn metadata_keys_for(target: f64, property_key: f64, include_prototypes: bool) -
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
     f64::from_bits(POINTER_TAG | ((arr as u64) & POINTER_MASK))
 }
+
+/// Native trampoline backing the `revoke` function returned by
+/// `Proxy.revocable`. The closure captures the proxy value in capture slot 0;
+/// invoking it revokes that specific proxy. Idempotent — revoking an
+/// already-revoked proxy is a no-op (Node's `revoke()` is idempotent). (#2846)
+extern "C" fn proxy_revoke_trampoline(closure: *const crate::closure::ClosureHeader) -> f64 {
+    let proxy = crate::closure::js_closure_get_capture_f64(closure, 0);
+    js_proxy_revoke(proxy);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `Proxy.revocable(target, handler)` — returns an ordinary object
+/// `{ proxy, revoke }` where `proxy` is a fresh revocable Proxy and `revoke`
+/// is a callable, idempotent function that revokes only that proxy. (#2846)
+///
+/// Unlike the destructuring fast-path in `stmt.rs`, this builds a real heap
+/// object so `typeof rec.revoke === "function"`, `rec.proxy.a` forwards, and
+/// the revoke function can be stored/aliased and still work.
+#[no_mangle]
+pub extern "C" fn js_proxy_revocable(target: f64, handler: f64) -> f64 {
+    // Reuse `js_proxy_new` so the same object-argument validation applies.
+    let proxy = js_proxy_new(target, handler);
+
+    // Build the revoke closure capturing the proxy value.
+    let revoke_closure = crate::closure::js_closure_alloc(proxy_revoke_trampoline as *const u8, 1);
+    crate::closure::js_register_closure_arity(proxy_revoke_trampoline as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(revoke_closure, 0, proxy);
+    let revoke_boxed = f64::from_bits(POINTER_TAG | ((revoke_closure as u64) & POINTER_MASK));
+
+    // Build the `{ proxy, revoke }` record. Root everything across the
+    // intermediate allocations so a GC during key/string allocation can't
+    // strand the proxy/revoke values.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proxy_root = scope.root_nanbox_f64(proxy);
+    let revoke_root = scope.root_nanbox_f64(revoke_boxed);
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let keys = crate::array::js_array_alloc(0);
+    let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+    crate::object::js_object_set_keys(obj, keys);
+
+    let proxy_key = crate::string::js_string_from_bytes(b"proxy".as_ptr(), 5);
+    crate::object::js_object_set_field_by_name(obj, proxy_key, proxy_root.get_nanbox_f64());
+    let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+    let revoke_key = crate::string::js_string_from_bytes(b"revoke".as_ptr(), 6);
+    crate::object::js_object_set_field_by_name(obj, revoke_key, revoke_root.get_nanbox_f64());
+
+    let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+    f64::from_bits(POINTER_TAG | ((obj as u64) & POINTER_MASK))
+}
+
+// #2846: retention anchor for `Proxy.revocable` (codegen-only callsite).
+#[used]
+static KEEP_PROXY_REVOCABLE: extern "C" fn(f64, f64) -> f64 = js_proxy_revocable;
 
 // #2762: retention anchors for the Reflect-specific extensibility entry points.
 // These `#[no_mangle]` fns are emitted only by codegen (no Rust caller in the
