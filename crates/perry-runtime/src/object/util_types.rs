@@ -312,3 +312,49 @@ pub extern "C" fn js_util_types_is_set_iterator(value: f64) -> f64 {
             || crate::set::is_registered_set_iterator(addr),
     )
 }
+
+// #3678: predicate tail beyond Perry's previously-claimed subset. Only the
+// predicates Perry can correctly back are added here — `isBigIntObject` /
+// `isSymbolObject` (Perry boxes only Number/String/Boolean), `isArgumentsObject`
+// (no distinct arguments object — Perry uses arrays), `isModuleNamespaceObject`,
+// `isKeyObject`, and `isCryptoKey` (no KeyObject/CryptoKey class) are
+// intentionally omitted because a `false`-always stub would lie about the
+// positive cases Node recognizes.
+
+/// `util.types.isDataView(value)` — true only for a DataView created over an
+/// ArrayBuffer. Backed by the same DataView registry `isArrayBufferView`
+/// already consults.
+#[no_mangle]
+pub extern "C" fn js_util_types_is_data_view(value: f64) -> f64 {
+    nanbox_bool(crate::buffer::is_data_view(jsvalue_addr(value)))
+}
+
+/// `util.types.isFloat16Array(value)` — true only for a Float16Array
+/// (#2902 added the KIND_FLOAT16 typed-array kind).
+#[no_mangle]
+pub extern "C" fn js_util_types_is_float16_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT16))
+}
+
+/// `util.types.isWeakMap(value)` — true only for a `new WeakMap()`. WeakMap
+/// instances carry CLASS_ID_WEAKMAP on their ObjectHeader (the class_id travels
+/// with the GC-movable object, unlike Map's raw-pointer registry).
+#[no_mangle]
+pub extern "C" fn js_util_types_is_weak_map(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKMAP))
+}
+
+/// `util.types.isWeakSet(value)` — true only for a `new WeakSet()`.
+#[no_mangle]
+pub extern "C" fn js_util_types_is_weak_set(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKSET))
+}
+
+/// `util.types.isExternal(value)` — Node returns true only for native V8
+/// `External` wrapper objects (raw C++ pointers surfaced to JS). Perry never
+/// produces such values, so this is correctly `false` for every JS value
+/// (matching Node, which also returns false for all pure-JS values).
+#[no_mangle]
+pub extern "C" fn js_util_types_is_external(_value: f64) -> f64 {
+    nanbox_bool(false)
+}

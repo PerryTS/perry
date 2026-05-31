@@ -2472,6 +2472,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
                     return JSValue::from_bits(v.to_bits());
                 }
+                if let Some(func_value) =
+                    super::class_registry::function_value_for_class_id(class_id)
+                {
+                    return JSValue::from_bits(func_value.to_bits());
+                }
                 if class_id != 0 && is_class_id_registered(class_id) {
                     let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
                     return JSValue::from_bits(bits);
