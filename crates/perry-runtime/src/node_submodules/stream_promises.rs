@@ -567,6 +567,10 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     destination: f64,
     options_or_rest: f64,
 ) -> f64 {
+    if let Some(rejection) = validate_pipeline_promise_args(source, destination) {
+        return rejection;
+    }
+
     let rest_values = match array_values(options_or_rest) {
         Some(values) => values,
         None => return direct_stream_promises_pipeline(source, destination, options_or_rest),

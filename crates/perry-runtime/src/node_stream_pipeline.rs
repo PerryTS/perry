@@ -619,7 +619,7 @@ pub(super) fn run_collected_pipeline(
                         }
                         complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
                     } else {
-                        complete_collected_pipeline(callback, result);
+                        complete_collected_pipeline(callback, result.value);
                     }
                     return last;
                 }
@@ -837,7 +837,8 @@ fn compose_process_stream_stage(stage: f64, chunks: f64, end_stage: bool) -> Res
 }
 
 fn compose_process_callable_stage(stage: f64, chunks: f64) -> Result<f64, f64> {
-    call_pipeline_function_stage(stage, chunks).and_then(collect_pipeline_chunks)
+    call_pipeline_function_stage(stage, chunks)
+        .and_then(|result| collect_pipeline_chunks(result.value))
 }
 
 fn compose_process_stages(stages: &[f64], input: f64, end_stages: bool) -> Result<f64, f64> {
