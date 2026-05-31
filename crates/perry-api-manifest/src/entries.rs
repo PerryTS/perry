@@ -94,6 +94,9 @@ pub const NATIVE_MODULES: &[&str] = &[
     "cron",
     "fastify",
     "async_hooks",
+    // #2875: internal module backing DisposableStack/AsyncDisposableStack
+    // instance-method dispatch (no JS import surface).
+    "__disposable__",
     "readline",
     "string_decoder",
     "querystring",
@@ -913,6 +916,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         Some("AsyncResource"),
     ),
     method("async_hooks", "bind", true, Some("AsyncResource")),
+    // #2875: DisposableStack / AsyncDisposableStack instance methods. The
+    // `__disposable__` module is internal (synthesized by the var-decl
+    // native-instance registration), so it has no JS import surface — these
+    // entries exist solely to satisfy the dispatch-table drift gate.
+    method("__disposable__", "use", true, None),
+    method("__disposable__", "adopt", true, None),
+    method("__disposable__", "defer", true, None),
+    method("__disposable__", "dispose", true, None),
+    method("__disposable__", "disposeAsync", true, None),
+    method("__disposable__", "move", true, None),
+    method("__disposable__", "disposed", true, None),
     // AsyncResource — Nest's `@nestjs/core` request-scoped DI uses
     // this to bind a callback to a synthetic async resource. The
     // stub in `node:async_hooks` JS module satisfies callers that

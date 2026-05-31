@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1985 entries across 93 modules
+// Coverage: 1992 entries across 94 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -64,6 +64,9 @@ declare module "@perryts/pdf" {
   export function pdfNewPage(...args: any[]): any;
   /** stdlib */
   export function pdfSave(...args: any[]): any;
+}
+
+declare module "__disposable__" {
 }
 
 declare module "argon2" {
