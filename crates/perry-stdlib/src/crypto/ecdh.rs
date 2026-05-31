@@ -10,6 +10,7 @@ pub unsafe extern "C" fn js_crypto_create_sign(alg_ptr: i64) -> f64 {
     let handle: Handle = register_handle(SignHandle {
         alg,
         data: std::sync::Mutex::new(Vec::new()),
+        finalized: std::sync::atomic::AtomicBool::new(false),
     });
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
@@ -24,6 +25,7 @@ pub unsafe extern "C" fn js_crypto_create_verify(alg_ptr: i64) -> f64 {
     let handle: Handle = register_handle(VerifyHandle {
         alg,
         data: std::sync::Mutex::new(Vec::new()),
+        finalized: std::sync::atomic::AtomicBool::new(false),
     });
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
@@ -139,6 +141,15 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // #2963 — once `.sign()` consumed the handle, Node throws on any further
+    // `update`/`sign`. Guard both terminal-affecting methods.
+    if matches!(method, "update" | "sign") && h.finalized.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        perry_runtime::fs::validate::throw_error_with_code(
+            "Not initialised",
+            "ERR_CRYPTO_INVALID_STATE",
+        );
+    }
     match method {
         "update" if !args.is_empty() => {
             let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
@@ -147,6 +158,9 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         "sign" if !args.is_empty() => {
+            // The handle is consumed by `.sign()` regardless of outcome.
+            h.finalized
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             let key_bits = args[0].to_bits();
             let pem = match crypto_key_input_to_private_pem(key_bits) {
                 Some(pem) => pem,
@@ -450,6 +464,16 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // #2963 — once `.verify()` consumed the handle, Node throws on any further
+    // `update`/`verify`.
+    if matches!(method, "update" | "verify")
+        && h.finalized.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        perry_runtime::fs::validate::throw_error_with_code(
+            "Not initialised",
+            "ERR_CRYPTO_INVALID_STATE",
+        );
+    }
     match method {
         "update" if !args.is_empty() => {
             let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
@@ -458,6 +482,9 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         "verify" if args.len() >= 2 => {
+            // The handle is consumed by `.verify()` regardless of outcome.
+            h.finalized
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             let key_bits = args[0].to_bits();
             let sig_ptr = (args[1].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
             let pem = match crypto_key_input_to_public_pem(key_bits) {

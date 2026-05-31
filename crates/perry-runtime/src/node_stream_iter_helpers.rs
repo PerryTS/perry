@@ -100,6 +100,14 @@ pub(super) fn rejected_promise(reason: f64) -> f64 {
     box_pointer(crate::promise::js_promise_rejected(reason) as *const u8)
 }
 
+pub(super) fn reduce_missing_initial_error() -> f64 {
+    let message = b"Reduce of an empty stream requires an initial value";
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_MISSING_ARGS");
+    let err = crate::error::js_typeerror_new(msg);
+    box_pointer(err as *const u8)
+}
+
 #[inline]
 pub(super) fn hidden_signal_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_SIGNAL_KEY)
@@ -481,9 +489,15 @@ pub(super) extern "C" fn ns_iter_reduce(
     } else if len > 0 {
         (crate::array::js_array_get_f64(arr, 0), 1)
     } else {
-        // Node throws "Reduce of empty stream with no initial value";
-        // the stub resolves undefined rather than crash.
-        return settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED));
+        if readable_hidden_error(this).is_some() {
+            return settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED));
+        }
+        if let Some(sig) = effective_signal(this, opts) {
+            if signal_is_aborted(sig) {
+                return rejected_promise(abort_error());
+            }
+        }
+        return rejected_promise(reduce_missing_initial_error());
     };
     if readable_hidden_error(this).is_none() && !cb.is_null() {
         for i in start..len {

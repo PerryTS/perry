@@ -6,8 +6,10 @@
 //! `ucs2.encode` array helpers (sub-namespace + array marshalling) are a
 //! separate follow-up.
 
+use crate::string::{string_data, StringHeader};
 use crate::url::{create_string_f64, get_string_content};
 use crate::value::JSValue;
+use std::slice;
 
 /// Bundled punycode.js version Node reports via `punycode.version`.
 pub const PUNYCODE_VERSION: &str = "2.1.0";
@@ -30,6 +32,19 @@ fn throw_range_error(message: &str) -> ! {
     let error = crate::error::js_rangeerror_new(msg);
     let bits = JSValue::pointer(error as *const u8).bits();
     crate::exception::js_throw(f64::from_bits(bits))
+}
+
+#[cold]
+fn throw_type_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_typeerror_new(msg);
+    let bits = JSValue::pointer(error as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(bits))
+}
+
+#[cold]
+fn throw_invalid_code_point(code: f64) -> ! {
+    throw_range_error(&format!("Invalid code point {}", code))
 }
 
 /// Bias adaptation (RFC 3492 §6.1).
@@ -305,42 +320,200 @@ pub extern "C" fn js_punycode_to_unicode(value: f64) -> f64 {
     }
 }
 
-/// `punycode.ucs2.decode(string)` — split a string into an array of Unicode
-/// code points (astral code points become a single number, combining the
-/// UTF-16 surrogate pair). Rust `char` is already a Unicode scalar value, so
-/// `chars()` yields code points directly.
+fn string_ptr_if_string(value: f64) -> Option<*const StringHeader> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+        if crate::string::is_valid_string_ptr(ptr) {
+            return Some(ptr);
+        }
+    }
+    None
+}
+
+fn string_bytes(ptr: *const StringHeader) -> &'static [u8] {
+    if !crate::string::is_valid_string_ptr(ptr) {
+        return &[];
+    }
+    unsafe { slice::from_raw_parts(string_data(ptr), (*ptr).byte_len as usize) }
+}
+
+fn push_utf16_units_from_scalar(units: &mut Vec<u16>, cp: u32) {
+    if cp <= 0xFFFF {
+        units.push(cp as u16);
+    } else {
+        let n = cp - 0x10000;
+        units.push((0xD800 + ((n >> 10) & 0x3FF)) as u16);
+        units.push((0xDC00 + (n & 0x3FF)) as u16);
+    }
+}
+
+fn decode_wtf8_to_utf16_units(bytes: &[u8]) -> Vec<u16> {
+    let mut units = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < 0x80 {
+            units.push(b as u16);
+            i += 1;
+        } else if b < 0xE0 && i + 1 < bytes.len() {
+            let cp = (((b & 0x1F) as u32) << 6) | ((bytes[i + 1] & 0x3F) as u32);
+            push_utf16_units_from_scalar(&mut units, cp);
+            i += 2;
+        } else if b < 0xF0 && i + 2 < bytes.len() {
+            let cp = (((b & 0x0F) as u32) << 12)
+                | (((bytes[i + 1] & 0x3F) as u32) << 6)
+                | ((bytes[i + 2] & 0x3F) as u32);
+            push_utf16_units_from_scalar(&mut units, cp);
+            i += 3;
+        } else if b < 0xF8 && i + 3 < bytes.len() {
+            let cp = (((b & 0x07) as u32) << 18)
+                | (((bytes[i + 1] & 0x3F) as u32) << 12)
+                | (((bytes[i + 2] & 0x3F) as u32) << 6)
+                | ((bytes[i + 3] & 0x3F) as u32);
+            push_utf16_units_from_scalar(&mut units, cp);
+            i += 4;
+        } else {
+            units.push(0xFFFD);
+            i += 1;
+        }
+    }
+    units
+}
+
+fn push_code_point_wtf8(out: &mut Vec<u8>, cp: u32) -> bool {
+    if cp <= 0x7F {
+        out.push(cp as u8);
+        false
+    } else if cp <= 0x7FF {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+        false
+    } else if (0xD800..=0xDFFF).contains(&cp) {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+        true
+    } else {
+        let ch = char::from_u32(cp).unwrap();
+        let mut buf = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buf);
+        out.extend_from_slice(encoded.as_bytes());
+        false
+    }
+}
+
+fn value_to_code_point_number(value: f64) -> f64 {
+    JSValue::from_bits(value.to_bits()).to_number()
+}
+
+/// `punycode.ucs2.decode(string)` — split a JS string's UTF-16 code units into
+/// code points, preserving lone surrogate code units like Node's bundled
+/// punycode.js helper.
 #[no_mangle]
 pub extern "C" fn js_punycode_ucs2_decode(value: f64) -> f64 {
-    let s = get_string_content(value);
-    let arr = crate::array::js_array_alloc(s.chars().count() as u32);
-    for c in s.chars() {
-        crate::array::js_array_push_f64(arr, c as u32 as f64);
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() {
+        throw_type_error("Cannot read properties of undefined (reading 'length')");
+    }
+    if jsval.is_null() {
+        throw_type_error("Cannot read properties of null (reading 'length')");
+    }
+
+    let Some(str_ptr) = string_ptr_if_string(value) else {
+        let arr = crate::array::js_array_alloc(0);
+        return f64::from_bits(crate::value::JSValue::array_ptr(arr).bits());
+    };
+
+    let units = decode_wtf8_to_utf16_units(string_bytes(str_ptr));
+    let mut arr = crate::array::js_array_alloc(units.len() as u32);
+    let mut i = 0usize;
+    while i < units.len() {
+        let unit = units[i];
+        let cp = if (0xD800..=0xDBFF).contains(&unit) && i + 1 < units.len() {
+            let next = units[i + 1];
+            if (0xDC00..=0xDFFF).contains(&next) {
+                i += 1;
+                0x10000 + (((unit as u32) - 0xD800) << 10) + ((next as u32) - 0xDC00)
+            } else {
+                unit as u32
+            }
+        } else {
+            unit as u32
+        };
+        arr = crate::array::js_array_push_f64(arr, cp as f64);
+        i += 1;
     }
     f64::from_bits(crate::value::JSValue::array_ptr(arr).bits())
 }
 
 /// `punycode.ucs2.encode(codePoints)` — build a string from an array of code
-/// points (each astral code point is emitted as its character; `char::from_u32`
-/// handles the surrogate-pair recombination since Rust strings are UTF-8).
+/// points, preserving surrogate code units using Perry's WTF-8 string storage.
 #[no_mangle]
 pub extern "C" fn js_punycode_ucs2_encode(value: f64) -> f64 {
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
-    if !jsval.is_pointer() {
-        return create_string_f64("");
+    if jsval.is_undefined() {
+        throw_type_error("codePoints is not iterable (cannot read property undefined)");
     }
-    let arr = jsval.as_pointer::<crate::array::ArrayHeader>();
+    if jsval.is_null() {
+        throw_type_error("codePoints is not iterable (cannot read property null)");
+    }
+    if jsval.is_any_string() {
+        throw_invalid_code_point(f64::NAN);
+    }
+    if crate::array::js_array_is_array(value).to_bits() != crate::value::TAG_TRUE {
+        throw_type_error("Spread syntax requires ...iterable[Symbol.iterator] to be a function");
+    }
+
+    let arr = if jsval.is_pointer() {
+        jsval.as_pointer::<crate::array::ArrayHeader>()
+    } else {
+        crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader
+    };
     if arr.is_null() {
-        return create_string_f64("");
+        throw_type_error("Spread syntax requires ...iterable[Symbol.iterator] to be a function");
     }
-    let len = unsafe { crate::array::js_array_length(arr) } as u32;
-    let mut out = String::new();
+    let len = crate::array::js_array_length(arr) as u32;
+    let mut out = Vec::new();
+    let mut has_surrogate = false;
     for i in 0..len {
-        let v = unsafe { crate::array::js_array_get_f64(arr, i) };
-        if let Some(c) = char::from_u32(v as u32) {
-            out.push(c);
+        let raw = crate::array::js_array_get_f64(arr, i);
+        let code = value_to_code_point_number(raw);
+        if !code.is_finite() || code.fract() != 0.0 || code < 0.0 || code > 0x10FFFF as f64 {
+            throw_invalid_code_point(code);
         }
+        has_surrogate |= push_code_point_wtf8(&mut out, code as u32);
     }
-    create_string_f64(&out)
+    let ptr = if has_surrogate {
+        crate::string::js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32)
+    } else {
+        crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32)
+    };
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+}
+
+#[cfg(test)]
+mod ucs2_tests {
+    use super::*;
+
+    #[test]
+    fn wtf8_decode_preserves_lone_surrogates() {
+        assert_eq!(
+            decode_wtf8_to_utf16_units(&[0xED, 0xA0, 0x80]),
+            vec![0xD800]
+        );
+        assert_eq!(
+            decode_wtf8_to_utf16_units(&[b'A', 0xED, 0xB0, 0x80]),
+            vec![65, 0xDC00]
+        );
+    }
+
+    #[test]
+    fn wtf8_encode_preserves_surrogate_units() {
+        let mut out = Vec::new();
+        assert!(push_code_point_wtf8(&mut out, 0xD800));
+        assert_eq!(out, vec![0xED, 0xA0, 0x80]);
+    }
 }
 
 #[cfg(test)]

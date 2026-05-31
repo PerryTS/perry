@@ -304,7 +304,7 @@ pub fn check_object_literal_escapes_in_expr(
         }
         Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand)
         | Expr::Await(operand) | Expr::Delete(operand)
-        | Expr::StringCoerce(operand) | Expr::BooleanCoerce(operand)
+        | Expr::StringCoerce(operand) | Expr::ObjectCoerce(operand) | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) | Expr::IsFinite(operand)
         | Expr::IsNaN(operand) | Expr::NumberIsNaN(operand)
         | Expr::NumberIsFinite(operand) | Expr::NumberIsInteger(operand)
@@ -429,7 +429,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::IterResultGetValue | Expr::IterResultGetDone
         // Process leaf intrinsics
         | Expr::ProcessCwd | Expr::ProcessUptime | Expr::ProcessArgv
-        | Expr::ProcessMemoryUsage | Expr::ProcessThreadCpuUsage
+        | Expr::ProcessMemoryUsage | Expr::ProcessThreadCpuUsage(_)
         | Expr::ProcessAvailableMemory | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
         | Expr::ProcessCpuUsage(_)
@@ -443,7 +443,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::GlobalThisExpr
         // Path / encoding / OS leaf intrinsics
         | Expr::PathSep | Expr::PathDelimiter
-        | Expr::TextEncoderNew | Expr::TextDecoderNew
+        | Expr::TextEncoderNew
         | Expr::OsPlatform | Expr::OsArch | Expr::OsHostname | Expr::OsHomedir
         | Expr::OsTmpdir | Expr::OsTotalmem | Expr::OsFreemem | Expr::OsUptime
         | Expr::OsType | Expr::OsRelease | Expr::OsCpus | Expr::OsNetworkInterfaces

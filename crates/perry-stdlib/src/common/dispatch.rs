@@ -53,21 +53,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return v;
     }
 
-    // Each dispatcher below is gated on TWO conditions: (a) its registry
-    // currently holds this handle id, AND (b) the method name is one this
-    // dispatcher actually handles. Both are required because handle id
-    // namespaces are not unified — `net.createConnection` uses its own
-    // `NEXT_NET_ID` counter, separate from the common HANDLES registry that
-    // backs Fastify/ioredis/HashHandle. A net.Socket at id=1 always
-    // collides with the first object created in the common registry. If we
-    // claimed a handle on registry match alone, calling `socket.write(b)` on
-    // a socket whose id collided with a HashHandle would route to
-    // `dispatch_hash` (registry says yes), find no `write` arm, and silently
-    // return undefined — the bytes never reach the wire (#91). Gating on
-    // method-name vocabulary lets the call fall through to the next
-    // dispatcher when a handle id is reused across registries with disjoint
-    // method sets. The proper long-term fix is a single unified id space;
-    // this is the surgical version.
+    // Dispatchers below gate on registry membership plus method vocabulary
+    // because native handle id spaces are not unified (#91).
 
     // Fastify app: routes for HTTP verbs + lifecycle methods.
     // #1113 adds `"on"` here — `app.server.on(event, cb)` dispatches
@@ -505,6 +492,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
             return dispatch_external_net_socket(handle, method_name, &args);
         }
+        if let Some(v) = crate::common::net_method_values::dispatch_external_server_method(
+            handle,
+            method_name,
+            &args,
+        ) {
+            return v;
+        }
     }
 
     // Web Fetch method dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
@@ -847,7 +841,7 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
             crate::net::js_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
-        "destroy" => {
+        "destroy" | "destroySoon" => {
             crate::net::js_net_socket_destroy(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
@@ -1038,7 +1032,7 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             js_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
-        "destroy" => {
+        "destroy" | "destroySoon" => {
             js_net_socket_destroy(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
@@ -1189,6 +1183,10 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             }
             return js_class_method_bind(handle as f64, name_bytes.as_ptr(), name_bytes.len());
         }
+    }
+
+    if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
+        return v;
     }
 
     // Server-side node:http request/response handles whose static

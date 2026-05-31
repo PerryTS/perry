@@ -613,18 +613,49 @@ pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
     buf
 }
 
-/// `new DataView(buffer)` — Perry currently aliases the underlying buffer
-/// storage, so mark that value as a DataView-backed ArrayBufferView.
+/// `new DataView(buffer, byteOffset?, byteLength?)` — Perry models a DataView
+/// as a `BufferHeader` over the backing `ArrayBuffer`. With `byteOffset == 0`
+/// and no explicit length the view aliases the backing pointer directly
+/// (zero-copy; writes are visible through sibling `Uint8Array` views). A
+/// non-zero offset or explicit length produces a registered slice view so the
+/// numeric accessors index relative to the view start (#2878).
 #[no_mangle]
-pub extern "C" fn js_data_view_new(value: f64) -> f64 {
+pub extern "C" fn js_data_view_new(value: f64, byte_offset: i32, requested_length: i32) -> f64 {
     let v = crate::value::JSValue::from_bits(value.to_bits());
-    if v.is_pointer() {
-        let addr = v.as_pointer::<u8>() as usize;
-        if addr != 0 {
-            mark_as_data_view(addr);
-        }
+    if !v.is_pointer() {
+        return value;
     }
-    value
+    let addr = v.as_pointer::<u8>() as usize;
+    if addr == 0 {
+        return value;
+    }
+
+    // Fast path: full-buffer view aliases the backing pointer.
+    if byte_offset <= 0 && requested_length < 0 {
+        mark_as_data_view(addr);
+        return value;
+    }
+
+    if !is_registered_buffer(addr) {
+        mark_as_data_view(addr);
+        return value;
+    }
+
+    let src = addr as *const BufferHeader;
+    unsafe {
+        let total_len = (*src).length as i32;
+        let start = byte_offset.clamp(0, total_len);
+        let len = if requested_length < 0 {
+            total_len.saturating_sub(start)
+        } else {
+            requested_length.max(0)
+        };
+        let end = start.saturating_add(len).min(total_len);
+        let view = js_buffer_slice(src, start, end);
+        mark_as_data_view(view as usize);
+        set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(addr));
+        f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())
+    }
 }
 
 fn throw_buffer_alloc_size_out_of_range() -> ! {

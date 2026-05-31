@@ -402,11 +402,16 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"decode",
         ]),
         "util" => Some(&[
+            b"aborted",
             b"callbackify",
+            b"convertProcessSignalToExitCode",
+            b"debug",
             b"debuglog",
             b"deprecate",
+            b"diff",
             b"format",
             b"formatWithOptions",
+            b"getCallSites",
             b"getSystemErrorMap",
             b"getSystemErrorName",
             b"getSystemErrorMessage",
@@ -416,11 +421,15 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isDeepStrictEqual",
             b"promisify",
             b"stripVTControlCharacters",
+            b"styleText",
             b"toUSVString",
+            b"setTraceSigInt",
             b"types",
             b"parseArgs",
             b"TextDecoder",
             b"TextEncoder",
+            b"transferableAbortController",
+            b"transferableAbortSignal",
         ]),
         "net" => Some(&[
             b"_createServerHandle",
@@ -445,7 +454,13 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
-        "assert/strict" | "constants" | "util" | "util.types" | "path.posix" | "path.win32"
+        "assert/strict"
+            | "constants"
+            | "process"
+            | "util"
+            | "util.types"
+            | "path.posix"
+            | "path.win32"
     )
 }
 
@@ -526,6 +541,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
                 "fs_promises".len() as u32,
             )
         };
+    }
+
+    if module_name == "util" && property_name == "debug" {
+        return bound_native_callable_export_value("util", "debuglog");
     }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
@@ -618,10 +637,13 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
+        ("util", "diff") => Some(2),
+        ("dns" | "dns/promises", "Resolver") => Some(0),
         _ => None,
     }
 }
@@ -865,36 +887,8 @@ fn util_inspect_colors() -> f64 {
         }
 
         let obj = js_object_alloc(0, 0);
-        for (name, open, close) in [
-            ("reset", 0, 0),
-            ("bold", 1, 22),
-            ("dim", 2, 22),
-            ("italic", 3, 23),
-            ("underline", 4, 24),
-            ("blink", 5, 25),
-            ("inverse", 7, 27),
-            ("hidden", 8, 28),
-            ("strikethrough", 9, 29),
-            ("black", 30, 39),
-            ("red", 31, 39),
-            ("green", 32, 39),
-            ("yellow", 33, 39),
-            ("blue", 34, 39),
-            ("magenta", 35, 39),
-            ("cyan", 36, 39),
-            ("white", 37, 39),
-            ("gray", 90, 39),
-            ("grey", 90, 39),
-            ("bgBlack", 40, 49),
-            ("bgRed", 41, 49),
-            ("bgGreen", 42, 49),
-            ("bgYellow", 43, 49),
-            ("bgBlue", 44, 49),
-            ("bgMagenta", 45, 49),
-            ("bgCyan", 46, 49),
-            ("bgWhite", 47, 49),
-        ] {
-            native_set_field(obj, name, native_color_tuple(open, close));
+        for style in crate::util_style_text::INSPECT_COLOR_STYLES {
+            native_set_field(obj, style.name, native_color_tuple(style.open, style.close));
         }
 
         let value = native_object_value(obj);
@@ -904,75 +898,8 @@ fn util_inspect_colors() -> f64 {
     })
 }
 
-extern "C" fn util_debuglog_logger_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _arg: f64,
-) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-pub(crate) fn util_debuglog_logger_value() -> f64 {
-    let func_ptr = util_debuglog_logger_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, "debuglog");
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
-fn fn_value(func_ptr: *const u8, name: &str) -> f64 {
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, name);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
-    let (packed, count) = if name == "WriteStream" {
-        (b"constructor\0hasColors\0getColorDepth\0".as_ptr(), 3)
-    } else {
-        (b"constructor\0".as_ptr(), 1)
-    };
-    let packed_len = if name == "WriteStream" {
-        b"constructor\0hasColors\0getColorDepth\0".len()
-    } else {
-        b"constructor\0".len()
-    };
-    let shape_id = if name == "WriteStream" {
-        0x7FFF_FF32
-    } else {
-        0x7FFF_FF31
-    };
-    let proto = js_object_alloc_with_shape(shape_id, count, packed, packed_len as u32);
-    js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
-    if name == "WriteStream" {
-        js_object_set_field(
-            proto,
-            1,
-            JSValue::from_bits(
-                fn_value(
-                    crate::tty::js_tty_write_stream_has_colors as *const u8,
-                    "hasColors",
-                )
-                .to_bits(),
-            ),
-        );
-        js_object_set_field(
-            proto,
-            2,
-            JSValue::from_bits(
-                fn_value(
-                    crate::tty::js_tty_write_stream_get_color_depth as *const u8,
-                    "getColorDepth",
-                )
-                .to_bits(),
-            ),
-        );
-    }
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    crate::closure::closure_set_dynamic_prop(
-        (constructor_value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
-        "prototype",
-        proto_value,
-    );
+    crate::tty::attach_tty_constructor_prototype(constructor_value, name);
 }
 
 pub(crate) unsafe fn bound_native_callable_module_and_method(
@@ -1093,6 +1020,35 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
     {
         return true;
     }
+    if matches!(module, "dns" | "dns/promises")
+        && matches!(
+            prop,
+            "lookup"
+                | "lookupService"
+                | "resolve"
+                | "resolve4"
+                | "resolve6"
+                | "resolveAny"
+                | "resolveCaa"
+                | "resolveCname"
+                | "resolveMx"
+                | "resolveNaptr"
+                | "resolveNs"
+                | "resolvePtr"
+                | "resolveSoa"
+                | "resolveSrv"
+                | "resolveTlsa"
+                | "resolveTxt"
+                | "reverse"
+                | "getServers"
+                | "setServers"
+                | "setDefaultResultOrder"
+                | "getDefaultResultOrder"
+                | "Resolver"
+        )
+    {
+        return true;
+    }
 
     matches!(
         (module, prop),
@@ -1114,6 +1070,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("dgram", "createSocket")
+            | ("dgram", "Socket")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
@@ -1369,16 +1327,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_hooks", "toJSON")
             | ("perf_hooks", "clearResourceTimings")
             | ("perf_hooks", "setResourceTimingBufferSize")
-            // #1478: performance.markResourceTiming(info) records a
-            // PerformanceResourceTiming. Perry's runtime no-ops it but
-            // the property must still read as a function for
-            // feature-detection (`typeof X === "function"`) wrappers.
+            // performance.markResourceTiming(info) records a resource entry;
+            // the property also reads as a function for feature-detection
+            // wrappers.
             | ("perf_hooks", "markResourceTiming")
-            // #1335: performance.timerify(fn) wraps `fn` to record a
-            // 'function' timeline entry per call. Perry currently
-            // returns `fn` unchanged (no entry recorded), but the
-            // property must still read as a function for
-            // feature-detection.
+            // performance.timerify(fn) returns a wrapper that preserves the
+            // result and emits observer-visible function entries.
             | ("perf_hooks", "timerify")
             // #1366: `crypto.getRandomValues` is the WebCrypto sync
             // randomness API. Perry lowers the call form via a
@@ -1424,9 +1378,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_histogram", "percentileBigInt")
             // node:cluster — namespace property reads of these callables
             // need to satisfy `typeof cluster.fork === "function"` etc.
-            // The fixtures only probe types, but compiled npm code that
-            // calls `cluster.fork()` would also land on the bound-method
-            // dispatch (currently a stub — see runtime entries below).
+            // Calls dispatch through the native module method table, where
+            // the primary-side settings / Worker lifecycle is implemented.
             | ("cluster", "fork")
             | ("cluster", "disconnect")
             | ("cluster", "setupPrimary")
@@ -1435,14 +1388,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("buffer.Buffer", "copyBytesFrom")
             | ("buffer", "atob")
             | ("buffer", "btoa")
+            | ("util", "convertProcessSignalToExitCode")
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
+            | ("util", "debug")
+            | ("util", "aborted")
             | ("util", "debuglog")
+            | ("util", "getCallSites")
+            | ("util", "diff")
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
             | ("util", "getSystemErrorMap")
             | ("util", "parseEnv")
+            | ("util", "transferableAbortController")
+            | ("util", "transferableAbortSignal")
             | ("util", "isArray")
             | ("util", "promisify")
             | ("util", "callbackify")
@@ -1451,7 +1411,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inherits")
             | ("util", "isDeepStrictEqual")
             | ("util", "stripVTControlCharacters")
+            | ("util", "styleText")
             | ("util", "toUSVString")
+            | ("util", "setTraceSigInt")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")
@@ -1634,6 +1596,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto.Certificate", "verifySpkac")
             | ("crypto.Certificate", "exportPublicKey")
             | ("crypto.Certificate", "exportChallenge")
+            // #3142: `(new v8.GCProfiler()).start` / `.stop` read as functions
+            // so `typeof profiler.start === "function"` holds.
+            | ("v8.GCProfiler", "start")
+            | ("v8.GCProfiler", "stop")
             // node:zlib — sync codecs, callback codecs, stream factories and
             // class names read as callables. Needed for `util.promisify(zlib.gzip)`
             // (#1857-style hook), `const compress = zlib.gzipSync`, and
@@ -1769,6 +1735,41 @@ pub extern "C" fn js_class_method_bind(
     method_name_ptr: *const u8,
     method_name_len: usize,
 ) -> f64 {
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        if let Ok(name) = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
+        } {
+            if matches!(
+                name,
+                "append"
+                    | "delete"
+                    | "entries"
+                    | "forEach"
+                    | "get"
+                    | "getSetCookie"
+                    | "has"
+                    | "keys"
+                    | "set"
+                    | "Symbol.iterator"
+                    | "@@iterator"
+                    | "values"
+            ) {
+                let bits = instance.to_bits();
+                if (bits >> 48) == 0x7FFD {
+                    let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    if id > 0 && id < 0x100000 {
+                        if let Some(dispatch) = handle_property_dispatch() {
+                            let value = unsafe { dispatch(id, method_name_ptr, method_name_len) };
+                            if value.to_bits() != crate::value::TAG_UNDEFINED {
+                                return value;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
     crate::closure::js_closure_set_capture_f64(closure, 0, instance);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
@@ -1887,6 +1888,82 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'sta
     let len = (*str_ptr).byte_len as usize;
     let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
+}
+
+fn dns_lookup_flag_constant(property: &str) -> Option<f64> {
+    #[cfg(unix)]
+    fn ai_addrconfig() -> f64 {
+        libc::AI_ADDRCONFIG as f64
+    }
+    #[cfg(windows)]
+    fn ai_addrconfig() -> f64 {
+        0x0400 as f64
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn ai_addrconfig() -> f64 {
+        0x0020 as f64
+    }
+    #[cfg(unix)]
+    fn ai_v4mapped() -> f64 {
+        libc::AI_V4MAPPED as f64
+    }
+    #[cfg(windows)]
+    fn ai_v4mapped() -> f64 {
+        0x0800 as f64
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn ai_v4mapped() -> f64 {
+        0x0008 as f64
+    }
+    #[cfg(unix)]
+    fn ai_all() -> f64 {
+        libc::AI_ALL as f64
+    }
+    #[cfg(windows)]
+    fn ai_all() -> f64 {
+        0x0100 as f64
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn ai_all() -> f64 {
+        0x0010 as f64
+    }
+
+    match property {
+        "ADDRCONFIG" => Some(ai_addrconfig()),
+        "V4MAPPED" => Some(ai_v4mapped()),
+        "ALL" => Some(ai_all()),
+        _ => None,
+    }
+}
+
+fn dns_error_alias(property: &str) -> Option<&'static str> {
+    match property {
+        "NODATA" => Some("ENODATA"),
+        "FORMERR" => Some("EFORMERR"),
+        "SERVFAIL" => Some("ESERVFAIL"),
+        "NOTFOUND" => Some("ENOTFOUND"),
+        "NOTIMP" => Some("ENOTIMP"),
+        "REFUSED" => Some("EREFUSED"),
+        "BADQUERY" => Some("EBADQUERY"),
+        "BADNAME" => Some("EBADNAME"),
+        "BADFAMILY" => Some("EBADFAMILY"),
+        "BADRESP" => Some("EBADRESP"),
+        "CONNREFUSED" => Some("ECONNREFUSED"),
+        "TIMEOUT" => Some("ETIMEOUT"),
+        "EOF" => Some("EOF"),
+        "FILE" => Some("EFILE"),
+        "NOMEM" => Some("ENOMEM"),
+        "DESTRUCTION" => Some("EDESTRUCTION"),
+        "BADSTR" => Some("EBADSTR"),
+        "BADFLAGS" => Some("EBADFLAGS"),
+        "NONAME" => Some("ENONAME"),
+        "BADHINTS" => Some("EBADHINTS"),
+        "NOTINITIALIZED" => Some("ENOTINITIALIZED"),
+        "LOADIPHLPAPI" => Some("ELOADIPHLPAPI"),
+        "ADDRGETNETWORKPARAMS" => Some("EADDRGETNETWORKPARAMS"),
+        "CANCELLED" => Some("ECANCELLED"),
+        _ => None,
+    }
 }
 
 /// Return constant (non-method) property values for native modules.
@@ -2482,6 +2559,39 @@ pub(crate) unsafe fn get_native_module_constant(
         })
     };
 
+    let dns_const = |prop: &str| -> Option<f64> {
+        Some(match prop {
+            "ADDRCONFIG" => 1024.0,
+            "V4MAPPED" => 2048.0,
+            "ALL" => 256.0,
+            "NODATA" => str_val("ENODATA"),
+            "FORMERR" => str_val("EFORMERR"),
+            "SERVFAIL" => str_val("ESERVFAIL"),
+            "NOTFOUND" => str_val("ENOTFOUND"),
+            "NOTIMP" => str_val("ENOTIMP"),
+            "REFUSED" => str_val("EREFUSED"),
+            "BADQUERY" => str_val("EBADQUERY"),
+            "BADNAME" => str_val("EBADNAME"),
+            "BADFAMILY" => str_val("EBADFAMILY"),
+            "BADRESP" => str_val("EBADRESP"),
+            "CONNREFUSED" => str_val("ECONNREFUSED"),
+            "TIMEOUT" => str_val("ETIMEOUT"),
+            "EOF" => str_val("EOF"),
+            "FILE" => str_val("EFILE"),
+            "NOMEM" => str_val("ENOMEM"),
+            "DESTRUCTION" => str_val("EDESTRUCTION"),
+            "BADSTR" => str_val("EBADSTR"),
+            "BADFLAGS" => str_val("EBADFLAGS"),
+            "NONAME" => str_val("ENONAME"),
+            "BADHINTS" => str_val("EBADHINTS"),
+            "NOTINITIALIZED" => str_val("ENOTINITIALIZED"),
+            "LOADIPHLPAPI" => str_val("ELOADIPHLPAPI"),
+            "ADDRGETNETWORKPARAMS" => str_val("EADDRGETNETWORKPARAMS"),
+            "CANCELLED" => str_val("ECANCELLED"),
+            _ => return None,
+        })
+    };
+
     match module_name {
         // node:punycode (deprecated, #2513) — the bundled punycode.js version
         // and the `ucs2` code-point helper sub-namespace (#2607).
@@ -2515,6 +2625,12 @@ pub(crate) unsafe fn get_native_module_constant(
             "constants" => Some(crate::process::js_module_constants()),
             _ => None,
         },
+        "dns" => match property {
+            "promises" => Some(create_sub_namespace("dns/promises")),
+            _ => dns_lookup_flag_constant(property)
+                .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
+        },
+        "dns/promises" => dns_error_alias(property).map(|alias| str_val(alias)),
         "constants" => fs_const(property)
             .or_else(|| os_signal_const(property))
             .or_else(|| os_errno_const(property))
@@ -2671,6 +2787,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
             _ => None,
         },
+        "test" => crate::node_test::property(property),
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(unsafe {
@@ -2760,39 +2877,10 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "http2.constants" => http2_const(property),
-        // node:cluster — all property reads are static constants on the
-        // primary process. The test fixture only exercises shape, never
-        // forks a worker; the `fork` / `disconnect` / `setupPrimary` /
-        // `setupMaster` / `Worker` callables are produced separately by
-        // `is_native_module_callable_export` (bound-method closure path).
-        "cluster" => match property {
-            // Identity flags: we always identify as the primary
-            // process. A future `cluster.fork` impl would need to flip
-            // these in the spawned child.
-            "isPrimary" | "isMaster" => Some(f64::from_bits(JSValue::bool(true).bits())),
-            "isWorker" => Some(f64::from_bits(JSValue::bool(false).bits())),
-            // No active worker on the primary side.
-            "worker" => Some(f64::from_bits(JSValue::undefined().bits())),
-            // Empty registries — each read allocates a fresh empty
-            // object (the test only reads them once, so the allocation
-            // churn is irrelevant).
-            "workers" | "settings" => {
-                let obj = unsafe { js_object_alloc(0, 0) };
-                Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
-            }
-            // SCHED_RR is the cross-platform default (port-based on
-            // Linux/macOS, manual scheduling on Windows). `SCHED_NONE`
-            // is 1, `SCHED_RR` is 2; `schedulingPolicy` defaults to RR.
-            "schedulingPolicy" | "SCHED_RR" => Some(2.0),
-            "SCHED_NONE" => Some(1.0),
-            // EventEmitter methods on the cluster module aren't named
-            // exports — Node's namespace import reads them as
-            // `undefined`. We register them in the api-manifest so the
-            // #463 gate doesn't reject the typeof read at compile time;
-            // here we resolve them to undefined at runtime.
-            "on" | "addListener" => Some(f64::from_bits(JSValue::undefined().bits())),
-            _ => None,
-        },
+        "dns" => dns_const(property),
+        // node:cluster — primary-side settings and Worker handles are backed
+        // by `crate::cluster`; scheduling/identity constants remain static.
+        "cluster" => crate::cluster::cluster_property(property),
         // #1336: Histograms returned by perf_hooks.monitorEventLoopDelay /
         // .createHistogram expose numeric stats via property read. Perry's
         // stub doesn't record samples so every accessor reads 0; `exceeds`

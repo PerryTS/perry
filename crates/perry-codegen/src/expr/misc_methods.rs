@@ -467,15 +467,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // match by content (handles SSO + heap-string mixed arrays).
         // Mirrors the `includes` arm + the `lower_array_method::indexOf`
         // arm.
-        Expr::ArrayIndexOf { array, value } => {
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
+        } => {
             let arr_box = lower_expr(ctx, array)?;
             let v = lower_expr(ctx, value)?;
+            // #2804: optional fromIndex. has_from=1 + lowered index when
+            // present; otherwise has_from=0 with a placeholder DOUBLE (`v`).
+            let (from_box, has_from) = match from_index {
+                Some(fi) => (lower_expr(ctx, fi)?, "1"),
+                None => (v.clone(), "0"),
+            };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let i32_v = blk.call(
                 I32,
                 "js_array_indexOf_jsvalue",
-                &[(I64, &arr_handle), (DOUBLE, &v)],
+                &[
+                    (I64, &arr_handle),
+                    (DOUBLE, &v),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
             );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }

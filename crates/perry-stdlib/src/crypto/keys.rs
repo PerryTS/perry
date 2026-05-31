@@ -14,41 +14,33 @@ use super::*;
 ///     accepts Uint8Array directly per `getSignVerifyKey`).
 ///
 /// `key_ptr` may point at a Buffer (already bytes) or a StringHeader
-/// (utf8 string literal). The `encoding` arg is accepted for API parity
-/// but only utf8/utf-8 is honored today; anything else is treated as
-/// utf8 (so `'secret'` and `'secret', 'utf8'` produce identical bytes).
+/// (utf8 string literal). The `encoding` arg honors Node/Buffer string
+/// decoding semantics (#2954): `hex`/`base64`/`base64url` are lenient (hex
+/// stops at the first invalid/incomplete pair, base64 ignores noise),
+/// `latin1`/`ascii`/`utf16le`/`ucs2` affect the bytes, and an unknown
+/// encoding name throws `TypeError [ERR_UNKNOWN_ENCODING]` — mirroring
+/// `Buffer.from(string, encoding)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_create_secret_key(
     key_ptr: i64,
     encoding_ptr: i64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
     let raw = bytes_from_ptr(key_ptr);
-    let encoding = if encoding_ptr >= 0x1000 {
-        String::from_utf8(bytes_from_ptr(encoding_ptr))
+    let bytes = if encoding_ptr >= 0x1000 {
+        // The `encoding` arg is passed as a raw StringHeader pointer (i64),
+        // not NaN-boxed, by the codegen call site. Read its name directly.
+        let name = String::from_utf8(bytes_from_ptr(encoding_ptr))
             .unwrap_or_default()
-            .to_ascii_lowercase()
+            .to_ascii_lowercase();
+        match encoding_tag_from_name(&name) {
+            Some(tag) => decode_string_bytes_with_tag(&raw, tag),
+            // Unknown encoding name → Node throws ERR_UNKNOWN_ENCODING.
+            None => throw_unknown_encoding(&name),
+        }
     } else {
-        String::new()
-    };
-    // Node throws on malformed encodings here; matching that exactly
-    // requires plumbing js_throw through the C ABI call site, so we
-    // surface failure as a null buffer (which the codegen path nanboxes
-    // to a NULL POINTER_TAG) instead of silently producing nonsense key
-    // bytes from an invalid hex/base64 input.
-    let bytes = match encoding.as_str() {
-        "hex" => match hex::decode(&raw) {
-            Ok(b) => b,
-            Err(_) => return std::ptr::null_mut(),
-        },
-        "base64" => match base64::engine::general_purpose::STANDARD.decode(&raw) {
-            Ok(b) => b,
-            Err(_) => return std::ptr::null_mut(),
-        },
-        "base64url" => match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&raw) {
-            Ok(b) => b,
-            Err(_) => return std::ptr::null_mut(),
-        },
-        _ => raw,
+        // No encoding arg: the input is a Buffer (already bytes) or a utf8
+        // string literal — pass the raw bytes through unchanged.
+        raw
     };
     let buf = alloc_buffer_from_slice(&bytes);
     if !buf.is_null() {
