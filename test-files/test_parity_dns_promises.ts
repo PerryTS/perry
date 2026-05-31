@@ -126,14 +126,38 @@ probeLocalhost();
 // ── Classes ──
 console.log("class dnsPromises.Resolver typeof:", typeof dns_promises.Resolver);
 try {
+  const originalServers = dns_promises.getServers();
   const r = new dns_promises.Resolver();
+  const sibling = new dns_promises.Resolver();
   console.log("new dnsPromises.Resolver typeof:", typeof r);
   console.log("resolver.cancel typeof:", typeof r.cancel);
   console.log("resolver.setServers typeof:", typeof r.setServers);
+  console.log("resolver.setLocalAddress typeof:", typeof (r as any).setLocalAddress);
+  console.log("resolver.resolve typeof:", typeof r.resolve);
+  console.log("resolver.resolve4 typeof:", typeof r.resolve4);
+  console.log("resolver.resolve6 typeof:", typeof r.resolve6);
+  console.log("resolver.resolveMx typeof:", typeof r.resolveMx);
+  console.log("resolver.resolveTxt typeof:", typeof r.resolveTxt);
+  console.log("resolver.reverse typeof:", typeof r.reverse);
+  console.log("resolver.cancel returns undefined:", r.cancel() === undefined);
+  const initialServers = r.getServers();
+  console.log("resolver.initial getServers isArray:", Array.isArray(initialServers));
+  console.log("resolver.initial getServers length typeof:", typeof initialServers.length);
+  const siblingBefore = sibling.getServers().join("|");
+  const moduleBefore = dns_promises.getServers().join("|");
   r.setServers(["1.0.0.1", "[::1]:5353"]);
   const rsrv = r.getServers();
   console.log("resolver.getServers isArray:", Array.isArray(rsrv));
   console.log("resolver.getServers roundtrip:", rsrv.join("|"));
+  console.log("resolver.setServers leaves sibling:", sibling.getServers().join("|") === siblingBefore);
+  console.log("resolver.setServers leaves dnsPromises:", dns_promises.getServers().join("|") === moduleBefore);
+  try {
+    r.setServers(["not ip"]);
+  } catch (e) {
+    console.log("resolver.setServers invalid ip:", (e as Error).name, (e as any).code);
+  }
+  console.log("resolver.setServers invalid keeps previous:", r.getServers().join("|"));
+  dns_promises.setServers(originalServers);
 } catch (e) {
   console.log("Resolver error:", (e as Error).message);
 }

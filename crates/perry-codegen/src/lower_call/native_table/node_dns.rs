@@ -1,5 +1,21 @@
 use super::*;
 
+// Compact helper for Resolver methods that only need callable/no-op shape
+// until the record APIs land in #3165.
+macro_rules! dns_resolver_noop_sig {
+    ($module:literal, $method:literal) => {
+        NativeModSig {
+            module: $module,
+            has_receiver: true,
+            method: $method,
+            class_filter: Some("Resolver"),
+            runtime: "js_dns_resolver_noop",
+            args: &[NA_VARARGS],
+            ret: NR_F64,
+        }
+    };
+}
+
 /// node:dns + node:dns/promises shape-stub rows (#793). Split out of
 /// node_core.rs to keep that file under the 2000-line CI gate.
 pub(super) const NODE_DNS_ROWS: &[NativeModSig] = &[
@@ -202,6 +218,21 @@ pub(super) const NODE_DNS_ROWS: &[NativeModSig] = &[
         args: &[NA_VARARGS],
         ret: NR_F64,
     },
+    dns_resolver_noop_sig!("dns", "resolve"),
+    dns_resolver_noop_sig!("dns", "resolve4"),
+    dns_resolver_noop_sig!("dns", "resolve6"),
+    dns_resolver_noop_sig!("dns", "resolveAny"),
+    dns_resolver_noop_sig!("dns", "resolveCaa"),
+    dns_resolver_noop_sig!("dns", "resolveCname"),
+    dns_resolver_noop_sig!("dns", "resolveMx"),
+    dns_resolver_noop_sig!("dns", "resolveNaptr"),
+    dns_resolver_noop_sig!("dns", "resolveNs"),
+    dns_resolver_noop_sig!("dns", "resolvePtr"),
+    dns_resolver_noop_sig!("dns", "resolveSoa"),
+    dns_resolver_noop_sig!("dns", "resolveSrv"),
+    dns_resolver_noop_sig!("dns", "resolveTlsa"),
+    dns_resolver_noop_sig!("dns", "resolveTxt"),
+    dns_resolver_noop_sig!("dns", "reverse"),
     NativeModSig {
         module: "dns",
         has_receiver: true,
@@ -436,6 +467,21 @@ pub(super) const NODE_DNS_ROWS: &[NativeModSig] = &[
         args: &[NA_VARARGS],
         ret: NR_F64,
     },
+    dns_resolver_noop_sig!("dns/promises", "resolve"),
+    dns_resolver_noop_sig!("dns/promises", "resolve4"),
+    dns_resolver_noop_sig!("dns/promises", "resolve6"),
+    dns_resolver_noop_sig!("dns/promises", "resolveAny"),
+    dns_resolver_noop_sig!("dns/promises", "resolveCaa"),
+    dns_resolver_noop_sig!("dns/promises", "resolveCname"),
+    dns_resolver_noop_sig!("dns/promises", "resolveMx"),
+    dns_resolver_noop_sig!("dns/promises", "resolveNaptr"),
+    dns_resolver_noop_sig!("dns/promises", "resolveNs"),
+    dns_resolver_noop_sig!("dns/promises", "resolvePtr"),
+    dns_resolver_noop_sig!("dns/promises", "resolveSoa"),
+    dns_resolver_noop_sig!("dns/promises", "resolveSrv"),
+    dns_resolver_noop_sig!("dns/promises", "resolveTlsa"),
+    dns_resolver_noop_sig!("dns/promises", "resolveTxt"),
+    dns_resolver_noop_sig!("dns/promises", "reverse"),
     NativeModSig {
         module: "dns/promises",
         has_receiver: true,
@@ -460,6 +506,15 @@ pub(super) const NODE_DNS_ROWS: &[NativeModSig] = &[
         method: "setServers",
         class_filter: Some("Resolver"),
         runtime: "js_dns_resolver_set_servers",
+        args: &[NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "dns/promises",
+        has_receiver: true,
+        method: "setLocalAddress",
+        class_filter: Some("Resolver"),
+        runtime: "js_dns_resolver_noop",
         args: &[NA_VARARGS],
         ret: NR_F64,
     },

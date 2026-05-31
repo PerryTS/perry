@@ -21,7 +21,25 @@ static DNS_SERVERS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(V
 static DNS_PROMISE_SERVERS: LazyLock<Mutex<Option<Vec<String>>>> =
     LazyLock::new(|| Mutex::new(None));
 
-const RESOLVER_METHODS: &[&str] = &["cancel", "getServers", "setServers", "setLocalAddress"];
+const RESOLVER_CONTROL_METHODS: &[&str] =
+    &["cancel", "getServers", "setServers", "setLocalAddress"];
+const RESOLVER_RESOLVE_METHODS: &[&str] = &[
+    "resolve",
+    "resolve4",
+    "resolve6",
+    "resolveAny",
+    "resolveCaa",
+    "resolveCname",
+    "resolveMx",
+    "resolveNaptr",
+    "resolveNs",
+    "resolvePtr",
+    "resolveSoa",
+    "resolveSrv",
+    "resolveTlsa",
+    "resolveTxt",
+    "reverse",
+];
 const RESOLVER_SERVERS_FIELD: &str = "__dns_servers";
 
 fn key(name: &str) -> *mut crate::StringHeader {
@@ -398,17 +416,18 @@ fn method_value(name: &str) -> f64 {
     js_nanbox_pointer(closure as i64)
 }
 
-fn resolver_object(include_set_local_address: bool) -> *mut ObjectHeader {
-    let method_count = if include_set_local_address {
-        RESOLVER_METHODS.len()
-    } else {
-        RESOLVER_METHODS.len() - 1
-    };
+fn resolver_object(initial_servers: Vec<String>) -> *mut ObjectHeader {
+    let method_count = RESOLVER_CONTROL_METHODS.len() + RESOLVER_RESOLVE_METHODS.len() + 1;
     let obj = js_object_alloc(0, method_count as u32);
-    for method in RESOLVER_METHODS {
-        if !include_set_local_address && *method == "setLocalAddress" {
-            continue;
-        }
+    js_object_set_field_by_name(
+        obj,
+        key(RESOLVER_SERVERS_FIELD),
+        servers_array_value(&initial_servers),
+    );
+    for method in RESOLVER_CONTROL_METHODS {
+        js_object_set_field_by_name(obj, key(method), method_value(method));
+    }
+    for method in RESOLVER_RESOLVE_METHODS {
         js_object_set_field_by_name(obj, key(method), method_value(method));
     }
     obj
@@ -464,12 +483,12 @@ pub extern "C" fn js_dns_get_default_result_order(_args: i64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_dns_resolver_new(_args: i64) -> f64 {
-    boxed_pointer(resolver_object(true) as *const u8)
+    boxed_pointer(resolver_object(stored_servers()) as *const u8)
 }
 
 #[no_mangle]
 pub extern "C" fn js_dns_promises_resolver_new(_args: i64) -> f64 {
-    boxed_pointer(resolver_object(false) as *const u8)
+    boxed_pointer(resolver_object(stored_promise_servers()) as *const u8)
 }
 
 #[no_mangle]
