@@ -419,6 +419,40 @@ pub extern "C" fn js_wait_for_event() {
     spin_streak_reset();
 }
 
+/// Exit like Node does when top-level module evaluation is still pending but
+/// the event loop has no refed work left to drive it.
+#[no_mangle]
+pub extern "C" fn js_unsettled_top_level_await_exit() {
+    const MESSAGE: &[u8] = b"Warning: Detected unsettled top-level await\n";
+
+    #[cfg(unix)]
+    unsafe {
+        libc::write(
+            libc::STDERR_FILENO,
+            MESSAGE.as_ptr() as *const _,
+            MESSAGE.len(),
+        );
+        libc::_exit(13);
+    }
+
+    #[cfg(windows)]
+    {
+        eprint!("{}", std::str::from_utf8(MESSAGE).unwrap_or(""));
+        extern "system" {
+            fn ExitProcess(uExitCode: u32);
+        }
+        unsafe {
+            ExitProcess(13);
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        eprint!("{}", std::str::from_utf8(MESSAGE).unwrap_or(""));
+        std::process::exit(13);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
