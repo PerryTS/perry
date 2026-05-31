@@ -1498,6 +1498,118 @@ mod tests {
         );
     }
 
+    fn set_stream_bool_property(stream: f64, name: &[u8], value: bool) {
+        let obj = object_ptr_from_value(stream).expect("stream object");
+        js_object_set_field_by_name(
+            obj,
+            js_string_from_bytes(name.as_ptr(), name.len() as u32),
+            f64::from_bits(if value {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        );
+    }
+
+    fn emit_stream_lifecycle_event(stream: f64, name: &str) {
+        let handle = object_ptr_from_value(stream).expect("stream object") as i64;
+        let _ = crate::node_stream::js_node_stream_method_emit(
+            handle,
+            string_value(name),
+            undefined_value(),
+        );
+    }
+
+    fn finished_bool_option(name: &[u8], value: bool) -> f64 {
+        let opts = js_object_alloc(0, 1);
+        js_object_set_field_by_name(
+            opts,
+            js_string_from_bytes(name.as_ptr(), name.len() as u32),
+            f64::from_bits(if value {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        );
+        boxed_ptr(opts as *const u8)
+    }
+
+    fn assert_promise_resolved_undefined(promise: *mut crate::promise::Promise) {
+        assert_eq!(crate::promise::js_promise_state(promise), 1);
+        assert_eq!(
+            crate::promise::js_promise_value(promise).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_default_waits_after_writable_finish_only() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"writableFinished", true);
+        emit_stream_lifecycle_event(stream, "finish");
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"readableEnded", true);
+        emit_stream_lifecycle_event(stream, "end");
+
+        assert_promise_resolved_undefined(promise);
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_default_waits_after_readable_end_only() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"readableEnded", true);
+        emit_stream_lifecycle_event(stream, "end");
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"writableFinished", true);
+        emit_stream_lifecycle_event(stream, "finish");
+
+        assert_promise_resolved_undefined(promise);
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_readable_false_resolves_after_writable_finish() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let options = finished_bool_option(b"readable", false);
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, options);
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"writableFinished", true);
+        emit_stream_lifecycle_event(stream, "finish");
+
+        assert_promise_resolved_undefined(promise);
+    }
+
+    #[test]
+    fn stream_promises_finished_duplex_writable_false_resolves_after_readable_end() {
+        let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
+        let options = finished_bool_option(b"writable", false);
+        let promise_value = thunk_streamP_finished(std::ptr::null(), stream, options);
+        let promise = promise_ptr(promise_value);
+
+        assert_eq!(crate::promise::js_promise_state(promise), 0);
+
+        set_stream_bool_property(stream, b"readableEnded", true);
+        emit_stream_lifecycle_event(stream, "end");
+
+        assert_promise_resolved_undefined(promise);
+    }
+
     thread_local! {
         static PIPELINE_CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
