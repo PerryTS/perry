@@ -122,6 +122,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
             body,
             is_async: false,
             is_generator: false,
+            is_strict: false,
             is_exported: false,
             captures: Vec::new(),
             decorators: Vec::new(),

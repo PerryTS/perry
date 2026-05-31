@@ -231,6 +231,102 @@ pub(super) fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
     public.as_slice().try_into().ok()
 }
 
+/// Buffer-style string encoding tag, matching `js_buffer_from_string` /
+/// `js_buffer_to_string`:
+/// 0 = utf8, 1 = hex, 2 = base64, 3 = base64url, 4 = latin1/binary,
+/// 5 = ascii, 6 = utf16le/ucs2. Used by `crypto.createSecretKey(str, enc)`
+/// (#2954) and `cipher.update(str, inputEnc, outputEnc)` / `cipher.final(enc)`
+/// (#3381) so crypto reuses the exact same Node-compatible string decoding /
+/// encoding rules as `Buffer`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct EncodingTag(pub i32);
+
+/// Map a lowercase encoding name to its Buffer tag, or `None` for an unknown
+/// name. Node throws `TypeError [ERR_UNKNOWN_ENCODING]` for unknown names.
+pub(super) fn encoding_tag_from_name(name: &str) -> Option<EncodingTag> {
+    let tag = match name {
+        "utf8" | "utf-8" => 0,
+        "hex" => 1,
+        "base64" => 2,
+        "base64url" => 3,
+        "latin1" | "binary" => 4,
+        "ascii" => 5,
+        "utf16le" | "utf-16le" | "ucs2" | "ucs-2" => 6,
+        _ => return None,
+    };
+    Some(EncodingTag(tag))
+}
+
+/// Throw Node's `TypeError [ERR_UNKNOWN_ENCODING]: Unknown encoding: <name>`.
+pub(super) unsafe fn throw_unknown_encoding(name: &str) -> ! {
+    let message = format!("Unknown encoding: {name}");
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(msg, "ERR_UNKNOWN_ENCODING");
+    let err = perry_runtime::error::js_typeerror_new(msg);
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+/// Decode `str_bytes` (a JS string's UTF-8 bytes) into raw bytes per `tag`,
+/// reusing the runtime's Node-lenient hex/base64 decoders and latin1/utf16le
+/// transforms.
+pub(super) fn decode_string_bytes_with_tag(str_bytes: &[u8], tag: EncodingTag) -> Vec<u8> {
+    match tag.0 {
+        1 => perry_runtime::buffer::decode_hex(str_bytes),
+        2 | 3 => perry_runtime::buffer::decode_base64(str_bytes),
+        4 | 5 => {
+            // latin1 / ascii input: low byte of each code point.
+            let decoded = String::from_utf8_lossy(str_bytes);
+            decoded.chars().map(|ch| (ch as u32 & 0xFF) as u8).collect()
+        }
+        6 => {
+            // utf16le / ucs2 input.
+            let decoded = String::from_utf8_lossy(str_bytes);
+            let mut out = Vec::with_capacity(decoded.len() * 2);
+            for unit in decoded.encode_utf16() {
+                out.extend_from_slice(&unit.to_le_bytes());
+            }
+            out
+        }
+        _ => str_bytes.to_vec(),
+    }
+}
+
+/// Encode raw `bytes` into a JS string per `tag`, reusing the runtime's
+/// `Buffer#toString(encoding)` codec. Returns a NaN-boxed STRING_TAG value.
+pub(super) unsafe fn encode_bytes_with_tag(bytes: &[u8], tag: EncodingTag) -> f64 {
+    let buf = alloc_buffer_from_slice(bytes);
+    if buf.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let s = perry_runtime::buffer::js_buffer_to_string(buf as *const _, tag.0);
+    nanbox_str(s)
+}
+
+/// If `arg` is a JS string, return its encoding tag (throwing on unknown
+/// names). Returns `None` when the arg is absent or not a string (the
+/// Buffer-input / Buffer-output overload). `Some(None)` is impossible —
+/// unknown names throw, matching Node.
+pub(super) unsafe fn encoding_tag_from_arg(arg: Option<f64>) -> Option<EncodingTag> {
+    let v = arg?;
+    let s = string_from_jsvalue(v.to_bits())?;
+    let lower = s.to_ascii_lowercase();
+    match encoding_tag_from_name(&lower) {
+        Some(tag) => Some(tag),
+        None => throw_unknown_encoding(&s),
+    }
+}
+
+/// Extract the UTF-8 bytes of a string argument (NaN-boxed STRING_TAG or SSO
+/// short string), falling back to `bytes_from_ptr` for a Buffer/StringHeader
+/// pointer. Used by `cipher.update(str, inputEncoding, ...)` (#3381).
+pub(super) unsafe fn string_bytes_from_arg(arg: f64) -> Vec<u8> {
+    if let Some(s) = string_from_jsvalue(arg.to_bits()) {
+        return s.into_bytes();
+    }
+    let ptr = (arg.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+    bytes_from_ptr(ptr)
+}
+
 pub(super) fn js_bool(b: bool) -> f64 {
     f64::from_bits(JSValue::bool(b).bits())
 }

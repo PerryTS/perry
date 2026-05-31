@@ -477,6 +477,7 @@ impl SH for Expr {
             Expr::UrlSetPassword { url, value } => { tag(h, 12022); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSetHref { url, value } => { tag(h, 12036); url.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::UrlSearchParamsNew(e) => { tag(h, 372); e.hash(h); }
+            Expr::UrlSearchParamsMissingArgs { params, args, name_and_value } => { tag(h, 12049); params.as_ref().hash(h); args.hash(h); name_and_value.hash(h); }
             Expr::UrlSearchParamsGet { params, name } => { tag(h, 373); params.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::UrlSearchParamsHas { params, name, value, } => { tag(h, 374); params.as_ref().hash(h); name.as_ref().hash(h); match value { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::UrlSearchParamsSet { params, name, value, } => { tag(h, 375); params.as_ref().hash(h); name.as_ref().hash(h); value.as_ref().hash(h); }
@@ -490,7 +491,7 @@ impl SH for Expr {
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
             Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
-            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, enclosing_class, is_async, is_generator, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); enclosing_class.hash(h); is_async.hash(h); is_generator.hash(h); }
+            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, enclosing_class, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); enclosing_class.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } }
             Expr::RegExpTest { regex, string } => { tag(h, 384); regex.as_ref().hash(h); string.as_ref().hash(h); }
@@ -518,6 +519,7 @@ impl SH for Expr {
             Expr::NumberCoerce(e) => { tag(h, 402); e.as_ref().hash(h); }
             Expr::BigIntCoerce(e) => { tag(h, 403); e.as_ref().hash(h); }
             Expr::StringCoerce(e) => { tag(h, 404); e.as_ref().hash(h); }
+            Expr::ObjectCoerce(e) => { tag(h, 906); e.as_ref().hash(h); }
             Expr::BooleanCoerce(e) => { tag(h, 405); e.as_ref().hash(h); }
             Expr::IsNaN(e) => { tag(h, 406); e.as_ref().hash(h); }
             Expr::IsUndefinedOrBareNan(e) => { tag(h, 407); e.as_ref().hash(h); }

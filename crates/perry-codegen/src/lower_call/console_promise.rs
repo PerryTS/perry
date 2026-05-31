@@ -7,7 +7,7 @@
 //!
 //! Plus the `util/types` predicate helper that bypasses the runtime
 //! dispatcher for source-level `util.types.isPromise(x)` and friends after HIR
-//! normalizes them to the canonical `util/types` module key.
+//! normalizes them to the `util/types` / `util.types` module keys.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -55,7 +55,8 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
     else {
         return Ok(None);
     };
-    let is_direct_util_types_module = module == "util/types" && class_name.is_none();
+    let is_direct_util_types_module =
+        matches!(module.as_str(), "util/types" | "util.types") && class_name.is_none();
     if !is_direct_util_types_module || object.is_some() {
         return Ok(None);
     }
@@ -78,11 +79,14 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         )));
     }
     let Some(runtime) = (match method.as_str() {
+        "isArgumentsObject" => Some("js_util_types_is_arguments_object"),
         "isPromise" => Some("js_util_types_is_promise"),
+        "isBigIntObject" => Some("js_util_types_is_big_int_object"),
         "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
         "isSharedArrayBuffer" => Some("js_util_types_is_shared_array_buffer"),
         "isAnyArrayBuffer" => Some("js_util_types_is_any_array_buffer"),
         "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
+        "isDataView" => Some("js_util_types_is_data_view"),
         "isTypedArray" => Some("js_util_types_is_typed_array"),
         "isUint8Array" => Some("js_util_types_is_uint8_array"),
         "isInt8Array" => Some("js_util_types_is_int8_array"),
@@ -90,6 +94,7 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isUint16Array" => Some("js_util_types_is_uint16_array"),
         "isInt32Array" => Some("js_util_types_is_int32_array"),
         "isUint32Array" => Some("js_util_types_is_uint32_array"),
+        "isFloat16Array" => Some("js_util_types_is_float16_array"),
         "isFloat32Array" => Some("js_util_types_is_float32_array"),
         "isFloat64Array" => Some("js_util_types_is_float64_array"),
         "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
@@ -98,14 +103,25 @@ fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Op
         "isMap" => Some("js_util_types_is_map"),
         "isMapIterator" => Some("js_util_types_is_map_iterator"),
         "isProxy" => Some("js_util_types_is_proxy"),
+        "isExternal" => Some("js_util_types_is_external"),
+        "isModuleNamespaceObject" => Some("js_util_types_is_module_namespace_object"),
         "isSet" => Some("js_util_types_is_set"),
         "isSetIterator" => Some("js_util_types_is_set_iterator"),
+        "isWeakMap" => Some("js_util_types_is_weak_map"),
+        "isWeakSet" => Some("js_util_types_is_weak_set"),
         "isDate" => Some("js_util_types_is_date"),
         "isRegExp" => Some("js_util_types_is_reg_exp"),
         "isAsyncFunction" => Some("js_util_types_is_async_function"),
         "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
         "isGeneratorObject" => Some("js_util_types_is_generator_object"),
         "isNativeError" => Some("js_util_types_is_native_error"),
+        "isKeyObject" => Some("js_util_types_is_key_object"),
+        "isCryptoKey" => Some("js_util_types_is_crypto_key"),
+        "isNumberObject" => Some("js_util_types_is_number_object"),
+        "isStringObject" => Some("js_util_types_is_string_object"),
+        "isBooleanObject" => Some("js_util_types_is_boolean_object"),
+        "isSymbolObject" => Some("js_util_types_is_symbol_object"),
+        "isBoxedPrimitive" => Some("js_util_types_is_boxed_primitive"),
         _ => None,
     }) else {
         return Ok(None);
@@ -777,63 +793,91 @@ pub fn try_lower_closure_call_fallthrough(
     //
     // The runtime checks the closure header on its own — if the value
     // isn't actually a closure, js_closure_call<N> handles the error.
-    if args.len() <= 16 {
-        // Issue #519: when the callee shape is `recv.method(args)` (a
-        // PropertyGet) — i.e. a method-style invocation — bind the
-        // receiver as the implicit `this` for the duration of the call.
-        // Non-arrow function bodies (including FuncRef wrappers) read
-        // `this` via `js_implicit_this_get` when their lexical
-        // this_stack is empty (codegen Expr::This fallback). Without
-        // this save/set/restore, hono's `RegExpRouter.match = match`
-        // (where `match` is an imported function declaration whose
-        // body does `this.buildAllMatchers()`) sees `this = undefined`
-        // and TypeErrors out at the first chained method call.
-        //
-        // We evaluate `object` once into a fresh slot so that
-        // (a) it's only side-effect-evaluated once, and
-        // (b) the lowered `callee` (which re-reads `object` to get the
-        //     property) and the IMPLICIT_THIS save/set both see the
-        //     same receiver value.
-        let method_recv: Option<String> = if let Expr::PropertyGet { object, .. } = callee {
-            // Skip the method-binding when the receiver is a global,
-            // namespace import, or NativeModuleRef — those aren't
-            // user objects and shouldn't influence `this`.
-            if matches!(
-                object.as_ref(),
-                Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
-            ) {
-                None
-            } else {
-                Some(lower_expr(ctx, object)?)
-            }
-        } else {
+    // Issue #519: when the callee shape is `recv.method(args)` (a
+    // PropertyGet) — i.e. a method-style invocation — bind the
+    // receiver as the implicit `this` for the duration of the call.
+    // Non-arrow function bodies (including FuncRef wrappers) read
+    // `this` via `js_implicit_this_get` when their lexical
+    // this_stack is empty (codegen Expr::This fallback). Without
+    // this save/set/restore, hono's `RegExpRouter.match = match`
+    // (where `match` is an imported function declaration whose
+    // body does `this.buildAllMatchers()`) sees `this = undefined`
+    // and TypeErrors out at the first chained method call.
+    //
+    // We evaluate `object` once into a fresh slot so that
+    // (a) it's only side-effect-evaluated once, and
+    // (b) the lowered `callee` (which re-reads `object` to get the
+    //     property) and the IMPLICIT_THIS save/set both see the
+    //     same receiver value.
+    //
+    // The `this`-binding / closure-unbox setup below is arity-independent;
+    // only the final dispatch differs. Arities 0..=16 use the per-arity
+    // `js_closure_call{N}` register helpers (fast path); arities > 16 (no
+    // `js_closure_call17`+ exists) marshal the args through a stack buffer
+    // and dispatch via `js_closure_call_array`. Refs #3527 (qs's recursive
+    // `stringify` self-calls with 18 args).
+    let method_recv: Option<String> = if let Expr::PropertyGet { object, .. } = callee {
+        // Skip the method-binding when the receiver is a global,
+        // namespace import, or NativeModuleRef — those aren't
+        // user objects and shouldn't influence `this`.
+        if matches!(
+            object.as_ref(),
+            Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
+        ) {
             None
-        };
-
-        let recv_box = lower_expr(ctx, callee)?;
-        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered_args.push(lower_expr(ctx, a)?);
+        } else {
+            Some(lower_expr(ctx, object)?)
         }
-        let prev_this: Option<String> = if let Some(ref this_val) = method_recv {
-            let blk = ctx.block();
-            Some(blk.call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, this_val)]))
-        } else {
-            None
-        };
+    } else {
+        None
+    };
+
+    let recv_box = lower_expr(ctx, callee)?;
+    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    for a in args {
+        lowered_args.push(lower_expr(ctx, a)?);
+    }
+    let prev_this: Option<String> = if let Some(ref this_val) = method_recv {
+        let blk = ctx.block();
+        Some(blk.call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, this_val)]))
+    } else {
+        None
+    };
+
+    let result = if lowered_args.len() <= 16 {
         let blk = ctx.block();
         let closure_handle = unbox_to_i64(blk, &recv_box);
-        let runtime_fn = format!("js_closure_call{}", args.len());
+        let runtime_fn = format!("js_closure_call{}", lowered_args.len());
         let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
         for v in &lowered_args {
             call_args.push((DOUBLE, v.as_str()));
         }
-        let result = blk.call(DOUBLE, &runtime_fn, &call_args);
-        if let Some(prev) = prev_this {
-            ctx.block()
-                .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev)]);
+        blk.call(DOUBLE, &runtime_fn, &call_args)
+    } else {
+        // #3527: > 16 args — stack-allocate a `[N x double]` array (entry-block
+        // alloca, see #167), store each lowered arg, and dispatch through the
+        // variadic `js_closure_call_array(closure_i64, args_ptr, argc)`. This
+        // mirrors the `js_native_call_value` marshaling used elsewhere in
+        // lower_call. `args_ptr` is non-null here since argc > 16 > 0.
+        let n = lowered_args.len();
+        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+        let blk = ctx.block();
+        for (i, v) in lowered_args.iter().enumerate() {
+            let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+            blk.store(DOUBLE, v, &slot);
         }
-        return Ok(Some(result));
+        let closure_handle = unbox_to_i64(blk, &recv_box);
+        let argc = n.to_string();
+        blk.call(
+            DOUBLE,
+            "js_closure_call_array",
+            &[(I64, &closure_handle), (PTR, &buf), (I64, &argc)],
+        )
+    };
+
+    if let Some(prev) = prev_this {
+        ctx.block()
+            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev)]);
     }
-    Ok(None)
+    Ok(Some(result))
 }

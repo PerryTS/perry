@@ -27,6 +27,23 @@ fn throw_invalid_query_pair_tuple() -> ! {
     ))
 }
 
+fn throw_missing_args(name_and_value: bool) -> ! {
+    let message: &[u8] = if name_and_value {
+        b"The \"name\" and \"value\" arguments must be specified"
+    } else {
+        b"The \"name\" argument must be specified"
+    };
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_MISSING_ARGS");
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_search_params_throw_missing_args(kind: i32) -> f64 {
+    throw_missing_args(kind == 2)
+}
+
 fn gc_object_type(raw_ptr: *const u8) -> Option<u8> {
     if raw_ptr.is_null() || (raw_ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -149,12 +166,14 @@ pub(crate) fn url_decode(s: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
-/// URL encode a string
+/// URL encode a string using the WHATWG application/x-www-form-urlencoded
+/// encode set used by URLSearchParams serialization. Unlike URL path
+/// encoding, this escapes `~` and leaves `*` literal.
 pub(crate) fn url_encode(s: &str) -> String {
     let mut result = String::with_capacity(s.len() * 3);
     for c in s.chars() {
         match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '*' => {
                 result.push(c);
             }
             ' ' => result.push('+'),

@@ -321,36 +321,49 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     }
 
     if let Some(target_ptr) = object_ptr_from_value(target) {
-        let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
-        let mut depth = 0usize;
-        let mut visited: [u32; 32] = [0; 32];
-        while cid != 0 && depth < visited.len() {
-            if visited[..depth].contains(&cid) {
-                break;
-            }
-            visited[depth] = cid;
-
-            let proto_obj = crate::object::class_registry::class_prototype_object(cid);
-            let mut next_cid = 0;
-            if !proto_obj.is_null() {
-                if std::ptr::addr_eq(proto_obj, receiver_ptr) {
-                    return true;
+        let has_instance_prototype =
+            crate::object::prototype_chain::object_static_prototype(target_ptr as usize).is_some();
+        if std::ptr::addr_eq(target_ptr, receiver_ptr) {
+            return false;
+        }
+        // A `new Func()` instance snapshots the function's current
+        // `.prototype` via the object prototype side table. Honor that
+        // per-instance chain before consulting the synthetic class map,
+        // because later `Func.prototype = other` must not rewrite older
+        // instances.
+        if !has_instance_prototype {
+            let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
+            let mut depth = 0usize;
+            let mut visited: [u32; 32] = [0; 32];
+            while cid != 0 && depth < visited.len() {
+                if visited[..depth].contains(&cid) {
+                    break;
                 }
-                next_cid = crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
-            }
+                visited[depth] = cid;
 
-            if next_cid != 0 && next_cid != cid {
-                cid = next_cid;
-                depth += 1;
-                continue;
-            }
+                let proto_obj = crate::object::class_registry::class_prototype_object(cid);
+                let mut next_cid = 0;
+                if !proto_obj.is_null() {
+                    if std::ptr::addr_eq(proto_obj, receiver_ptr) {
+                        return true;
+                    }
+                    next_cid =
+                        crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
+                }
 
-            match crate::object::class_registry::get_parent_class_id(cid) {
-                Some(parent_id) if parent_id != 0 && parent_id != cid => {
-                    cid = parent_id;
+                if next_cid != 0 && next_cid != cid {
+                    cid = next_cid;
                     depth += 1;
+                    continue;
                 }
-                _ => break,
+
+                match crate::object::class_registry::get_parent_class_id(cid) {
+                    Some(parent_id) if parent_id != 0 && parent_id != cid => {
+                        cid = parent_id;
+                        depth += 1;
+                    }
+                    _ => break,
+                }
             }
         }
     } else {
@@ -1230,36 +1243,9 @@ pub unsafe extern "C" fn js_native_call_method(
                 "replace" | "replaceAll" => {
                     // Two-arg shape: (pattern, replacement). pattern can be a
                     // string OR a RegExp; replacement is a string OR a function.
-                    // Function replacements over a RegExp pattern route to the
-                    // regex-fn helpers (#2867) so dynamically-dispatched
-                    // `str.replace(re, fn)` observes Node's callback argument
-                    // shape `(match, p1, ..., offset, string, groups?)`.
-                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
-                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
-                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
-                        if pat_jsv.is_pointer() && repl_jsv.is_pointer() {
-                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-                            if crate::closure::is_closure_ptr(repl_raw) {
-                                let regex_ptr = pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
-                                if !regex_ptr.is_null() {
-                                    let r = if method_name == "replaceAll" {
-                                        crate::regex::js_string_replace_all_regex_fn(
-                                            receiver_string(),
-                                            regex_ptr,
-                                            repl_val,
-                                        )
-                                    } else {
-                                        crate::regex::js_string_replace_regex_fn(
-                                            receiver_string(),
-                                            regex_ptr,
-                                            repl_val,
-                                        )
-                                    };
-                                    return f64::from_bits(JSValue::string_ptr(r).bits());
-                                }
-                            }
-                        }
-                    }
+                    // Function replacements route to the callback helpers so
+                    // `str.replace(x, fn)` observes Node's callback argument
+                    // shape and receiver binding.
                     let pat_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
                     let repl_handle = root_string_arg_handle(&root_scope, &arg_handles, 1);
                     let pat_str = || {
@@ -1274,21 +1260,59 @@ pub unsafe extern "C" fn js_native_call_method(
                             .map(|handle| handle.get_raw_const_ptr::<crate::StringHeader>())
                             .unwrap_or(std::ptr::null())
                     };
+                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
+                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
+                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
+                        if repl_jsv.is_pointer() {
+                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                            if crate::closure::is_closure_ptr(repl_raw) {
+                                if pat_jsv.is_pointer() {
+                                    let regex_ptr =
+                                        pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
+                                    if !regex_ptr.is_null()
+                                        && crate::regex::is_regex_pointer(regex_ptr as *const u8)
+                                    {
+                                        let r = if method_name == "replaceAll" {
+                                            crate::regex::js_string_replace_all_regex_fn(
+                                                receiver_string(),
+                                                regex_ptr,
+                                                repl_val,
+                                            )
+                                        } else {
+                                            crate::regex::js_string_replace_regex_fn(
+                                                receiver_string(),
+                                                regex_ptr,
+                                                repl_val,
+                                            )
+                                        };
+                                        return f64::from_bits(JSValue::string_ptr(r).bits());
+                                    }
+                                }
+                                let r = if method_name == "replaceAll" {
+                                    crate::regex::js_string_replace_all_string_fn(
+                                        receiver_string(),
+                                        pat_str(),
+                                        repl_val,
+                                    )
+                                } else {
+                                    crate::regex::js_string_replace_string_fn(
+                                        receiver_string(),
+                                        pat_str(),
+                                        repl_val,
+                                    )
+                                };
+                                return f64::from_bits(JSValue::string_ptr(r).bits());
+                            }
+                        }
+                    }
                     // Detect RegExp pattern: NaN-boxed pointer to a RegExpHeader.
                     if let Some(v) = arg_at(0) {
                         let jsv = JSValue::from_bits(v.to_bits());
                         if jsv.is_pointer() {
-                            // Probe whether the pointer is a RegExpHeader by
-                            // checking the GC type tag the regex helpers
-                            // already validate; if it's not, the regex helper
-                            // returns the original string unchanged.
                             let regex_ptr = jsv.as_pointer::<crate::regex::RegExpHeader>();
-                            // Heuristic: a non-null POINTER_TAG that's not a
-                            // string/array (those have different GC type tags)
-                            // is treated as a RegExp here. The runtime helper
-                            // already validates internally and falls back
-                            // safely on mismatch.
-                            if !regex_ptr.is_null() {
+                            if !regex_ptr.is_null()
+                                && crate::regex::is_regex_pointer(regex_ptr as *const u8)
+                            {
                                 let r = if method_name == "replaceAll" {
                                     crate::regex::js_string_replace_all_regex(
                                         receiver_string(),
@@ -2524,6 +2548,18 @@ pub unsafe extern "C" fn js_native_call_method(
                 if key_str.is_null() {
                     return f64::from_bits(JSValue::bool(false).bits());
                 }
+                // #3655: a closure receiver (functions ARE objects). Report
+                // the built-in `name`/`length` (+ constructor `prototype`)
+                // and user props as own; honor `delete`. Without this, the
+                // `is_valid_obj_ptr`-false fallthrough returned `true` for
+                // *every* key (so a deleted slot still looked present).
+                let raw = jsval.as_pointer::<u8>() as usize;
+                if crate::closure::is_closure_ptr(raw) {
+                    let present = super::has_own_helpers::str_from_string_header(key_str)
+                        .map(|k| super::has_own_helpers::closure_own_key_present(raw, k))
+                        .unwrap_or(false);
+                    return f64::from_bits(JSValue::bool(present).bits());
+                }
                 let obj_ptr = jsval.as_pointer::<ObjectHeader>();
                 if !obj_ptr.is_null() && is_valid_obj_ptr(obj_ptr as *const u8) {
                     return f64::from_bits(
@@ -2554,6 +2590,25 @@ pub unsafe extern "C" fn js_native_call_method(
             let key_str = crate::builtins::js_string_coerce(key_value);
             if key_str.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());
+            }
+            // #3655: closure receiver — built-in slots are non-enumerable,
+            // user props default enumerable. Mirrors the `js_object_property_is_enumerable`
+            // entry point (the `.call`-lowered shape).
+            let raw = jsval.as_pointer::<u8>() as usize;
+            if crate::closure::is_closure_ptr(raw) {
+                let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                };
+                if !super::has_own_helpers::closure_own_key_present(raw, key_name) {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                }
+                if matches!(key_name, "name" | "length" | "prototype") {
+                    return f64::from_bits(JSValue::bool(false).bits());
+                }
+                let enumerable = get_property_attrs(raw, key_name)
+                    .map(|attrs| attrs.enumerable())
+                    .unwrap_or(true);
+                return f64::from_bits(JSValue::bool(enumerable).bits());
             }
             let obj_ptr = jsval.as_pointer::<ObjectHeader>();
             if obj_ptr.is_null() || !is_valid_obj_ptr(obj_ptr as *const u8) {

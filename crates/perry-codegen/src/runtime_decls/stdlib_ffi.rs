@@ -14,7 +14,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
+    module.declare_function("js_http_client_request_method", I64, &[I64]);
+    module.declare_function("js_http_client_request_protocol", I64, &[I64]);
+    module.declare_function("js_http_client_request_host", I64, &[I64]);
+    module.declare_function("js_http_client_request_path", I64, &[I64]);
+    module.declare_function("js_http_client_request_listener_count", DOUBLE, &[I64, I64]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
+    // #3226/#3227/#3228 — overload-normalizing client factories take a
+    // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a
+    // ClientRequest handle.
+    module.declare_function("js_http_get_overload", I64, &[I64]);
+    module.declare_function("js_http_request_overload", I64, &[I64]);
+    module.declare_function("js_https_get_overload", I64, &[I64]);
+    module.declare_function("js_https_request_overload", I64, &[I64]);
     module.declare_function("js_http_on", I64, &[I64, I64, I64]);
     module.declare_function("js_http_request", I64, &[DOUBLE, I64]);
     module.declare_function("js_http_request_body", I64, &[I64]);
@@ -63,6 +75,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_agent_keep_alive_msecs", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_keep_alive", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_protocol", I64, &[I64]);
+    module.declare_function("js_http_agent_default_port", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_set_protocol", VOID, &[I64, I64]);
     // #2154
     module.declare_function("js_http_agent_destroy", I64, &[I64]);
@@ -145,14 +158,67 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_https_create_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_https_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_https_server_close", VOID, &[I64, I64]);
+    module.declare_function("js_node_https_server_close_all_connections", VOID, &[I64]);
+    module.declare_function("js_node_https_server_close_idle_connections", VOID, &[I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_node_https_server_headers_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_headers_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_keep_alive_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_keep_alive_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_request_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_request_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_idle_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_idle_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_max_headers_count", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_max_headers_count",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_max_requests_per_socket",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_node_https_server_set_max_requests_per_socket",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_set_timeout_method",
+        I64,
+        &[I64, DOUBLE, I64],
+    );
     // node:http2 secure server (HTTP/2 with ALPN):
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http2_server_on", DOUBLE, &[I64, I64, I64]);
+    // node:http2 settings helpers (#3168) — getDefaultSettings()/
+    // getUnpackedSettings() return a JSON StringHeader (reparsed via
+    // NR_OBJ_FROM_JSON_STR); getPackedSettings() returns a Buffer pointer.
+    module.declare_function("js_node_http2_get_default_settings", I64, &[]);
+    module.declare_function("js_node_http2_get_packed_settings", I64, &[I64]);
+    module.declare_function("js_node_http2_get_unpacked_settings", I64, &[I64]);
 
     // ========== PostgreSQL (pg) ==========
     module.declare_function("js_pg_client_connect", I64, &[I64]);
@@ -370,10 +436,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
     // #3092 — callback is passed as a full NaN-boxed value (DOUBLE), not a raw
     // pointer, so the runtime can reject non-callable callbacks.
-    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
     module.declare_function("js_async_local_storage_new", I64, &[]);
-    module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_async_local_storage_run",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, I64],
+    );
 
     // ========== #2875 DisposableStack / AsyncDisposableStack / SuppressedError ==========
     // `new` ctors (dispatched by lower_builtin_new). Instance methods are
@@ -520,8 +590,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     //   js_url_search_params_to_string(*mut ObjectHeader)     -> *mut StringHeader
     //   js_url_search_params_get_all(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (NaN-boxed array)
-    module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_get_hash", DOUBLE, &[I64]);
     module.declare_function("js_url_get_host", DOUBLE, &[I64]);
     module.declare_function("js_url_get_hostname", DOUBLE, &[I64]);
@@ -551,6 +621,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_set_href", VOID, &[I64, DOUBLE]);
     module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_delete2", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_throw_missing_args", DOUBLE, &[I32]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_delete", VOID, &[I64, DOUBLE]);
     module.declare_function("js_url_search_params_get", I64, &[I64, DOUBLE]);
@@ -579,13 +650,15 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // `String(value)` coercion (throws TypeError for Symbols) for WHATWG URL
     // arguments — #3054/#3055. Returns a `*mut StringHeader` (I64).
     module.declare_function("js_url_coerce_string", I64, &[DOUBLE]);
-    module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_to_http_options", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_url_legacy_url_new", DOUBLE, &[]);
     module.declare_function("js_url_format", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_parse", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_url_legacy_resolve", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_url_legacy_resolve_object", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== WebSocket ==========
     module.declare_function("js_ws_close", VOID, &[I64]);
@@ -650,6 +723,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_os_uptime", DOUBLE, &[]);
     module.declare_function("js_os_user_info", I64, &[]);
     module.declare_function("js_os_user_info_buffer", I64, &[]);
+    // #3004 — dynamic-options form: inspects `options.encoding` at runtime.
+    module.declare_function("js_os_user_info_options", I64, &[I64]);
 
     // ========== Crypto ==========
     module.declare_function("js_crypto_aes256_decrypt", I64, &[I64, I64, I64]);
@@ -1024,6 +1099,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_init", DOUBLE, &[]);
 
     // ========== Domain ==========
     module.declare_function("js_domain_create", I64, &[]);
@@ -1219,7 +1295,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
     module.declare_function("js_call_value", DOUBLE, &[DOUBLE, I64, I64]);
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
+    // (closure_env i64, args_ptr, args_len i64). The args pointer is a real
+    // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
+    // to I64 in the integer register class) so call sites can pass an alloca
+    // directly. See `try_lower_closure_call_fallthrough` (#3527).
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,
@@ -1320,6 +1400,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_to_json", DOUBLE, &[]);
     module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
     module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_perf_mark_resource_timing",
+        DOUBLE,
+        &[
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function("js_perf_timerify", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);
@@ -1393,6 +1481,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // closure-typed class field method-style. `Expr::This` codegen reads
     // this when the lexical this_stack is empty.
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
+    module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
 
     // ========== Runtime init / module loader ==========

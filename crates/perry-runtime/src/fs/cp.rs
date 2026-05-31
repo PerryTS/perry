@@ -91,7 +91,7 @@ pub(crate) fn copy_preserve_timestamps(src: &Path, dst: &Path, follow: bool) {
     // `set_path_times` is unix-only (utimensat); on other targets timestamp
     // preservation is a no-op, matching the cfg-gated callers in fs/mod.rs.
     #[cfg(unix)]
-    let _ = set_path_times(&dst_string, atime / 1000.0, mtime / 1000.0, !follow);
+    let _ = set_path_times_result(&dst_string, atime / 1000.0, mtime / 1000.0, !follow);
     #[cfg(not(unix))]
     let _ = (&dst_string, atime, mtime, follow);
 }

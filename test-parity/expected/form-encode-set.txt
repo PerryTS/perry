@@ -1,0 +1,11 @@
+param ~: "x=%7E"
+param *: "x=*"
+param -: "x=-"
+param .: "x=."
+param _: "x=_"
+param  : "x=+"
+param !: "x=%21"
+param é: "x=%C3%A9"
+owner initial href: https://example.com/?x=~&y=%7E
+owner params string: x=%7E&y=%7E
+owner sorted href: https://example.com/?x=%7E&y=%7E

@@ -77,6 +77,7 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
     let helper = match name {
         "Symbol" => "js_throw_symbol_constructor_type_error",
         "BigInt" => "js_throw_bigint_constructor_type_error",
+        "Math" => "js_throw_math_constructor_type_error",
         _ => unreachable!(),
     };
     let throw_expr = Expr::Call {
@@ -172,6 +173,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     object: None,
                     method: "Agent".to_string(),
                     args,
+                });
+            }
+            let is_url_module =
+                obj_name == "url" || ctx.lookup_builtin_module_alias(obj_name) == Some("url");
+            if is_url_module && prop_ident.sym.as_ref() == "Url" {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
                 });
             }
             let dns_module =
@@ -394,6 +406,18 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     match callee_expr {
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("url", Some("Url")))
+            ) {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
 
             // #1677 `new Function(...)` handling, when `Function` is not
             // shadowed. Phase 1 (#1679) first: when every argument is a
@@ -569,7 +593,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
-            if matches!(class_name.as_str(), "Symbol" | "BigInt") {
+            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math") {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1130,7 +1154,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(property.as_str(), "Symbol" | "BigInt")
+                    && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
                 {
                     return Ok(nonconstructable_builtin_throw_expr(property, args));
                 }
