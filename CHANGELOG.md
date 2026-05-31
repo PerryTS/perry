@@ -2,6 +2,12 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1046 — fix(stdlib): compile node:domain without bundled-events
+
+**Hotfix — main default-feature build was broken.** `crates/perry-stdlib/src/domain.rs` (added by #3535) called `crate::events::{is_event_emitter_handle, js_event_emitter_get_domain, js_event_emitter_set_domain}` unconditionally at six sites, but `mod events` is `#[cfg(feature = "bundled-events")]`-gated (since v0.5.546, so the well-known bindings table can flip `import 'events'` to `perry-ext-events`). `mod domain` itself is **not** feature-gated, so any build with `bundled-events` off — notably the auto-optimize compile path the `compiler-output-regression` CI gate exercises — failed with `error[E0433]: cannot find 'events' in 'crate'`. `cargo-test` masked it because the test build pulls `full` (which includes `bundled-events`).
+
+Fix: route all six call sites through three small feature-gated shims (`ee_is_event_emitter_handle`, `ee_get_domain`, `ee_set_domain`). With `bundled-events` on they delegate to `crate::events::*` as before; with it off they degrade to inert no-ops (`false`/`0`/`()`), so the domain↔EventEmitter integration is simply absent in that build (where events lives in `perry-ext-events`). Verified both feature configurations compile cleanly.
+
 ## v0.5.1045 — fix(runtime): brand-check collection prototype methods (#3662)
 
 `Set`/`Map`/`WeakSet`/`WeakMap` prototype methods reached as plain values —

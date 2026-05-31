@@ -454,6 +454,37 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
+            // #3157: `import { MessageChannel } from "worker_threads"` then
+            // `new MessageChannel()` — the bare-ident form must route to the
+            // same receiver-less worker_threads NativeMethodCall as the
+            // `new worker_threads.MessageChannel()` member form above, so the
+            // runtime `js_worker_threads_message_channel_new` allocates the
+            // real `{ port1, port2 }` object. Without this it falls through to
+            // the user-class `Expr::New` path and gets an empty object.
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("worker_threads", Some("MessageChannel")))
+                    | Some(("worker_threads", Some("BroadcastChannel")))
+            ) {
+                let args = new_expr
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| lower_expr(ctx, &a.expr))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                return Ok(Expr::NativeMethodCall {
+                    module: "worker_threads".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: class_name,
+                    args,
+                });
+            }
+
             if matches!(class_name.as_str(), "MIMEType" | "MIMEParams") {
                 if let Some((module_name, Some(method_name))) =
                     ctx.lookup_native_module(&class_name)

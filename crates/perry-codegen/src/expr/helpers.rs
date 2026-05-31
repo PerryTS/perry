@@ -309,6 +309,13 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            | "Performance"
+            | "PerformanceEntry"
+            | "PerformanceMark"
+            | "PerformanceMeasure"
+            | "PerformanceObserver"
+            | "PerformanceObserverEntryList"
+            | "PerformanceResourceTiming"
             // #2875: TC39 explicit-resource-management global constructors.
             | "DisposableStack"
             | "AsyncDisposableStack"
