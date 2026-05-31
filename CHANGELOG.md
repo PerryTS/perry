@@ -2,6 +2,17 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1057 — hotfix: resolve native_module.rs conflict marker (build break)
+
+A batch of admin-merges left an unresolved git conflict marker in
+`crates/perry-runtime/src/object/native_module.rs` (the `namespace_keys_for`
+match, punycode-vs-timers arms), leaving `main` uncompilable
+(`error: expected one of ... found "punycode"`). Resolved as the union of both
+sides: keep the punycode namespace-key arms (HEAD) and the `timers` arm
+(origin/main). All referenced `PUNYCODE_*_KEYS` / `TIMERS_NAMESPACE_KEYS`
+consts already exist. Verified `cargo build --release` (runtime/stdlib/codegen/
+hir/perry) -> exit 0.
+
 ## v0.5.1047 — fix(node): expose net.Stream / timers.promises / zlib.codes namespace aliases
 
 External contributor PR #3509 (Andrew DiZenzo), rebased onto current `main` and merged with the metadata folded in. Closes #2689, #2682, #2688.
