@@ -289,6 +289,13 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         // dispatch correctly.
                                         | ("http", "Agent")
                                         | ("https", "Agent")
+                                        | (
+                                            "v8",
+                                            "Serializer"
+                                                | "Deserializer"
+                                                | "DefaultSerializer"
+                                                | "DefaultDeserializer",
+                                        )
                                         | ("dns" | "dns/promises", "Resolver")
                                 );
                                 if is_known_native_class {

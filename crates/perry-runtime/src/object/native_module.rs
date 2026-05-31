@@ -447,6 +447,40 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
         ]),
+        "v8" => Some(&[
+            b"serialize",
+            b"deserialize",
+            b"cachedDataVersionTag",
+            b"getHeapStatistics",
+            b"getHeapCodeStatistics",
+            b"getHeapSpaceStatistics",
+            b"Serializer",
+            b"Deserializer",
+            b"DefaultSerializer",
+            b"DefaultDeserializer",
+        ]),
+        "v8.Serializer" | "v8.DefaultSerializer" => Some(&[
+            b"writeHeader",
+            b"writeValue",
+            b"releaseBuffer",
+            b"transferArrayBuffer",
+            b"writeUint32",
+            b"writeUint64",
+            b"writeDouble",
+            b"writeRawBytes",
+            b"_getDataCloneError",
+            b"_setTreatArrayBufferViewsAsHostObjects",
+        ]),
+        "v8.Deserializer" | "v8.DefaultDeserializer" => Some(&[
+            b"readHeader",
+            b"readValue",
+            b"transferArrayBuffer",
+            b"getWireFormatVersion",
+            b"readUint32",
+            b"readUint64",
+            b"readDouble",
+            b"readRawBytes",
+        ]),
         _ => None,
     }
 }
@@ -461,6 +495,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "util.types"
             | "path.posix"
             | "path.win32"
+            | "v8"
     )
 }
 
@@ -1144,6 +1179,37 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("net", "Socket")
             | ("net", "_normalizeArgs")
             | ("net", "_createServerHandle")
+            | ("v8", "serialize")
+            | ("v8", "deserialize")
+            | ("v8", "cachedDataVersionTag")
+            | ("v8", "getHeapStatistics")
+            | ("v8", "getHeapCodeStatistics")
+            | ("v8", "getHeapSpaceStatistics")
+            | ("v8", "Serializer")
+            | ("v8", "Deserializer")
+            | ("v8", "DefaultSerializer")
+            | ("v8", "DefaultDeserializer")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeHeader")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeValue")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "releaseBuffer")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "transferArrayBuffer")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeUint32")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeUint64")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeDouble")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "writeRawBytes")
+            | ("v8.Serializer" | "v8.DefaultSerializer", "_getDataCloneError")
+            | (
+                "v8.Serializer" | "v8.DefaultSerializer",
+                "_setTreatArrayBufferViewsAsHostObjects",
+            )
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readHeader")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readValue")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "transferArrayBuffer")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "getWireFormatVersion")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint32")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readUint64")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readDouble")
+            | ("v8.Deserializer" | "v8.DefaultDeserializer", "readRawBytes")
             // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.
             | ("child_process", "ChildProcess")
             // #1857 / #2130: every exported function reads as a bound-method
