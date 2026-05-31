@@ -2665,11 +2665,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "O_NOFOLLOW"),
     property("constants", "O_NOCTTY"),
     property("constants", "O_DIRECTORY"),
+    #[cfg(target_os = "linux")]
     property("constants", "O_DIRECT"),
+    #[cfg(target_os = "linux")]
     property("constants", "O_NOATIME"),
     property("constants", "O_NONBLOCK"),
     property("constants", "O_SYNC"),
     property("constants", "O_DSYNC"),
+    #[cfg(target_os = "macos")]
+    property("constants", "O_SYMLINK"),
     property("constants", "O_CREAT"),
     property("constants", "O_TRUNC"),
     property("constants", "O_APPEND"),
@@ -2728,6 +2732,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "SIGALRM"),
     property("constants", "SIGTERM"),
     property("constants", "SIGCHLD"),
+    #[cfg(target_os = "linux")]
+    property("constants", "SIGSTKFLT"),
     property("constants", "SIGCONT"),
     property("constants", "SIGSTOP"),
     property("constants", "SIGTSTP"),
@@ -2740,7 +2746,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "SIGPROF"),
     property("constants", "SIGWINCH"),
     property("constants", "SIGIO"),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    property("constants", "SIGPOLL"),
+    #[cfg(target_os = "linux")]
+    property("constants", "SIGPWR"),
     property("constants", "SIGSYS"),
+    #[cfg(target_os = "macos")]
+    property("constants", "SIGINFO"),
     property("constants", "E2BIG"),
     property("constants", "EACCES"),
     property("constants", "EADDRINUSE"),
@@ -2830,6 +2842,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "RTLD_NOW"),
     property("constants", "RTLD_GLOBAL"),
     property("constants", "RTLD_LOCAL"),
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     property("constants", "RTLD_DEEPBIND"),
     property("constants", "OPENSSL_VERSION_NUMBER"),
     property("constants", "SSL_OP_ALL"),
