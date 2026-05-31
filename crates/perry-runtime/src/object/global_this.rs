@@ -1,27 +1,11 @@
-//! `globalThis` singleton plus the built-in constructor / prototype-method
-//! population that backs `globalThis.Array`, `globalThis.Object`,
-//! `globalThis.console`, etc. Also home for the codegen-emitted
-//! `js_global_or_console_property_by_name` property-read shortcut.
-//!
-//! Split out of `object/mod.rs` (issue #1103).
+//! `globalThis` singleton plus built-in constructor/namespace population.
 
 use super::*;
 
 #[path = "global_this_webassembly.rs"]
 mod global_this_webassembly;
 
-/// Issue #611 (Effect): `globalThis[<computed>] = value` and the
-/// `(globalThis as any)[id] ??= new Map()` pattern (used by hono / Effect /
-/// most ESM libraries that ship a CJS-compat global side-store) wrote to
-/// a 0-pointer sentinel and read back undefined — `globalStore` was always
-/// undefined, callers SIGSEGV'd at the next `.has()` / `.get()` call. This
-/// function lazily allocates a single shared ObjectHeader (one per process,
-/// initialised on first access) and returns a NaN-boxed POINTER to it. The
-/// codegen-side IndexGet / IndexSet on `Expr::GlobalGet` routes through
-/// this helper instead of through the 0.0 sentinel so reads / writes
-/// actually persist. Existing AST-shape patterns like
-/// `PropertyGet { GlobalGet, "log" }` (console.log dispatch) match on the
-/// HIR node, not the SSA value, so they continue to fire even though the
+/// Issue #611: lazily allocate shared `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
     let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
@@ -41,20 +25,8 @@ pub extern "C" fn js_get_global_this() -> f64 {
             Ordering::Acquire,
         ) {
             Ok(_) => {
-                // Winner: populate built-in constructor properties on the
-                // singleton so `globalThis.Array` / `context.Array` (lodash's
-                // `runInContext` pattern) return non-undefined values. Each
-                // value is a tiny ObjectHeader carrying a `prototype` field
-                // pointing at another empty object — enough that
-                // `var arrayProto = Array.prototype` doesn't throw and the
-                // chained `.toString` reads return undefined rather than
-                // tripping the "Cannot read properties of undefined" gate at
-                // module-init time. Full constructor dispatch on these
-                // sentinels still falls through to existing code paths (bare
-                // `new Array(n)` continues to work through `lower_new`); the
-                // goal here is just to unblock libraries that read the
-                // constructors off `globalThis` as values. Refs lodash
-                // `runInContext` blocker after PR #963.
+                // Populate constructor values for `globalThis.Array` /
+                // `context.Array` style reads without changing bare `new Array`.
                 populate_global_this_builtins(new_ptr as *mut ObjectHeader);
                 new_ptr
             }
@@ -92,14 +64,7 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// JS built-in constructor names exposed on `globalThis`. Pre-populated by
-/// the singleton init in `js_get_global_this` so libraries that read these
-/// off the global (lodash's `var Array = context.Array; var arrayProto =
-/// Array.prototype`, the same `(globalThis as any).X` read shape) see a
-/// non-undefined backing object. Codegen mirrors this list in
-/// `perry-codegen/src/expr.rs::is_global_this_builtin_name` to decide when
-/// `globalThis.<Name>` should route through the singleton instead of the
-/// legacy `0.0` no-value placeholder.
+/// Built-in constructor names exposed on `globalThis`.
 pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Array",
     "Object",
@@ -162,24 +127,14 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "MessagePort",
     "BroadcastChannel",
     "FinalizationRegistry",
-    // #2875: TC39 explicit-resource-management globals. Backed by the
-    // no-op constructor thunk so `typeof DisposableStack === "function"`;
-    // real `new DisposableStack()` / `new SuppressedError(...)` flow through
-    // codegen's `lower_builtin_new` to the dedicated runtime ctors.
+    // #2875: TC39 explicit-resource-management globals.
     "DisposableStack",
     "AsyncDisposableStack",
     "SuppressedError",
     "Buffer",
 ];
 
-/// #3655: spec `length` (declared-parameter count) for each built-in
-/// constructor, so `Ctor.length` reads the right arity through the runtime
-/// value path (`const C = DataView; C.length === 1`) and
-/// `Object.getOwnPropertyDescriptor(Ctor, 'length').value` matches Node. The
-/// HIR also folds bare `Ctor.length` constants (`analysis::builtin_constructor_length`);
-/// these are the runtime fallback for rebound / passed-as-value constructors.
-/// Values verified against `node --experimental-strip-types`. Unlisted names
-/// fall through to the closure arity registry (0).
+/// #3655: spec declared-parameter count for built-in constructor values.
 pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
     let len = match name {
         "Symbol"
@@ -235,9 +190,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
     Some(len)
 }
 
-/// JS built-in namespaces (typeof === "object", not "function"). Same
-/// shape on the singleton — a backing object with `prototype` so chained
-/// reads degrade gracefully — but typeof reports "object".
+/// Built-in namespaces exposed on `globalThis` as objects.
 pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
     "console",
     "process",
@@ -247,14 +200,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
     "WebAssembly",
 ];
 
-// Note: `navigator` (#2923) is installed on the singleton directly (see
-// `populate_global_this_builtins`) rather than via this generic namespace
-// loop because it needs its own field-populated object, not an empty stub.
+// `navigator` (#2923) is installed directly because it needs populated fields.
 
-/// JS global built-in functions exposed as function-valued properties on
-/// `globalThis`. Unlike constructor sentinels, these call through to Perry's
-/// real direct-call runtime helpers so rebinding works:
-/// `const clone = globalThis.structuredClone; clone(value)`.
+/// Global built-in functions exposed as function-valued properties.
 pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "structuredClone",
     "atob",
@@ -266,9 +214,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "setImmediate",
     "clearImmediate",
     "queueMicrotask",
-    // #2905: standard global helper functions. These route through Perry's
-    // real direct-call runtime helpers, so `const p = parseInt; p("42px")`
-    // and `globalThis.encodeURIComponent("a b")` match Node.
+    // #2905: standard global helper functions route through runtime helpers.
     "parseInt",
     "parseFloat",
     "isNaN",
@@ -279,16 +225,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "decodeURIComponent",
 ];
 
-/// No-op thunk used as the function body for most singleton globalThis
-/// built-in constructor values. Lets `globalThis.Array` carry a real
-/// ClosureHeader (so `typeof globalThis.Array === "function"`) without
-/// implementing actual constructor dispatch through this path — bare
-/// `new Array(n)` continues to flow through codegen's `lower_new` arm and
-/// the runtime `js_array_alloc` machinery, so callers that follow the
-/// usual `new <Ident>(...)` pattern are unaffected. Calling these
-/// sentinels directly (e.g. `globalThis.Array(3)`) returns undefined —
-/// best-effort no-op rather than throwing — and remains a known gap for
-/// non-String call-form constructors after re-binding the global to a local.
+/// No-op thunk for singleton constructor values.
 pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
