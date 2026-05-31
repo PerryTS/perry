@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2228 entries across 99 modules.
+Total: 2234 entries across 99 modules.
 
 ## Modules
 
@@ -525,10 +525,17 @@ Total: 2228 entries across 99 modules.
 - `OPENSSL_VERSION_NUMBER`
 - `O_APPEND`
 - `O_CREAT`
+- `O_DIRECT`
+- `O_DIRECTORY`
+- `O_DSYNC`
 - `O_EXCL`
+- `O_NOATIME`
+- `O_NOCTTY`
 - `O_NOFOLLOW`
+- `O_NONBLOCK`
 - `O_RDONLY`
 - `O_RDWR`
+- `O_SYNC`
 - `O_TRUNC`
 - `O_WRONLY`
 - `POINT_CONVERSION_COMPRESSED`
@@ -607,9 +614,20 @@ Total: 2228 entries across 99 modules.
 - `SSL_OP_NO_TLSv1_3`
 - `SSL_OP_PRIORITIZE_CHACHA`
 - `SSL_OP_TLS_ROLLBACK_BUG`
+- `S_IFBLK`
+- `S_IFCHR`
+- `S_IFDIR`
+- `S_IFIFO`
+- `S_IFLNK`
+- `S_IFMT`
+- `S_IFREG`
+- `S_IFSOCK`
 - `S_IRGRP`
 - `S_IROTH`
 - `S_IRUSR`
+- `S_IRWXG`
+- `S_IRWXO`
+- `S_IRWXU`
 - `S_IWGRP`
 - `S_IWOTH`
 - `S_IWUSR`
@@ -620,8 +638,23 @@ Total: 2228 entries across 99 modules.
 - `TLS1_2_VERSION`
 - `TLS1_3_VERSION`
 - `TLS1_VERSION`
+- `UV_DIRENT_BLOCK`
+- `UV_DIRENT_CHAR`
+- `UV_DIRENT_DIR`
+- `UV_DIRENT_FIFO`
+- `UV_DIRENT_FILE`
+- `UV_DIRENT_LINK`
+- `UV_DIRENT_SOCKET`
+- `UV_DIRENT_UNKNOWN`
+- `UV_FS_COPYFILE_EXCL`
+- `UV_FS_COPYFILE_FICLONE`
+- `UV_FS_COPYFILE_FICLONE_FORCE`
+- `UV_FS_O_FILEMAP`
+- `UV_FS_SYMLINK_DIR`
+- `UV_FS_SYMLINK_JUNCTION`
 - `W_OK`
 - `X_OK`
+- `defaultCoreCipherList`
 
 ## `cron`
 
@@ -2300,6 +2333,7 @@ Total: 2228 entries across 99 modules.
 
 - `abort` — module
 - `addListener` — module
+- `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
 - `chdir` — module
 - `constrainedMemory` — module
@@ -2317,6 +2351,7 @@ Total: 2228 entries across 99 modules.
 - `getgid` — module
 - `getgroups` — module
 - `getuid` — module
+- `hasUncaughtExceptionCaptureCallback` — module
 - `hrtime` — module
 - `initgroups` — module
 - `kill` — module
@@ -2337,6 +2372,7 @@ Total: 2228 entries across 99 modules.
 - `setMaxListeners` — module
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
+- `setUncaughtExceptionCaptureCallback` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
@@ -2414,6 +2450,7 @@ Total: 2228 entries across 99 modules.
 - `emitKeypressEvents` — module
 - `getCursorPos` — instance
 - `getPrompt` — instance
+- `line` — instance
 - `moveCursor` — module
 - `on` — instance
 - `pause` — instance
@@ -2421,6 +2458,7 @@ Total: 2228 entries across 99 modules.
 - `question` — instance
 - `resume` — instance
 - `setPrompt` — instance
+- `terminal` — instance
 - `write` — instance
 
 ## `readline/promises`
@@ -2836,53 +2874,18 @@ Total: 2228 entries across 99 modules.
 
 ### Classes
 
-- `DefaultDeserializer`
-- `DefaultSerializer`
-- `Deserializer`
 - `GCProfiler`
-- `Serializer`
 
 ### Methods
 
-- `addDeserializeCallback` — instance *(class: `startupSnapshot`)*
-- `addSerializeCallback` — instance *(class: `startupSnapshot`)*
 - `cachedDataVersionTag` — module
-- `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
 - `getHeapCodeStatistics` — module
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
-- `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
-- `onAfter` — instance *(class: `promiseHooks`)*
-- `onBefore` — instance *(class: `promiseHooks`)*
-- `onInit` — instance *(class: `promiseHooks`)*
-- `onSettled` — instance *(class: `promiseHooks`)*
-- `readDouble` — instance *(class: `Deserializer`)*
-- `readHeader` — instance *(class: `Deserializer`)*
-- `readRawBytes` — instance *(class: `Deserializer`)*
-- `readUint32` — instance *(class: `Deserializer`)*
-- `readUint64` — instance *(class: `Deserializer`)*
-- `readValue` — instance *(class: `Deserializer`)*
-- `releaseBuffer` — instance *(class: `Serializer`)*
 - `serialize` — module
-- `setDeserializeMainFunction` — instance *(class: `startupSnapshot`)*
-- `setFlagsFromString` — module
-- `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `stop` — instance *(class: `GCProfiler`)*
-- `stopCoverage` — module
-- `takeCoverage` — module
-- `writeDouble` — instance *(class: `Serializer`)*
-- `writeHeader` — instance *(class: `Serializer`)*
-- `writeRawBytes` — instance *(class: `Serializer`)*
-- `writeUint32` — instance *(class: `Serializer`)*
-- `writeUint64` — instance *(class: `Serializer`)*
-- `writeValue` — instance *(class: `Serializer`)*
-
-### Properties
-
-- `promiseHooks`
-- `startupSnapshot`
 
 ## `validator`
 

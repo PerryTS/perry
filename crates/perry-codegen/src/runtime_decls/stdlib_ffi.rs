@@ -1466,6 +1466,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // closure-typed class field method-style. `Expr::This` codegen reads
     // this when the lexical this_stack is empty.
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
+    module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
 
     // ========== Runtime init / module loader ==========

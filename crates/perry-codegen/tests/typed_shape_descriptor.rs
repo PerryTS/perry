@@ -108,6 +108,7 @@ fn module_with_new(class: Class) -> Module {
             }))],
             is_async: false,
             is_generator: false,
+            is_strict: false,
             is_exported: false,
             captures: Vec::new(),
             decorators: Vec::new(),

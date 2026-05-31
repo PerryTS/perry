@@ -451,11 +451,42 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
+        ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
+        ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
+        ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
+        ("module", "getSourceMapsSupport") => crate::process::js_module_get_source_maps_support(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
+        ("module", "setSourceMapsSupport") => {
+            crate::process::js_module_set_source_maps_support(arg(0), arg(1))
+        }
+        ("module", "stripTypeScriptTypes") => {
+            crate::process::js_module_strip_typescript_types(arg(0), arg(1))
+        }
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
         ("process", "threadCpuUsage") => crate::process::js_process_thread_cpu_usage(arg(0)),
+        ("process", "availableMemory") => crate::process::js_process_available_memory(),
+        ("process", "constrainedMemory") => crate::process::js_process_constrained_memory(),
+        ("process", "resourceUsage") => crate::process::js_process_resource_usage(),
+        ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
+        ("process", "getuid") => crate::process::js_process_getuid(),
+        ("process", "geteuid") => crate::process::js_process_geteuid(),
+        ("process", "getgid") => crate::process::js_process_getgid(),
+        ("process", "getegid") => crate::process::js_process_getegid(),
+        ("process", "sourceMapsEnabled") => crate::process::js_process_source_maps_enabled(),
+        ("process", "setSourceMapsEnabled") => {
+            crate::process::js_process_set_source_maps_enabled(arg(0))
+        }
+        ("process", "hasUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_has_uncaught_exception_capture_callback()
+        }
+        ("process", "setUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_set_uncaught_exception_capture_callback(arg(0))
+        }
+        ("process", "addUncaughtExceptionCaptureCallback") => {
+            crate::process::js_process_add_uncaught_exception_capture_callback(arg(0))
+        }
         ("process", "nextTick") => {
             // Validate the callback and forward trailing args (#3046).
             unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
@@ -504,6 +535,23 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "abort") => {
+            crate::process::js_process_abort();
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        ("process", "umask") => {
+            let mask = arg(0);
+            let mask_value = JSValue::from_bits(mask.to_bits());
+            if mask_value.is_undefined() {
+                crate::process::js_process_umask()
+            } else {
+                crate::process::js_process_umask_set(mask)
+            }
+        }
+        ("process", "emitWarning") => {
+            crate::process::js_process_emit_warning(arg(0), arg(1), arg(2));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "hrtime") => crate::os::js_process_hrtime(arg(0)),
@@ -1393,6 +1441,21 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+        ("readline", "clearLine") => {
+            crate::readline_helpers::js_readline_clear_line_args(pack_args())
+        }
+        ("readline", "clearScreenDown") => {
+            crate::readline_helpers::js_readline_clear_screen_down_args(pack_args())
+        }
+        ("readline", "cursorTo") => {
+            crate::readline_helpers::js_readline_cursor_to_args(pack_args())
+        }
+        ("readline", "moveCursor") => {
+            crate::readline_helpers::js_readline_move_cursor_args(pack_args())
+        }
+        ("readline", "emitKeypressEvents") => {
+            crate::readline_helpers::js_readline_emit_keypress_events_args(pack_args())
+        }
 
         // ── node:dns / node:dns/promises configuration ──
         ("dns", "getServers") => crate::dns::dns_get_servers_value(),

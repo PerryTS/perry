@@ -276,6 +276,8 @@ pub(crate) struct FnCtx<'a> {
     /// `Stmt::Return(value)` wraps `value` in `js_promise_resolved`
     /// before returning, so callers can `await` the result.
     pub is_async_fn: bool,
+    /// Whether `this` reads should preserve exact strict-mode receiver values.
+    pub is_strict_fn: bool,
     /// Static class fields: `(class_name, field_name) → llvm global
     /// symbol`. Built once in `compile_module`. Used by
     /// `Expr::StaticFieldGet/Set` to load/store the global.

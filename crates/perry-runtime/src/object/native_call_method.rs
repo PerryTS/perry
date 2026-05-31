@@ -1243,36 +1243,9 @@ pub unsafe extern "C" fn js_native_call_method(
                 "replace" | "replaceAll" => {
                     // Two-arg shape: (pattern, replacement). pattern can be a
                     // string OR a RegExp; replacement is a string OR a function.
-                    // Function replacements over a RegExp pattern route to the
-                    // regex-fn helpers (#2867) so dynamically-dispatched
-                    // `str.replace(re, fn)` observes Node's callback argument
-                    // shape `(match, p1, ..., offset, string, groups?)`.
-                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
-                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
-                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
-                        if pat_jsv.is_pointer() && repl_jsv.is_pointer() {
-                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-                            if crate::closure::is_closure_ptr(repl_raw) {
-                                let regex_ptr = pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
-                                if !regex_ptr.is_null() {
-                                    let r = if method_name == "replaceAll" {
-                                        crate::regex::js_string_replace_all_regex_fn(
-                                            receiver_string(),
-                                            regex_ptr,
-                                            repl_val,
-                                        )
-                                    } else {
-                                        crate::regex::js_string_replace_regex_fn(
-                                            receiver_string(),
-                                            regex_ptr,
-                                            repl_val,
-                                        )
-                                    };
-                                    return f64::from_bits(JSValue::string_ptr(r).bits());
-                                }
-                            }
-                        }
-                    }
+                    // Function replacements route to the callback helpers so
+                    // `str.replace(x, fn)` observes Node's callback argument
+                    // shape and receiver binding.
                     let pat_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
                     let repl_handle = root_string_arg_handle(&root_scope, &arg_handles, 1);
                     let pat_str = || {
@@ -1287,21 +1260,59 @@ pub unsafe extern "C" fn js_native_call_method(
                             .map(|handle| handle.get_raw_const_ptr::<crate::StringHeader>())
                             .unwrap_or(std::ptr::null())
                     };
+                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
+                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
+                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
+                        if repl_jsv.is_pointer() {
+                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                            if crate::closure::is_closure_ptr(repl_raw) {
+                                if pat_jsv.is_pointer() {
+                                    let regex_ptr =
+                                        pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
+                                    if !regex_ptr.is_null()
+                                        && crate::regex::is_regex_pointer(regex_ptr as *const u8)
+                                    {
+                                        let r = if method_name == "replaceAll" {
+                                            crate::regex::js_string_replace_all_regex_fn(
+                                                receiver_string(),
+                                                regex_ptr,
+                                                repl_val,
+                                            )
+                                        } else {
+                                            crate::regex::js_string_replace_regex_fn(
+                                                receiver_string(),
+                                                regex_ptr,
+                                                repl_val,
+                                            )
+                                        };
+                                        return f64::from_bits(JSValue::string_ptr(r).bits());
+                                    }
+                                }
+                                let r = if method_name == "replaceAll" {
+                                    crate::regex::js_string_replace_all_string_fn(
+                                        receiver_string(),
+                                        pat_str(),
+                                        repl_val,
+                                    )
+                                } else {
+                                    crate::regex::js_string_replace_string_fn(
+                                        receiver_string(),
+                                        pat_str(),
+                                        repl_val,
+                                    )
+                                };
+                                return f64::from_bits(JSValue::string_ptr(r).bits());
+                            }
+                        }
+                    }
                     // Detect RegExp pattern: NaN-boxed pointer to a RegExpHeader.
                     if let Some(v) = arg_at(0) {
                         let jsv = JSValue::from_bits(v.to_bits());
                         if jsv.is_pointer() {
-                            // Probe whether the pointer is a RegExpHeader by
-                            // checking the GC type tag the regex helpers
-                            // already validate; if it's not, the regex helper
-                            // returns the original string unchanged.
                             let regex_ptr = jsv.as_pointer::<crate::regex::RegExpHeader>();
-                            // Heuristic: a non-null POINTER_TAG that's not a
-                            // string/array (those have different GC type tags)
-                            // is treated as a RegExp here. The runtime helper
-                            // already validates internally and falls back
-                            // safely on mismatch.
-                            if !regex_ptr.is_null() {
+                            if !regex_ptr.is_null()
+                                && crate::regex::is_regex_pointer(regex_ptr as *const u8)
+                            {
                                 let r = if method_name == "replaceAll" {
                                     crate::regex::js_string_replace_all_regex(
                                         receiver_string(),
