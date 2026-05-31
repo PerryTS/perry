@@ -326,6 +326,8 @@ mod termios_impl {
 /// for shape compatibility with Node but currently ignored.
 #[no_mangle]
 pub extern "C" fn js_readline_create_interface(_opts: f64) -> i64 {
+    CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
+    CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     try_register_pump();
     ensure_reader_started();
     READLINE_HANDLE

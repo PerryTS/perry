@@ -487,29 +487,19 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
     }
     let original_args_handle = scope.root_raw_mut_ptr(original_args);
 
-    let mut returned = TAG_UNDEFINED_F64;
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
+    // #2917: Node's callbackified wrapper does NOT catch synchronous throws
+    // from `original` — they propagate to the caller. Likewise, if `original`
+    // returns a non-thenable, Node throws `TypeError` synchronously (it reaches
+    // for `.then` on the result). Only genuine Promise fulfillment/rejection
+    // routes through the callback. We therefore run the call WITHOUT a try
+    // trap so any sync exception unwinds past us.
+    let returned = unsafe {
         let arr = original_args_handle.get_raw_const_ptr::<ArrayHeader>();
-        let data =
-            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 };
-        returned = unsafe {
-            crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
-        };
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        call_callback_rejected(callback_handle.get_nanbox_f64(), exc);
-    }
-    crate::exception::js_try_end();
+        let data = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
+    };
 
-    let promise_ptr = promise_ptr_from_value(returned);
-    if promise_ptr.is_null() {
-        return TAG_UNDEFINED_F64;
-    }
-    let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
-
+    // Build the onFulfilled / onRejected closures (bound to the user callback).
     let fulfilled = js_closure_alloc(callbackify_fulfilled_thunk as *const u8, 1);
     if fulfilled.is_null() {
         return TAG_UNDEFINED_F64;
@@ -532,13 +522,98 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
         callback_handle.get_nanbox_f64(),
     );
 
-    js_promise_attach_handlers(
-        promise_handle.get_raw_mut_ptr(),
-        fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
-        rejected_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
-    );
+    // Native Perry Promise → attach our handlers directly.
+    let promise_ptr = promise_ptr_from_value(returned);
+    if !promise_ptr.is_null() {
+        let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
+        js_promise_attach_handlers(
+            promise_handle.get_raw_mut_ptr(),
+            fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+            rejected_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+        );
+        return TAG_UNDEFINED_F64;
+    }
 
-    TAG_UNDEFINED_F64
+    // Class-based thenable (e.g. a custom Promise subclass) → assimilate into a
+    // real Promise wrapper, then attach.
+    let assimilated = crate::promise::js_assimilate_thenable(returned);
+    let assimilated_ptr = promise_ptr_from_value(assimilated);
+    if !assimilated_ptr.is_null() {
+        let promise_handle = scope.root_raw_mut_ptr(assimilated_ptr);
+        js_promise_attach_handlers(
+            promise_handle.get_raw_mut_ptr(),
+            fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+            rejected_handle.get_raw_const_ptr::<ClosureHeader>() as ClosurePtr,
+        );
+        return TAG_UNDEFINED_F64;
+    }
+
+    // Object-literal thenable (`{ then(onF, onR) { … } }`) → its `.then` lives
+    // as an own field, not a vtable method, so `js_assimilate_thenable` passes
+    // it through unchanged. Probe for a callable `.then` field and invoke it
+    // with the thenable as `this`, passing our fulfilled/rejected handlers.
+    if let Some(then_fn) = callable_then_field(returned) {
+        let then_handle = scope.root_nanbox_f64(then_fn);
+        let on_fulfilled =
+            nanbox_pointer(fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
+        let on_rejected =
+            nanbox_pointer(rejected_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
+        let args = [on_fulfilled, on_rejected];
+        let prev_this = crate::object::js_implicit_this_set(returned);
+        unsafe {
+            crate::closure::js_native_call_value(
+                then_handle.get_nanbox_f64(),
+                args.as_ptr(),
+                args.len(),
+            );
+        }
+        crate::object::js_implicit_this_set(prev_this);
+        return TAG_UNDEFINED_F64;
+    }
+
+    // Not a Promise or thenable — Node throws `TypeError` synchronously because
+    // it attempts to call `.then` on the result.
+    throw_callbackify_not_thenable(returned);
+}
+
+/// Locate a callable own `then` field on a heap-object value (object-literal
+/// thenable). Returns the closure value to invoke, or `None`.
+fn callable_then_field(value: f64) -> Option<f64> {
+    let bits = value.to_bits();
+    if (bits & TAG_MASK) != POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    // Only read `.then` off genuine object headers; reading arbitrary heap
+    // types as objects would segfault.
+    unsafe {
+        let gc_header =
+            (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+    }
+    let obj = addr as *const crate::object::ObjectHeader;
+    let key = js_string_from_bytes(b"then".as_ptr(), 4);
+    let then_value = unsafe {
+        crate::object::js_object_get_field_by_name_f64(obj, key as *const crate::StringHeader)
+    };
+    if is_callable_closure(then_value) {
+        Some(then_value)
+    } else {
+        None
+    }
+}
+
+/// `TypeError` Node raises when the callbackified original returns a
+/// non-thenable. Node's message reads `<expr>.then is not a function` (the
+/// `<expr>` text varies by version); we use a stable, descriptive form.
+fn throw_callbackify_not_thenable(value: f64) -> ! {
+    let _ = value;
+    throw_plain_type_error("The \"original\" function did not return a Promise");
 }
 
 extern "C" fn callbackify_fulfilled_thunk(closure: *const ClosureHeader, value: f64) -> f64 {

@@ -34,6 +34,7 @@ pub mod buffer;
 pub mod builtins;
 pub mod child_process;
 pub mod closure;
+pub mod cluster;
 pub mod collection_iter;
 pub mod collection_iter_object;
 pub mod color_parse;
@@ -63,7 +64,6 @@ pub mod node_submodules;
 pub mod node_test;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
 pub mod node_v8;
-mod process_env_file;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
 pub use node_submodules::js_zlib_resolve_level;
@@ -85,6 +85,7 @@ pub mod timer;
 pub mod typed_feedback;
 pub mod typedarray;
 pub mod url;
+pub mod v8;
 pub mod value;
 pub mod wasi;
 /// WebAssembly host shims (issue #76). Forward-declares the
@@ -159,6 +160,8 @@ mod ui_harmonyos_stubs;
 pub mod ui_text_registry;
 pub mod util_abort;
 pub mod util_call_sites;
+pub mod util_debuglog;
+pub mod util_diff;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;

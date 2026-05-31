@@ -20,6 +20,42 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "findSourceMap",
+        class_filter: None,
+        runtime: "js_module_find_source_map",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "enableCompileCache",
+        class_filter: None,
+        runtime: "js_module_enable_compile_cache",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "getCompileCacheDir",
+        class_filter: None,
+        runtime: "js_module_get_compile_cache_dir",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "flushCompileCache",
+        class_filter: None,
+        runtime: "js_module_flush_compile_cache",
+        args: &[],
+        ret: NR_F64,
+    },
     // #3120: module.findPackageJSON(specifier[, base]) — walks parent
     // directories from the resolved specifier looking for package.json.
     // `specifier` (string) and `base` (string or URL object) both ride in
@@ -31,6 +67,40 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_module_find_package_json",
         args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    // #3119: module.createRequire(filenameOrURL) → a CommonJS-shaped require
+    // function (resolve/cache/extensions/main). The argument rides in the
+    // NaN-boxed F64 slot.
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "createRequire",
+        class_filter: None,
+        runtime: "js_module_create_require",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    // #3126: module.syncBuiltinESMExports() → undefined (no-op for the
+    // non-patched case). Extra arguments are ignored.
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "syncBuiltinESMExports",
+        class_filter: None,
+        runtime: "js_module_sync_builtin_esm_exports",
+        args: &[],
+        ret: NR_F64,
+    },
+    // #3263: module.runMain() → undefined (entrypoint already run in a
+    // native-compiled binary).
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "runMain",
+        class_filter: None,
+        runtime: "js_module_run_main",
+        args: &[],
         ret: NR_F64,
     },
     // ========== Node test runner shape stubs ==========
@@ -444,16 +514,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
-    // #2135 (Node process parity): process.loadEnvFile(path?) — HIR
-    // defaults the missing path to ".env" so this row always sees a
-    // single string argument.
+    // #2135 (Node process parity): process.loadEnvFile(path?) — pass the
+    // full JS value so runtime validation can accept strings, Buffers,
+    // file: URLs, and omitted/undefined/null defaults.
     NativeModSig {
         module: "process",
         has_receiver: false,
         method: "loadEnvFile",
         class_filter: None,
         runtime: "js_process_load_env_file",
-        args: &[NA_STR],
+        args: &[NA_F64],
         ret: NR_VOID,
     },
     // #2135 (Node process parity): process.getgroups() — Array<number>
@@ -1253,6 +1323,33 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_util_convert_process_signal_to_exit_code",
         args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "debuglog",
+        class_filter: None,
+        runtime: "js_util_debuglog",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "debug",
+        class_filter: None,
+        runtime: "js_util_debuglog",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "util",
+        has_receiver: false,
+        method: "diff",
+        class_filter: None,
+        runtime: "js_util_diff",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

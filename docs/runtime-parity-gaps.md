@@ -6,11 +6,11 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 17 | 466 | n/a |
-| Partial-module gaps | 30 | 1646 | 377 |
+| Whole-module gaps (zero coverage) | 16 | 427 | n/a |
+| Partial-module gaps | 31 | 1672 | 390 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2394** |  |
+| **Total true gaps** |  | **2381** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -91,29 +91,9 @@ Selected highlights (full list in `runtime-parity.md`):
 - `dns.resolvePtr(hostname, callback)`
 - … and 41 more
 
-### node:module
-
-**Total APIs: 39** · Perry covers: 0 · Gap: 39
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `Module.builtinModules`
-- `Module.createRequire(filename)`
-- `Module.findPackageJSON(specifier[, base])`
-- `Module.findSourceMap(path)`
-- `Module.flushCompileCache()`
-- `Module.getCompileCacheDir()`
-- `Module.getSourceMapsSupport()`
-- `Module.isBuiltin(moduleName)`
-- `Module.register(specifier[, parentURL][, options])`
-- `Module.registerHooks(options)`
-- `Module.runMain()`
-- `Module.setSourceMapsSupport(enabled[, options])`
-- … and 27 more
-
 ### node:cluster
 
-**Total APIs: 35** · Perry covers: 0 · Gap: 35
+**Total APIs: 35** · Perry covers: primary lifecycle subset · Gap: worker handle distribution and remaining events
 
 Selected highlights (full list in `runtime-parity.md`):
 
@@ -129,7 +109,9 @@ Selected highlights (full list in `runtime-parity.md`):
 - `cluster.fork([env])`
 - `cluster.disconnect([callback])`
 - `cluster.setupPrimary([settings])`
-- … and 23 more
+- `cluster.setupMaster([settings])`
+- worker handle identity and disconnect lifecycle
+- … and remaining Worker/listening events
 
 ### node:vm
 
@@ -643,7 +625,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `util.parseEnv(content)`
 - `util.stripVTControlCharacters(str)`
 - `util.toUSVString(string)`
-- `util.diff(actual, expected)`
 - `util.setTraceSigInt(enable)`
 - `MIMEType.prototype.type`
 - `MIMEType.prototype.subtype`
@@ -1841,6 +1822,57 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `new WASI([options])` | `manifest:wasi.WASI`; `test-parity/node-suite/wasi/classes/constructor-validation.ts` |
 | `wasi.getImportObject()` | `manifest:wasi.getImportObject`; `test-parity/node-suite/wasi/classes/import-object.ts` |
 | `wasi.wasiImport` | `manifest:wasi.wasiImport`; `test-parity/node-suite/wasi/classes/import-object.ts` |
+
+### node:module
+
+**Gap APIs: 26** · Already covered: 13
+
+#### Missing from Perry
+
+- `Module.createRequire(filename)`
+- `Module.getSourceMapsSupport()`
+- `Module.register(specifier[, parentURL][, options])`
+- `Module.registerHooks(options)`
+- `Module.runMain()`
+- `Module.setSourceMapsSupport(enabled[, options])`
+- `Module.stripTypeScriptTypes(code[, options])`
+- `Module.syncBuiltinESMExports()`
+- `Module.wrap(code)`
+- `Module.wrapper`
+- `module.children`
+- `module.exports`
+- `module.filename`
+- `module.id`
+- `module.loaded`
+- `module.parent`
+- `module.path`
+- `module.paths`
+- `module.isPreloading`
+- `module.require(id)`
+- `module.load()`
+- `require.cache` overrides
+- `module._extensions`
+- `module._cache`
+- `module._pathCache`
+- Customization hook callbacks
+
+#### Covered (sampled)
+
+| API | Coverage source |
+|-----|-----------------|
+| `Module.builtinModules` | `manifest:module.builtinModules`; `runtime:js_module_builtin_modules` |
+| `Module.findPackageJSON(specifier[, base])` | `manifest:module.findPackageJSON`; `runtime:js_module_find_package_json` |
+| `Module.findSourceMap(path)` | `manifest:module.findSourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
+| `Module.flushCompileCache()` | `manifest:module.flushCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.getCompileCacheDir()` | `manifest:module.getCompileCacheDir`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.isBuiltin(moduleName)` | `manifest:module.isBuiltin`; `test-parity/node-suite/module/methods/is-builtin.ts` |
+| `Module.constants.compileCacheStatus` | `manifest:module.constants`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `Module.enableCompileCache([cacheDir])` | `manifest:module.enableCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
+| `new SourceMap(payload[, options])` | `manifest:module.SourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
+| `sourceMap.payload` | `test-parity/node-suite/module/source-map/basic.ts` |
+| `sourceMap.findEntry(lineOffset, columnOffset)` | `test-parity/node-suite/module/source-map/basic.ts` |
+| `sourceMap.findOrigin(lineNumber, columnNumber)` | `test-parity/node-suite/module/source-map/basic.ts` |
+| Module namespace callable helper exports | `test-parity/node-suite/module/namespace/helper-shape.ts` |
 
 ### node:tty
 

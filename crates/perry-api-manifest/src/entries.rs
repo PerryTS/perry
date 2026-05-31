@@ -143,7 +143,9 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
 pub const NODE_SUBMODULES: &[&str] = &[
+    "fs/promises",
     "stream/promises",
+    "readline/promises",
     "punycode.ucs2",
     "sys",
     "test",
@@ -2125,9 +2127,33 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    method("readline", "clearLine", false, None),
+    method("readline", "clearScreenDown", false, None),
+    method("readline", "cursorTo", false, None),
+    method("readline", "moveCursor", false, None),
+    method("readline", "emitKeypressEvents", false, None),
     method("readline", "question", true, None),
     method("readline", "on", true, None),
     method("readline", "close", true, None),
+    method("readline", "pause", true, None),
+    method("readline", "resume", true, None),
+    method("readline", "prompt", true, None),
+    method("readline", "setPrompt", true, None),
+    method("readline", "getPrompt", true, None),
+    method("readline", "write", true, None),
+    method("readline", "getCursorPos", true, None),
+    method_sig(
+        "readline/promises",
+        "createInterface",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Any,
+    ),
+    method("readline/promises", "question", true, None),
+    method("readline/promises", "close", true, None),
+    class("readline/promises", "Interface"),
+    class("readline/promises", "Readline"),
     method_sig(
         "worker_threads",
         "getEnvironmentData",
@@ -2748,7 +2774,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
     method("process", "getBuiltinModule", false, None),
-    method("process", "loadEnvFile", false, None),
+    method_sig(
+        "process",
+        "loadEnvFile",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "path",
+            ty: TypeSpec::Any,
+            optional: true,
+        }],
+        TypeSpec::Void,
+    ),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
     method("process", "threadCpuUsage", false, None),
@@ -2796,10 +2833,81 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("process", "stdout"),
     property("process", "stderr"),
     property("process", "env"),
+    // node:v8 — shape-compatible diagnostics plus structured-clone round trips.
+    method("v8", "serialize", false, None),
+    method("v8", "deserialize", false, None),
+    method("v8", "cachedDataVersionTag", false, None),
+    method("v8", "getHeapStatistics", false, None),
+    method("v8", "getHeapCodeStatistics", false, None),
+    method("v8", "getHeapSpaceStatistics", false, None),
+    method("v8", "Serializer", false, None),
+    method("v8", "DefaultSerializer", false, None),
+    method("v8", "Deserializer", false, None),
+    method("v8", "DefaultDeserializer", false, None),
+    method("v8", "writeHeader", true, Some("Serializer")),
+    method("v8", "writeValue", true, Some("Serializer")),
+    method("v8", "releaseBuffer", true, Some("Serializer")),
+    method("v8", "transferArrayBuffer", true, Some("Serializer")),
+    method("v8", "writeUint32", true, Some("Serializer")),
+    method("v8", "writeUint64", true, Some("Serializer")),
+    method("v8", "writeDouble", true, Some("Serializer")),
+    method("v8", "writeRawBytes", true, Some("Serializer")),
+    method("v8", "_getDataCloneError", true, Some("Serializer")),
+    method(
+        "v8",
+        "_setTreatArrayBufferViewsAsHostObjects",
+        true,
+        Some("Serializer"),
+    ),
+    method("v8", "writeHeader", true, Some("DefaultSerializer")),
+    method("v8", "writeValue", true, Some("DefaultSerializer")),
+    method("v8", "releaseBuffer", true, Some("DefaultSerializer")),
+    method("v8", "transferArrayBuffer", true, Some("DefaultSerializer")),
+    method("v8", "writeUint32", true, Some("DefaultSerializer")),
+    method("v8", "writeUint64", true, Some("DefaultSerializer")),
+    method("v8", "writeDouble", true, Some("DefaultSerializer")),
+    method("v8", "writeRawBytes", true, Some("DefaultSerializer")),
+    method("v8", "_getDataCloneError", true, Some("DefaultSerializer")),
+    method(
+        "v8",
+        "_setTreatArrayBufferViewsAsHostObjects",
+        true,
+        Some("DefaultSerializer"),
+    ),
+    method("v8", "readHeader", true, Some("Deserializer")),
+    method("v8", "readValue", true, Some("Deserializer")),
+    method("v8", "transferArrayBuffer", true, Some("Deserializer")),
+    method("v8", "getWireFormatVersion", true, Some("Deserializer")),
+    method("v8", "readUint32", true, Some("Deserializer")),
+    method("v8", "readUint64", true, Some("Deserializer")),
+    method("v8", "readDouble", true, Some("Deserializer")),
+    method("v8", "readRawBytes", true, Some("Deserializer")),
+    method("v8", "readHeader", true, Some("DefaultDeserializer")),
+    method("v8", "readValue", true, Some("DefaultDeserializer")),
+    method(
+        "v8",
+        "transferArrayBuffer",
+        true,
+        Some("DefaultDeserializer"),
+    ),
+    method(
+        "v8",
+        "getWireFormatVersion",
+        true,
+        Some("DefaultDeserializer"),
+    ),
+    method("v8", "readUint32", true, Some("DefaultDeserializer")),
+    method("v8", "readUint64", true, Some("DefaultDeserializer")),
+    method("v8", "readDouble", true, Some("DefaultDeserializer")),
+    method("v8", "readRawBytes", true, Some("DefaultDeserializer")),
     // ===========================================================
     // Class exports (constructors `new Foo(...)` from a module).
     // ===========================================================
     class("buffer", "Buffer"),
+    class("v8", "Serializer"),
+    class("v8", "Deserializer"),
+    class("v8", "DefaultSerializer"),
+    class("v8", "DefaultDeserializer"),
     class("events", "EventEmitter"),
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
@@ -2834,11 +2942,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // at the same address.
     method("querystring", "decode", false, None),
     method("querystring", "encode", false, None),
-    // node:cluster — shape-only surface. The fixture probes
-    // typeof properties + reads constants; we never actually fork.
-    // Methods are wired through `is_native_module_callable_export`
-    // (bound-method closure path) so `typeof cluster.fork === "function"`
-    // holds without us implementing a real fork.
+    // node:cluster — primary lifecycle surface. `setupPrimary` /
+    // `setupMaster`, `fork`, and `disconnect` route through the native
+    // module bound-method path; handle sharing/listening distribution is
+    // outside this manifest entry.
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),
@@ -2968,6 +3075,43 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "watch", false, None),
     property("fs", "promises"),
     property("fs", "constants"),
+    // --- node:fs/promises direct submodule (#2728). Only the named exports
+    // Perry actually backs with runtime thunks (see
+    // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
+    // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
+    // intentionally omitted — they are tracked separately (#2133). The parent
+    // `fs.promises` namespace above still resolves to the same surface.
+    method("fs/promises", "access", false, None),
+    method("fs/promises", "appendFile", false, None),
+    method("fs/promises", "chmod", false, None),
+    method("fs/promises", "chown", false, None),
+    method("fs/promises", "copyFile", false, None),
+    method("fs/promises", "cp", false, None),
+    method("fs/promises", "glob", false, None),
+    method("fs/promises", "lchmod", false, None),
+    method("fs/promises", "lchown", false, None),
+    method("fs/promises", "link", false, None),
+    method("fs/promises", "lstat", false, None),
+    method("fs/promises", "lutimes", false, None),
+    method("fs/promises", "mkdir", false, None),
+    method("fs/promises", "mkdtemp", false, None),
+    method("fs/promises", "open", false, None),
+    method("fs/promises", "opendir", false, None),
+    method("fs/promises", "readFile", false, None),
+    method("fs/promises", "readdir", false, None),
+    method("fs/promises", "readlink", false, None),
+    method("fs/promises", "realpath", false, None),
+    method("fs/promises", "rename", false, None),
+    method("fs/promises", "rm", false, None),
+    method("fs/promises", "rmdir", false, None),
+    method("fs/promises", "stat", false, None),
+    method("fs/promises", "statfs", false, None),
+    method("fs/promises", "symlink", false, None),
+    method("fs/promises", "truncate", false, None),
+    method("fs/promises", "unlink", false, None),
+    method("fs/promises", "utimes", false, None),
+    method("fs/promises", "watch", false, None),
+    method("fs/promises", "writeFile", false, None),
     // --- console (Node global console exposed as node:console too). ---
     class("console", "Console"),
     method("console", "log", false, None),
@@ -2998,6 +3142,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "inspect", false, None),
     method("util", "format", false, None),
     method("util", "convertProcessSignalToExitCode", false, None),
+    method("util", "debug", false, None),
+    method("util", "diff", false, None),
     // #2514: libuv-style errno helpers.
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
@@ -3084,6 +3230,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
     method("sys", "convertProcessSignalToExitCode", false, None),
+    method("sys", "debug", false, None),
+    method("sys", "diff", false, None),
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
     method("sys", "getSystemErrorMap", false, None),
@@ -3405,10 +3553,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "toJSON", false, None),
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
-    // #1478: stub — records the entry (no-op today, see codegen).
+    // Resource timing entries are recorded through the perf_hooks timeline.
     method("perf_hooks", "markResourceTiming", false, None),
-    // #1335: returns `fn` unchanged today; the spec'd "wraps fn to
-    // record a 'function' timeline entry" piece isn't recorded yet.
+    // timerify returns a wrapper that emits observer-visible function entries.
     method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
@@ -4063,6 +4210,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "close", true, Some("Http2SecureServer")),
     method("http2", "on", true, Some("Http2SecureServer")),
     method("http2", "address", true, Some("Http2SecureServer")),
+    // --- node:http2 settings helpers (issue #3168) ---
+    method("http2", "getDefaultSettings", false, None),
+    method("http2", "getPackedSettings", false, None),
+    method("http2", "getUnpackedSettings", false, None),
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

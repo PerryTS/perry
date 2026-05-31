@@ -931,6 +931,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "v8"
+                    && is_v8_serializer_instance_method_name(&class_name, &property_name)
+                {
+                    // `new Serializer().writeHeader` and friends are method
+                    // value reads, not zero-arg native getters.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(module_name.as_str(), "dns" | "dns/promises")
                     && class_name == "Resolver"
                     && is_dns_resolver_method_name(&property_name)
@@ -1893,6 +1903,36 @@ fn is_console_instance_method_name(prop: &str) -> bool {
             | "profileEnd"
             | "timeStamp"
     )
+}
+
+fn is_v8_serializer_instance_method_name(class_name: &str, prop: &str) -> bool {
+    match class_name {
+        "Serializer" | "DefaultSerializer" => matches!(
+            prop,
+            "writeHeader"
+                | "writeValue"
+                | "releaseBuffer"
+                | "transferArrayBuffer"
+                | "writeUint32"
+                | "writeUint64"
+                | "writeDouble"
+                | "writeRawBytes"
+                | "_getDataCloneError"
+                | "_setTreatArrayBufferViewsAsHostObjects"
+        ),
+        "Deserializer" | "DefaultDeserializer" => matches!(
+            prop,
+            "readHeader"
+                | "readValue"
+                | "transferArrayBuffer"
+                | "getWireFormatVersion"
+                | "readUint32"
+                | "readUint64"
+                | "readDouble"
+                | "readRawBytes"
+        ),
+        _ => false,
+    }
 }
 
 fn is_dgram_socket_method_name(prop: &str) -> bool {
