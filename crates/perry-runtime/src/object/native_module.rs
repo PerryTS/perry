@@ -672,6 +672,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("module", "enableCompileCache" | "findSourceMap" | "SourceMap") => Some(1),
+        ("module", "flushCompileCache" | "getCompileCacheDir") => Some(0),
         ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
