@@ -1830,7 +1830,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
-        ("util", "debug" | "debuglog") => Some(2),
+        ("util", "debug" | "debuglog" | "inherits") => Some(2),
         ("util", "MIMEParams") => Some(0),
         ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),

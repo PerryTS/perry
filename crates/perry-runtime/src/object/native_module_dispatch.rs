@@ -1127,6 +1127,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "debuglog") | ("util", "debug") => {
             crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
         }
+        ("util", "inherits") => crate::util_inherits::js_util_inherits(arg(0), arg(1)),
         ("util", "_extend") => crate::util_mime::js_util_extend(arg(0), arg(1)),
         ("util", "_errnoException") => {
             crate::util_mime::js_util_errno_exception(arg(0), arg(1), arg(2))

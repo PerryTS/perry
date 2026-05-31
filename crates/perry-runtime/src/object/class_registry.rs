@@ -174,7 +174,10 @@ fn global_object_prototype_bits() -> Option<u64> {
     }
 }
 
-fn ensure_function_prototype_object(func_value: f64, class_id: u32) -> *mut ObjectHeader {
+pub(crate) fn ensure_function_prototype_object(
+    func_value: f64,
+    class_id: u32,
+) -> *mut ObjectHeader {
     if class_id == 0 {
         return std::ptr::null_mut();
     }
