@@ -49,7 +49,10 @@ pub(in crate::lower_call) fn build_headers_from_object(
     for (k, vexpr) in props {
         let key_expr = Expr::String(k.clone());
         let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
-        let val_ptr = get_raw_string_ptr(ctx, vexpr)?;
+        let value = lower_expr(ctx, vexpr)?;
+        let val_ptr = ctx
+            .block()
+            .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
         ctx.block().call(
             DOUBLE,
             "js_headers_set",
