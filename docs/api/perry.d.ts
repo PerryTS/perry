@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2337 entries across 102 modules
+// Coverage: 2388 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -175,6 +175,9 @@ declare module "async_hooks" {
   export class AsyncLocalStorage { [key: string]: any; }
   /** stdlib */
   export class AsyncResource { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function createHook(...args: any[]): any;
   /** stdlib */
@@ -564,15 +567,11 @@ declare module "constants" {
   /** stdlib */
   export const O_CREAT: any;
   /** stdlib */
-  export const O_DIRECT: any;
-  /** stdlib */
   export const O_DIRECTORY: any;
   /** stdlib */
   export const O_DSYNC: any;
   /** stdlib */
   export const O_EXCL: any;
-  /** stdlib */
-  export const O_NOATIME: any;
   /** stdlib */
   export const O_NOCTTY: any;
   /** stdlib */
@@ -583,6 +582,8 @@ declare module "constants" {
   export const O_RDONLY: any;
   /** stdlib */
   export const O_RDWR: any;
+  /** stdlib */
+  export const O_SYMLINK: any;
   /** stdlib */
   export const O_SYNC: any;
   /** stdlib */
@@ -624,8 +625,6 @@ declare module "constants" {
   /** stdlib */
   export const RSA_X931_PADDING: any;
   /** stdlib */
-  export const RTLD_DEEPBIND: any;
-  /** stdlib */
   export const RTLD_GLOBAL: any;
   /** stdlib */
   export const RTLD_LAZY: any;
@@ -651,6 +650,8 @@ declare module "constants" {
   export const SIGHUP: any;
   /** stdlib */
   export const SIGILL: any;
+  /** stdlib */
+  export const SIGINFO: any;
   /** stdlib */
   export const SIGINT: any;
   /** stdlib */
@@ -1239,6 +1240,23 @@ declare module "dns/promises" {
   export function setServers(...args: any[]): any;
 }
 
+declare module "domain" {
+  /** stdlib */
+  export class Domain { [key: string]: any; }
+  /** stdlib */
+  export const _stack: any;
+  /** stdlib */
+  export const active: any;
+  /** stdlib */
+  export const members: any;
+  /** stdlib */
+  export function Domain(...args: any[]): any;
+  /** stdlib */
+  export function create(...args: any[]): any;
+  /** stdlib */
+  export function createDomain(...args: any[]): any;
+}
+
 declare module "dotenv" {
   /** stdlib */
   export function config(...args: any[]): any;
@@ -1264,6 +1282,9 @@ declare module "events" {
   export const captureRejectionSymbol: any;
   /** stdlib */
   export const captureRejections: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export const defaultMaxListeners: any;
   /** stdlib */
@@ -1872,6 +1893,9 @@ declare module "os" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const devNull: any;
   /** stdlib */
   export function arch(...args: any[]): any;
@@ -1917,6 +1941,9 @@ declare module "os" {
 
 declare module "path" {
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const delimiter: any;
   /** stdlib */
   export const posix: any;
@@ -1954,6 +1981,9 @@ declare module "path" {
 
 declare module "path/posix" {
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const delimiter: any;
   /** stdlib */
   export const posix: any;
@@ -1990,6 +2020,9 @@ declare module "path/posix" {
 }
 
 declare module "path/win32" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export const delimiter: any;
   /** stdlib */
@@ -2813,6 +2846,9 @@ declare module "punycode.ucs2" {
 
 declare module "querystring" {
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export function decode(...args: any[]): any;
   /** stdlib */
   export function encode(...args: any[]): any;
@@ -2878,6 +2914,11 @@ declare module "slugify" {
   export default function (p0: string, p1: string, p2: string): string;
   /** stdlib */
   export function slugify(p0: string, p1: string, p2: string): string;
+}
+
+declare module "sqlite" {
+  /** stdlib */
+  export function DatabaseSync(p0: string): any;
 }
 
 declare module "stream" {
@@ -3014,11 +3055,28 @@ declare module "string_decoder" {
 
 declare module "sys" {
   /** stdlib */
+  export class MIMEParams { [key: string]: any; }
+  /** stdlib */
+  export class MIMEType { [key: string]: any; }
+  /** stdlib */
   export class TextDecoder { [key: string]: any; }
   /** stdlib */
   export class TextEncoder { [key: string]: any; }
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const types: any;
+  /** stdlib */
+  export function MIMEParams(...args: any[]): any;
+  /** stdlib */
+  export function MIMEType(...args: any[]): any;
+  /** stdlib */
+  export function _errnoException(...args: any[]): any;
+  /** stdlib */
+  export function _exceptionWithHostPort(...args: any[]): any;
+  /** stdlib */
+  export function _extend(...args: any[]): any;
   /** stdlib */
   export function aborted(...args: any[]): any;
   /** stdlib */
@@ -3177,6 +3235,9 @@ declare module "url" {
   /** stdlib */
   export class Url { [key: string]: any; }
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export function Url(...args: any[]): any;
   /** stdlib */
   export function domainToASCII(...args: any[]): any;
@@ -3202,11 +3263,28 @@ declare module "url" {
 
 declare module "util" {
   /** stdlib */
+  export class MIMEParams { [key: string]: any; }
+  /** stdlib */
+  export class MIMEType { [key: string]: any; }
+  /** stdlib */
   export class TextDecoder { [key: string]: any; }
   /** stdlib */
   export class TextEncoder { [key: string]: any; }
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const types: any;
+  /** stdlib */
+  export function MIMEParams(...args: any[]): any;
+  /** stdlib */
+  export function MIMEType(...args: any[]): any;
+  /** stdlib */
+  export function _errnoException(...args: any[]): any;
+  /** stdlib */
+  export function _exceptionWithHostPort(...args: any[]): any;
+  /** stdlib */
+  export function _extend(...args: any[]): any;
   /** stdlib */
   export function aborted(...args: any[]): any;
   /** stdlib */

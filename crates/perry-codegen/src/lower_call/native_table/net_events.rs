@@ -1721,6 +1721,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "events",
+        has_receiver: true,
+        method: "domain",
+        class_filter: None,
+        runtime: "js_event_emitter_domain_value",
+        args: &[],
+        ret: NR_F64,
+    },
     // Module-level helpers (`events.once` / `events.getEventListeners` /
     // `events.listenerCount` / `events.getMaxListeners` /
     // `events.setMaxListeners`). All take the emitter handle as a

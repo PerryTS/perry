@@ -3,7 +3,8 @@
 //! Three consumers:
 //!
 //! - **perry-hir** consults [`module_has_symbol`] during HIR lowering to
-//!   reject references to unimplemented APIs at compile time (#463).
+//!   reject references to unimplemented APIs at compile time (#463), and
+//!   [`module_has_public_named_export`] when checking Node-compatible named imports.
 //! - **perry-codegen** keeps its native dispatch table aligned with this
 //!   manifest via a CI test (`tests/manifest_consistency.rs`) — the
 //!   manifest is the entry list, codegen owns the dispatch metadata.
@@ -51,6 +52,15 @@ pub struct ApiEntry {
     /// flagged so the unimplemented-API check (#463) does NOT error on
     /// them — the runtime first-call warning from #464 surfaces those.
     pub stub: bool,
+    /// True when this row is a real top-level export of the module.
+    ///
+    /// Some rows exist only so the runtime dispatch table and strict
+    /// property gate can recognize object members (`Buffer.from`,
+    /// `performance.mark`, `process.on`, receiver methods, etc.). Those
+    /// rows must remain in `API_MANIFEST`, but they are not ESM named
+    /// exports and should not be accepted by named-import validation or
+    /// emitted as top-level declarations.
+    pub module_export: bool,
     /// ABI version this entry was published against. `None` for
     /// `Stdlib` source — the bundled stdlib is built and shipped
     /// together with the compiler, so its ABI moves in lockstep.
@@ -559,7 +569,6 @@ mod tests {
             "SIGINT",
             "EACCES",
             "PRIORITY_NORMAL",
-            "RTLD_DEEPBIND",
             "RSA_PKCS1_PADDING",
             "SSL_OP_NO_SSLv2",
             "SSL_OP_NO_TLSv1",
@@ -568,6 +577,15 @@ mod tests {
         ] {
             let entry = module_has_symbol("node:constants", name)
                 .expect("node:constants representative property should be in the manifest");
+            assert!(matches!(entry.kind, ApiKind::Property));
+        }
+
+        let rtld_deepbind = module_has_symbol("node:constants", "RTLD_DEEPBIND");
+        assert_eq!(
+            rtld_deepbind.is_some(),
+            cfg!(all(target_os = "linux", target_env = "gnu"))
+        );
+        if let Some(entry) = rtld_deepbind {
             assert!(matches!(entry.kind, ApiKind::Property));
         }
     }
@@ -721,6 +739,145 @@ mod tests {
                     class_filter: None,
                 }
             ));
+        }
+    }
+
+    #[test]
+    fn dispatch_only_node_members_are_not_module_exports() {
+        for (module, names) in [
+            (
+                "buffer",
+                &[
+                    "alloc",
+                    "allocUnsafe",
+                    "allocUnsafeSlow",
+                    "byteLength",
+                    "concat",
+                    "copyBytesFrom",
+                    "from",
+                    "fromBase64",
+                    "fromHex",
+                    "isBuffer",
+                    "isEncoding",
+                    "of",
+                ][..],
+            ),
+            ("crypto", &["md5", "randomUUIDv7", "sha256"][..]),
+            (
+                "perf_hooks",
+                &[
+                    "clearMarks",
+                    "clearMeasures",
+                    "clearResourceTimings",
+                    "getEntries",
+                    "getEntriesByName",
+                    "getEntriesByType",
+                    "mark",
+                    "markResourceTiming",
+                    "measure",
+                    "nodeTiming",
+                    "now",
+                    "setResourceTimingBufferSize",
+                    "supportedEntryTypes",
+                    "timeOrigin",
+                    "toJSON",
+                ][..],
+            ),
+            (
+                "process",
+                &[
+                    "addListener",
+                    "emit",
+                    "eventNames",
+                    "getMaxListeners",
+                    "listenerCount",
+                    "listeners",
+                    "off",
+                    "on",
+                    "once",
+                    "prependListener",
+                    "prependOnceListener",
+                    "rawListeners",
+                    "removeAllListeners",
+                    "removeListener",
+                    "setMaxListeners",
+                ][..],
+            ),
+            (
+                "string_decoder",
+                &["encoding", "lastChar", "lastNeed", "lastTotal"][..],
+            ),
+            (
+                "tty",
+                &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
+            ),
+            ("url", &["createObjectURL", "revokeObjectURL"][..]),
+            ("worker_threads", &["getWorkerData"][..]),
+            (
+                "https",
+                &["ClientRequest", "IncomingMessage", "ServerResponse"][..],
+            ),
+            ("http2", &["Http2SecureServer"][..]),
+            ("child_process", &["Stream"][..]),
+            ("cluster", &["addListener", "on", "worker"][..]),
+            ("stream", &["from", "fromWeb", "prototype", "toWeb"][..]),
+        ] {
+            for name in names {
+                assert!(
+                    module_has_symbol(module, name).is_some(),
+                    "{module}.{name} should remain present for dispatch/member gates"
+                );
+                assert!(
+                    !module_has_public_named_export(module, name),
+                    "{module}.{name} must not be accepted as a top-level module export"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn representative_node_module_exports_stay_public() {
+        for (module, names) in [
+            (
+                "buffer",
+                &["Buffer", "Blob", "File", "atob", "constants"][..],
+            ),
+            (
+                "crypto",
+                &["createHash", "getRandomValues", "hash", "randomUUID"][..],
+            ),
+            (
+                "perf_hooks",
+                &[
+                    "PerformanceObserver",
+                    "constants",
+                    "createHistogram",
+                    "performance",
+                ][..],
+            ),
+            ("process", &["cwd", "env", "pid", "version"][..]),
+            ("string_decoder", &["StringDecoder"][..]),
+            ("tty", &["ReadStream", "WriteStream", "isatty"][..]),
+            ("url", &["URL", "URLSearchParams", "fileURLToPath"][..]),
+            (
+                "worker_threads",
+                &["Worker", "parentPort", "workerData"][..],
+            ),
+            ("https", &["Agent", "Server", "get", "request"][..]),
+            (
+                "http2",
+                &["Http2ServerRequest", "Http2ServerResponse", "constants"][..],
+            ),
+            ("child_process", &["ChildProcess", "exec", "spawn"][..]),
+            ("cluster", &["Worker", "fork", "isPrimary"][..]),
+            ("stream", &["Readable", "Stream", "default", "pipeline"][..]),
+        ] {
+            for name in names {
+                assert!(
+                    module_has_public_named_export(module, name),
+                    "{module}.{name} should remain a top-level module export"
+                );
+            }
         }
     }
 

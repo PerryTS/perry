@@ -97,6 +97,27 @@ pub fn is_registered_map(addr: usize) -> bool {
     MAP_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
+/// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Map`
+/// pointer, or `None` if the receiver is not a `Map`. Backs the reflective
+/// `Map.prototype.*` thunks so they can perform the spec brand check
+/// (`TypeError` on a non-`Map` receiver) before dispatching. See
+/// `set::set_ptr_from_receiver_bits` for the receiver-extraction rationale.
+pub fn map_ptr_from_receiver_bits(bits: u64) -> Option<*mut MapHeader> {
+    let jsv = crate::value::JSValue::from_bits(bits);
+    let addr = if jsv.is_pointer() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if bits >> 48 == 0 && bits > 0x10000 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if is_registered_map(addr) {
+        Some(addr as *mut MapHeader)
+    } else {
+        None
+    }
+}
+
 /// Numeric-key index entry: hashed/compared by raw f64 bits only.
 /// Strings/object-pointer keys are NOT inserted here — those still go
 /// through the linear-scan fallback in `find_key_index`. The reason is
