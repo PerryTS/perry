@@ -647,6 +647,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns/promises", "Resolver", false, None),
     method("dns/promises", "cancel", true, Some("Resolver")),
     method("dns/promises", "getServers", true, Some("Resolver")),
+    method("dns/promises", "setServers", true, Some("Resolver")),
     // node:dgram UDP support is currently a runtime-only shape stub:
     // createSocket returns a socket-like object with callable methods so
     // feature detection and inventory probes compile without claiming packet IO.

@@ -28,17 +28,56 @@ console.log("typeof dns.resolveTlsa:", typeof dns.resolveTlsa);
 console.log("typeof dns.resolveTxt:", typeof dns.resolveTxt);
 console.log("typeof dns.reverse:", typeof dns.reverse);
 try {
-  const servers = dns.getServers();
-  console.log("dns.getServers isArray:", Array.isArray(servers));
-  console.log("dns.getServers length typeof:", typeof servers.length);
-  dns.setServers(servers);
-  console.log("dns.setServers: ok");
+  const originalServers = dns.getServers();
+  console.log("dns.getServers isArray:", Array.isArray(originalServers));
+  console.log("dns.getServers length typeof:", typeof originalServers.length);
+  dns.setServers(["1.1.1.1", "[2001:4860:4860::8888]:1053"]);
+  console.log("dns.setServers roundtrip:", dns.getServers().join("|"));
+  console.log("dns.promises initial servers:", dns.promises.getServers().join("|"));
+  dns.promises.setServers(["8.8.8.8", "::1"]);
+  console.log("dns.promises set roundtrip:", dns.promises.getServers().join("|"));
+  console.log("dns.promises set leaves dns:", dns.getServers().join("|"));
+  try {
+    dns.setServers(["not ip"]);
+  } catch (e) {
+    console.log("dns.setServers invalid ip:", (e as Error).name, (e as any).code);
+  }
+  try {
+    dns.setServers("1.1.1.1" as any);
+  } catch (e) {
+    console.log("dns.setServers non-array:", (e as Error).name, (e as any).code);
+  }
+  try {
+    dns.setServers([1] as any);
+  } catch (e) {
+    console.log("dns.setServers non-string:", (e as Error).name, (e as any).code);
+  }
+  console.log("dns.setServers invalid keeps previous:", dns.getServers().join("|"));
+  dns.setServers(originalServers);
+  console.log(
+    "dns.setServers restored:",
+    dns.getServers().join("|") === originalServers.join("|"),
+  );
 } catch (e) {
   console.log("dns.getServers/setServers error:", (e as Error).message);
 }
 try {
+  const originalOrder = dns.getDefaultResultOrder();
+  dns.setDefaultResultOrder("verbatim");
+  console.log("dns.setDefaultResultOrder('verbatim'):", dns.getDefaultResultOrder());
   dns.setDefaultResultOrder("ipv4first");
-  console.log("dns.setDefaultResultOrder('ipv4first'): ok");
+  console.log("dns.setDefaultResultOrder('ipv4first'):", dns.getDefaultResultOrder());
+  dns.setDefaultResultOrder("ipv6first");
+  console.log("dns.setDefaultResultOrder('ipv6first'):", dns.getDefaultResultOrder());
+  console.log("dns.promises shared result order:", dns.promises.getDefaultResultOrder());
+  try {
+    dns.setDefaultResultOrder("bad-order" as any);
+  } catch (e) {
+    console.log("dns.setDefaultResultOrder invalid:", (e as Error).name, (e as any).code);
+  }
+  console.log("dns.setDefaultResultOrder invalid keeps previous:", dns.getDefaultResultOrder());
+  dns.setDefaultResultOrder(originalOrder as any);
+  console.log("dns.setDefaultResultOrder restored:", dns.getDefaultResultOrder() === originalOrder);
 } catch (e) {
   console.log("dns.setDefaultResultOrder error:", (e as Error).message);
 }
@@ -51,9 +90,10 @@ try {
   console.log("new dns.Resolver typeof:", typeof r);
   console.log("resolver.cancel typeof:", typeof r.cancel);
   console.log("resolver.setLocalAddress typeof:", typeof r.setLocalAddress);
+  r.setServers(["1.0.0.1", "[::1]:5353"]);
   const rsrv = r.getServers();
   console.log("resolver.getServers isArray:", Array.isArray(rsrv));
-  console.log("resolver.getServers length typeof:", typeof rsrv.length);
+  console.log("resolver.getServers roundtrip:", rsrv.join("|"));
   console.log("resolver.setServers typeof:", typeof r.setServers);
 } catch (e) {
   console.log("Resolver error:", (e as Error).message);
