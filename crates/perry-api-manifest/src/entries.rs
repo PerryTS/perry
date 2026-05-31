@@ -2680,6 +2680,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Deprecated `node:constants` flat alias. It mirrors the fs/os/crypto
     // constants that Perry already exposes under module-specific
     // `*.constants` namespaces.
+    property("constants", "default"),
     property("constants", "F_OK"),
     property("constants", "R_OK"),
     property("constants", "W_OK"),

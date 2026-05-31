@@ -17,7 +17,15 @@ use crate::ir::*;
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
-        "async_hooks" | "events" | "os" | "path" | "querystring" | "sys" | "url" | "util"
+        "async_hooks"
+            | "constants"
+            | "events"
+            | "os"
+            | "path"
+            | "querystring"
+            | "sys"
+            | "url"
+            | "util"
     )
 }
 

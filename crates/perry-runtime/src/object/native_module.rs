@@ -999,6 +999,24 @@ fn deprecated_constants_keys() -> &'static [&'static [u8]] {
     DEPRECATED_CONSTANTS_KEYS
 }
 
+fn deprecated_constants_namespace_keys() -> &'static [&'static [u8]] {
+    use std::sync::OnceLock;
+    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+    MERGED
+        .get_or_init(|| {
+            let keys = deprecated_constants_keys();
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(keys.len() + 1);
+            for &k in keys {
+                if k == b"defaultCoreCipherList" {
+                    v.push(b"default");
+                }
+                v.push(k);
+            }
+            v
+        })
+        .as_slice()
+}
+
 #[cfg(test)]
 mod tests {
     use super::deprecated_constants_keys;
@@ -1159,7 +1177,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "path.default" => Some(PATH_DEFAULT_KEYS),
         "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "fs" => Some(FS_NAMESPACE_KEYS),
-        "constants" => Some(deprecated_constants_keys()),
+        "constants" => Some(deprecated_constants_namespace_keys()),
+        "constants.default" => Some(deprecated_constants_keys()),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
         "os" => Some(OS_NAMESPACE_KEYS),
@@ -1205,6 +1224,7 @@ pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> 
 fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
+        "constants.default" => Some("constants"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "querystring.default" => Some("querystring"),
@@ -1217,6 +1237,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
 fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
+        "constants" => Some("constants.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "querystring" => Some("querystring.default"),
@@ -1234,7 +1255,7 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
-        "async_hooks" | "os" | "path" | "querystring" | "url" | "util" => {
+        "async_hooks" | "constants" | "os" | "path" | "querystring" | "url" | "util" => {
             create_cjs_default_namespace(module_name)
         }
         _ => None,
@@ -1259,6 +1280,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "async_hooks"
             | "async_hooks.default"
             | "constants"
+            | "constants.default"
             | "events"
             | "fs.constants"
             | "os"
@@ -3973,20 +3995,23 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" if !is_cjs_default_object => cjs_default_export_value("querystring"),
             _ => None,
         },
-        "constants" => fs_const(property)
-            .or_else(|| fs_const_tail(property))
-            .or_else(|| os_signal_const(property))
-            .or_else(|| os_errno_const(property))
-            .or_else(|| os_priority_const(property))
-            .or_else(|| os_dlopen_const(property))
-            .or_else(|| crypto_const(property))
-            .or_else(|| {
-                if property == "defaultCoreCipherList" {
-                    Some(str_val(DEFAULT_CORE_CIPHER_LIST))
-                } else {
-                    None
-                }
-            }),
+        "constants" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("constants"),
+            _ => fs_const(property)
+                .or_else(|| fs_const_tail(property))
+                .or_else(|| os_signal_const(property))
+                .or_else(|| os_errno_const(property))
+                .or_else(|| os_priority_const(property))
+                .or_else(|| os_dlopen_const(property))
+                .or_else(|| crypto_const(property))
+                .or_else(|| {
+                    if property == "defaultCoreCipherList" {
+                        Some(str_val(DEFAULT_CORE_CIPHER_LIST))
+                    } else {
+                        None
+                    }
+                }),
+        },
         "path" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("path"),
             "sep" => {
