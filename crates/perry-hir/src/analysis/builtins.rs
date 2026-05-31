@@ -88,6 +88,13 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            | "Performance"
+            | "PerformanceEntry"
+            | "PerformanceMark"
+            | "PerformanceMeasure"
+            | "PerformanceObserver"
+            | "PerformanceObserverEntryList"
+            | "PerformanceResourceTiming"
             // #2875: TC39 explicit-resource-management globals.
             | "DisposableStack"
             | "AsyncDisposableStack"

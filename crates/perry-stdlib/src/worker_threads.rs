@@ -7,7 +7,7 @@
 //! - parentPort.on('message', callback): Async stdin reader, dispatch on main thread
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::sync::Once;
 
@@ -41,6 +41,37 @@ thread_local! {
     static ENVIRONMENT_DATA: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
     /// Objects marked through worker_threads.markAsUntransferable().
     static UNTRANSFERABLE_OBJECTS: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+    /// Objects marked through worker_threads.markAsUncloneable().
+    static UNCLONEABLE_OBJECTS: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+    /// Same-process MessageChannel ports keyed by port id (#3157).
+    static MESSAGE_PORTS: RefCell<HashMap<u64, MessagePortState>> = RefCell::new(HashMap::new());
+    /// Monotonic counter handing out MessagePort ids. Port ids start at 100 so
+    /// they never collide with the singleton parentPort handle (1).
+    static NEXT_PORT_ID: RefCell<u64> = const { RefCell::new(100) };
+}
+
+/// Per-port state for a same-process MessageChannel (#3157). A `MessageChannel`
+/// creates two ports linked as peers; `port.postMessage(v)` JSON-serializes `v`
+/// (structured-clone-like value semantics, matching the existing stdin/stdout
+/// IPC path) and enqueues it on the PEER's `inbox`. The event-loop pump drains
+/// inboxes and fires the `message` callback; `receiveMessageOnPort(port)` pops a
+/// single queued message synchronously without involving the pump.
+#[derive(Default)]
+struct MessagePortState {
+    /// Id of the paired port. `postMessage` delivers to the peer's inbox.
+    peer: u64,
+    /// Queue of delivered messages as JSON strings (oldest first).
+    inbox: VecDeque<String>,
+    /// `message` event listener (NaN-boxed closure value bits), if registered.
+    message_cb: Option<u64>,
+    /// `close` event listener (NaN-boxed closure value bits), if registered.
+    close_cb: Option<u64>,
+    /// Whether `.start()` (or a `message` listener) has been attached. Until a
+    /// port is started, queued messages are not dispatched to the listener
+    /// (Node semantics), though `receiveMessageOnPort` still drains them.
+    started: bool,
+    /// Whether `close()` has been called on this port.
+    closed: bool,
 }
 
 static ENVIRONMENT_DATA_GC_REGISTERED: Once = Once::new();
@@ -60,6 +91,23 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
             visitor.visit_nanbox_u64_slot(value);
         }
     });
+    // Keep MessageChannel port listener closures live + rewritten across GC
+    // moves (#3157). Stored as NaN-boxed closure value bits.
+    MESSAGE_PORTS.with(|ports| {
+        for state in ports.borrow_mut().values_mut() {
+            if let Some(cb) = state.message_cb.as_mut() {
+                visitor.visit_nanbox_u64_slot(cb);
+            }
+            if let Some(cb) = state.close_cb.as_mut() {
+                visitor.visit_nanbox_u64_slot(cb);
+            }
+        }
+    });
+}
+
+/// Unbox a NaN-boxed closure value into a `*const ClosureHeader`.
+fn closure_ptr_from_bits(bits: u64) -> *const ClosureHeader {
+    perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *const ClosureHeader
 }
 
 fn string_header_to_string(str_ptr: *const StringHeader) -> Option<String> {
@@ -155,30 +203,83 @@ extern "C" fn worker_threads_noop1(_closure: *const ClosureHeader, _arg0: f64) -
     js_undefined()
 }
 
-extern "C" fn worker_threads_noop2(_closure: *const ClosureHeader, _arg0: f64, _arg1: f64) -> f64 {
-    js_undefined()
-}
-
 extern "C" fn worker_threads_has_ref(_closure: *const ClosureHeader) -> f64 {
     js_bool(true)
 }
 
-fn message_port_object() -> *mut perry_runtime::object::ObjectHeader {
+/// Build a closure that captures a single f64 (the port id) in capture slot 0.
+/// The bound extern fn reads it back via `js_closure_get_capture_f64`.
+fn port_bound_closure(func_ptr: *const u8, arity: u32, port_id: u64) -> f64 {
+    perry_runtime::closure::js_register_closure_arity(func_ptr, arity);
+    let closure = perry_runtime::closure::js_closure_alloc(func_ptr, 1);
+    perry_runtime::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(port_id));
+    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
+/// Read the captured port id from a port-method closure.
+fn port_id_from_closure(closure: *const ClosureHeader) -> u64 {
+    perry_runtime::closure::js_closure_get_capture_f64(closure, 0).to_bits()
+}
+
+/// JSON-serialize a JSValue into a String (structured-clone-like deep copy).
+fn serialize_message(value: f64) -> String {
+    let str_ptr = unsafe { js_json_stringify(value, 0) };
+    string_header_to_string(str_ptr).unwrap_or_else(|| "undefined".to_string())
+}
+
+/// JSON-deserialize a stored message string back into a JSValue.
+fn deserialize_message(msg: &str) -> f64 {
+    if msg == "undefined" || msg.is_empty() {
+        return js_undefined();
+    }
+    let str_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    f64::from_bits(unsafe { js_json_parse(str_ptr) })
+}
+
+/// Build a MessagePort JS object for a same-process channel. The id is also
+/// stored on the object (hidden `__perryPortId` field) so `receiveMessageOnPort`
+/// can recover it from the object reference.
+fn message_port_object(port_id: u64) -> *mut perry_runtime::object::ObjectHeader {
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(
         obj,
         "postMessage",
-        closure_value(worker_threads_noop2 as *const u8, 2),
+        port_bound_closure(port_post_message as *const u8, 2, port_id),
+    );
+    set_object_field(
+        obj,
+        "on",
+        port_bound_closure(port_on as *const u8, 2, port_id),
+    );
+    set_object_field(
+        obj,
+        "addListener",
+        port_bound_closure(port_on as *const u8, 2, port_id),
+    );
+    set_object_field(
+        obj,
+        "once",
+        port_bound_closure(port_on as *const u8, 2, port_id),
+    );
+    set_object_field(
+        obj,
+        "off",
+        port_bound_closure(port_off as *const u8, 2, port_id),
+    );
+    set_object_field(
+        obj,
+        "removeListener",
+        port_bound_closure(port_off as *const u8, 2, port_id),
     );
     set_object_field(
         obj,
         "close",
-        closure_value(worker_threads_noop0 as *const u8, 0),
+        port_bound_closure(port_close as *const u8, 0, port_id),
     );
     set_object_field(
         obj,
         "start",
-        closure_value(worker_threads_noop0 as *const u8, 0),
+        port_bound_closure(port_start as *const u8, 0, port_id),
     );
     set_object_field(
         obj,
@@ -195,7 +296,105 @@ fn message_port_object() -> *mut perry_runtime::object::ObjectHeader {
         "hasRef",
         closure_value(worker_threads_has_ref as *const u8, 0),
     );
+    set_object_field(obj, "__perryPortId", f64::from_bits(port_id));
     obj
+}
+
+/// port.postMessage(value) — deliver to the peer port's inbox (#3157).
+extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _transfer: f64) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    // Reject values flagged uncloneable (#3159). Match Node's DataCloneError.
+    if UNCLONEABLE_OBJECTS.with(|set| set.borrow().contains(&value.to_bits())) {
+        return throw_data_clone_error("object could not be cloned.");
+    }
+    let serialized = serialize_message(value);
+    MESSAGE_PORTS.with(|ports| {
+        let peer = {
+            let ports = ports.borrow();
+            match ports.get(&port_id) {
+                Some(state) if !state.closed => state.peer,
+                _ => return,
+            }
+        };
+        if let Some(peer_state) = ports.borrow_mut().get_mut(&peer) {
+            peer_state.inbox.push_back(serialized);
+        }
+    });
+    js_undefined()
+}
+
+/// port.on(event, callback) / addListener / once (#3157).
+extern "C" fn port_on(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let event_name = string_value_to_string(event).unwrap_or_default();
+    let cb_bits = callback.to_bits();
+    // A program that only uses MessageChannel never calls spawn_for_promise, so
+    // the runtime pump would otherwise never be registered and `main` would
+    // return before any queued `message` is delivered. Register it here (mirrors
+    // readline #347), so the event loop ticks and drains the inboxes.
+    crate::common::async_bridge::ensure_pump_registered();
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            match event_name.as_str() {
+                "message" => {
+                    state.message_cb = Some(cb_bits);
+                    // Attaching a `message` listener implicitly starts the port.
+                    state.started = true;
+                }
+                "close" => state.close_cb = Some(cb_bits),
+                _ => {}
+            }
+        }
+    });
+    js_undefined()
+}
+
+/// port.off(event) / removeListener (#3157).
+extern "C" fn port_off(closure: *const ClosureHeader, event: f64, _callback: f64) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let event_name = string_value_to_string(event).unwrap_or_default();
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            match event_name.as_str() {
+                "message" => state.message_cb = None,
+                "close" => state.close_cb = None,
+                _ => {}
+            }
+        }
+    });
+    js_undefined()
+}
+
+/// port.start() — enable delivery of queued messages to the listener (#3157).
+extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            state.started = true;
+        }
+    });
+    js_undefined()
+}
+
+/// port.close() — mark closed and queue `close` events on both ends (#3157).
+extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    MESSAGE_PORTS.with(|ports| {
+        let mut ports = ports.borrow_mut();
+        if let Some(state) = ports.get_mut(&port_id) {
+            state.closed = true;
+        }
+    });
+    js_undefined()
+}
+
+/// worker_threads DataCloneError: matches Node's message for postMessage
+/// rejections of marked-uncloneable / marked-untransferable values (#3159).
+fn throw_data_clone_error(detail: &str) -> ! {
+    let msg = format!("DataCloneError: {detail}");
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = perry_runtime::error::js_error_new_with_message(msg_ptr);
+    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
 }
 
 /// worker_threads.markAsUntransferable(object)
@@ -216,7 +415,10 @@ pub extern "C" fn js_worker_threads_is_marked_as_untransferable(value: f64) -> f
 
 /// worker_threads.markAsUncloneable(object)
 #[no_mangle]
-pub extern "C" fn js_worker_threads_mark_as_uncloneable(_value: f64) -> f64 {
+pub extern "C" fn js_worker_threads_mark_as_uncloneable(value: f64) -> f64 {
+    UNCLONEABLE_OBJECTS.with(|objects| {
+        objects.borrow_mut().insert(value.to_bits());
+    });
     js_undefined()
 }
 
@@ -227,9 +429,51 @@ pub extern "C" fn js_worker_threads_move_message_port_to_context(port: f64, _con
 }
 
 /// worker_threads.receiveMessageOnPort(port)
+///
+/// Pops one queued message from `port`'s inbox synchronously (no event-loop
+/// involvement). Returns `{ message: value }` when a message is available, or
+/// `undefined` when the inbox is empty — matching Node (#3157).
 #[no_mangle]
-pub extern "C" fn js_worker_threads_receive_message_on_port(_port: f64) -> f64 {
-    js_undefined()
+pub extern "C" fn js_worker_threads_receive_message_on_port(port: f64) -> f64 {
+    let port_id = match port_id_from_object(port) {
+        Some(id) => id,
+        None => return js_undefined(),
+    };
+    let msg = MESSAGE_PORTS.with(|ports| {
+        ports
+            .borrow_mut()
+            .get_mut(&port_id)
+            .and_then(|state| state.inbox.pop_front())
+    });
+    match msg {
+        Some(json) => {
+            let value = deserialize_message(&json);
+            let obj = perry_runtime::object::js_object_alloc(0, 0);
+            set_object_field(obj, "message", value);
+            object_value(obj)
+        }
+        None => js_undefined(),
+    }
+}
+
+/// Recover a port id from a MessagePort JS object (the hidden `__perryPortId`).
+fn port_id_from_object(port: f64) -> Option<u64> {
+    let js = JSValue::from_bits(port.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let obj = perry_runtime::value::js_nanbox_get_pointer(port)
+        as *const perry_runtime::object::ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    let key = "__perryPortId";
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let field = perry_runtime::object::js_object_get_field_by_name_f64(obj, key_ptr);
+    if JSValue::from_bits(field.to_bits()).is_undefined() {
+        return None;
+    }
+    Some(field.to_bits())
 }
 
 /// worker_threads.postMessageToThread(threadId, value[, transferList][, timeout])
@@ -244,12 +488,118 @@ pub extern "C" fn js_worker_threads_post_message_to_thread(
 }
 
 /// new worker_threads.MessageChannel()
+///
+/// Allocates two paired same-process ports and returns `{ port1, port2 }`.
+/// Posting on one port delivers to the other's inbox (#3157).
 #[no_mangle]
 pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
+    ensure_environment_data_gc_scanner();
+    let (id1, id2) = NEXT_PORT_ID.with(|n| {
+        let mut n = n.borrow_mut();
+        let a = *n;
+        let b = a + 1;
+        *n = b + 1;
+        (a, b)
+    });
+    MESSAGE_PORTS.with(|ports| {
+        let mut ports = ports.borrow_mut();
+        ports.insert(
+            id1,
+            MessagePortState {
+                peer: id2,
+                ..Default::default()
+            },
+        );
+        ports.insert(
+            id2,
+            MessagePortState {
+                peer: id1,
+                ..Default::default()
+            },
+        );
+    });
     let obj = perry_runtime::object::js_object_alloc(0, 0);
-    set_object_field(obj, "port1", object_value(message_port_object()));
-    set_object_field(obj, "port2", object_value(message_port_object()));
+    set_object_field(obj, "port1", object_value(message_port_object(id1)));
+    set_object_field(obj, "port2", object_value(message_port_object(id2)));
     object_value(obj)
+}
+
+/// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
+/// firing `close` events for closed ports. Called from the event-loop pump.
+/// Returns the number of messages/events dispatched (#3157).
+#[no_mangle]
+pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
+    let mut dispatched = 0;
+
+    // Snapshot deliverable (port_id, callback, message) tuples, then invoke the
+    // callbacks OUTSIDE the MESSAGE_PORTS borrow — a listener may re-enter
+    // postMessage / close, which needs to borrow MESSAGE_PORTS again.
+    loop {
+        let next: Option<(u64, String)> = MESSAGE_PORTS.with(|ports| {
+            let mut ports = ports.borrow_mut();
+            for state in ports.values_mut() {
+                if state.started && !state.closed && state.message_cb.is_some() {
+                    if let Some(msg) = state.inbox.pop_front() {
+                        return Some((state.message_cb.unwrap(), msg));
+                    }
+                }
+            }
+            None
+        });
+        match next {
+            Some((cb_bits, msg)) => {
+                let value = deserialize_message(&msg);
+                let closure = closure_ptr_from_bits(cb_bits);
+                if !closure.is_null() {
+                    perry_runtime::closure::js_closure_call1(closure, value);
+                }
+                dispatched += 1;
+            }
+            None => break,
+        }
+    }
+
+    // Fire `close` callbacks once for newly-closed ports.
+    let close_cbs: Vec<u64> = MESSAGE_PORTS.with(|ports| {
+        let mut cbs = Vec::new();
+        for state in ports.borrow_mut().values_mut() {
+            if state.closed {
+                if let Some(cb) = state.close_cb.take() {
+                    cbs.push(cb);
+                }
+            }
+        }
+        cbs
+    });
+    for cb_bits in close_cbs {
+        let closure = closure_ptr_from_bits(cb_bits);
+        if !closure.is_null() {
+            perry_runtime::closure::js_closure_call0(closure);
+        }
+        dispatched += 1;
+    }
+
+    dispatched
+}
+
+/// Keep the event loop alive while any MessageChannel port still has a started
+/// `message` listener with queued or potentially-incoming messages (#3157).
+#[no_mangle]
+pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
+    let pending = MESSAGE_PORTS.with(|ports| {
+        ports.borrow().values().any(|state| {
+            (state.started
+                && state.message_cb.is_some()
+                && !state.closed
+                && !state.inbox.is_empty())
+                || (state.closed && state.close_cb.is_some())
+        })
+    });
+    if pending {
+        1
+    } else {
+        0
+    }
 }
 
 /// new worker_threads.BroadcastChannel(name)
@@ -486,3 +836,17 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
         0
     }
 }
+
+// `#[used]` keepalive anchors (#3157/#3159) — these `#[no_mangle]` entry points
+// are emitted by codegen (native-table dispatch) and called only from generated
+// `.o`. The auto-optimize whole-program-LLVM rebuild internalizes + dead-strips
+// unreferenced `#[no_mangle]` symbols, so anchor them here. See
+// [[project_auto_optimize_keepalive_3320]].
+#[used]
+static KEEP_WT_MESSAGE_CHANNEL_NEW: extern "C" fn() -> f64 = js_worker_threads_message_channel_new;
+#[used]
+static KEEP_WT_RECEIVE_MESSAGE_ON_PORT: extern "C" fn(f64) -> f64 =
+    js_worker_threads_receive_message_on_port;
+#[used]
+static KEEP_WT_MARK_AS_UNCLONEABLE: extern "C" fn(f64) -> f64 =
+    js_worker_threads_mark_as_uncloneable;

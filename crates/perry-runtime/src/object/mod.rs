@@ -1681,7 +1681,16 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
         if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-            let bytes = b"[object Array]";
+            // #3553: a function's `arguments` object is represented as an array
+            // carrying the GC_ARRAY_ARGUMENTS_OBJECT flag. Node tags it
+            // `[object Arguments]`, not `[object Array]`.
+            let bytes: &[u8] = if crate::array::array_has_arguments_object_flag(
+                raw_addr as *const crate::array::ArrayHeader,
+            ) {
+                b"[object Arguments]"
+            } else {
+                b"[object Array]"
+            };
             let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
             return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
         }
