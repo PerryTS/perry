@@ -1097,18 +1097,12 @@ mod tests {
         drop_handle(handle);
     }
 
-    fn assert_js_bool(value: f64, expected: bool) {
-        let value = JsValue::from_bits(value.to_bits());
-        assert!(value.is_bool(), "expected JS bool, got {:#x}", value.bits());
-        assert_eq!(value.to_bool(), expected);
-    }
-
     #[test]
     fn destroy_marks_destroyed() {
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
-        assert_js_bool(js_http_agent_destroyed(handle), false);
+        assert_eq!(js_http_agent_destroyed(handle), bool_f64(false));
         let _ = js_http_agent_destroy(handle);
-        assert_js_bool(js_http_agent_destroyed(handle), true);
+        assert_eq!(js_http_agent_destroyed(handle), bool_f64(true));
         drop_handle(handle);
     }
 
@@ -1118,7 +1112,7 @@ mod tests {
         js_http_agent_set_max_sockets(handle, 4.0);
         assert_eq!(js_http_agent_max_sockets(handle), 4.0);
         js_http_agent_set_keep_alive(handle, 1.0);
-        assert_js_bool(js_http_agent_keep_alive(handle), true);
+        assert_eq!(js_http_agent_keep_alive(handle), bool_f64(true));
         drop_handle(handle);
     }
 
