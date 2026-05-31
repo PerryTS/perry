@@ -357,6 +357,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
+    #[cfg(feature = "external-http-client-pump")]
+    if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_incoming_method(handle, method_name, &args) }
+    {
+        return value;
+    }
+
     // External http-server path (#2153): when `node:http` / `node:https` /
     // `node:http2` routes through perry-ext-http-server, the HttpServer handle
     // returned by `http.createServer(...)` reaches `js_native_call_method` via
@@ -420,16 +427,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_incoming_message_method = matches!(
             method_name,
-            "on" | "addListener" | "pause" | "resume" | "destroy" | "read"
+            "on" | "addListener" | "setEncoding" | "pause" | "resume" | "destroy" | "read"
         ) || matches!(
             method_name,
-            "method" | "url" | "httpVersion"
+            "method" | "url" | "httpVersion" | "headers" | "rawHeaders"
         ) || matches!(
             method_name,
-            "__get_method" | "__get_url" | "__get_httpVersion"
+            "__get_method" | "__get_url" | "__get_httpVersion" | "__get_headers"
         ) || matches!(
             method_name,
-            "__get_complete" | "__get_aborted" | "__get_destroyed"
+            "__get_rawHeaders" | "__get_complete" | "__get_aborted" | "__get_destroyed"
         );
         if is_incoming_message_method
             && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
@@ -1283,6 +1290,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "destroyed"
                 | "on"
                 | "addListener"
+                | "setEncoding"
                 | "pause"
                 | "resume"
                 | "destroy"
@@ -1436,41 +1444,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         }
     }
 
-    // Issue #769 — perry-ext-http `IncomingMessage` response handle.
-    // `res.statusCode` / `res.statusMessage` / `res.headers` inside the
-    // `request(url, (res) => ...)` callback hits this arm via
-    // `js_object_get_field_by_name`'s small-handle path. Gated on
-    // `external-http-client-pump` because that feature is the marker
-    // for "perry-ext-http is linked and exports these symbols".
     #[cfg(feature = "external-http-client-pump")]
-    if matches!(
-        property_name,
-        "statusCode" | "statusMessage" | "headers" | "trailers"
-    ) {
-        extern "C" {
-            fn js_http_is_incoming_message(handle: i64) -> i32;
-            fn js_http_status_code(handle: i64) -> f64;
-            fn js_http_status_message(handle: i64) -> *mut perry_runtime::StringHeader;
-            fn js_http_response_headers(handle: i64) -> f64;
-            fn js_http_response_trailers(handle: i64) -> f64;
-        }
-        if unsafe { js_http_is_incoming_message(handle) } != 0 {
-            use perry_runtime::JSValue;
-            return match property_name {
-                "statusCode" => unsafe { js_http_status_code(handle) },
-                "statusMessage" => {
-                    let ptr = unsafe { js_http_status_message(handle) };
-                    if ptr.is_null() {
-                        f64::from_bits(0x7FFC_0000_0000_0001)
-                    } else {
-                        f64::from_bits(JSValue::string_ptr(ptr).bits())
-                    }
-                }
-                "headers" => unsafe { js_http_response_headers(handle) },
-                "trailers" => unsafe { js_http_response_trailers(handle) },
-                _ => f64::from_bits(0x7FFC_0000_0000_0001),
-            };
-        }
+    if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_incoming_property(handle, property_name) }
+    {
+        return value;
     }
 
     // Web Fetch property dispatch (refs #421 — Phase 1 of the handle-NaN-boxing

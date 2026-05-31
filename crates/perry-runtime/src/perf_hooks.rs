@@ -35,6 +35,9 @@ const ENTRY_TYPE_FUNCTION: u8 = 3;
 pub(crate) const CLASS_ID_PERFORMANCE_ENTRY: u32 = 0xFFFF_0080;
 pub(crate) const CLASS_ID_PERFORMANCE_MARK: u32 = 0xFFFF_0081;
 pub(crate) const CLASS_ID_PERFORMANCE_MEASURE: u32 = 0xFFFF_0082;
+pub(crate) const CLASS_ID_PERFORMANCE_RESOURCE_TIMING: u32 = 0xFFFF_0086;
+pub(crate) const CLASS_ID_PERFORMANCE: u32 = 0xFFFF_0087;
+pub(crate) const CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST: u32 = 0xFFFF_0088;
 
 /// Shape id for the `{ name, entryType, startTime, duration, detail }` object
 /// returned by mark/measure and the getEntries* arrays.
@@ -52,13 +55,18 @@ const PERF_ENTRY_JSON_SHAPE: u32 = 0x7FFF_FF42;
 const ELU_SHAPE: u32 = 0x7FFF_FF41;
 const ELU_KEYS: &[u8] = b"idle\0active\0utilization\0";
 
-/// Shape id for the `{ timeOrigin }` snapshot returned by `performance.toJSON()`.
-const TOJSON_SHAPE: u32 = 0x7FFF_FF42;
-const TOJSON_KEYS: &[u8] = b"timeOrigin\0";
+/// Shape id for the `{ eventLoopUtilization, nodeTiming, timeOrigin }`
+/// snapshot returned by `performance.toJSON()`.
+const TOJSON_SHAPE: u32 = 0x7FFF_FF50;
+const TOJSON_KEYS: &[u8] = b"eventLoopUtilization\0nodeTiming\0timeOrigin\0";
 
 /// Shape id + keys for `performance.nodeTiming` (PerformanceNodeTiming entry).
 const NODE_TIMING_SHAPE: u32 = 0x7FFF_FF43;
-const NODE_TIMING_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0nodeStart\0v8Start\0bootstrapComplete\0environment\0loopStart\0loopExit\0idleTime\0";
+const NODE_TIMING_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0nodeStart\0v8Start\0bootstrapComplete\0environment\0loopStart\0loopExit\0idleTime\0uvMetricsInfo\0";
+
+/// Shape id + keys for `performance.nodeTiming.uvMetricsInfo`.
+const UV_METRICS_INFO_SHAPE: u32 = 0x7FFF_FF51;
+const UV_METRICS_INFO_KEYS: &[u8] = b"loopCount\0events\0eventsWaiting\0";
 
 #[derive(Clone)]
 struct PerfEntry {
@@ -109,6 +117,8 @@ unsafe fn perf_entry_type(obj: *const crate::object::ObjectHeader) -> Option<u8>
     match entry_type.as_str() {
         "mark" => Some(ENTRY_TYPE_MARK),
         "measure" => Some(ENTRY_TYPE_MEASURE),
+        "resource" => Some(ENTRY_TYPE_RESOURCE),
+        "function" => Some(ENTRY_TYPE_FUNCTION),
         _ => None,
     }
 }
@@ -121,6 +131,7 @@ pub(crate) unsafe fn is_perf_entry_object_instance_of(
         CLASS_ID_PERFORMANCE_ENTRY => None,
         CLASS_ID_PERFORMANCE_MARK => Some(ENTRY_TYPE_MARK),
         CLASS_ID_PERFORMANCE_MEASURE => Some(ENTRY_TYPE_MEASURE),
+        CLASS_ID_PERFORMANCE_RESOURCE_TIMING => Some(ENTRY_TYPE_RESOURCE),
         _ => return None,
     };
     if !is_perf_entry_object(obj) {
@@ -130,6 +141,32 @@ pub(crate) unsafe fn is_perf_entry_object_instance_of(
         None => true,
         Some(kind) => perf_entry_type(obj) == Some(kind),
     })
+}
+
+pub(crate) fn is_performance_object_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    PERFORMANCE_NS.with(|c| {
+        let cached = c.get();
+        cached != 0 && cached == bits
+    })
+}
+
+pub(crate) fn is_perf_observer_list_value(value: f64) -> bool {
+    unsafe {
+        let Some(obj) = as_object_ptr(value) else {
+            return false;
+        };
+        let module = js_object_get_field(obj, 0);
+        string_of(module).as_deref() == Some("perf_observer_list")
+    }
+}
+
+pub(crate) fn is_perf_hooks_shape_instance_of(value: f64, class_id: u32) -> Option<bool> {
+    match class_id {
+        CLASS_ID_PERFORMANCE => Some(is_performance_object_value(value)),
+        CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST => Some(is_perf_observer_list_value(value)),
+        _ => None,
+    }
 }
 
 /// Build the plain object returned by `PerformanceEntry#toJSON()` — a copy of
@@ -798,19 +835,31 @@ unsafe fn read_elu_idle_active(value: f64) -> Option<(f64, f64)> {
 
 // ── performance.toJSON() ─────────────────────────────────────────────────────
 /// A JSON snapshot of the performance object. Node returns
-/// `{ nodeTiming, timeOrigin, ... }`; Perry currently surfaces `timeOrigin`
-/// (a positive ms value), which is the field user code reads when serializing
-/// `performance`. Forward-compatible with adding `nodeTiming` later (#1337).
+/// `{ eventLoopUtilization, nodeTiming, timeOrigin }`; Perry keeps the same
+/// property names and numeric subfield types while using deterministic fallback
+/// values for libuv-specific counters.
 #[no_mangle]
 pub extern "C" fn js_perf_to_json() -> f64 {
     unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let (idle, active) = cumulative_idle_active();
+        let elu = make_elu_object(idle, active);
+        let elu_handle = scope.root_nanbox_f64(elu);
+        let node_timing = js_perf_node_timing();
+        let node_timing_handle = scope.root_nanbox_f64(node_timing);
         let obj = js_object_alloc_with_shape(
             TOJSON_SHAPE,
-            1,
+            3,
             TOJSON_KEYS.as_ptr(),
             TOJSON_KEYS.len() as u32,
         );
-        js_object_set_field(obj, 0, JSValue::number(time_origin_ms()));
+        js_object_set_field(obj, 0, JSValue::from_bits(elu_handle.get_nanbox_u64()));
+        js_object_set_field(
+            obj,
+            1,
+            JSValue::from_bits(node_timing_handle.get_nanbox_u64()),
+        );
+        js_object_set_field(obj, 2, JSValue::number(time_origin_ms()));
         crate::value::js_nanbox_pointer(obj as i64)
     }
 }
@@ -824,14 +873,20 @@ pub extern "C" fn js_perf_to_json() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perf_node_timing() -> f64 {
     unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let node_name = str_value("node");
+        let node_name_handle = scope.root_nanbox_u64(node_name.bits());
+        let uv_metrics = make_uv_metrics_info_object();
+        let uv_metrics_handle = scope.root_nanbox_f64(uv_metrics);
         let obj = js_object_alloc_with_shape(
             NODE_TIMING_SHAPE,
-            11,
+            12,
             NODE_TIMING_KEYS.as_ptr(),
             NODE_TIMING_KEYS.len() as u32,
         );
-        js_object_set_field(obj, 0, str_value("node")); // name
-        js_object_set_field(obj, 1, str_value("node")); // entryType
+        let node_name = JSValue::from_bits(node_name_handle.get_nanbox_u64());
+        js_object_set_field(obj, 0, node_name); // name
+        js_object_set_field(obj, 1, node_name); // entryType
         js_object_set_field(obj, 2, JSValue::number(0.0)); // startTime
         js_object_set_field(obj, 3, JSValue::number(0.0)); // duration
         js_object_set_field(obj, 4, JSValue::number(0.0)); // nodeStart
@@ -841,8 +896,28 @@ pub extern "C" fn js_perf_node_timing() -> f64 {
         js_object_set_field(obj, 8, JSValue::number(perf_now().max(0.0))); // loopStart
         js_object_set_field(obj, 9, JSValue::number(-1.0)); // loopExit (loop running)
         js_object_set_field(obj, 10, JSValue::number(0.0)); // idleTime
+        js_object_set_field(
+            obj,
+            11,
+            JSValue::from_bits(uv_metrics_handle.get_nanbox_u64()),
+        );
         crate::value::js_nanbox_pointer(obj as i64)
     }
+}
+
+unsafe fn make_uv_metrics_info_object() -> f64 {
+    let obj = js_object_alloc_with_shape(
+        UV_METRICS_INFO_SHAPE,
+        3,
+        UV_METRICS_INFO_KEYS.as_ptr(),
+        UV_METRICS_INFO_KEYS.len() as u32,
+    );
+    // Perry does not expose libuv counters; retain Node's property names and
+    // numeric field types with deterministic zero counters.
+    js_object_set_field(obj, 0, JSValue::number(0.0)); // loopCount
+    js_object_set_field(obj, 1, JSValue::number(0.0)); // events
+    js_object_set_field(obj, 2, JSValue::number(0.0)); // eventsWaiting
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 // ── clearResourceTimings() / setResourceTimingBufferSize(n) ──────────────────

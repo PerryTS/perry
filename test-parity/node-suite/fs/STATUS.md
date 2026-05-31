@@ -4,9 +4,9 @@ This split suite replaces the legacy monolithic `test-files/test_parity_fs.ts` a
 
 ## Current coverage
 
-- `node:fs`: 126 TypeScript parity cases
+- `node:fs`: 127 TypeScript parity cases
 - `node:fs/promises`: 62 TypeScript parity cases
-- Total: 188 TypeScript parity cases
+- Total: 189 TypeScript parity cases
 
 The suite was built from deterministic behavior in:
 

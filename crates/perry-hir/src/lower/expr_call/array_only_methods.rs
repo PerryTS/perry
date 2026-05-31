@@ -62,6 +62,69 @@ fn is_module_builtin_modules_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bo
             .unwrap_or(false)
 }
 
+fn is_util_or_sys(module_name: &str) -> bool {
+    matches!(module_name, "util" | "sys")
+}
+
+fn is_util_mime_constructor(ctx: &LoweringContext, expr: &ast::Expr, class_name: &str) -> bool {
+    match unwrap_transparent_expr(expr) {
+        ast::Expr::Ident(ident) => ctx
+            .lookup_native_module(ident.sym.as_ref())
+            .map(|(module_name, method_name)| {
+                is_util_or_sys(module_name) && method_name == Some(class_name)
+            })
+            .unwrap_or(false),
+        ast::Expr::Member(member) => {
+            let ast::MemberProp::Ident(prop_ident) = &member.prop else {
+                return false;
+            };
+            if prop_ident.sym.as_ref() != class_name {
+                return false;
+            }
+            let ast::Expr::Ident(obj_ident) = unwrap_transparent_expr(member.obj.as_ref()) else {
+                return false;
+            };
+            ctx.lookup_native_module(obj_ident.sym.as_ref())
+                .map(|(module_name, method_name)| {
+                    is_util_or_sys(module_name) && method_name.is_none()
+                })
+                .unwrap_or(false)
+                || ctx
+                    .lookup_builtin_module_alias(obj_ident.sym.as_ref())
+                    .map(is_util_or_sys)
+                    .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn is_util_mime_instance(ctx: &LoweringContext, expr: &ast::Expr, class_name: &str) -> bool {
+    match unwrap_transparent_expr(expr) {
+        ast::Expr::Ident(ident) => ctx
+            .lookup_native_instance(ident.sym.as_ref())
+            .map(|(module_name, instance_class)| {
+                is_util_or_sys(module_name) && instance_class == class_name
+            })
+            .unwrap_or(false),
+        ast::Expr::New(new_expr) => is_util_mime_constructor(ctx, &new_expr.callee, class_name),
+        _ => false,
+    }
+}
+
+fn is_util_mime_params_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match unwrap_transparent_expr(expr) {
+        ast::Expr::Ident(_) | ast::Expr::New(_) => is_util_mime_instance(ctx, expr, "MIMEParams"),
+        ast::Expr::Member(member) => {
+            let ast::MemberProp::Ident(prop_ident) = &member.prop else {
+                return false;
+            };
+            prop_ident.sym.as_ref() == "params"
+                && is_util_mime_instance(ctx, &member.obj, "MIMEType")
+        }
+        _ => false,
+    }
+}
+
 /// Does this expression's method chain originate from a node:stream
 /// source — `Readable.from(...)` / `Readable.of(...)`, `new Transform()`,
 /// or a chain of lazy iterator helpers (`map`/`filter`/`flatMap`/`take`/
@@ -387,7 +450,8 @@ pub(super) fn try_array_only_methods(
                 // dynamic dispatch so the runtime's iterator-helper stubs run.
                 let recv_is_class = recv_is_class
                     || chain_roots_at_stream(member_obj)
-                    || chain_roots_at_iterator_from(member_obj);
+                    || chain_roots_at_iterator_from(member_obj)
+                    || is_util_mime_params_receiver(ctx, member_obj);
                 match method_name {
                     "reduce" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;

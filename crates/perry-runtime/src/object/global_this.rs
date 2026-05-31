@@ -1175,6 +1175,20 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let pval = crate::perf_hooks::performance_namespace();
         js_object_set_field_by_name(singleton, pkey, pval);
     }
+    // Perf_hooks constructors are globals identical to the module exports.
+    for name in [
+        "Performance",
+        "PerformanceEntry",
+        "PerformanceMark",
+        "PerformanceMeasure",
+        "PerformanceObserver",
+        "PerformanceObserverEntryList",
+        "PerformanceResourceTiming",
+    ] {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = super::native_module::bound_native_callable_export_value("perf_hooks", name);
+        js_object_set_field_by_name(singleton, key, value);
+    }
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.
     {
