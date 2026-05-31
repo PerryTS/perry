@@ -31,9 +31,6 @@ pub struct LoweringContext {
     pub(crate) next_type_alias_id: TypeAliasId,
     /// Current scope's local variables: name -> (id, type)
     pub(crate) locals: Vec<(String, LocalId, Type)>,
-    /// LocalIds that represent immutable bindings (`const`, imports, and
-    /// other lexical bindings that must throw when assigned).
-    pub(crate) immutable_locals: HashSet<LocalId>,
     /// Global variables: name -> (id, type)
     // #854: initialized in `new` but currently unread (globals tracked
     // elsewhere). Retained alongside `next_global_id` for the global table.
@@ -432,8 +429,4 @@ pub struct LoweringContext {
     /// observe the failure instead of rejecting the whole user source at
     /// compile time. Outside try blocks, `require(literal)` still hard-errors.
     pub(crate) optional_require_try_depth: u32,
-    /// True while lowering code governed by strict mode. Module source goals
-    /// and exact `"use strict"` directive prologues set this; nested function
-    /// bodies inherit it unless they are sloppy script functions.
-    pub(crate) strict_mode: bool,
 }

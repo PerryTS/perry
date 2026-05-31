@@ -942,8 +942,8 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
             // #2889: `new (rebound TypedArray)(lengthOrSource)`.
             "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-            | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
-            | "BigUint64Array" => {
+            | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+            | "BigInt64Array" | "BigUint64Array" => {
                 let kind = match name {
                     "Int8Array" => crate::typedarray::KIND_INT8,
                     "Uint8Array" => crate::typedarray::KIND_UINT8,
@@ -952,6 +952,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                     "Uint16Array" => crate::typedarray::KIND_UINT16,
                     "Int32Array" => crate::typedarray::KIND_INT32,
                     "Uint32Array" => crate::typedarray::KIND_UINT32,
+                    "Float16Array" => crate::typedarray::KIND_FLOAT16,
                     "Float32Array" => crate::typedarray::KIND_FLOAT32,
                     "Float64Array" => crate::typedarray::KIND_FLOAT64,
                     "BigInt64Array" => crate::typedarray::KIND_BIGINT64,

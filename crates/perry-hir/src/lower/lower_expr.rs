@@ -284,6 +284,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "Uint16Array"
                     && name != "Int32Array"
                     && name != "Uint32Array"
+                    && name != "Float16Array"
                     && name != "Float32Array"
                     && name != "Float64Array"
                     && name != "TextEncoder"

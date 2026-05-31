@@ -1127,10 +1127,7 @@ pub(super) fn collect_modules(
             // `js_node_submodule_namespace`. Skip the hard-error so the
             // compile.rs registration loop can wire the namespace local
             // through to that runtime helper.
-            if has_namespace_specifier
-                && !import.is_native
-                && known_node_submodule_key(&import.source).is_none()
-            {
+            if has_namespace_specifier && known_node_submodule_key(&import.source).is_none() {
                 return Err(anyhow::anyhow!(
                     "Could not resolve namespace import `import * as ... from \"{source}\"` in {filename}.\n\
                      Perry has no stdlib bindings for this module path, so the namespace would compile to an empty object \

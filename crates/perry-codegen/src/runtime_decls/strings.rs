@@ -641,9 +641,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_find_package_json", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_module_create_require", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_module_sync_builtin_esm_exports", DOUBLE, &[]);
-    module.declare_function("js_module_run_main", DOUBLE, &[]);
     module.declare_function("js_process_next_tick", VOID, &[I64, I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);
@@ -965,12 +962,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_referenceerror_new", I64, &[I64]);
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
-    module.declare_function("js_throw_type_error_const_assignment", DOUBLE, &[DOUBLE]);
-    module.declare_function(
-        "js_throw_reference_error_unresolvable_assignment",
-        DOUBLE,
-        &[DOUBLE],
-    );
     module.declare_function("js_evalerror_new", I64, &[I64]);
     module.declare_function("js_urierror_new", I64, &[I64]);
     // WeakMap / WeakSet / WeakRef / FinalizationRegistry — called

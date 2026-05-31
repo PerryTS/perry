@@ -284,6 +284,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Int16Array"
             | "Uint32Array"
             | "Int32Array"
+            | "Float16Array"
             | "Float32Array"
             | "Float64Array"
             | "Uint8ClampedArray"

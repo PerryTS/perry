@@ -16,7 +16,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 - `Web / Global APIs` — 282
 - `node:os` — 195
-- `node:fs` — 139
+- `node:fs` — 133
 - `node:crypto` — 128
 - `node:process (and global `process`)` — 99
 - `node:util` — 92
@@ -385,7 +385,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs
 
-**Gap APIs: 139** · Already covered: 40
+**Gap APIs: 133** · Already covered: 46
 
 #### Missing from Perry
 
@@ -402,7 +402,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `fs.glob(pattern[, options], callback)`
 - `fs.lchmod(path, mode, callback)`
 - `fs.lchown(path, uid, gid, callback)`
-- `fs.link(existingPath, newPath, callback)`
 - `fs.lstat(path[, options], callback)`
 - `fs.lutimes(path, atime, mtime, callback)`
 - `fs.open(path[, flags[, mode]], callback)`
@@ -411,11 +410,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `fs.read(fd, buffer, offset, length, position, callback)`
 - `fs.read(fd[, options], callback)`
 - `fs.read(fd, buffer[, options], callback)`
-- `fs.readlink(path[, options], callback)`
 - `fs.readv(fd, buffers[, position], callback)`
 - `fs.realpath.native(path[, options], callback)`
 - `fs.statfs(path[, options], callback)`
-- `fs.symlink(target, path[, type], callback)`
 - `fs.truncate(path[, len], callback)`
 - `fs.utimes(path, atime, mtime, callback)`
 - `fs.watch(filename[, options][, listener])`
@@ -436,10 +433,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `fs.globSync(pattern[, options])`
 - `fs.lchmodSync(path, mode)`
 - `fs.lchownSync(path, uid, gid)`
-- `fs.linkSync(existingPath, newPath)`
 - `fs.lutimesSync(path, atime, mtime)`
 - `fs.mkdtempDisposableSync(prefix[, options])`
-- … and 89 more (see `runtime-parity.md` for the full list)
+- … and 87 more (see `runtime-parity.md` for the full list)
 
 #### Covered (sampled)
 
@@ -452,14 +448,20 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `fs.createReadStream(path[, options])` | `manifest:fs.createReadStream` |
 | `fs.createWriteStream(path[, options])` | `manifest:fs.createWriteStream` |
 | `fs.exists(path, callback)` | `ffi:js_fs_exists_sync` |
+| `fs.link(existingPath, newPath, callback)` | `ffi:js_fs_link_sync` |
+| `fs.linkSync(existingPath, newPath)` | `ffi:js_fs_link_sync` |
 | `fs.mkdir(path[, options], callback)` | `manifest:fs.mkdir` |
 | `fs.mkdtemp(prefix[, options], callback)` | `ffi:js_fs_mkdtemp_sync` |
 | `fs.readdir(path[, options], callback)` | `manifest:fs.readdir` |
 | `fs.readFile(path[, options], callback)` | `manifest:fs.readFile` |
+| `fs.readlink(path[, options], callback)` | `ffi:js_fs_readlink_dispatch` |
+| `fs.readlinkSync(path[, options])` | `ffi:js_fs_readlink_dispatch` |
 | `fs.realpath(path[, options], callback)` | `ffi:js_fs_realpath_sync` |
 | `fs.rename(oldPath, newPath, callback)` | `ffi:js_fs_rename_sync` |
 | `fs.rm(path[, options], callback)` | `manifest:fs.rm` |
 | `fs.rmdir(path[, options], callback)` | `ffi:js_fs_rmdir_sync` |
+| `fs.symlink(target, path[, type], callback)` | `ffi:js_fs_symlink_sync` |
+| `fs.symlinkSync(target, path[, type])` | `ffi:js_fs_symlink_sync` |
 | … | 25 more covered APIs |
 
 ### node:crypto
@@ -1318,31 +1320,26 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:fs/promises
 
-**Gap APIs: 46** · Already covered: 15
+**Gap APIs: 41** · Already covered: 20
 
 #### Missing from Perry
 
 - `fsPromises.access(path[, mode])`
 - `fsPromises.chmod(path, mode)`
 - `fsPromises.chown(path, uid, gid)`
-- `fsPromises.copyFile(src, dest[, mode])`
 - `fsPromises.cp(src, dest[, options])`
 - `fsPromises.glob(pattern[, options])`
 - `fsPromises.lchmod(path, mode)`
 - `fsPromises.lchown(path, uid, gid)`
-- `fsPromises.link(existingPath, newPath)`
 - `fsPromises.lstat(path[, options])`
 - `fsPromises.lutimes(path, atime, mtime)`
 - `fsPromises.mkdtemp(prefix[, options])`
 - `fsPromises.mkdtempDisposable(prefix[, options])`
 - `fsPromises.open(path, flags[, mode])`
 - `fsPromises.opendir(path[, options])`
-- `fsPromises.readlink(path[, options])`
 - `fsPromises.realpath(path[, options])`
-- `fsPromises.rename(oldPath, newPath)`
 - `fsPromises.rmdir(path[, options])`
 - `fsPromises.statfs(path[, options])`
-- `fsPromises.symlink(target, path[, type])`
 - `fsPromises.truncate(path[, len])`
 - `fsPromises.utimes(path, atime, mtime)`
 - `fsPromises.watch(filename[, options])`
@@ -1374,11 +1371,16 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `fsPromises.appendFile(path, data[, options])` | `manifest:fs.appendFile` |
+| `fsPromises.copyFile(src, dest[, mode])` | `manifest:fs.copyFile` |
+| `fsPromises.link(existingPath, newPath)` | `manifest:fs.link` |
 | `fsPromises.mkdir(path[, options])` | `manifest:fs.mkdir` |
 | `fsPromises.readdir(path[, options])` | `manifest:fs.readdir` |
 | `fsPromises.readFile(path[, options])` | `manifest:fs.readFile` |
+| `fsPromises.readlink(path[, options])` | `manifest:fs.readlink` |
+| `fsPromises.rename(oldPath, newPath)` | `manifest:fs.rename` |
 | `fsPromises.rm(path[, options])` | `manifest:fs.rm` |
 | `fsPromises.stat(path[, options])` | `manifest:fs.stat` |
+| `fsPromises.symlink(target, path[, type])` | `manifest:fs.symlink` |
 | `fsPromises.unlink(path)` | `manifest:fs.unlink` |
 | `fsPromises.writeFile(file, data[, options])` | `manifest:fs.writeFile` |
 | `filehandle.appendFile(data[, options])` | `manifest:fs.appendFile` |

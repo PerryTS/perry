@@ -30,27 +30,6 @@ unsafe fn throw_mix_bigint() -> ! {
     crate::exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
-/// True when `value` is a NaN-boxed Symbol pointer (registered in the symbol
-/// side-table). Used to detect `Symbol + x` for the addition TypeError (#3564).
-#[inline]
-unsafe fn is_symbol_value(value: f64) -> bool {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_pointer() {
-        return false;
-    }
-    let ptr = (value.to_bits() & POINTER_MASK) as usize;
-    ptr >= 0x1000 && crate::symbol::is_registered_symbol(ptr)
-}
-
-/// Throw the `TypeError` Node raises when a Symbol participates in `+`.
-#[cold]
-unsafe fn throw_symbol_to_primitive() -> ! {
-    let msg = b"Cannot convert a Symbol value to a string";
-    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
-}
-
 /// Enforce Node's rule that BigInt operators require *both* operands to be
 /// BigInt. Returns true when both are BigInt (proceed with the BigInt op),
 /// false when neither is (use the numeric path), and throws a TypeError when
@@ -137,28 +116,10 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let a0 = scope.root_nanbox_f64(a);
-    let b0 = scope.root_nanbox_f64(b);
-
-    // Step 1: ToPrimitive(operand, "default") on BOTH operands, in order, per
-    // ES2024 §13.15.3 (`+` evaluation). This resolves objects / Dates /
-    // functions / boxed primitives to primitive values via valueOf→toString
-    // (Dates use the string hint) BEFORE we decide string-concat vs numeric
-    // addition (#3562/#3563). A throwing valueOf/toString propagates here
-    // (#3564). Re-root the results: they may be freshly-allocated strings.
-    let a_prim = crate::value::to_primitive_for_add(a0.get_nanbox_f64());
-    let a_handle = scope.root_nanbox_f64(a_prim);
-    let b_prim = crate::value::to_primitive_for_add(b0.get_nanbox_f64());
-    let b_handle = scope.root_nanbox_f64(b_prim);
+    let a_handle = scope.root_nanbox_f64(a);
+    let b_handle = scope.root_nanbox_f64(b);
     let a_val = JSValue::from_bits(a_handle.get_nanbox_f64().to_bits());
     let b_val = JSValue::from_bits(b_handle.get_nanbox_f64().to_bits());
-
-    // Step 2: a Symbol primitive can be neither concatenated nor numerically
-    // added — `Symbol() + x` / `x + Symbol()` throws TypeError in Node,
-    // whether the other side is a string or a number (#3564).
-    if is_symbol_value(a_handle.get_nanbox_f64()) || is_symbol_value(b_handle.get_nanbox_f64()) {
-        throw_symbol_to_primitive();
-    }
 
     // String concat takes priority: either operand being a string forces
     // ToPrimitive on the other side via the spec's "if either is a string,
