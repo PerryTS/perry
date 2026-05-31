@@ -168,6 +168,10 @@ pub(crate) fn url_encode(s: &str) -> String {
     result
 }
 
+fn coerce_search_param_arg(value: f64) -> String {
+    string_from_header(js_url_coerce_string(value))
+}
+
 /// Create a URLSearchParams object from entries
 pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) -> *mut ObjectHeader {
     let obj = js_object_alloc(0, URL_SEARCH_PARAMS_FIELD_COUNT);
@@ -319,10 +323,8 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
         return create_url_search_params_object(entries);
     }
 
-    // Numbers / booleans / etc. — coerce to string via the unified string-ptr
-    // helper, then parse. Matches Node which `String(init)`-coerces unknown
-    // init values before parsing.
-    let s = get_string_content(init);
+    // Numbers / booleans / etc. — coerce with `String(init)`, then parse.
+    let s = stringify_field_value(init);
     create_url_search_params_object(parse_query_string(&s))
 }
 
@@ -416,57 +418,20 @@ pub(crate) fn read_record_entries(obj: *mut ObjectHeader) -> Vec<(String, String
     }
 }
 
-/// Coerce a NaN-boxed field value to a String the way Node's
-/// `URLSearchParams` does — values are passed through `String(...)`. Strings
-/// pass through; numbers / booleans use their textual form; null/undefined
-/// stringify literally.
+/// Coerce a NaN-boxed field value through the same `String(value)` path used
+/// by URLSearchParams constructors and methods. Symbols throw.
 pub(crate) fn stringify_field_value(v: f64) -> String {
-    let bits = v.to_bits();
-    let jsval = crate::value::JSValue::from_bits(bits);
-    if jsval.is_string() || jsval.is_short_string() {
-        return get_string_content(v);
-    }
-    if jsval.is_undefined() {
-        return "undefined".to_string();
-    }
-    if jsval.is_null() {
-        return "null".to_string();
-    }
-    if !v.is_nan() {
-        // Plain double — format without trailing ".0" for integers.
-        if v == v.trunc() && v.is_finite() && v.abs() < 1e21 {
-            return format!("{}", v as i64);
-        }
-        return format!("{}", v);
-    }
-    // Booleans land in the NaN-tag space.
-    if bits == 0x7FFC_0000_0000_0004 {
-        return "true".to_string();
-    }
-    if bits == 0x7FFC_0000_0000_0003 {
-        return "false".to_string();
-    }
-    // Pointer / unknown: stringify via the unified helper.
-    get_string_content(v)
+    coerce_search_param_arg(v)
 }
 
 /// Get a value by name
-/// js_url_search_params_get(params: *mut ObjectHeader, name: *mut StringHeader) -> *mut StringHeader (string or null)
+/// js_url_search_params_get(params, name) -> *mut StringHeader (string or null)
 #[no_mangle]
 pub extern "C" fn js_url_search_params_get(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
+    name_value: f64,
 ) -> *mut crate::StringHeader {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+    let name = coerce_search_param_arg(name_value);
 
     let entries = get_url_search_params_entries(params);
     for (key, value) in entries {
@@ -481,22 +446,10 @@ pub extern "C" fn js_url_search_params_get(
 }
 
 /// Check if a name exists
-/// js_url_search_params_has(params: *mut ObjectHeader, name: *mut StringHeader) -> f64 (boolean)
+/// js_url_search_params_has(params, name) -> f64 (boolean)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_has(
-    params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-) -> f64 {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+pub extern "C" fn js_url_search_params_has(params: *mut ObjectHeader, name_value: f64) -> f64 {
+    let name = coerce_search_param_arg(name_value);
 
     let entries = get_url_search_params_entries(params);
     let found = entries.iter().any(|(key, _)| key == &name);
@@ -508,34 +461,15 @@ pub extern "C" fn js_url_search_params_has(
 }
 
 /// Set a value (replaces existing or adds new)
-/// js_url_search_params_set(params: *mut ObjectHeader, name: *mut StringHeader, value: *mut StringHeader) -> void
+/// js_url_search_params_set(params, name, value) -> void
 #[no_mangle]
 pub extern "C" fn js_url_search_params_set(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
-
-    let value = if value_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*value_str).byte_len as usize;
-            let data_ptr = (value_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+    let name = coerce_search_param_arg(name_value);
+    let value = coerce_search_param_arg(value_value);
 
     let entries = get_url_search_params_entries(params);
 
@@ -573,34 +507,15 @@ pub extern "C" fn js_url_search_params_set(
 }
 
 /// Append a value (adds even if name already exists)
-/// js_url_search_params_append(params: *mut ObjectHeader, name: *mut StringHeader, value: *mut StringHeader) -> void
+/// js_url_search_params_append(params, name, value) -> void
 #[no_mangle]
 pub extern "C" fn js_url_search_params_append(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
-
-    let value = if value_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*value_str).byte_len as usize;
-            let data_ptr = (value_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+    let name = coerce_search_param_arg(name_value);
+    let value = coerce_search_param_arg(value_value);
 
     let mut entries = get_url_search_params_entries(params);
     entries.push((name, value));
@@ -620,22 +535,10 @@ pub extern "C" fn js_url_search_params_append(
 }
 
 /// Delete all entries with a name
-/// js_url_search_params_delete(params: *mut ObjectHeader, name: *mut StringHeader) -> void
+/// js_url_search_params_delete(params, name) -> void
 #[no_mangle]
-pub extern "C" fn js_url_search_params_delete(
-    params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-) {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+pub extern "C" fn js_url_search_params_delete(params: *mut ObjectHeader, name_value: f64) {
+    let name = coerce_search_param_arg(name_value);
 
     let mut entries = get_url_search_params_entries(params);
     entries.retain(|(key, _)| key != &name);
@@ -655,22 +558,18 @@ pub extern "C" fn js_url_search_params_delete(
 }
 
 /// Node 19+: `URLSearchParams.has(name, value)` returns true only when both
-/// the name and value match (exact string equality). Falls back to the
-/// 1-arg behavior when `value_str` is null.
+/// the name and value match (exact string equality). The lowering only calls
+/// this helper when the second argument was actually present.
 #[no_mangle]
 pub extern "C" fn js_url_search_params_has2(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) -> f64 {
-    let name = string_header_to_string(name_str);
+    let name = coerce_search_param_arg(name_value);
+    let value = coerce_search_param_arg(value_value);
     let entries = get_url_search_params_entries(params);
-    let found = if value_str.is_null() {
-        entries.iter().any(|(k, _)| k == &name)
-    } else {
-        let value = string_header_to_string(value_str);
-        entries.iter().any(|(k, v)| k == &name && v == &value)
-    };
+    let found = entries.iter().any(|(k, v)| k == &name && v == &value);
     if found {
         1.0
     } else {
@@ -679,29 +578,22 @@ pub extern "C" fn js_url_search_params_has2(
 }
 
 /// Node 19+: `URLSearchParams.delete(name, value)` — drops only entries
-/// matching BOTH the name and value (exact string equality). Falls back to
-/// the 1-arg behavior when `value_str` is null.
+/// matching BOTH the name and value (exact string equality). The lowering only
+/// calls this helper when the second argument was actually present.
 #[no_mangle]
 pub extern "C" fn js_url_search_params_delete2(
     params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-    value_str: *mut crate::StringHeader,
+    name_value: f64,
+    value_value: f64,
 ) {
-    let name = string_header_to_string(name_str);
-    let value_filter: Option<String> = if value_str.is_null() {
-        None
-    } else {
-        Some(string_header_to_string(value_str))
-    };
+    let name = coerce_search_param_arg(name_value);
+    let value_filter = coerce_search_param_arg(value_value);
     let mut entries = get_url_search_params_entries(params);
     entries.retain(|(k, v)| {
         if k != &name {
             return true;
         }
-        match &value_filter {
-            Some(want) => v != want,
-            None => false,
-        }
+        v != &value_filter
     });
     let mut entries_array = js_array_alloc(entries.len() as u32);
     for (key, val) in entries {
@@ -839,22 +731,10 @@ pub extern "C" fn js_url_search_params_for_each(
 }
 
 /// Get all values for a name
-/// js_url_search_params_get_all(params: *mut ObjectHeader, name: *mut StringHeader) -> f64 (array)
+/// js_url_search_params_get_all(params, name) -> f64 (array)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_get_all(
-    params: *mut ObjectHeader,
-    name_str: *mut crate::StringHeader,
-) -> f64 {
-    let name = if name_str.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let len = (*name_str).byte_len as usize;
-            let data_ptr = (name_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let slice = std::slice::from_raw_parts(data_ptr, len);
-            String::from_utf8_lossy(slice).into_owned()
-        }
-    };
+pub extern "C" fn js_url_search_params_get_all(params: *mut ObjectHeader, name_value: f64) -> f64 {
+    let name = coerce_search_param_arg(name_value);
 
     let entries = get_url_search_params_entries(params);
     let values: Vec<String> = entries
