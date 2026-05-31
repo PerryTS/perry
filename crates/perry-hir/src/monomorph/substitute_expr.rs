@@ -332,7 +332,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             mask.as_ref()
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         ),
-        Expr::ProcessThreadCpuUsage => Expr::ProcessThreadCpuUsage,
+        Expr::ProcessThreadCpuUsage(prior) => Expr::ProcessThreadCpuUsage(
+            prior
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        ),
         Expr::ProcessAvailableMemory => Expr::ProcessAvailableMemory,
         Expr::ProcessConstrainedMemory => Expr::ProcessConstrainedMemory,
         Expr::ProcessPosixCredential(k) => Expr::ProcessPosixCredential(*k),
@@ -767,6 +771,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             enclosing_class,
             is_async,
             is_generator,
+            is_strict,
         } => Expr::Closure {
             func_id: *func_id,
             params: params
@@ -791,6 +796,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             enclosing_class: enclosing_class.clone(),
             is_async: *is_async,
             is_generator: *is_generator,
+            is_strict: *is_strict,
         },
 
         // RegExp operations
@@ -860,6 +866,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         }
         Expr::StringCoerce(value) => {
             Expr::StringCoerce(Box::new(substitute_expr(value, substitutions)))
+        }
+        Expr::ObjectCoerce(value) => {
+            Expr::ObjectCoerce(Box::new(substitute_expr(value, substitutions)))
         }
         Expr::IsNaN(value) => Expr::IsNaN(Box::new(substitute_expr(value, substitutions))),
         Expr::IsUndefinedOrBareNan(value) => {

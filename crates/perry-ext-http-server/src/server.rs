@@ -172,7 +172,7 @@ pub unsafe extern "C" fn js_node_http_create_server_with_options(
 /// in `types.rs` so we don't introduce a second runtime-object-read API
 /// surface — keeps the crate independent of perry-runtime's internal
 /// ObjectHeader layout.
-fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
+pub(crate) fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
     use perry_ffi::JsValue;
     let v = JsValue::from_bits(options_f64.to_bits());
     if !v.is_pointer() {

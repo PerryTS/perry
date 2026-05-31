@@ -29,6 +29,7 @@ fn typed_array_name_for_name(name: &str) -> Option<&'static str> {
         "Uint16Array" => Some("Uint16Array"),
         "Int32Array" => Some("Int32Array"),
         "Uint32Array" => Some("Uint32Array"),
+        "Float16Array" => Some("Float16Array"),
         "Float32Array" => Some("Float32Array"),
         "Float64Array" => Some("Float64Array"),
         _ => None,
@@ -197,13 +198,24 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 // Bitwise operators → Number
                 BitAnd | BitOr | BitXor | LShift | RShift | ZeroFillRShift => Type::Number,
 
-                // Logical operators → type of operands (simplified)
+                // Logical operators → type of operands (simplified).
+                //
+                // `A && B` yields B's value when A is truthy (else A); `A || B`
+                // yields B when A is falsy (else A). So when B has a concrete
+                // type we approximate the result as that type. But when B is
+                // `Any` we must NOT fall back to A's type: #3527 hit
+                // `var hasMap = typeof Map === "function" && Map.prototype`,
+                // where A is a boolean compare and B (`Map.prototype`) is `Any`.
+                // Returning A's `Boolean` mistyped `hasMap` as a boolean even
+                // though it holds an object, so a later `hasMap && d && d.get`
+                // chain miscompiled and dereferenced `null`. The result can be
+                // the (unknown) right value, so `Any` is the only sound type.
                 LogicalAnd | LogicalOr => {
                     let right = infer_type_from_expr(&bin.right, ctx);
                     if !matches!(right, Type::Any) {
                         right
                     } else {
-                        infer_type_from_expr(&bin.left, ctx)
+                        Type::Any
                     }
                 }
                 NullishCoalescing => {
@@ -706,6 +718,12 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     if let Some(ty) = ctx.lookup_class_method_return_type(class_name, method_name) {
                         return ty.clone();
                     }
+                    if typed_array_name_for_name(class_name).is_some() {
+                        return match method_name {
+                            "slice" | "subarray" => obj_ty.clone(),
+                            _ => Type::Any,
+                        };
+                    }
                     // Built-in TextEncoder / TextDecoder method return types.
                     // `new TextEncoder().encode(s)` → Uint8Array (issue #584:
                     // without this the local typed-anonymously inherits
@@ -862,6 +880,18 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             "compare" => Type::Number,
                             _ => Type::Any,
                         };
+                    }
+                    // #2902: `<TypedArray>.from(...)` / `<TypedArray>.of(...)`
+                    // produce a typed array of the receiver's kind. Typing the
+                    // local refines `arr[i]` / `arr.length` onto the typed-array
+                    // fast path (like the `new TypedArray(...)` form), instead of
+                    // the generic `Any` index path which reads raw f64 garbage.
+                    // Uint8Array stays a Buffer (handled above).
+                    if obj_name != "Uint8Array"
+                        && crate::ir::typed_array_kind_for_name(obj_name).is_some()
+                        && matches!(method_name, "from" | "of")
+                    {
+                        return Type::Named(obj_name.to_string());
                     }
                     // `Readable.from(...)` produces a classic node:stream
                     // Readable. Typing it lets `for await (... of r)` lower

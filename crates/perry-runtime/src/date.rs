@@ -224,13 +224,10 @@ pub extern "C" fn js_date_now() -> f64 {
 }
 
 /// performance.now() — high-resolution time in milliseconds (sub-ms precision).
-/// Returns ms since UNIX_EPOCH as f64; the float retains microsecond resolution.
+/// Returns ms since performance.timeOrigin as f64.
 #[no_mangle]
 pub extern "C" fn js_performance_now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64() * 1000.0)
-        .unwrap_or(0.0)
+    crate::perf_hooks::performance_now_ms()
 }
 
 /// Create a new Date from current time, returning a NaN-boxed DateCell pointer.

@@ -140,14 +140,21 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "setSourceMapsEnabled" => {
-                            // #1400: process.setSourceMapsEnabled(bool) —
-                            // toggles runtime source-map resolution in Node.
-                            // Perry compiles AOT and has no resolver to
-                            // toggle, so the call is a no-op returning
-                            // undefined. Without this, framework startup
-                            // code that conditionally enables maps crashes
-                            // on "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            // #1400 / #3108: process.setSourceMapsEnabled(bool)
+                            // toggles the live source-map flag. Perry compiles
+                            // AOT and has no resolver, so the flag drives
+                            // nothing observable — but it round-trips through
+                            // process.sourceMapsEnabled and validates that the
+                            // argument is a boolean (else ERR_INVALID_ARG_TYPE),
+                            // matching Node. Lower to the runtime setter,
+                            // passing the original argument for validation.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setSourceMapsEnabled".to_string(),
+                                args,
+                            }));
                         }
                         "getBuiltinModule" => {
                             return Ok(Ok(Expr::NativeMethodCall {
@@ -174,20 +181,24 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "hasUncaughtExceptionCaptureCallback" => {
-                            // #1406: returns a boolean indicating whether
-                            // a capture callback has been installed via
-                            // setUncaughtExceptionCaptureCallback. Perry
-                            // doesn't expose that hook, so the answer is
-                            // always `false`.
-                            return Ok(Ok(Expr::Bool(false)));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "hasUncaughtExceptionCaptureCallback".to_string(),
+                                args,
+                            }));
                         }
-                        "setUncaughtExceptionCaptureCallback" => {
-                            // #1406: installs a single callback that
-                            // intercepts uncaught exceptions before they
-                            // reach the `uncaughtException` event. Perry
-                            // doesn't have the hook to install — the call
-                            // is a no-op returning undefined.
-                            return Ok(Ok(Expr::Undefined));
+                        "setUncaughtExceptionCaptureCallback"
+                        | "addUncaughtExceptionCaptureCallback" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
                         }
                         "loadEnvFile" => {
                             // #1399 / #2135: process.loadEnvFile(path?)
@@ -197,21 +208,15 @@ pub(super) fn try_native_module_methods(
                             // didn't persist; #1344 has since wired writes
                             // through `std::env::set_var`, so we lower to a
                             // runtime call that actually reads the file.
-                            // Default the optional path to `.env` (Node's
-                            // default) so the dispatch-table row's single
-                            // NA_STR arg stays satisfied for the no-arg call
-                            // form.
-                            let call_args = if args.is_empty() {
-                                vec![Expr::String(".env".to_string())]
-                            } else {
-                                args
-                            };
+                            // Keep the original JS value: the runtime handles
+                            // omitted/undefined/null defaulting plus Buffer
+                            // and file-URL path objects.
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "process".to_string(),
                                 class_name: None,
                                 object: None,
                                 method: "loadEnvFile".to_string(),
-                                args: call_args,
+                                args,
                             }));
                         }
                         "exit" => {
@@ -246,11 +251,16 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ProcessUmask(mask)));
                         }
                         "threadCpuUsage" => {
-                            // process.threadCpuUsage() — CPU time used by
-                            // the current thread, as { user, system } in
-                            // microseconds. Ignores any arguments (Node
-                            // accepts none).
-                            return Ok(Ok(Expr::ProcessThreadCpuUsage));
+                            // process.threadCpuUsage(prior?) — CPU time used
+                            // by the current thread, as { user, system } in
+                            // microseconds. If prior is given, returns the
+                            // validated delta.
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessThreadCpuUsage(prior)));
                         }
                         "availableMemory" => {
                             // process.availableMemory() — free system memory
@@ -405,10 +415,38 @@ pub(super) fn try_native_module_methods(
                         "version" => return Ok(Ok(Expr::OsVersion)),
                         "cpus" => return Ok(Ok(Expr::OsCpus)),
                         "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call))),
+                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                         "getPriority" | "setPriority" => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "os".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
+                        }
+                        _ => {} // Fall through to generic handling
+                    }
+                }
+            }
+
+            // node:v8 module methods (#3137/#3138). serialize/deserialize and
+            // the heap-stat helpers lower to a receiver-less NativeMethodCall
+            // dispatched in codegen to the `js_v8_*` runtime entry points.
+            let is_v8_module =
+                obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
+            if is_v8_module {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    match method_name {
+                        "serialize"
+                        | "deserialize"
+                        | "getHeapStatistics"
+                        | "getHeapCodeStatistics"
+                        | "getHeapSpaceStatistics"
+                        | "cachedDataVersionTag" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "v8".to_string(),
                                 class_name: None,
                                 object: None,
                                 method: method_name.to_string(),

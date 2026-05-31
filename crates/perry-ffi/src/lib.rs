@@ -87,6 +87,9 @@ pub use buffer::{alloc_buffer, read_buffer_bytes};
 mod json;
 pub use json::json_stringify;
 
+mod error;
+pub use error::{throw_with_code, value_byte_slice, ErrorKind};
+
 mod event_pump;
 pub use event_pump::notify_main_thread;
 

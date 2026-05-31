@@ -1148,8 +1148,11 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
-    // Fetch `Headers` values are small pointer-tagged handles. Route the
-    // default iterator symbol to the same bound method as `headers.entries`.
+    // Web Fetch and other stdlib handle-backed values are small ids
+    // NaN-boxed as POINTER. A computed `handle[Symbol.iterator]` reaches the
+    // symbol resolver directly, bypassing the normal string-key handle
+    // property dispatcher. Map the well-known symbol back to the dispatcher so
+    // `Headers` can expose its `entries` method as the iterator function.
     if (bits >> 48) == 0x7FFD {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         if id > 0 && id < 0x100000 {
@@ -1159,10 +1162,10 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                     f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
                 if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
                     if let Some(dispatch) = crate::object::handle_property_dispatch() {
-                        let method = b"entries";
-                        let v = dispatch(id, method.as_ptr(), method.len());
-                        if v.to_bits() != TAG_UNDEFINED {
-                            return v;
+                        let prop = b"@@iterator";
+                        let value = dispatch(id, prop.as_ptr(), prop.len());
+                        if value.to_bits() != TAG_UNDEFINED {
+                            return value;
                         }
                     }
                 }
@@ -1408,6 +1411,23 @@ fn class_chain_has_method(class_id: u32, name: &str) -> bool {
     false
 }
 
+fn is_object_value(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    raw >= 0x10000 && !is_registered_symbol(raw)
+}
+
+#[cold]
+fn throw_iterator_result_not_object() -> ! {
+    let msg = b"Result of the Symbol.iterator method is not an object";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
 /// #1831: resolve the iterator for a `yield*` operand.
 ///
 /// `yield* X` must drive `X[Symbol.iterator]()` — for a generator **call** the
@@ -1448,7 +1468,19 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             let fn_ptr = crate::value::js_nanbox_get_pointer(call_target)
                 as *const crate::closure::ClosureHeader;
             if !fn_ptr.is_null() {
-                return crate::closure::js_closure_call0(fn_ptr);
+                let iter = crate::closure::js_closure_call0(fn_ptr);
+                // Several Perry host-backed collections expose iterator
+                // helpers as eager arrays for direct `.entries()` parity. When
+                // the same function is reached through `Symbol.iterator`, wrap
+                // that array in the runtime array iterator so generic protocol
+                // consumers can drive `.next()`.
+                if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
+                    return crate::array::array_values_iter(iter);
+                }
+                if !is_object_value(iter) {
+                    throw_iterator_result_not_object();
+                }
+                return iter;
             }
         }
     }

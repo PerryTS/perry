@@ -244,6 +244,7 @@ pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
 }
 
 pub fn gc_init() {
+    crate::perf_hooks::init_time_origin();
     gc_register_budgeted_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,
@@ -337,6 +338,7 @@ pub fn gc_init() {
     // singletons store heap pointers in TLS caches; keep them live and rewrite
     // them if a copying collection moves their backing allocations.
     gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
+    gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
     #[cfg(feature = "full")]

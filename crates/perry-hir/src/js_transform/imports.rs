@@ -1143,7 +1143,7 @@ pub fn transform_expr(
                 transform_expr(r, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
-        Expr::ParseFloat(e) | Expr::NumberCoerce(e) | Expr::BigIntCoerce(e) | Expr::StringCoerce(e) | Expr::IsNaN(e) | Expr::IsUndefinedOrBareNan(e) | Expr::IsFinite(e) | Expr::StaticPluginResolve(e) => {
+        Expr::ParseFloat(e) | Expr::NumberCoerce(e) | Expr::BigIntCoerce(e) | Expr::StringCoerce(e) | Expr::ObjectCoerce(e) | Expr::IsNaN(e) | Expr::IsUndefinedOrBareNan(e) | Expr::IsFinite(e) | Expr::StaticPluginResolve(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // JS Runtime expressions (already transformed, just recurse into subexpressions)

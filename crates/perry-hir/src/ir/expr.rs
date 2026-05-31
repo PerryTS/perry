@@ -493,8 +493,8 @@ pub enum Expr {
     ProcessExit(Option<Box<Expr>>), // process.exit(code?) -> never; None means code 0
     ProcessAbort,                   // process.abort() -> never; raises SIGABRT
     ProcessUmask(Option<Box<Expr>>), // process.umask(mask?) -> number; no-arg reads, arg sets and returns previous
-    ProcessThreadCpuUsage,           // process.threadCpuUsage() -> { user, system } microseconds
-    ProcessAvailableMemory,          // process.availableMemory() -> number (free memory bytes)
+    ProcessThreadCpuUsage(Option<Box<Expr>>), // process.threadCpuUsage(prior?) -> { user, system } µs
+    ProcessAvailableMemory, // process.availableMemory() -> number (free memory bytes)
     ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
     ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
     ProcessEmitWarning(Vec<Expr>), // process.emitWarning(warning[, type, code, ctor]) -> undefined (#1375)
@@ -1713,6 +1713,12 @@ pub enum Expr {
     // URLSearchParams operations
     /// new URLSearchParams(init?)
     UrlSearchParamsNew(Option<Box<Expr>>),
+    /// URLSearchParams method call missing required arguments.
+    UrlSearchParamsMissingArgs {
+        params: Box<Expr>,
+        args: Vec<Expr>,
+        name_and_value: bool,
+    },
     /// params.get(name) -> string | null
     UrlSearchParamsGet {
         params: Box<Expr>,
@@ -1798,6 +1804,8 @@ pub enum Expr {
         /// calling the closure returns a `{next,return,throw}` generator, then
         /// clears the flag. Refs #321 (effect's `Effect.gen(function*(){...})`).
         is_generator: bool,
+        /// Whether this closure body is strict mode code.
+        is_strict: bool,
     },
 
     // RegExp operations
@@ -1960,6 +1968,9 @@ pub enum Expr {
     /// String(value) -> string
     /// Type coercion to string
     StringCoerce(Box<Expr>),
+    /// `Object(value)` plain-call coercion (#3149). Nullish/primitive → a fresh
+    /// `{}`; an existing object/array passes through unchanged.
+    ObjectCoerce(Box<Expr>),
     /// Boolean(value) -> boolean
     /// Type coercion to boolean via JS truthiness rules
     BooleanCoerce(Box<Expr>),

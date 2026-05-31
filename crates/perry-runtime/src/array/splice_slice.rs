@@ -156,6 +156,14 @@ pub extern "C" fn js_array_slice(
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    // #3148: TypedArray slice — return a same-kind TypedArray.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_slice(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            start,
+            end,
+        ) as *mut ArrayHeader;
+    }
     unsafe {
         let len = (*arr).length as i32;
 

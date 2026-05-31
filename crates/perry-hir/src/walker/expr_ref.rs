@@ -48,7 +48,6 @@ where
         | Expr::ProcessStdout
         | Expr::ProcessStderr
         | Expr::ProcessAbort
-        | Expr::ProcessThreadCpuUsage
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
@@ -224,6 +223,7 @@ where
         | Expr::NumberCoerce(v)
         | Expr::BigIntCoerce(v)
         | Expr::StringCoerce(v)
+        | Expr::ObjectCoerce(v)
         | Expr::BooleanCoerce(v)
         | Expr::IsNaN(v)
         | Expr::IsUndefinedOrBareNan(v)
@@ -324,6 +324,12 @@ where
             f(proto);
             if let Some(props) = props {
                 f(props);
+            }
+        }
+        Expr::UrlSearchParamsMissingArgs { params, args, .. } => {
+            f(params);
+            for arg in args {
+                f(arg);
             }
         }
         Expr::BufferConcatWithLength { list, total_length } => {
@@ -1195,6 +1201,11 @@ where
             }
         }
         Expr::ProcessUmask(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
+        Expr::ProcessThreadCpuUsage(opt) => {
             if let Some(v) = opt {
                 f(v);
             }

@@ -195,3 +195,9 @@ test-files/.perry-cache/
 
 # Vendored upstream corpora for the compat radars (large; never committed).
 /vendor/
+
+# stray test-output binaries (compile with -o /tmp/... instead)
+/v8mini
+/tiny_test
+/wasm_test
+/t1

@@ -486,7 +486,10 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
             _ => "localhost".to_string(),
         };
         let port = match get_object_number_field(arg1_f64, "port") {
-            Some(p) => p as u16,
+            Some(p) => {
+                perry_runtime::net_validate::js_net_validate_connect_port(p);
+                p as u16
+            }
             None => return 0,
         };
         let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
@@ -494,6 +497,7 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
         return handle;
     }
     // Positional form: arg2 is a NaN-boxed string, arg3 is the cb.
+    perry_runtime::net_validate::js_net_validate_connect_port(arg1_f64);
     let host_ptr = perry_runtime::js_get_string_pointer_unified(arg2_f64);
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
@@ -557,6 +561,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
 ///    args: &[NA_F64, NA_STR], ret: NR_VOID }`.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64) {
+    perry_runtime::net_validate::js_net_validate_connect_port(port);
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
         None => {

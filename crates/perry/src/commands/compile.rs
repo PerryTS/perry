@@ -3018,6 +3018,11 @@ pub fn run_with_parse_cache(
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
+                            // Some historical submodules model their default
+                            // import as the namespace object. Other submodules
+                            // with CommonJS-style default objects route through
+                            // the explicit "default" export below.
+                            //
                             // For `node:diagnostics_channel`, the CJS-wrap
                             // converts `require('node:diagnostics_channel')`
                             // into `import diagChan from 'node:diagnostics_channel'`
@@ -3028,10 +3033,7 @@ pub fn run_with_parse_cache(
                             // not the function-singleton form, which would
                             // produce `(function).tracingChannel is not a
                             // function` because functions don't carry the
-                            // module's exported methods. The four pre-#906
-                            // submodules (`timers/promises` etc.) keep the
-                            // function-singleton routing because no real
-                            // code reads them as namespace objects.
+                            // module's exported methods.
                             if matches!(
                                 submod_key.as_str(),
                                 "diagnostics_channel" | "timers" | "sys" | "trace_events"
@@ -3046,9 +3048,10 @@ pub fn run_with_parse_cache(
                                 }
                             } else {
                                 // Default imports route to "default" — these
-                                // submodules don't have meaningful defaults
-                                // but tracking them keeps the catch-all from
-                                // firing on `import x from "node:..."`.
+                                // submodules either expose a real default
+                                // (`node:sys` aliases `node:util`) or need a
+                                // tracked placeholder to keep the catch-all
+                                // from firing on `import x from "node:..."`.
                                 import_function_node_submodule.insert(
                                     local.clone(),
                                     (submod_key.clone(), "default".to_string()),
@@ -3854,6 +3857,24 @@ pub fn run_with_parse_cache(
             .map(|name| failed_modules.iter().any(|m| m == name))
             .unwrap_or(false);
 
+        // #3527: a per-module codegen failure produces a broken (or empty
+        // stub) object. The driver historically linked empty `<prefix>__init`
+        // stubs for *non-entry* failed modules and still reported success
+        // (`COMPILE_EXIT=0`). For a real program that's a false positive: the
+        // textbook Express app surfaced 49 modules failing codegen, linked
+        // anyway, and `Bus error: 10`d at launch with zero output. The exit
+        // code lied. Default to aborting the build on ANY module codegen
+        // failure so the failure is visible in the exit status. The old
+        // stub-link path — genuinely useful for the iterative "peel back one
+        // blocker at a time" debugging the issue author did — stays available
+        // behind `PERRY_ALLOW_PARTIAL_CODEGEN=1`.
+        let allow_partial = std::env::var_os("PERRY_ALLOW_PARTIAL_CODEGEN").is_some();
+        // A failed entry module always aborts: its `main` symbol is required
+        // by the linker and an empty `<prefix>__init` stub doesn't satisfy
+        // it. A non-entry failure aborts unless the partial-codegen hatch is
+        // set.
+        let will_abort = entry_failed || !allow_partial;
+
         let bar = "═".repeat(72);
         let (red_on, red_off, bold_on, bold_off) = if use_color {
             ("\x1b[1;31m", "\x1b[0m", "\x1b[1m", "\x1b[0m")
@@ -3861,23 +3882,28 @@ pub fn run_with_parse_cache(
             ("", "", "", "")
         };
         eprintln!();
+        eprintln!("{}{}{}", red_on, bar, red_off);
         if entry_failed {
-            eprintln!("{}{}{}", red_on, bar, red_off);
             eprintln!(
                 "{}✗ ENTRY MODULE FAILED TO COMPILE — REFUSING TO LINK{}",
                 red_on, red_off
             );
-            eprintln!("{}{}{}", red_on, bar, red_off);
+        } else if will_abort {
+            eprintln!(
+                "{}✗ {} module(s) failed to compile — REFUSING TO LINK{}",
+                red_on,
+                failed_modules.len(),
+                red_off
+            );
         } else {
-            eprintln!("{}{}{}", red_on, bar, red_off);
             eprintln!(
                 "{}⚠ {} module(s) failed to compile — linking with empty stubs{}",
                 red_on,
                 failed_modules.len(),
                 red_off
             );
-            eprintln!("{}{}{}", red_on, bar, red_off);
         }
+        eprintln!("{}{}{}", red_on, bar, red_off);
         eprintln!();
         for m in &failed_modules {
             let is_entry = Some(m.as_str()) == entry_module_name.as_deref();
@@ -3896,10 +3922,31 @@ pub fn run_with_parse_cache(
                 "entry module '{}' failed to compile (see errors above)",
                 entry_module_name.as_deref().unwrap_or("?")
             ));
+        } else if will_abort {
+            eprintln!(
+                "Aborting: {} module(s) above failed codegen. Linking the surviving",
+                failed_modules.len()
+            );
+            eprintln!("objects with empty stubs would produce a binary that crashes (Bus");
+            eprintln!("error / SIGSEGV) the moment any code in a failed module runs — so the");
+            eprintln!("build fails here rather than emitting a misleading COMPILE_EXIT=0.");
+            eprintln!();
+            eprintln!("Fix the codegen errors above (search for `Error compiling module`),");
+            eprintln!("or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`");
+            eprintln!("stubs for the failed modules and surface deeper errors during");
+            eprintln!("iterative debugging (the resulting binary is inert/unsafe in those");
+            eprintln!("modules and may crash at runtime).");
+            eprintln!();
+            return Err(anyhow!(
+                "{} module(s) failed to compile (see errors above); set \
+                 PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+                failed_modules.len()
+            ));
         } else {
-            eprintln!("Continuing with linking. Empty `<prefix>__init` stubs will be");
-            eprintln!("emitted for the failed modules so the binary still links, but");
-            eprintln!("any code in those modules will be inert at runtime.");
+            eprintln!("PERRY_ALLOW_PARTIAL_CODEGEN=1 set: continuing with linking. Empty");
+            eprintln!("`<prefix>__init` stubs will be emitted for the failed modules so the");
+            eprintln!("binary still links, but any code in those modules will be inert at");
+            eprintln!("runtime (and may crash if actually invoked).");
             eprintln!();
         }
     }
@@ -4363,11 +4410,14 @@ pub fn run_with_parse_cache(
     });
 
     if !failed_modules.is_empty() {
-        // The loud failure summary + entry-module abort already ran
-        // earlier (right after the parallel compile loop), so by the
-        // time we get here we know the entry module compiled OK and
-        // every entry in `failed_modules` is a non-entry module that
-        // we're consciously stubbing out so the binary can still link.
+        // The loud failure summary + abort already ran earlier (right
+        // after the parallel compile loop). #3527: reaching this block
+        // with a non-empty `failed_modules` now implies the caller set
+        // `PERRY_ALLOW_PARTIAL_CODEGEN=1` — without it, any module failure
+        // returns `Err` up there. So by the time we get here we know the
+        // entry module compiled OK and every entry in `failed_modules` is
+        // a non-entry module the caller has explicitly opted to stub out
+        // so the binary can still link.
         // Generate one empty `<prefix>__init` per failed module — the
         // entry main and any consumer module call each non-entry init
         // in order, so the symbols need to exist or the linker fails.
