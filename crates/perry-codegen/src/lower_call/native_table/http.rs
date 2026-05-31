@@ -11,13 +11,22 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
     // handle; the let-stmt arm in `crates/perry-hir/src/lower.rs` tags
     // the binding so `req.on/.end/.write/...` dispatch via the
     // class-filtered entries below.
+    // #3226/#3227/#3228 — client factory overloads. Node accepts
+    // `request(url[, cb])`, `request(options[, cb])`, and
+    // `request(url, options[, cb])` (same for `get`). A fixed
+    // `[NA_F64, NA_PTR]` shape mis-routed the options object into the
+    // callback slot and dropped the real callback in the three-arg form.
+    // Pass every user arg as a JS array (`NA_VARARGS`, mirroring the
+    // `listen()` rows) and let the runtime `*_overload` entry points
+    // resolve `(url, options, callback)` by value type. Runtime impls
+    // live in `crates/perry-ext-http/src/lib.rs`.
     NativeModSig {
         module: "http",
         has_receiver: false,
         method: "request",
         class_filter: None,
-        runtime: "js_http_request",
-        args: &[NA_F64, NA_PTR],
+        runtime: "js_http_request_overload",
+        args: &[NA_VARARGS],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -25,8 +34,8 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "get",
         class_filter: None,
-        runtime: "js_http_get",
-        args: &[NA_F64, NA_PTR],
+        runtime: "js_http_get_overload",
+        args: &[NA_VARARGS],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -34,8 +43,8 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "request",
         class_filter: None,
-        runtime: "js_https_request",
-        args: &[NA_F64, NA_PTR],
+        runtime: "js_https_request_overload",
+        args: &[NA_VARARGS],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -43,8 +52,8 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "get",
         class_filter: None,
-        runtime: "js_https_get",
-        args: &[NA_F64, NA_PTR],
+        runtime: "js_https_get_overload",
+        args: &[NA_VARARGS],
         ret: NR_PTR,
     },
     // ClientRequest instance methods (`req.on/.end/.write/.setHeader/.setTimeout`).
