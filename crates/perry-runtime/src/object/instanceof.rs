@@ -57,6 +57,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "console"
             && method == "Console"
             && crate::builtins::is_console_instance_value(value)
