@@ -249,6 +249,7 @@ pub struct EventEmitterHandle {
     /// Constructor-level `{ captureRejections: true }` flag. When enabled,
     /// rejected promises returned from listeners are routed to `"error"`.
     capture_rejections: bool,
+    domain_handle: Option<Handle>,
 }
 
 // SAFETY: pending records hold raw GC-managed pointers, but the
@@ -316,6 +317,7 @@ impl EventEmitterHandle {
             // on a fresh emitter returns 10 (matching Node).
             max_listeners: 10.0,
             capture_rejections: false,
+            domain_handle: None,
         }
     }
 
@@ -663,6 +665,33 @@ pub fn is_event_emitter_handle(handle: Handle) -> bool {
     get_handle::<EventEmitterHandle>(handle).is_some()
 }
 
+#[no_mangle]
+pub extern "C" fn js_event_emitter_set_domain(handle: Handle, domain: Handle) -> i32 {
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.domain_handle = if domain == 0 { None } else { Some(domain) };
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_emitter_get_domain(handle: Handle) -> Handle {
+    get_handle::<EventEmitterHandle>(handle)
+        .and_then(|emitter| emitter.domain_handle)
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_emitter_domain_value(handle: Handle) -> f64 {
+    let domain = js_event_emitter_get_domain(handle);
+    if domain == 0 {
+        f64::from_bits(TAG_NULL_F64_BITS)
+    } else {
+        js_nanbox_pointer(domain)
+    }
+}
+
 /// EventEmitter.on(eventName, listener) — also serves as `addListener`.
 /// Register a listener for the specified event.
 /// Returns the emitter handle for chaining.
@@ -906,6 +935,15 @@ pub unsafe extern "C" fn js_event_emitter_emit(
             let rejected_once = reject_pending_once_promises_for_error(emitter, first_arg);
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
+                if let Some(domain) = emitter.domain_handle {
+                    let _ = crate::domain::js_domain_emit_error(
+                        domain,
+                        first_arg,
+                        js_nanbox_pointer(handle),
+                        false,
+                    );
+                    return TAG_FALSE_F64;
+                }
                 perry_runtime::exception::js_throw(first_arg);
             }
         }
@@ -968,6 +1006,16 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
             );
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
+                if let Some(domain) = emitter.domain_handle {
+                    let err = f64::from_bits(TAG_UNDEFINED_F64_BITS);
+                    let _ = crate::domain::js_domain_emit_error(
+                        domain,
+                        err,
+                        js_nanbox_pointer(handle),
+                        false,
+                    );
+                    return TAG_FALSE_F64;
+                }
                 perry_runtime::exception::js_throw(f64::from_bits(TAG_UNDEFINED_F64_BITS));
             }
         }

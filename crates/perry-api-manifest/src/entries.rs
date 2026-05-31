@@ -57,6 +57,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "https",
     "http2",
     "events",
+    "domain",
     "os",
     "buffer",
     "assert",
@@ -862,6 +863,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "eventNames", true, None),
     method("events", "setMaxListeners", true, None),
     method("events", "getMaxListeners", true, None),
+    method("events", "domain", true, None),
     // Module-level helpers (`events.once` / `events.getEventListeners` /
     // `events.listenerCount` / `events.getMaxListeners` /
     // `events.setMaxListeners`).
@@ -874,6 +876,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Module-level `events.on(emitter, name)` — async-iterable queue,
     // PR #1257.
     method("events", "on", false, None),
+    method_sig("domain", "Domain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "createDomain", false, None, &[], TypeSpec::Any),
+    method_sig("domain", "create", false, None, &[], TypeSpec::Any),
+    property("domain", "_stack"),
+    property("domain", "active"),
+    property("domain", "members"),
+    method("domain", "on", true, None),
+    method("domain", "addListener", true, None),
+    method("domain", "emit", true, None),
+    method("domain", "run", true, None),
+    method("domain", "bind", true, None),
+    method("domain", "intercept", true, None),
+    method("domain", "add", true, None),
+    method("domain", "remove", true, None),
+    method("domain", "enter", true, None),
+    method("domain", "exit", true, None),
     method_sig(
         "lru-cache",
         "default",
@@ -2793,6 +2811,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // ===========================================================
     class("buffer", "Buffer"),
     class("events", "EventEmitter"),
+    class("domain", "Domain"),
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
     class("net", "Socket"),
