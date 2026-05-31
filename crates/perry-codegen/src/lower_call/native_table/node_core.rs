@@ -340,6 +340,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // ========== Node WASI ==========
+    NativeModSig {
+        module: "wasi",
+        has_receiver: false,
+        method: "WASI",
+        class_filter: None,
+        runtime: "js_wasi_constructor_call",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node OS ==========
     NativeModSig {
         module: "os",

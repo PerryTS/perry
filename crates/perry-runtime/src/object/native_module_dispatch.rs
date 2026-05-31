@@ -524,6 +524,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
+        // ── wasi module ──
+        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
+
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
         ("net", "_createServerHandle") => crate::net_validate::js_net_create_server_handle_stub(

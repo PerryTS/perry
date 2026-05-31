@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2160 entries across 97 modules.
+Total: 2167 entries across 98 modules.
 
 ## Modules
 
@@ -100,6 +100,7 @@ Total: 2160 entries across 97 modules.
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
+- [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
 - [`zlib`](#zlib)
@@ -2819,6 +2820,24 @@ Total: 2160 entries across 97 modules.
 - `isJSON` — module
 - `isURL` — module
 - `isUUID` — module
+
+## `wasi`
+
+### Classes
+
+- `WASI`
+
+### Methods
+
+- `WASI` — module
+- `finalizeBindings` — instance *(class: `WASI`)*
+- `getImportObject` — instance *(class: `WASI`)*
+- `initialize` — instance *(class: `WASI`)*
+- `start` — instance *(class: `WASI`)*
+
+### Properties
+
+- `wasiImport`
 
 ## `worker_threads`
 

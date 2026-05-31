@@ -616,6 +616,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
+    if module_name == "wasi" && property_name == "WASI" {
+        crate::wasi::attach_wasi_constructor_prototype(value);
+    }
     if module_name == "stream" && property_name == "Stream" {
         attach_stream_legacy_prototype(value);
     }
@@ -681,6 +684,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "_createServerHandle") => Some(5),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        ("wasi", "WASI") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
         ("module", "syncBuiltinESMExports") => Some(0),
@@ -1180,6 +1184,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
+            | ("wasi", "WASI")
             | ("net", "createServer")
             | ("net", "Server")
             | ("net", "Socket")
@@ -2868,6 +2873,10 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "test" => crate::node_test::property(property),
+        "wasi" => match property {
+            "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
+            _ => None,
+        },
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(unsafe {

@@ -104,6 +104,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "querystring",
     "cluster",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
     "process",
@@ -187,6 +188,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/tui",
     "perry/background",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
 ];
@@ -3530,6 +3532,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("tty", "removeListener", true, Some("WriteStream")),
     method("tty", "off", true, Some("WriteStream")),
     method("tty", "removeAllListeners", true, Some("WriteStream")),
+    // --- wasi ---
+    class("wasi", "WASI"),
+    method("wasi", "WASI", false, None),
+    method("wasi", "getImportObject", true, Some("WASI")),
+    method("wasi", "start", true, Some("WASI")),
+    method("wasi", "initialize", true, Some("WASI")),
+    method("wasi", "finalizeBindings", true, Some("WASI")),
+    property("wasi", "wasiImport"),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     method("perf_hooks", "now", false, None),
     method("perf_hooks", "mark", false, None),
