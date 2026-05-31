@@ -39,6 +39,32 @@ fn jsvalue_typed_array_kind(v: f64) -> Option<u8> {
 }
 
 #[inline]
+fn pointer_addr(value: f64) -> Option<usize> {
+    let bits = value.to_bits();
+    let v = JSValue::from_bits(bits);
+    if v.is_pointer() {
+        Some((bits & crate::value::POINTER_MASK) as usize)
+    } else if bits > 0x10000 && (bits >> 48) == 0 {
+        Some(bits as usize)
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn value_is_arguments_object(value: f64) -> bool {
+    if crate::array::js_array_is_array(value).to_bits() != crate::value::TAG_TRUE {
+        return false;
+    }
+    let Some(addr) = pointer_addr(value) else {
+        return false;
+    };
+    unsafe {
+        crate::array::array_has_arguments_object_flag(addr as *const crate::array::ArrayHeader)
+    }
+}
+
+#[inline]
 fn object_class_id(value: f64) -> Option<u32> {
     let v = JSValue::from_bits(value.to_bits());
     if !v.is_pointer() {
@@ -71,6 +97,23 @@ fn object_field_is_closure(obj: *const ObjectHeader, key: &[u8]) -> bool {
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_arguments_object(value: f64) -> f64 {
+    nanbox_bool(value_is_arguments_object(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_big_int_object(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_BIGINT))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_symbol_object(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(CLASS_ID_BOXED_SYMBOL))
+}
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_number_object(value: f64) -> f64 {
@@ -91,7 +134,13 @@ pub extern "C" fn js_util_types_is_boolean_object(value: f64) -> f64 {
 pub extern "C" fn js_util_types_is_boxed_primitive(value: f64) -> f64 {
     nanbox_bool(matches!(
         object_class_id(value),
-        Some(CLASS_ID_BOXED_NUMBER | CLASS_ID_BOXED_STRING | CLASS_ID_BOXED_BOOLEAN)
+        Some(
+            CLASS_ID_BOXED_NUMBER
+                | CLASS_ID_BOXED_STRING
+                | CLASS_ID_BOXED_BOOLEAN
+                | CLASS_ID_BOXED_BIGINT
+                | CLASS_ID_BOXED_SYMBOL
+        )
     ))
 }
 
@@ -131,6 +180,11 @@ pub extern "C" fn js_util_types_is_array_buffer_view(value: f64) -> f64 {
             || crate::buffer::is_data_view(addr)
             || jsvalue_typed_array_kind(value).is_some(),
     )
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_data_view(value: f64) -> f64 {
+    nanbox_bool(crate::buffer::is_data_view(jsvalue_addr(value)))
 }
 
 #[no_mangle]
@@ -174,6 +228,11 @@ pub extern "C" fn js_util_types_is_float32_array(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_float16_array(value: f64) -> f64 {
+    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT16))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_float64_array(value: f64) -> f64 {
     nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT64))
 }
@@ -199,8 +258,18 @@ pub extern "C" fn js_util_types_is_map(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_weak_map(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKMAP))
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_set(value: f64) -> f64 {
     nanbox_bool(crate::set::is_registered_set(jsvalue_addr(value)))
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_weak_set(value: f64) -> f64 {
+    nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKSET))
 }
 
 #[no_mangle]
@@ -293,6 +362,44 @@ pub extern "C" fn js_util_types_is_proxy(value: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_util_types_is_external(_value: f64) -> f64 {
+    nanbox_bool(false)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_module_namespace_object(value: f64) -> f64 {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return nanbox_bool(false);
+    }
+    let ptr = v.as_pointer::<ObjectHeader>();
+    if ptr.is_null()
+        || !crate::object::is_valid_obj_ptr(ptr as *const u8)
+        || unsafe { (*ptr).class_id } != crate::object::native_module::NATIVE_MODULE_CLASS_ID
+    {
+        return nanbox_bool(false);
+    }
+    let is_namespace = unsafe {
+        crate::object::native_module::read_native_module_name(ptr)
+            .is_some_and(|name| name != "util.types")
+    };
+    nanbox_bool(is_namespace)
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_key_object(value: f64) -> f64 {
+    let addr = jsvalue_addr(value);
+    nanbox_bool(
+        crate::buffer::is_secret_key(addr) || crate::buffer::asymmetric_key_meta(addr).is_some(),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_util_types_is_crypto_key(value: f64) -> f64 {
+    nanbox_bool(crate::buffer::crypto_key_meta(jsvalue_addr(value)).is_some())
+}
+
+#[no_mangle]
 pub extern "C" fn js_util_types_is_map_iterator(value: f64) -> f64 {
     let addr = jsvalue_addr(value);
     // #2856: real Map iterator objects carry a dedicated class id. The
@@ -311,50 +418,4 @@ pub extern "C" fn js_util_types_is_set_iterator(value: f64) -> f64 {
         crate::collection_iter_object::is_set_iterator_addr(addr)
             || crate::set::is_registered_set_iterator(addr),
     )
-}
-
-// #3678: predicate tail beyond Perry's previously-claimed subset. Only the
-// predicates Perry can correctly back are added here — `isBigIntObject` /
-// `isSymbolObject` (Perry boxes only Number/String/Boolean), `isArgumentsObject`
-// (no distinct arguments object — Perry uses arrays), `isModuleNamespaceObject`,
-// `isKeyObject`, and `isCryptoKey` (no KeyObject/CryptoKey class) are
-// intentionally omitted because a `false`-always stub would lie about the
-// positive cases Node recognizes.
-
-/// `util.types.isDataView(value)` — true only for a DataView created over an
-/// ArrayBuffer. Backed by the same DataView registry `isArrayBufferView`
-/// already consults.
-#[no_mangle]
-pub extern "C" fn js_util_types_is_data_view(value: f64) -> f64 {
-    nanbox_bool(crate::buffer::is_data_view(jsvalue_addr(value)))
-}
-
-/// `util.types.isFloat16Array(value)` — true only for a Float16Array
-/// (#2902 added the KIND_FLOAT16 typed-array kind).
-#[no_mangle]
-pub extern "C" fn js_util_types_is_float16_array(value: f64) -> f64 {
-    nanbox_bool(jsvalue_typed_array_kind(value) == Some(crate::typedarray::KIND_FLOAT16))
-}
-
-/// `util.types.isWeakMap(value)` — true only for a `new WeakMap()`. WeakMap
-/// instances carry CLASS_ID_WEAKMAP on their ObjectHeader (the class_id travels
-/// with the GC-movable object, unlike Map's raw-pointer registry).
-#[no_mangle]
-pub extern "C" fn js_util_types_is_weak_map(value: f64) -> f64 {
-    nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKMAP))
-}
-
-/// `util.types.isWeakSet(value)` — true only for a `new WeakSet()`.
-#[no_mangle]
-pub extern "C" fn js_util_types_is_weak_set(value: f64) -> f64 {
-    nanbox_bool(object_class_id(value) == Some(crate::weakref::CLASS_ID_WEAKSET))
-}
-
-/// `util.types.isExternal(value)` — Node returns true only for native V8
-/// `External` wrapper objects (raw C++ pointers surfaced to JS). Perry never
-/// produces such values, so this is correctly `false` for every JS value
-/// (matching Node, which also returns false for all pure-JS values).
-#[no_mangle]
-pub extern "C" fn js_util_types_is_external(_value: f64) -> f64 {
-    nanbox_bool(false)
 }

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2246 entries across 99 modules
+// Coverage: 2252 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3305,6 +3305,8 @@ declare module "util/types" {
   /** stdlib */
   export function isAnyArrayBuffer(...args: any[]): any;
   /** stdlib */
+  export function isArgumentsObject(...args: any[]): any;
+  /** stdlib */
   export function isArrayBuffer(...args: any[]): any;
   /** stdlib */
   export function isArrayBufferView(...args: any[]): any;
@@ -3313,11 +3315,15 @@ declare module "util/types" {
   /** stdlib */
   export function isBigInt64Array(...args: any[]): any;
   /** stdlib */
+  export function isBigIntObject(...args: any[]): any;
+  /** stdlib */
   export function isBigUint64Array(...args: any[]): any;
   /** stdlib */
   export function isBooleanObject(...args: any[]): any;
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
+  /** stdlib */
+  export function isCryptoKey(...args: any[]): any;
   /** stdlib */
   export function isDataView(...args: any[]): any;
   /** stdlib */
@@ -3341,9 +3347,13 @@ declare module "util/types" {
   /** stdlib */
   export function isInt8Array(...args: any[]): any;
   /** stdlib */
+  export function isKeyObject(...args: any[]): any;
+  /** stdlib */
   export function isMap(...args: any[]): any;
   /** stdlib */
   export function isMapIterator(...args: any[]): any;
+  /** stdlib */
+  export function isModuleNamespaceObject(...args: any[]): any;
   /** stdlib */
   export function isNativeError(...args: any[]): any;
   /** stdlib */
@@ -3362,6 +3372,8 @@ declare module "util/types" {
   export function isSharedArrayBuffer(...args: any[]): any;
   /** stdlib */
   export function isStringObject(...args: any[]): any;
+  /** stdlib */
+  export function isSymbolObject(...args: any[]): any;
   /** stdlib */
   export function isTypedArray(...args: any[]): any;
   /** stdlib */

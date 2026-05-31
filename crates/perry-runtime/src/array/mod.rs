@@ -33,8 +33,9 @@ pub use self::flat_clone::{
     js_array_values,
 };
 pub use self::from_concat::{js_array_concat_variadic, js_array_from_mapped, js_array_from_value};
+pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
 pub use self::header::{
-    js_array_clear_numeric_layout, js_array_is_numeric_f64_layout,
+    js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
     js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_register_raw,
     js_template_raw, scan_template_raw_roots, scan_template_raw_roots_mut, ArrayHeader,
 };

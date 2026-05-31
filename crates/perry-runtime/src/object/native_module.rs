@@ -1099,13 +1099,21 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
-    let key = format!("{module_name}\0{property_name}");
+    let callable_module_name = if module_name == "util.types" {
+        "util/types"
+    } else {
+        module_name
+    };
+    let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
         return f64::from_bits(bits);
     }
 
     let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let ns = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+    let ns = js_create_native_module_namespace(
+        callable_module_name.as_ptr(),
+        callable_module_name.len(),
+    );
     let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
@@ -2062,11 +2070,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("zlib", "ZstdDecompress")
             | ("zlib", "createZstdCompress")
             | ("zlib", "createZstdDecompress")
+            | ("util.types", "isArgumentsObject")
             | ("util.types", "isPromise")
+            | ("util.types", "isBigIntObject")
             | ("util.types", "isArrayBuffer")
             | ("util.types", "isSharedArrayBuffer")
             | ("util.types", "isAnyArrayBuffer")
             | ("util.types", "isArrayBufferView")
+            | ("util.types", "isDataView")
             | ("util.types", "isTypedArray")
             | ("util.types", "isUint8Array")
             | ("util.types", "isInt8Array")
@@ -2074,6 +2085,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util.types", "isUint16Array")
             | ("util.types", "isInt32Array")
             | ("util.types", "isUint32Array")
+            | ("util.types", "isFloat16Array")
             | ("util.types", "isFloat32Array")
             | ("util.types", "isFloat64Array")
             | ("util.types", "isUint8ClampedArray")
@@ -2082,25 +2094,28 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util.types", "isMap")
             | ("util.types", "isMapIterator")
             | ("util.types", "isProxy")
+            | ("util.types", "isExternal")
+            | ("util.types", "isModuleNamespaceObject")
             | ("util.types", "isSet")
             | ("util.types", "isSetIterator")
+            | ("util.types", "isWeakMap")
+            | ("util.types", "isWeakSet")
             | ("util.types", "isDate")
             | ("util.types", "isRegExp")
             | ("util.types", "isAsyncFunction")
             | ("util.types", "isGeneratorFunction")
             | ("util.types", "isGeneratorObject")
             | ("util.types", "isNativeError")
+            | ("util.types", "isKeyObject")
+            | ("util.types", "isCryptoKey")
             | ("util.types", "isNumberObject")
             | ("util.types", "isStringObject")
             | ("util.types", "isBooleanObject")
+            | ("util.types", "isSymbolObject")
             | ("util.types", "isBoxedPrimitive")
-            // #3678: predicate tail.
-            | ("util.types", "isDataView")
-            | ("util.types", "isFloat16Array")
-            | ("util.types", "isWeakMap")
-            | ("util.types", "isWeakSet")
-            | ("util.types", "isExternal")
+            | ("util/types", "isArgumentsObject")
             | ("util/types", "isPromise")
+            | ("util/types", "isBigIntObject")
             | ("timers", "setTimeout")
             | ("timers", "clearTimeout")
             | ("timers", "setInterval")
@@ -2114,6 +2129,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isSharedArrayBuffer")
             | ("util/types", "isAnyArrayBuffer")
             | ("util/types", "isArrayBufferView")
+            | ("util/types", "isDataView")
             | ("util/types", "isTypedArray")
             | ("util/types", "isUint8Array")
             | ("util/types", "isInt8Array")
@@ -2121,6 +2137,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isUint16Array")
             | ("util/types", "isInt32Array")
             | ("util/types", "isUint32Array")
+            | ("util/types", "isFloat16Array")
             | ("util/types", "isFloat32Array")
             | ("util/types", "isFloat64Array")
             | ("util/types", "isUint8ClampedArray")
@@ -2129,24 +2146,25 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isMap")
             | ("util/types", "isMapIterator")
             | ("util/types", "isProxy")
+            | ("util/types", "isExternal")
+            | ("util/types", "isModuleNamespaceObject")
             | ("util/types", "isSet")
             | ("util/types", "isSetIterator")
+            | ("util/types", "isWeakMap")
+            | ("util/types", "isWeakSet")
             | ("util/types", "isDate")
             | ("util/types", "isRegExp")
             | ("util/types", "isAsyncFunction")
             | ("util/types", "isGeneratorFunction")
             | ("util/types", "isGeneratorObject")
             | ("util/types", "isNativeError")
+            | ("util/types", "isKeyObject")
+            | ("util/types", "isCryptoKey")
             | ("util/types", "isNumberObject")
             | ("util/types", "isStringObject")
             | ("util/types", "isBooleanObject")
+            | ("util/types", "isSymbolObject")
             | ("util/types", "isBoxedPrimitive")
-            // #3678: predicate tail.
-            | ("util/types", "isDataView")
-            | ("util/types", "isFloat16Array")
-            | ("util/types", "isWeakMap")
-            | ("util/types", "isWeakSet")
-            | ("util/types", "isExternal")
             | ("url", "URL")
             | ("url", "URLSearchParams")
             | ("url", "fileURLToPath")
