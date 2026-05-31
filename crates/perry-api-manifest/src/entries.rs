@@ -664,6 +664,29 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `server.on('connection', s => …)` is the dominant case) keep
     // dispatching instead of throwing "not a function".
     method("net", "address", true, Some("Socket")),
+    // #2549 — `net.Socket` state / counter / metadata property getters.
+    // Lowered as zero-arg `NativeMethodCall`s (bare member reads), so the
+    // manifest counterpart is a `has_receiver: true` Method entry.
+    method("net", "pending", true, Some("Socket")),
+    method("net", "connecting", true, Some("Socket")),
+    method("net", "destroyed", true, Some("Socket")),
+    method("net", "readyState", true, Some("Socket")),
+    method("net", "bytesRead", true, Some("Socket")),
+    method("net", "bytesWritten", true, Some("Socket")),
+    method("net", "timeout", true, Some("Socket")),
+    method("net", "localAddress", true, Some("Socket")),
+    method("net", "localPort", true, Some("Socket")),
+    method("net", "localFamily", true, Some("Socket")),
+    method("net", "remoteAddress", true, Some("Socket")),
+    method("net", "remotePort", true, Some("Socket")),
+    method("net", "remoteFamily", true, Some("Socket")),
+    method("net", "bufferSize", true, Some("Socket")),
+    method(
+        "net",
+        "autoSelectFamilyAttemptedAddresses",
+        true,
+        Some("Socket"),
+    ),
     method("net", "once", true, Some("Socket")),
     method("net", "addListener", true, Some("Socket")),
     method("net", "off", true, Some("Socket")),

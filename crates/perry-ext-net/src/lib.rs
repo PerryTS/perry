@@ -244,6 +244,15 @@ pub(crate) struct SocketState {
     /// `run_socket_task` buffers inbound bytes here for `perry-ext-http` to
     /// drain instead of firing JS `'data'` events.
     raw: Option<Arc<Mutex<RawReadState>>>,
+    /// #2549 — Node `net.Socket` lifecycle/counter property surface.
+    /// `destroyed` flips true on `.destroy()`/peer close; drives
+    /// `socket.destroyed` and the `readyState` string. Byte counters track
+    /// `socket.bytesRead`/`socket.bytesWritten`. `timeout` holds the value set
+    /// via `setTimeout(ms)` (Node reports `undefined` until one is set).
+    pub(crate) destroyed: bool,
+    pub(crate) bytes_read: u64,
+    pub(crate) bytes_written: u64,
+    pub(crate) timeout: Option<u64>,
 }
 
 pub(crate) enum SocketCommand {
@@ -339,7 +348,7 @@ extern "C" {
 /// does (Node throws `ERR_INVALID_ARG_TYPE` here, but Perry's existing
 /// body-write paths are lenient and stringify — keep parity with
 /// that). `null` / `undefined` produce `None` (no bytes written).
-unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
+pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
     let v = JsValue::from_bits(value.to_bits());
     if v.is_undefined() || v.is_null() {
         return None;
@@ -680,6 +689,10 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             is_open: false,
             local_addr: None,
             raw: None,
+            destroyed: false,
+            bytes_read: 0,
+            bytes_written: 0,
+            timeout: None,
         },
     );
     statics::listeners()
@@ -932,6 +945,10 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                                         is_open: true,
                                         local_addr: accepted_local,
                                         raw: None,
+                                        destroyed: false,
+                                        bytes_read: 0,
+                                        bytes_written: 0,
+                                        timeout: None,
                                     },
                                 );
                                 statics::listeners()
@@ -1202,6 +1219,10 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             is_open: false,
             local_addr: None,
             raw: None,
+            destroyed: false,
+            bytes_read: 0,
+            bytes_written: 0,
+            timeout: None,
         },
     );
     statics::listeners()
@@ -1358,78 +1379,9 @@ async fn run_socket_task(
     }
 }
 
-// ─── FFI: socket.write(buf) ──────────────────────────────────────────────────
-
-/// `socket.write(chunk)` — enqueues bytes for the writer task.
-///
-/// Issue #1131 — `chunk_bits` is the full NaN-boxed JS value (codegen
-/// passes `NA_JSV`, the dispatch shims pass `args[0].to_bits()`), NOT a
-/// pre-stripped `BufferHeader` pointer. `jsvalue_to_socket_bytes`
-/// probes the actual type (Buffer / Uint8Array vs JS string vs
-/// number / bool) and reads through the correct memory layout, so
-/// `socket.write("ping")` now sends the string's UTF-8 bytes instead
-/// of garbage read out of the wrong header shape. Outbound mirror of
-/// the #1124 inbound `res.write(Buffer)` fix.
-///
-/// # Safety
-///
-/// `chunk_bits` must be a valid NaN-boxed JS value (string / Buffer /
-/// number / bool / null / undefined). String / Buffer pointers must
-/// reference live runtime allocations.
-#[no_mangle]
-pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
-    let bytes = match jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
-        Some(b) => b,
-        None => return,
-    };
-
-    let sockets = statics::sockets().lock().unwrap();
-    if let Some(s) = sockets.get(&handle) {
-        let _ = s.cmd_tx.send(SocketCommand::Write(bytes));
-    }
-}
-
-// ─── FFI: socket.end([data]) ─────────────────────────────────────────────────
-
-/// `socket.end([data])` — optionally write a final chunk, then half-close
-/// the write side.
-///
-/// Issue #1852 — Node's `socket.end(data)` writes `data` and *then* sends
-/// FIN. The previous signature took no data, so `socket.end("bye")` (a
-/// single-call write+close, common in request/response protocols and echo
-/// tests) silently dropped the payload — the peer never saw the bytes, its
-/// `'data'` listener never fired, and the exchange hung. `chunk_bits` is the
-/// full NaN-boxed JS value (NA_JSV); `undefined`/`null` (the no-arg
-/// `socket.end()` form, where the dispatch table pads the slot with
-/// `TAG_UNDEFINED`) yields `None` and we just send FIN.
-///
-/// # Safety
-///
-/// `chunk_bits` must be a valid NaN-boxed JS value. String / Buffer pointers
-/// must reference live runtime allocations.
-#[no_mangle]
-pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
-    let sockets = statics::sockets().lock().unwrap();
-    if let Some(s) = sockets.get(&handle) {
-        if let Some(bytes) = jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
-            if !bytes.is_empty() {
-                let _ = s.cmd_tx.send(SocketCommand::Write(bytes));
-            }
-        }
-        let _ = s.cmd_tx.send(SocketCommand::End);
-    }
-}
-
-// ─── FFI: socket.destroy() ───────────────────────────────────────────────────
-
-/// `socket.destroy()` — hard close.
-#[no_mangle]
-pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
-    let sockets = statics::sockets().lock().unwrap();
-    if let Some(s) = sockets.get(&handle) {
-        let _ = s.cmd_tx.send(SocketCommand::Destroy);
-    }
-}
+// ─── FFI: socket.write / end / destroy live in `lifecycle.rs` ────────────────
+// (#2549 split — moved there alongside the new state/counter getters to keep
+// this file under the 2000-line gate; they mutate the same SocketState.)
 
 // ─── FFI: socket.on(event, callback) ─────────────────────────────────────────
 

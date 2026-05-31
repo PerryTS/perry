@@ -20,11 +20,310 @@
 //! `NativeModSig` rows live in
 //! `perry-codegen/src/lower_call/native_table/net_events.rs`.
 
-use perry_ffi::{alloc_string, ArrayHeader, JsValue, StringHeader};
+use perry_ffi::{alloc_string, nanbox_string_bits, ArrayHeader, JsValue, StringHeader};
 use std::collections::HashSet;
 
 use crate::statics;
 use crate::string_from_header_i64;
+
+// ─── #2549: net.Socket state / counter / metadata property getters ───────────
+//
+// These zero-arg getters back the `net.Socket` property surface Node exposes
+// (`socket.pending`, `.connecting`, `.destroyed`, `.readyState`, `.bytesRead`,
+// `.bytesWritten`, `.timeout`, the `local*`/`remote*` endpoint fields, …).
+// The codegen lowers a bare member read on a `("net", "Socket")` instance into
+// a zero-arg `NativeMethodCall`; the matching `NativeModSig` rows live in
+// `perry-codegen/src/lower_call/native_table/net_events.rs`.
+//
+// Numeric/boolean/undefined-valued getters return a *NaN-boxed* `f64` through
+// the dispatch table's `NR_F64` kind (the value passes straight through).
+// `readyState` is always a string, so it uses `NR_STR` and returns a raw
+// `*mut StringHeader`. String-or-undefined fields (`localAddress`, …) box the
+// string themselves and fall back to `TAG_UNDEFINED` when unconnected, since
+// Node reports `undefined` (not `null`) for those before a connection.
+
+const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
+const TAG_FALSE_BITS: u64 = 0x7FFC_0000_0000_0003;
+const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+
+fn nanbox_bool(b: bool) -> f64 {
+    f64::from_bits(if b { TAG_TRUE_BITS } else { TAG_FALSE_BITS })
+}
+
+fn nanbox_undefined() -> f64 {
+    f64::from_bits(TAG_UNDEFINED_BITS)
+}
+
+/// NaN-box a freshly allocated runtime string as an `f64` JS value.
+fn nanbox_string_value(s: &str) -> f64 {
+    let header = alloc_string(s).as_raw();
+    f64::from_bits(nanbox_string_bits(header))
+}
+
+/// Run `f` against the live `SocketState` for `handle`, returning `default`
+/// when the handle is unknown (e.g. already torn down).
+fn with_socket<T>(handle: i64, default: T, f: impl FnOnce(&crate::SocketState) -> T) -> T {
+    match statics::sockets().lock() {
+        Ok(g) => g.get(&handle).map(f).unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+/// `socket.pending` — `true` until the socket starts connecting. We treat a
+/// not-yet-open, not-destroyed handle as pending (matches Node's value for a
+/// freshly constructed `new net.Socket()`).
+///
+/// # Safety
+///
+/// `handle` must be a registered socket id (raw, NOT NaN-boxed).
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_pending(handle: i64) -> f64 {
+    nanbox_bool(with_socket(handle, true, |s| !s.is_open && !s.destroyed))
+}
+
+/// `socket.connecting` — `true` only while a connection attempt is in flight.
+/// Perry resolves connects synchronously inside the tokio task, so from the
+/// JS side this is `false` before connect and `false` once open — matching
+/// Node for the construct-then-inspect path this getter targets.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_connecting(_handle: i64) -> f64 {
+    nanbox_bool(false)
+}
+
+/// `socket.destroyed` — `true` once `.destroy()` ran or the peer closed.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_destroyed(handle: i64) -> f64 {
+    nanbox_bool(with_socket(handle, false, |s| s.destroyed))
+}
+
+/// `socket.readyState` — one of `"opening" | "open" | "readOnly" |
+/// "writeOnly" | "closed"`. Node reports `"open"` for a freshly constructed
+/// socket and `"closed"` once destroyed.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_ready_state(handle: i64) -> *mut StringHeader {
+    let state = with_socket(
+        handle,
+        "open",
+        |s| if s.destroyed { "closed" } else { "open" },
+    );
+    alloc_string(state).as_raw()
+}
+
+/// `socket.bytesRead` — total bytes consumed from the socket.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_bytes_read(handle: i64) -> f64 {
+    with_socket(handle, 0u64, |s| s.bytes_read) as f64
+}
+
+/// `socket.bytesWritten` — total bytes queued for the socket.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_bytes_written(handle: i64) -> f64 {
+    with_socket(handle, 0u64, |s| s.bytes_written) as f64
+}
+
+/// `socket.timeout` — the value set via `setTimeout(ms)`, or `undefined`.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_timeout(handle: i64) -> f64 {
+    match with_socket(handle, None, |s| s.timeout) {
+        Some(ms) => ms as f64,
+        None => nanbox_undefined(),
+    }
+}
+
+/// `socket.localAddress` — the bound local IP string, or `undefined`.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_local_address(handle: i64) -> f64 {
+    match with_socket(handle, None, |s| s.local_addr) {
+        Some(addr) => nanbox_string_value(&addr.ip().to_string()),
+        None => nanbox_undefined(),
+    }
+}
+
+/// `socket.localPort` — the bound local port number, or `undefined`.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_local_port(handle: i64) -> f64 {
+    match with_socket(handle, None, |s| s.local_addr) {
+        Some(addr) => addr.port() as f64,
+        None => nanbox_undefined(),
+    }
+}
+
+/// `socket.localFamily` — `"IPv4"`/`"IPv6"` of the local endpoint, else
+/// `undefined`.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_local_family(handle: i64) -> f64 {
+    match with_socket(handle, None, |s| s.local_addr) {
+        Some(addr) => nanbox_string_value(if addr.is_ipv6() { "IPv6" } else { "IPv4" }),
+        None => nanbox_undefined(),
+    }
+}
+
+/// `socket.remoteAddress` — the peer IP string, or `undefined`. Perry does
+/// not cache the connected peer endpoint yet, so this reports `undefined`
+/// (Node's pre-connect value) rather than a stale address.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_remote_address(_handle: i64) -> f64 {
+    nanbox_undefined()
+}
+
+/// `socket.remotePort` — the peer port, or `undefined` (see
+/// [`js_net_socket_get_remote_address`]).
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_remote_port(_handle: i64) -> f64 {
+    nanbox_undefined()
+}
+
+/// `socket.remoteFamily` — `"IPv4"`/`"IPv6"` of the peer, or `undefined`
+/// (see [`js_net_socket_get_remote_address`]).
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_remote_family(_handle: i64) -> f64 {
+    nanbox_undefined()
+}
+
+/// `socket.bufferSize` — Node reports `undefined` for an unconnected socket
+/// and `0` (plus any internally buffered writes) once connected. We surface
+/// `undefined` while closed, `0` while open.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_buffer_size(handle: i64) -> f64 {
+    if with_socket(handle, false, |s| s.is_open) {
+        0.0
+    } else {
+        nanbox_undefined()
+    }
+}
+
+/// `socket.autoSelectFamilyAttemptedAddresses` — Node reports `undefined`
+/// until a Happy-Eyeballs connect runs. Perry does not model the per-attempt
+/// list, so we return `undefined`.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_auto_select_family_attempted_addresses(
+    _handle: i64,
+) -> f64 {
+    nanbox_undefined()
+}
+
+// ─── socket.write / end / destroy ────────────────────────────────────────────
+//
+// Moved here from `lib.rs` (#2549) to keep that file under the 2000-line
+// gate; they share `SocketState` with the getters above and also feed the
+// `bytesWritten`/`destroyed` counters those getters read.
+
+/// `socket.write(chunk)` — enqueues bytes for the writer task and bumps the
+/// `bytesWritten` counter. `chunk_bits` is the full NaN-boxed JS value (NA_JSV);
+/// `jsvalue_to_socket_bytes` probes Buffer/Uint8Array/string/number/bool and
+/// reads through the correct layout (#1131).
+///
+/// # Safety
+///
+/// `chunk_bits` must be a valid NaN-boxed JS value; string / Buffer pointers
+/// must reference live runtime allocations.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
+    let bytes = match crate::jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+        Some(b) => b,
+        None => return,
+    };
+    let mut sockets = statics::sockets().lock().unwrap();
+    if let Some(s) = sockets.get_mut(&handle) {
+        s.bytes_written = s.bytes_written.saturating_add(bytes.len() as u64);
+        let _ = s.cmd_tx.send(crate::SocketCommand::Write(bytes));
+    }
+}
+
+/// `socket.end([data])` — optionally write a final chunk, then half-close the
+/// write side (#1852). `undefined`/`null` (the no-arg form, padded with
+/// `TAG_UNDEFINED`) yields `None` and we just send FIN.
+///
+/// # Safety
+///
+/// `chunk_bits` must be a valid NaN-boxed JS value; string / Buffer pointers
+/// must reference live runtime allocations.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
+    let mut sockets = statics::sockets().lock().unwrap();
+    if let Some(s) = sockets.get_mut(&handle) {
+        if let Some(bytes) = crate::jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+            if !bytes.is_empty() {
+                s.bytes_written = s.bytes_written.saturating_add(bytes.len() as u64);
+                let _ = s.cmd_tx.send(crate::SocketCommand::Write(bytes));
+            }
+        }
+        let _ = s.cmd_tx.send(crate::SocketCommand::End);
+    }
+}
+
+/// `socket.destroy()` — hard close. Flags the handle destroyed (so
+/// `socket.destroyed` / `readyState` reflect it) and sends the teardown
+/// command.
+///
+/// # Safety
+///
+/// `handle` must be a registered socket id (raw, NOT NaN-boxed).
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
+    let mut sockets = statics::sockets().lock().unwrap();
+    if let Some(s) = sockets.get_mut(&handle) {
+        s.destroyed = true;
+        s.is_open = false;
+        let _ = s.cmd_tx.send(crate::SocketCommand::Destroy);
+    }
+}
 
 // ─── socket.address() ────────────────────────────────────────────────────────
 
