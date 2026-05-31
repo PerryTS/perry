@@ -836,6 +836,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("fs", "accessSync") => bool_to_f64(crate::fs::js_fs_access_sync_mode(arg(0), arg(1))),
         ("fs", "realpathSync") => crate::fs::js_fs_realpath_dispatch(arg(0), arg(1)),
         ("fs", "mkdtempSync") => crate::fs::js_fs_mkdtemp_dispatch(arg(0), arg(1)),
+        ("fs", "mkdtempDisposableSync") => crate::fs::js_fs_mkdtemp_disposable_sync(arg(0), arg(1)),
         ("fs", "chmodSync") => bool_to_f64(crate::fs::js_fs_chmod_sync(arg(0), arg(1))),
         ("fs", "chownSync") => bool_to_f64(crate::fs::js_fs_chown_sync(arg(0), arg(1), arg(2))),
         ("fs", "lchownSync") => bool_to_f64(crate::fs::js_fs_lchown_sync(arg(0), arg(1), arg(2))),
@@ -850,6 +851,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("fs", "utimesSync") => crate::fs::js_fs_utimes_sync(arg(0), arg(1), arg(2)) as f64,
         ("fs", "lutimesSync") => crate::fs::js_fs_lutimes_sync(arg(0), arg(1), arg(2)) as f64,
         ("fs", "futimesSync") => crate::fs::js_fs_futimes_sync(arg(0), arg(1), arg(2)) as f64,
+        ("fs", "_toUnixTimestamp") => crate::fs::js_fs_to_unix_timestamp(arg(0)),
         ("fs", "readvSync") => crate::fs::js_fs_readv_sync(arg(0), arg(1), arg(2)),
         ("fs", "writevSync") => crate::fs::js_fs_writev_sync(arg(0), arg(1), arg(2)),
         ("fs", "statfsSync") => crate::fs::js_fs_statfs_sync_options(arg(0), arg(1)),
@@ -894,6 +896,13 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("fs", "writev") => crate::fs::js_fs_writev_callback(arg(0), arg(1), arg(2), arg(3)),
         ("fs", "createWriteStream") => crate::fs::js_fs_create_write_stream(arg(0), arg(1)),
         ("fs", "createReadStream") => crate::fs::js_fs_create_read_stream(arg(0), arg(1)),
+        ("fs", "WriteStream") | ("fs", "FileWriteStream") => {
+            crate::fs::js_fs_create_write_stream(arg(0), arg(1))
+        }
+        ("fs", "ReadStream") | ("fs", "FileReadStream") => {
+            crate::fs::js_fs_create_read_stream(arg(0), arg(1))
+        }
+        ("fs", "Utf8Stream") => crate::fs::js_fs_utf8_stream_call_without_new(arg(0)),
         ("fs", "readFile") => crate::fs::js_fs_read_file_callback(arg(0), arg(1), arg(2)),
         ("fs", "writeFile") => crate::fs::js_fs_write_file_callback(arg(0), arg(1), arg(2), arg(3)),
         ("fs", "appendFile") => {

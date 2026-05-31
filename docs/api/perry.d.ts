@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2392 entries across 104 modules
+// Coverage: 2403 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1336,6 +1336,22 @@ declare module "fetch" {
 
 declare module "fs" {
   /** stdlib */
+  export class Dir { [key: string]: any; }
+  /** stdlib */
+  export class Dirent { [key: string]: any; }
+  /** stdlib */
+  export class FileReadStream { [key: string]: any; }
+  /** stdlib */
+  export class FileWriteStream { [key: string]: any; }
+  /** stdlib */
+  export class ReadStream { [key: string]: any; }
+  /** stdlib */
+  export class Stats { [key: string]: any; }
+  /** stdlib */
+  export class Utf8Stream { [key: string]: any; }
+  /** stdlib */
+  export class WriteStream { [key: string]: any; }
+  /** stdlib */
   export const constants: any;
   /** stdlib */
   export const promises: any;
@@ -1435,6 +1451,8 @@ declare module "fs" {
   export function mkdirSync(...args: any[]): any;
   /** stdlib */
   export function mkdtemp(...args: any[]): any;
+  /** stdlib */
+  export function mkdtempDisposableSync(...args: any[]): any;
   /** stdlib */
   export function mkdtempSync(...args: any[]): any;
   /** stdlib */
@@ -1559,6 +1577,8 @@ declare module "fs/promises" {
   export function mkdir(...args: any[]): any;
   /** stdlib */
   export function mkdtemp(...args: any[]): any;
+  /** stdlib */
+  export function mkdtempDisposable(...args: any[]): any;
   /** stdlib */
   export function open(...args: any[]): any;
   /** stdlib */

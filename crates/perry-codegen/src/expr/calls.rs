@@ -1762,10 +1762,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // Phase H fs: `fs.promises.METHOD(args...)` — HIR shape is a
         // nested PropertyGet { PropertyGet { NativeModuleRef("fs"),
-        // "promises" }, method }. We route these to their sync
-        // counterparts and wrap the result in an already-resolved
-        // Promise via `js_promise_resolved`. This is enough for the
-        // test's `await fs.promises.readFile(...)` pattern.
+        // "promises" }, method }. Route supported methods through the
+        // runtime fs/promises wrappers so validation failures reject
+        // instead of throwing before a Promise is returned.
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
@@ -1792,14 +1791,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                     };
-                    let blk = ctx.block();
-                    let value = blk.call(
+                    Ok(ctx.block().call(
                         DOUBLE,
-                        "js_fs_read_file_dispatch",
+                        "js_fs_promises_read_file",
                         &[(DOUBLE, &p), (DOUBLE, &options)],
-                    );
-                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &value)]);
-                    Ok(nanbox_pointer_inline(blk, &promise_handle))
+                    ))
                 }
                 "writeFile" if args.len() >= 2 => {
                     let path = lower_expr(ctx, &args[0])?;
@@ -1809,15 +1805,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                     };
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_write_file_sync_options",
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_promises_write_file",
                         &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
-                    );
-                    let blk = ctx.block();
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-                    Ok(nanbox_pointer_inline(blk, &promise_handle))
+                    ))
                 }
                 "appendFile" if args.len() >= 2 => {
                     let path = lower_expr(ctx, &args[0])?;
@@ -1827,23 +1819,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                     };
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_append_file_sync_options",
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_promises_append_file",
                         &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
-                    );
-                    let blk = ctx.block();
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-                    Ok(nanbox_pointer_inline(blk, &promise_handle))
+                    ))
                 }
                 "mkdir" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
-                    let _ = ctx.block().call(I32, "js_fs_mkdir_sync", &[(DOUBLE, &p)]);
-                    let blk = ctx.block();
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-                    Ok(nanbox_pointer_inline(blk, &promise_handle))
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_promises_mkdir",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
                 }
                 _ => {
                     // Unsupported — return a resolved promise holding
@@ -2030,6 +2023,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &p), (DOUBLE, &options)],
                     ))
                 }
+                "mkdtempDisposableSync" if !args.is_empty() => {
+                    let p = lower_expr(ctx, &args[0])?;
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_mkdtemp_disposable_sync",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
+                }
                 "rmdirSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
                     let options = if args.len() >= 2 {
@@ -2069,6 +2075,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_fs_create_read_stream",
                         &[(DOUBLE, &p), (DOUBLE, &options)],
                     ))
+                }
+                "_toUnixTimestamp" if !args.is_empty() => {
+                    let time = lower_expr(ctx, &args[0])?;
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_fs_to_unix_timestamp", &[(DOUBLE, &time)]))
                 }
                 "readFile" if args.len() >= 3 => {
                     // Node `fs.readFile(path, encoding, callback)` —

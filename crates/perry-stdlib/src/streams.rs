@@ -70,6 +70,9 @@ struct ReadableStreamData {
     strategy_size_cb: i64,
     high_water_mark: f64,
     is_byte_stream: bool,
+    /// Internal source used by runtime APIs that hand back byte chunks instead
+    /// of receiving a Web Streams controller.
+    pull_returns_byte_chunk: bool,
     pulling: bool,
     started: bool,
     reader_handle: Option<usize>,
@@ -394,6 +397,7 @@ fn alloc_readable_with_strategy(
             strategy_size_cb,
             high_water_mark: if hwm.is_nan() || hwm <= 0.0 { 1.0 } else { hwm },
             is_byte_stream,
+            pull_returns_byte_chunk: false,
             pulling: false,
             started: false,
             reader_handle: None,
@@ -445,27 +449,40 @@ unsafe fn invoke_start(stream_id: usize) {
 }
 
 unsafe fn maybe_pull(stream_id: usize) {
-    let (cb, controller, should_pull) = {
+    let (cb, controller, should_pull, pull_returns_byte_chunk) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) if s.state == ReadableState::Readable && !s.pulling && s.started => {
                 let need = s.chunks.is_empty() || (s.chunks.len() as f64) < s.high_water_mark;
                 if need && s.pull_cb != 0 {
                     s.pulling = true;
-                    (s.pull_cb, stream_id as f64, true)
+                    (s.pull_cb, stream_id as f64, true, s.pull_returns_byte_chunk)
                 } else {
-                    (0, 0.0, false)
+                    (0, 0.0, false, false)
                 }
             }
-            _ => (0, 0.0, false),
+            _ => (0, 0.0, false, false),
         }
     };
     if !should_pull {
         return;
     }
-    js_closure_call1(cb as *const ClosureHeader, controller);
+    if pull_returns_byte_chunk {
+        pull_deferred_byte_chunk(stream_id, cb);
+    } else {
+        js_closure_call1(cb as *const ClosureHeader, controller);
+    }
     if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.pulling = false;
+    }
+}
+
+unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
+    let chunk = js_closure_call0(cb as *const ClosureHeader);
+    if chunk.to_bits() == TAG_UNDEFINED {
+        let _ = js_readable_stream_controller_close(stream_id as f64);
+    } else {
+        let _ = js_readable_stream_controller_enqueue(stream_id as f64, chunk);
     }
 }
 
@@ -538,6 +555,32 @@ pub unsafe extern "C" fn js_readable_stream_new_with_source_type(
     );
     invoke_start(id);
     maybe_pull(id);
+    id as f64
+}
+
+/// Runtime registration target for APIs like
+/// `fs.promises.FileHandle.readableWebStream()`: create a byte-oriented
+/// ReadableStream whose pull callback returns one Uint8Array chunk per call
+/// and `undefined` at EOF. Unlike the public constructor path, this does not
+/// run an eager initial pull, so file positions are not advanced at stream
+/// creation time.
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_deferred_byte_source(
+    pull_bits: f64,
+    cancel_bits: f64,
+) -> f64 {
+    ensure_gc_registered();
+    let id = alloc_readable_with_type(
+        0,
+        closure_from_bits(pull_bits.to_bits()),
+        closure_from_bits(cancel_bits.to_bits()),
+        1.0,
+        true,
+    );
+    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&id) {
+        s.started = true;
+        s.pull_returns_byte_chunk = true;
+    }
     id as f64
 }
 
@@ -1330,6 +1373,7 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
                     strategy_size_cb: 0,
                     high_water_mark: 1.0,
                     is_byte_stream,
+                    pull_returns_byte_chunk: false,
                     pulling: false,
                     started: true,
                     reader_handle: None,
@@ -2444,6 +2488,7 @@ mod tests {
                     high_water_mark: 1.0,
                     strategy_size_cb: 0,
                     is_byte_stream: false,
+                    pull_returns_byte_chunk: false,
                     pulling: false,
                     started: false,
                     reader_handle: None,

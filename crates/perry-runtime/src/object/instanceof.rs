@@ -57,6 +57,19 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "fs" {
+            let matched = match method.as_str() {
+                "Stats" => crate::fs::is_fs_stats_instance_value(value),
+                "Dir" => crate::fs::is_fs_dir_instance_value(value),
+                "Dirent" => crate::fs::is_fs_dirent_instance_value(value),
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+                | "Utf8Stream" => crate::fs::is_fs_stream_instance_value(value, method.as_str()),
+                _ => false,
+            };
+            if matched {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+        }
         if module == "tls"
             && method == "SecureContext"
             && crate::tls::is_secure_context_instance(value)
@@ -254,6 +267,48 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_EVENT_EMITTER {
         return if is_event_emitter_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_STATS_EXPORT {
+        return if crate::fs::is_fs_stats_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_DIR {
+        return if crate::fs::is_fs_dir_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_DIRENT {
+        return if crate::fs::is_fs_dirent_instance_value(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_READ_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "ReadStream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_WRITE_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "WriteStream") {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
+        return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
             true_val
         } else {
             false_val

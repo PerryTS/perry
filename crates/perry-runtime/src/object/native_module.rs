@@ -13,6 +13,8 @@ use std::cell::{Cell, RefCell};
 thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+    static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
     static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_STYLES: Cell<u64> = const { Cell::new(0) };
@@ -23,6 +25,12 @@ thread_local! {
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     NATIVE_CALLABLE_EXPORTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+    NATIVE_MODULE_ACCESSOR_EXPORTS.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
             visitor.visit_nanbox_u64_slot(value_bits);
@@ -151,6 +159,7 @@ pub extern "C" fn js_create_native_module_namespace(
 }
 
 fn normalize_native_module_alias(module_name: &str) -> &str {
+    let module_name = module_name.strip_prefix("node:").unwrap_or(module_name);
     match module_name {
         "sys" => {
             crate::node_submodules::emit_sys_deprecation_warning_once();
@@ -1006,8 +1015,116 @@ mod tests {
     }
 }
 
+const FS_NAMESPACE_EXPORT_KEYS: &[&[u8]] = &[
+    b"appendFile",
+    b"appendFileSync",
+    b"access",
+    b"accessSync",
+    b"chown",
+    b"chownSync",
+    b"chmod",
+    b"chmodSync",
+    b"close",
+    b"closeSync",
+    b"copyFile",
+    b"copyFileSync",
+    b"cp",
+    b"cpSync",
+    b"createReadStream",
+    b"createWriteStream",
+    b"exists",
+    b"existsSync",
+    b"fchown",
+    b"fchownSync",
+    b"fchmod",
+    b"fchmodSync",
+    b"fdatasync",
+    b"fdatasyncSync",
+    b"fstat",
+    b"fstatSync",
+    b"fsync",
+    b"fsyncSync",
+    b"ftruncate",
+    b"ftruncateSync",
+    b"futimes",
+    b"futimesSync",
+    b"glob",
+    b"globSync",
+    b"lchown",
+    b"lchownSync",
+    b"lchmod",
+    b"lchmodSync",
+    b"link",
+    b"linkSync",
+    b"lstat",
+    b"lstatSync",
+    b"lutimes",
+    b"lutimesSync",
+    b"mkdir",
+    b"mkdirSync",
+    b"mkdtemp",
+    b"mkdtempDisposableSync",
+    b"mkdtempSync",
+    b"open",
+    b"openSync",
+    b"readdir",
+    b"readdirSync",
+    b"read",
+    b"readSync",
+    b"readv",
+    b"readvSync",
+    b"readFile",
+    b"readFileSync",
+    b"readlink",
+    b"readlinkSync",
+    b"realpath",
+    b"realpathSync",
+    b"rename",
+    b"renameSync",
+    b"rm",
+    b"rmSync",
+    b"rmdir",
+    b"rmdirSync",
+    b"stat",
+    b"statfs",
+    b"statSync",
+    b"statfsSync",
+    b"symlink",
+    b"symlinkSync",
+    b"truncate",
+    b"truncateSync",
+    b"unwatchFile",
+    b"unlink",
+    b"unlinkSync",
+    b"utimes",
+    b"utimesSync",
+    b"watch",
+    b"watchFile",
+    b"writeFile",
+    b"writeFileSync",
+    b"write",
+    b"writeSync",
+    b"writev",
+    b"writevSync",
+    b"Dirent",
+    b"Stats",
+    b"ReadStream",
+    b"WriteStream",
+    b"FileReadStream",
+    b"FileWriteStream",
+    b"Utf8Stream",
+    b"_toUnixTimestamp",
+    b"Dir",
+    b"opendir",
+    b"opendirSync",
+    b"constants",
+    b"promises",
+];
+
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
+    let module_name = normalize_native_module_alias(module_name);
     match module_name {
+        "fs" => Some(FS_NAMESPACE_EXPORT_KEYS),
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
@@ -1080,6 +1197,11 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
     }
 }
 
+pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+    native_module_enumerable_keys(module_name)
+        .is_some_and(|keys| keys.iter().any(|candidate| *candidate == key.as_bytes()))
+}
+
 fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
@@ -1121,6 +1243,8 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
 
 fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a str) -> &'a str {
     match (module_name, property_name) {
+        ("fs", "FileReadStream") => "ReadStream",
+        ("fs", "FileWriteStream") => "WriteStream",
         ("path" | "path.posix" | "path.win32", "_makeLong") => "toNamespacedPath",
         ("querystring", "decode") => "parse",
         ("querystring", "encode") => "stringify",
@@ -1267,6 +1391,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if is_native_module_callable_export(module_name, property_name) {
         return bound_native_callable_export_value(module_name, property_name);
     }
+    // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)
+    let js_val = crate::value::native_module_try_js_property(module_name, property_name);
+    if js_val.to_bits() != crate::value::TAG_UNDEFINED {
+        return js_val;
+    }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -1292,7 +1421,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    let exposed_name = if module_name == "url" && property_name == "resolveObject" {
+    let exposed_name = if module_name == "fs" {
+        native_callable_export_display_name(module_name, property_name)
+    } else if module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
     } else if module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
@@ -1404,6 +1535,70 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     value
 }
 
+extern "C" fn fs_namespace_descriptor_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    unsafe {
+        let property_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
+        let property_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        js_native_module_property_by_name(b"fs".as_ptr(), 2, property_ptr, property_len)
+    }
+}
+
+extern "C" fn fs_namespace_descriptor_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _value: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
+    let key = format!("fs\0get\0{property_name}");
+    if let Some(bits) = NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+
+    let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
+    let func_ptr = fs_namespace_descriptor_getter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 2);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, property_bytes.as_ptr() as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, property_bytes.len() as i64);
+    let name = if property_name == "promises" {
+        "get".to_string()
+    } else {
+        format!("get {property_name}")
+    };
+    set_bound_native_closure_name(closure, &name);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+
+    NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| {
+        c.borrow_mut().insert(key, value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    });
+    value
+}
+
+pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
+    let key = format!("fs\0set\0{property_name}");
+    if let Some(bits) = NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+
+    let func_ptr = fs_namespace_descriptor_setter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let name = format!("set {property_name}");
+    set_bound_native_closure_name(closure, &name);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+
+    NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| {
+        c.borrow_mut().insert(key, value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    });
+    value
+}
+
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         ("events", "EventEmitter") => Some(1),
@@ -1443,6 +1638,12 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        ("fs", "ReadStream" | "WriteStream") => Some(2),
+        ("fs", "Utf8Stream") => Some(0),
+        ("fs", "Dir" | "Dirent") => Some(3),
+        ("fs", "Stats") => Some(14),
+        ("fs", "mkdtempDisposableSync") => Some(2),
+        ("fs", "_toUnixTimestamp") => Some(1),
         ("events", "init") => Some(1),
         ("wasi", "WASI") => Some(0),
         ("perf_hooks", "Performance") => Some(0),
@@ -1463,6 +1664,18 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("module", "syncBuiltinESMExports") => Some(0),
         ("module", "runMain") => Some(0),
         _ => None,
+    }
+}
+
+fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
+    if module == "fs" {
+        match prop {
+            "_toUnixTimestamp" => "toUnixTimestamp",
+            "Stats" => "deprecated",
+            _ => prop,
+        }
+    } else {
+        prop
     }
 }
 
@@ -2108,8 +2321,15 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "cpSync")
             | ("fs", "createReadStream")
             | ("fs", "createWriteStream")
+            | ("fs", "Dir")
+            | ("fs", "Dirent")
             | ("fs", "existsSync")
             | ("fs", "exists")
+            | ("fs", "FileReadStream")
+            | ("fs", "FileWriteStream")
+            | ("fs", "ReadStream")
+            | ("fs", "Utf8Stream")
+            | ("fs", "WriteStream")
             | ("fs", "closeSync")
             | ("fs", "close")
             | ("fs", "fdatasync")
@@ -2136,6 +2356,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "lutimesSync")
             | ("fs", "mkdir")
             | ("fs", "mkdirSync")
+            | ("fs", "mkdtempDisposableSync")
             | ("fs", "mkdtempSync")
             | ("fs", "mkdtemp")
             | ("fs", "openSync")
@@ -2166,6 +2387,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "statfs")
             | ("fs", "statfsSync")
             | ("fs", "statSync")
+            | ("fs", "Stats")
             | ("fs", "lstatSync")
             | ("fs", "truncateSync")
             | ("fs", "truncate")
@@ -2173,6 +2395,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "unlinkSync")
             | ("fs", "utimes")
             | ("fs", "utimesSync")
+            | ("fs", "_toUnixTimestamp")
             | ("fs", "watch")
             | ("fs", "watchFile")
             | ("fs", "unwatchFile")
@@ -2599,7 +2822,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
 /// For constant properties (e.g., `path.sep`, `fs.constants`), returns the value directly.
 #[no_mangle]
 pub extern "C" fn js_native_module_bind_method(
-    namespace_obj: f64,
+    _namespace_obj: f64,
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
@@ -2611,13 +2834,20 @@ pub extern "C" fn js_native_module_bind_method(
     };
 
     // Extract module name from the namespace object's first field
-    let module_name = unsafe { get_module_name_from_namespace(namespace_obj) };
+    let module_name = unsafe { get_module_name_from_namespace(_namespace_obj) };
 
     // Check for known constant properties first
     if let Some(val) =
-        unsafe { get_native_module_constant(module_name, property_name, namespace_obj) }
+        unsafe { get_native_module_constant(module_name, property_name, _namespace_obj) }
     {
         return val;
+    }
+
+    // Not a constant. Only synthesize callables for
+    // exports that are actually callable on this platform; otherwise namespace
+    // reads such as Linux `fs.lchmodSync` must stay `undefined`.
+    if is_native_module_callable_export(module_name, property_name) {
+        return bound_native_callable_export_value(module_name, property_name);
     }
 
     // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)

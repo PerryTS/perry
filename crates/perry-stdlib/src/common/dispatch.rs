@@ -1910,6 +1910,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_event_emitter_handle_probe(event_emitter_probe);
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_on(crate::events::js_event_emitter_on);
+    // #1577: route captured-then-called `crypto.*` methods (which reach the
+    // runtime's native-module dispatch) back to the stdlib crypto impls.
+    #[cfg(feature = "crypto")]
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
@@ -1946,6 +1949,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         // real single-chunk Web stream when streams are linked.
         perry_runtime::node_submodules::js_register_jsx_render_stream(
             crate::streams::js_jsx_render_stream_from_value,
+        );
+        perry_runtime::fs::js_register_filehandle_readable_web_stream_factory(
+            crate::streams::js_readable_stream_deferred_byte_source,
         );
     }
 }
