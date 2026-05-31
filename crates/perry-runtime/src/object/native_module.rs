@@ -401,6 +401,21 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"parse",
             b"decode",
         ]),
+        "url" => Some(&[
+            b"Url",
+            b"parse",
+            b"resolve",
+            b"resolveObject",
+            b"format",
+            b"URL",
+            b"URLSearchParams",
+            b"domainToASCII",
+            b"domainToUnicode",
+            b"pathToFileURL",
+            b"fileURLToPath",
+            b"fileURLToPathBuffer",
+            b"urlToHttpOptions",
+        ]),
         "util" => Some(&[
             b"aborted",
             b"callbackify",
@@ -574,7 +589,12 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    set_bound_native_closure_name(closure, property_name);
+    let exposed_name = if module_name == "url" && property_name == "resolveObject" {
+        "urlResolveObject"
+    } else {
+        property_name
+    };
+    set_bound_native_closure_name(closure, exposed_name);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
@@ -640,6 +660,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("url", "Url") => Some(0),
+        ("url", "resolveObject") => Some(2),
         ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
@@ -1519,6 +1541,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isBoxedPrimitive")
             | ("url", "URL")
             | ("url", "URLSearchParams")
+            | ("url", "Url")
             | ("url", "fileURLToPath")
             | ("url", "fileURLToPathBuffer")
             | ("url", "pathToFileURL")
@@ -1528,6 +1551,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("url", "format")
             | ("url", "parse")
             | ("url", "resolve")
+            | ("url", "resolveObject")
             | ("punycode", "decode")
             | ("punycode", "encode")
             | ("punycode", "toASCII")
