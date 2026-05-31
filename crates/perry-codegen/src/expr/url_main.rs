@@ -260,7 +260,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let n_v = lower_expr(ctx, name)?;
             let n_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             let str_ptr = ctx.block().call(
                 I64,
                 "js_url_search_params_get",
@@ -288,15 +288,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let n_v = lower_expr(ctx, name)?;
             let n_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             // Runtime returns 0.0 / 1.0 as a plain f64 — not NaN-boxed.
             // Translate to TAG_TRUE / TAG_FALSE so `typeof` and strict-eq
             // behave correctly.
             let raw = if let Some(v_expr) = value {
                 let v_v = lower_expr(ctx, v_expr)?;
-                let v_ptr =
-                    ctx.block()
-                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v_v)]);
+                let v_ptr = ctx
+                    .block()
+                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &v_v)]);
                 ctx.block().call(
                     DOUBLE,
                     "js_url_search_params_has2",
@@ -331,11 +331,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let n_v = lower_expr(ctx, name)?;
             let n_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             let val_v = lower_expr(ctx, value)?;
-            let val_ptr =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)]);
+            let val_ptr = ctx
+                .block()
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &val_v)]);
             ctx.block().call_void(
                 "js_url_search_params_set",
                 &[(I64, &p_ptr), (I64, &n_ptr), (I64, &val_ptr)],
@@ -355,11 +355,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let n_v = lower_expr(ctx, name)?;
             let n_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             let val_v = lower_expr(ctx, value)?;
-            let val_ptr =
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)]);
+            let val_ptr = ctx
+                .block()
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &val_v)]);
             ctx.block().call_void(
                 "js_url_search_params_append",
                 &[(I64, &p_ptr), (I64, &n_ptr), (I64, &val_ptr)],
@@ -379,12 +379,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let n_v = lower_expr(ctx, name)?;
             let n_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             if let Some(v_expr) = value {
                 let v_v = lower_expr(ctx, v_expr)?;
-                let v_ptr =
-                    ctx.block()
-                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v_v)]);
+                let v_ptr = ctx
+                    .block()
+                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &v_v)]);
                 ctx.block().call_void(
                     "js_url_search_params_delete2",
                     &[(I64, &p_ptr), (I64, &n_ptr), (I64, &v_ptr)],
@@ -475,7 +475,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let n_v = lower_expr(ctx, name)?;
             let n_ptr = ctx
                 .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
+                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             // Returns f64 with the raw array pointer bit-cast in; the runtime
             // does not NaN-box it, so tag it here with POINTER_TAG.
             let raw_f64 = ctx.block().call(
