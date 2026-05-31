@@ -1774,3 +1774,56 @@ pub(crate) fn is_array_value(jv: JSValue) -> bool {
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
     gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
 }
+
+// #3108 — `process.sourceMapsEnabled` / `process.setSourceMapsEnabled(bool)`.
+//
+// Node exposes a live boolean toggle: `setSourceMapsEnabled(true|false)`
+// flips the flag and returns `undefined`, the getter reflects it, and a
+// non-boolean setter argument throws `TypeError [ERR_INVALID_ARG_TYPE]`.
+// Perry compiles AOT and ships no source-map resolver, so the flag drives
+// nothing observable beyond its own state — but mirroring Node's round-trip
+// + validation lets feature-detecting libraries (and the parity suite)
+// behave identically. The flag starts `false`, matching a fresh Node process
+// launched without `--enable-source-maps`.
+use std::sync::atomic::{AtomicBool, Ordering};
+static SOURCE_MAPS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// `process.sourceMapsEnabled` getter — returns the current toggle as a
+/// NaN-boxed boolean.
+#[no_mangle]
+pub extern "C" fn js_process_source_maps_enabled() -> f64 {
+    let on = SOURCE_MAPS_ENABLED.load(Ordering::Relaxed);
+    f64::from_bits(if on {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+/// `process.setSourceMapsEnabled(enabled)` — validates that `enabled` is a
+/// boolean (else `TypeError [ERR_INVALID_ARG_TYPE]`), stores it, and returns
+/// `undefined`. Receives the full NaN-boxed value so missing/null/numeric/
+/// string/object arguments are rejected exactly as Node does.
+#[no_mangle]
+pub extern "C" fn js_process_set_source_maps_enabled(value: f64) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_bool() {
+        let message = format!(
+            "The \"enabled\" argument must be of type boolean. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    SOURCE_MAPS_ENABLED.store(jv.as_bool(), Ordering::Relaxed);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+// Codegen emits these two entry points only from generated `.o` (see the
+// process native table). Pin retained-reference edges so the auto-optimize
+// whole-program build doesn't internalize + dead-strip them. Same rationale
+// as KEEP_JS_SETENV above.
+#[used]
+static KEEP_JS_PROCESS_SOURCE_MAPS_ENABLED: extern "C" fn() -> f64 = js_process_source_maps_enabled;
+#[used]
+static KEEP_JS_PROCESS_SET_SOURCE_MAPS_ENABLED: extern "C" fn(f64) -> f64 =
+    js_process_set_source_maps_enabled;
