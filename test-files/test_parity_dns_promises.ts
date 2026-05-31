@@ -5,12 +5,13 @@
 // `./run_parity_tests.sh --filter test_parity_dns_promises` to verify.
 
 import * as dns_promises from "node:dns/promises";
+import * as dns from "node:dns";
 
 
 // ── Functions ──
-// Non-deterministic resolution APIs — only probe types/presence, never call externally.
+// Non-deterministic resolution APIs — only probe types/presence unless the
+// target is loopback/localhost below.
 console.log("typeof dnsPromises.lookup:", typeof dns_promises.lookup);
-// PERRY-SKIP: dnsPromises.lookupService — requires live reverse lookup.
 console.log("typeof dnsPromises.lookupService:", typeof dns_promises.lookupService);
 console.log("typeof dnsPromises.resolve:", typeof dns_promises.resolve);
 console.log("typeof dnsPromises.resolve4:", typeof dns_promises.resolve4);
@@ -28,43 +29,209 @@ console.log("typeof dnsPromises.resolveTlsa:", typeof dns_promises.resolveTlsa);
 console.log("typeof dnsPromises.resolveTxt:", typeof dns_promises.resolveTxt);
 console.log("typeof dnsPromises.reverse:", typeof dns_promises.reverse);
 try {
-  const servers = dns_promises.getServers();
-  console.log("dnsPromises.getServers isArray:", Array.isArray(servers));
-  console.log("dnsPromises.getServers length typeof:", typeof servers.length);
-  dns_promises.setServers(servers);
-  console.log("dnsPromises.setServers: ok");
+  const originalServers = dns_promises.getServers();
+  const originalCallbackServers = dns.getServers();
+  console.log("dnsPromises.getServers isArray:", Array.isArray(originalServers));
+  console.log("dnsPromises.getServers length typeof:", typeof originalServers.length);
+  dns_promises.setServers(["1.1.1.1", "[2001:4860:4860::8888]:1053"]);
+  console.log("dnsPromises.setServers roundtrip:", dns_promises.getServers().join("|"));
+  console.log(
+    "dns callback servers unchanged:",
+    dns.getServers().join("|") === originalCallbackServers.join("|"),
+  );
+  dns.setServers(["8.8.8.8", "::1"]);
+  console.log("dns callback set leaves dnsPromises:", dns_promises.getServers().join("|"));
+  try {
+    dns_promises.setServers(["not ip"]);
+  } catch (e) {
+    console.log("dnsPromises.setServers invalid ip:", (e as Error).name, (e as any).code);
+  }
+  try {
+    dns_promises.setServers("1.1.1.1" as any);
+  } catch (e) {
+    console.log("dnsPromises.setServers non-array:", (e as Error).name, (e as any).code);
+  }
+  try {
+    dns_promises.setServers([1] as any);
+  } catch (e) {
+    console.log("dnsPromises.setServers non-string:", (e as Error).name, (e as any).code);
+  }
+  console.log("dnsPromises.setServers invalid keeps previous:", dns_promises.getServers().join("|"));
+  dns_promises.setServers(originalServers);
+  console.log(
+    "dnsPromises.setServers restored:",
+    dns_promises.getServers().join("|") === originalServers.join("|"),
+  );
+  dns.setServers(originalCallbackServers);
+  console.log(
+    "dns callback setServers restored:",
+    dns.getServers().join("|") === originalCallbackServers.join("|"),
+  );
 } catch (e) {
   console.log("dnsPromises.getServers/setServers error:", (e as Error).message);
 }
 try {
+  const originalOrder = dns_promises.getDefaultResultOrder();
+  dns_promises.setDefaultResultOrder("verbatim");
+  console.log(
+    "dnsPromises.setDefaultResultOrder('verbatim'):",
+    dns_promises.getDefaultResultOrder(),
+  );
   dns_promises.setDefaultResultOrder("ipv4first");
-  console.log("dnsPromises.setDefaultResultOrder('ipv4first'): ok");
+  console.log(
+    "dnsPromises.setDefaultResultOrder('ipv4first'):",
+    dns_promises.getDefaultResultOrder(),
+  );
+  dns_promises.setDefaultResultOrder("ipv6first");
+  console.log(
+    "dnsPromises.setDefaultResultOrder('ipv6first'):",
+    dns_promises.getDefaultResultOrder(),
+  );
+  console.log("dns callback shared result order:", dns.getDefaultResultOrder());
+  try {
+    dns_promises.setDefaultResultOrder("bad-order" as any);
+  } catch (e) {
+    console.log(
+      "dnsPromises.setDefaultResultOrder invalid:",
+      (e as Error).name,
+      (e as any).code,
+    );
+  }
+  console.log(
+    "dnsPromises.setDefaultResultOrder invalid keeps previous:",
+    dns_promises.getDefaultResultOrder(),
+  );
+  dns_promises.setDefaultResultOrder(originalOrder as any);
+  console.log(
+    "dnsPromises.setDefaultResultOrder restored:",
+    dns_promises.getDefaultResultOrder() === originalOrder,
+  );
 } catch (e) {
   console.log("dnsPromises.setDefaultResultOrder error:", (e as Error).message);
 }
 console.log("dnsPromises.getDefaultResultOrder():", dns_promises.getDefaultResultOrder());
 
+// ── deterministic loopback records ──
+function thrownShape(label: string, fn: () => void): void {
+  try {
+    fn();
+    console.log(label + ":", "no throw");
+  } catch (e: any) {
+    console.log(label + ":", e.name, e.code);
+  }
+}
+
+async function rejectedShape(label: string, fn: () => Promise<unknown>): Promise<void> {
+  try {
+    const promise = fn();
+    await promise;
+    console.log(label + ":", "resolved");
+  } catch (e: any) {
+    console.log(label + ":", e.name, e.code);
+  }
+}
+
+async function probeRecords() {
+  const resolveDefault = await dns_promises.resolve("localhost");
+  console.log("dnsPromises.resolve default loopback:", resolveDefault[0] === "127.0.0.1");
+
+  const resolveA = await dns_promises.resolve("localhost", "A");
+  console.log("dnsPromises.resolve A loopback:", resolveA[0] === "127.0.0.1");
+
+  const resolve4 = await dns_promises.resolve4("localhost");
+  console.log("dnsPromises.resolve4 loopback:", resolve4[0] === "127.0.0.1");
+
+  const resolve6 = await dns_promises.resolve6("localhost");
+  console.log("dnsPromises.resolve6 loopback:", resolve6[0] === "::1");
+
+  const resolveMx = await dns_promises.resolveMx("localhost");
+  console.log("dnsPromises.resolveMx shape:", resolveMx[0]?.exchange, typeof resolveMx[0]?.priority);
+
+  const resolveTxt = await dns_promises.resolveTxt("localhost");
+  console.log("dnsPromises.resolveTxt nested:", Array.isArray(resolveTxt[0]), resolveTxt[0]?.[0]);
+
+  const resolveAny = await dns_promises.resolveAny("localhost");
+  console.log("dnsPromises.resolveAny first type:", resolveAny[0]?.type);
+
+  const reverse = await dns_promises.reverse("::1");
+  console.log("dnsPromises.reverse loopback:", reverse[0]);
+
+  thrownShape("dnsPromises.resolve invalid rrtype", () => {
+    dns_promises.resolve("localhost", "BAD" as any);
+  });
+}
+await probeRecords();
+
 // ── localhost lookup (deterministic) ──
+function isLoopback(address: unknown): boolean {
+  return address === "127.0.0.1" || address === "::1";
+}
+
 async function probeLocalhost() {
   try {
     const r = await dns_promises.lookup("localhost");
     console.log("loopback:", r.address === "127.0.0.1" || r.address === "::1");
     console.log("loopback family typeof:", typeof r.family);
+
+    const all = await dns_promises.lookup("localhost", { all: true });
+    console.log("loopback all isArray:", Array.isArray(all));
+    console.log("loopback all first shape:", typeof all[0]?.address, typeof all[0]?.family);
+    console.log("loopback all loopback:", all.every((entry: any) => isLoopback(entry.address)));
+
+    const f4 = await dns_promises.lookup("localhost", { family: 4 });
+    console.log("loopback family4 address:", f4.address === "127.0.0.1");
+    console.log("loopback family4 family:", f4.family);
+
+    const service = await dns_promises.lookupService("127.0.0.1", 80);
+    console.log("lookupService hostname type:", typeof service.hostname);
+    console.log("lookupService service:", service.service);
   } catch (e) {
     console.log("loopback error:", (e as Error).message);
   }
 }
-probeLocalhost();
+await probeLocalhost();
+await rejectedShape("lookup invalid family", () => dns_promises.lookup("localhost", { family: 5 } as any));
+await rejectedShape("lookupService bad port", () => dns_promises.lookupService("127.0.0.1", -1));
 
 // ── Classes ──
 console.log("class dnsPromises.Resolver typeof:", typeof dns_promises.Resolver);
 try {
+  const originalServers = dns_promises.getServers();
   const r = new dns_promises.Resolver();
+  const sibling = new dns_promises.Resolver();
   console.log("new dnsPromises.Resolver typeof:", typeof r);
   console.log("resolver.cancel typeof:", typeof r.cancel);
+  console.log("resolver.setServers typeof:", typeof r.setServers);
+  console.log("resolver.setLocalAddress typeof:", typeof (r as any).setLocalAddress);
+  console.log("resolver.resolve typeof:", typeof r.resolve);
+  console.log("resolver.resolve4 typeof:", typeof r.resolve4);
+  console.log("resolver.resolve6 typeof:", typeof r.resolve6);
+  console.log("resolver.resolveMx typeof:", typeof r.resolveMx);
+  console.log("resolver.resolveTxt typeof:", typeof r.resolveTxt);
+  console.log("resolver.reverse typeof:", typeof r.reverse);
+  console.log("resolver.cancel returns undefined:", r.cancel() === undefined);
+  const initialServers = r.getServers();
+  console.log("resolver.initial getServers isArray:", Array.isArray(initialServers));
+  console.log("resolver.initial getServers length typeof:", typeof initialServers.length);
+  const siblingBefore = sibling.getServers().join("|");
+  const moduleBefore = dns_promises.getServers().join("|");
+  r.setServers(["1.0.0.1", "[::1]:5353"]);
   const rsrv = r.getServers();
   console.log("resolver.getServers isArray:", Array.isArray(rsrv));
-  console.log("resolver.getServers length typeof:", typeof rsrv.length);
+  console.log("resolver.getServers roundtrip:", rsrv.join("|"));
+  console.log("resolver.setServers leaves sibling:", sibling.getServers().join("|") === siblingBefore);
+  console.log("resolver.setServers leaves dnsPromises:", dns_promises.getServers().join("|") === moduleBefore);
+  const resolver4 = await r.resolve4("localhost");
+  console.log("resolver.resolve4 loopback:", resolver4[0] === "127.0.0.1");
+  const resolverReverse = await r.reverse("127.0.0.1");
+  console.log("resolver.reverse loopback:", resolverReverse[0]);
+  try {
+    r.setServers(["not ip"]);
+  } catch (e) {
+    console.log("resolver.setServers invalid ip:", (e as Error).name, (e as any).code);
+  }
+  console.log("resolver.setServers invalid keeps previous:", r.getServers().join("|"));
+  dns_promises.setServers(originalServers);
 } catch (e) {
   console.log("Resolver error:", (e as Error).message);
 }

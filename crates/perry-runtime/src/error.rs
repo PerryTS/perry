@@ -478,6 +478,11 @@ pub extern "C" fn js_throw_bigint_constructor_type_error() -> f64 {
     throw_builtin_not_constructor("BigInt")
 }
 
+#[no_mangle]
+pub extern "C" fn js_throw_math_constructor_type_error() -> f64 {
+    throw_builtin_not_constructor("Math")
+}
+
 fn value_to_lossy_string(value: f64) -> String {
     let string = crate::builtins::js_string_coerce(value);
     if string.is_null() {

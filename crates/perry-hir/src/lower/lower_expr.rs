@@ -998,6 +998,33 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     }
                 }
             }
+            if unary.op == ast::UnaryOp::Delete {
+                if let ast::Expr::Member(member) = unary.arg.as_ref() {
+                    if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                        (member.obj.as_ref(), &member.prop)
+                    {
+                        let obj_name = obj.sym.as_ref();
+                        let prop_name = prop.sym.as_ref();
+                        if obj_name == "Number"
+                            && ctx.lookup_local(obj_name).is_none()
+                            && ctx.lookup_func(obj_name).is_none()
+                            && matches!(
+                                prop_name,
+                                "NaN"
+                                    | "POSITIVE_INFINITY"
+                                    | "NEGATIVE_INFINITY"
+                                    | "MAX_VALUE"
+                                    | "MIN_VALUE"
+                                    | "EPSILON"
+                                    | "MAX_SAFE_INTEGER"
+                                    | "MIN_SAFE_INTEGER"
+                            )
+                        {
+                            return Ok(Expr::Bool(false));
+                        }
+                    }
+                }
+            }
             let operand = Box::new(lower_expr(ctx, &unary.arg)?);
             match unary.op {
                 ast::UnaryOp::Minus => {

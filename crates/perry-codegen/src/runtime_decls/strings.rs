@@ -562,6 +562,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boxed_primitive", DOUBLE, &[DOUBLE]);
+    // #3678: predicate tail.
+    module.declare_function("js_util_types_is_data_view", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_float16_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_weak_map", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_weak_set", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_external", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_proxy", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map_iterator", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set_iterator", DOUBLE, &[DOUBLE]);
@@ -602,6 +608,23 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_available_memory", DOUBLE, &[]);
     module.declare_function("js_process_constrained_memory", DOUBLE, &[]);
+    module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
+    module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_process_has_uncaught_exception_capture_callback",
+        DOUBLE,
+        &[],
+    );
+    module.declare_function(
+        "js_process_set_uncaught_exception_capture_callback",
+        DOUBLE,
+        &[DOUBLE],
+    );
+    module.declare_function(
+        "js_process_add_uncaught_exception_capture_callback",
+        DOUBLE,
+        &[DOUBLE],
+    );
     module.declare_function("js_process_getuid", DOUBLE, &[]);
     module.declare_function("js_process_geteuid", DOUBLE, &[]);
     module.declare_function("js_process_getgid", DOUBLE, &[]);
@@ -966,6 +989,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_referenceerror_new", I64, &[I64]);
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
+    module.declare_function("js_throw_math_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_type_error_const_assignment", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_throw_reference_error_unresolvable_assignment",
