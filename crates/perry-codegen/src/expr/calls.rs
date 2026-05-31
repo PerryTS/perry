@@ -2063,6 +2063,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &p), (DOUBLE, &options)],
                     ))
                 }
+                "_toUnixTimestamp" if !args.is_empty() => {
+                    let time = lower_expr(ctx, &args[0])?;
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_fs_to_unix_timestamp", &[(DOUBLE, &time)]))
+                }
                 "readFile" if args.len() >= 3 => {
                     // Node `fs.readFile(path, encoding, callback)` —
                     // sync read + immediate callback invocation.

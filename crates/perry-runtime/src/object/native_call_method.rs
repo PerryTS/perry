@@ -2614,9 +2614,6 @@ pub unsafe extern "C" fn js_native_call_method(
             if obj_ptr.is_null() || !is_valid_obj_ptr(obj_ptr as *const u8) {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
-            if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
-                return f64::from_bits(JSValue::bool(false).bits());
-            }
             let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let name_len = (*key_str).byte_len as usize;
             let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
@@ -2624,6 +2621,17 @@ pub unsafe extern "C" fn js_native_call_method(
                 Ok(s) => s,
                 Err(_) => return f64::from_bits(JSValue::bool(false).bits()),
             };
+            if (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID {
+                if let Some(module_name) = read_native_module_name(obj_ptr) {
+                    return f64::from_bits(
+                        JSValue::bool(native_module_has_enumerable_key(&module_name, key_name))
+                            .bits(),
+                    );
+                }
+            }
+            if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
             let enumerable = get_property_attrs(obj_ptr as usize, &key_name)
                 .map(|attrs| attrs.enumerable())
                 .unwrap_or(true);

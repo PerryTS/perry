@@ -25,12 +25,10 @@ use std::collections::HashMap as StdHashMap;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
-use crate::object::{js_object_alloc_with_shape, js_object_set_field, ObjectHeader};
+use crate::object::{js_object_set_field, ObjectHeader};
 use crate::value::JSValue;
 
 pub(crate) const TAG_UNDEFINED_STREAM: u64 = 0x7FFC_0000_0000_0001;
-pub(crate) const STREAM_SHAPE_ID: u32 = 0x7FFF_FE40;
-
 /// State for a single file stream (read OR write).
 #[derive(Default)]
 pub(crate) struct StreamState {
@@ -127,6 +125,7 @@ pub(crate) fn make_stream_closure(func: extern "C" fn(), stream_id: usize) -> *m
 #[allow(clippy::type_complexity)]
 pub(crate) fn build_stream_object(
     stream_id: usize,
+    class_id: u32,
     method_funcs: &[(&str, extern "C" fn())],
 ) -> *mut ObjectHeader {
     // Build a packed-keys byte sequence: "write\0end\0on\0once\0close\0"
@@ -135,17 +134,13 @@ pub(crate) fn build_stream_object(
         packed.extend_from_slice(name.as_bytes());
         packed.push(0);
     }
-    // Use a unique shape id per method-set so the SHAPE_CACHE doesn't
-    // collide with other allocations. Since read/write use different
-    // method sets, we use +0 for write, +1 for read (set by caller).
     let field_count = method_funcs.len() as u32;
-    // NOTE: shape id uniqueness is on the caller side — pass the right
-    // constant. We use STREAM_SHAPE_ID as base below.
-    let obj = js_object_alloc_with_shape(
-        STREAM_SHAPE_ID + method_funcs.len() as u32,
+    let obj = crate::object::js_object_alloc_class_with_keys(
+        class_id,
+        0,
         field_count,
         packed.as_ptr(),
-        packed.len() as u32,
+        (packed.len() - 1) as u32,
     );
     for (i, (_name, func)) in method_funcs.iter().enumerate() {
         let closure = make_stream_closure(*func, stream_id);
@@ -496,7 +491,7 @@ pub extern "C" fn js_fs_create_write_stream(path_value: f64, options_value: f64)
             )
         }),
     ];
-    let obj = build_stream_object(id, &method_funcs);
+    let obj = build_stream_object(id, CLASS_ID_FS_WRITE_STREAM, &method_funcs);
     // NaN-box as POINTER_TAG so the dispatcher's `is_pointer()` check
     // routes through the object-field scan in js_native_call_method.
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
@@ -566,6 +561,6 @@ pub extern "C" fn js_fs_create_read_stream(path_value: f64, options_value: f64) 
             )
         }),
     ];
-    let obj = build_stream_object(id, &method_funcs);
+    let obj = build_stream_object(id, CLASS_ID_FS_READ_STREAM, &method_funcs);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }

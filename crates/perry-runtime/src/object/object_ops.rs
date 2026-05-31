@@ -618,15 +618,24 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         if obj.is_null() || (obj as usize) < 0x10000 || !is_valid_obj_ptr(obj as *const u8) {
             return f64::from_bits(TAG_FALSE);
         }
-        if !own_key_present(obj, key_str) {
-            return f64::from_bits(TAG_FALSE);
-        }
         let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let name_len = (*key_str).byte_len as usize;
         let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
             Ok(s) => s,
             Err(_) => return f64::from_bits(TAG_FALSE),
         };
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(module_name) = read_native_module_name(obj) {
+                return f64::from_bits(if native_module_has_enumerable_key(&module_name, key_name) {
+                    TAG_TRUE
+                } else {
+                    TAG_FALSE
+                });
+            }
+        }
+        if !own_key_present(obj, key_str) {
+            return f64::from_bits(TAG_FALSE);
+        }
         let enumerable = super::get_property_attrs(obj as usize, key_name)
             .map(|attrs| attrs.enumerable())
             .unwrap_or(true);

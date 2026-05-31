@@ -946,6 +946,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 crate::tty::js_tty_write_stream_new(fd)
             };
         }
+        if module == "fs"
+            && matches!(
+                method.as_str(),
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+            )
+        {
+            let path = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let options = if !args_ptr.is_null() && args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return if matches!(method.as_str(), "ReadStream" | "FileReadStream") {
+                crate::fs::js_fs_create_read_stream(path, options)
+            } else {
+                crate::fs::js_fs_create_write_stream(path, options)
+            };
+        }
         if module == "tls" && method == "SecureContext" {
             let options = if !args_ptr.is_null() && args_len > 0 {
                 *args_ptr

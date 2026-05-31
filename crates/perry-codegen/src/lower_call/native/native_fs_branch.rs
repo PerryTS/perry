@@ -274,6 +274,12 @@
                 );
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            "_toUnixTimestamp" if !args.is_empty() => {
+                let time = lower_expr(ctx, &args[0])?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_fs_to_unix_timestamp", &[(DOUBLE, &time)]));
+            }
             "readvSync" if args.len() >= 2 => {
                 let fd = lower_expr(ctx, &args[0])?;
                 let bufs = lower_expr(ctx, &args[1])?;

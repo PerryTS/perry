@@ -35,6 +35,12 @@ mod dirent;
 pub use dirent::*;
 pub mod validate;
 
+pub(crate) const CLASS_ID_FS_DIR: u32 = 0xFFFF_0086;
+pub(crate) const CLASS_ID_FS_DIRENT: u32 = 0xFFFF_0087;
+pub(crate) const CLASS_ID_FS_READ_STREAM: u32 = 0xFFFF_0088;
+pub(crate) const CLASS_ID_FS_WRITE_STREAM: u32 = 0xFFFF_0089;
+pub(crate) const CLASS_ID_FS_STATS_EXPORT: u32 = 0xFFFF_008A;
+
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
     static FD_PATHS: RefCell<StdHashMap<i32, String>> = RefCell::new(StdHashMap::new());
@@ -71,6 +77,51 @@ struct DirState {
     entries: Vec<f64>,
     index: usize,
     closed: bool,
+}
+
+fn object_class_id(value: f64) -> Option<u32> {
+    let bits = value.to_bits();
+    let js_value = crate::value::JSValue::from_bits(bits);
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let obj = js_value.as_pointer::<crate::object::ObjectHeader>();
+    if obj.is_null() || (obj as usize) < 0x100000 {
+        return None;
+    }
+    unsafe {
+        let gc_header =
+            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+        Some((*obj).class_id)
+    }
+}
+
+pub(crate) fn is_fs_dir_instance_value(value: f64) -> bool {
+    object_class_id(value) == Some(CLASS_ID_FS_DIR)
+}
+
+pub(crate) fn is_fs_dirent_instance_value(value: f64) -> bool {
+    object_class_id(value) == Some(CLASS_ID_FS_DIRENT)
+}
+
+pub(crate) fn is_fs_stats_instance_value(value: f64) -> bool {
+    matches!(
+        object_class_id(value),
+        Some(stats::STATS_REGULAR_CLASS_ID | stats::STATS_BIGINT_CLASS_ID)
+    )
+}
+
+pub(crate) fn is_fs_stream_instance_value(value: f64, constructor_name: &str) -> bool {
+    match constructor_name {
+        "ReadStream" | "FileReadStream" => object_class_id(value) == Some(CLASS_ID_FS_READ_STREAM),
+        "WriteStream" | "FileWriteStream" => {
+            object_class_id(value) == Some(CLASS_ID_FS_WRITE_STREAM)
+        }
+        _ => false,
+    }
 }
 
 /// Extract a string pointer from a NaN-boxed f64 value
@@ -1668,17 +1719,77 @@ pub(crate) fn fstat_stats_value(fd: i32, bigint: bool) -> Result<f64, f64> {
 
 #[cfg(unix)]
 fn seconds_to_timespec(seconds: f64) -> libc::timespec {
-    let safe = if seconds.is_finite() && seconds >= 0.0 {
+    let safe = if seconds.is_finite() {
         seconds
     } else {
-        0.0
+        current_unix_timestamp_seconds()
     };
-    let secs = safe.trunc() as libc::time_t;
-    let nanos = ((safe - safe.trunc()) * 1_000_000_000.0).round() as libc::c_long;
+    let seconds_floor = safe.floor();
+    let mut secs = seconds_floor as libc::time_t;
+    let mut nanos = ((safe - seconds_floor) * 1_000_000_000.0).round() as libc::c_long;
+    if nanos >= 1_000_000_000 {
+        secs += 1;
+        nanos = 0;
+    }
     libc::timespec {
         tv_sec: secs,
         tv_nsec: nanos.clamp(0, 999_999_999),
     }
+}
+
+fn current_unix_timestamp_seconds() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+fn invalid_time_arg(arg_name: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be an instance of Date or an Time in seconds. Received {}",
+        arg_name,
+        validate::describe_received(value)
+    );
+    validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+pub(crate) fn to_unix_timestamp_or_throw(time_value: f64, arg_name: &str) -> f64 {
+    let js_value = crate::value::JSValue::from_bits(time_value.to_bits());
+    if js_value.is_any_string() {
+        let number = crate::builtins::js_number_coerce(time_value);
+        if number.is_nan() {
+            invalid_time_arg(arg_name, time_value);
+        }
+        return number;
+    }
+    if js_value.is_int32() {
+        let number = js_value.as_int32() as f64;
+        return if number < 0.0 {
+            current_unix_timestamp_seconds()
+        } else {
+            number
+        };
+    }
+    if js_value.is_number() {
+        let number = js_value.as_number();
+        if !number.is_finite() {
+            invalid_time_arg(arg_name, time_value);
+        }
+        return if number < 0.0 {
+            current_unix_timestamp_seconds()
+        } else {
+            number
+        };
+    }
+    if crate::date::is_date_value(time_value) {
+        return crate::date::date_cell_timestamp(time_value) / 1000.0;
+    }
+    invalid_time_arg(arg_name, time_value);
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_to_unix_timestamp(time_value: f64) -> f64 {
+    to_unix_timestamp_or_throw(time_value, "time")
 }
 
 /// Apply timestamps to a path. On `utimensat` failure builds a Node-shaped fs
@@ -1718,17 +1829,19 @@ pub(crate) unsafe fn js_fs_utimes_result(
     nofollow: bool,
 ) -> Result<(), f64> {
     validate::validate_path("path", path_value);
+    let atime = to_unix_timestamp_or_throw(atime_value, "time");
+    let mtime = to_unix_timestamp_or_throw(mtime_value, "time");
     let path = match decode_path_value(path_value) {
         Some(s) => s,
         None => return Ok(()),
     };
     #[cfg(unix)]
     {
-        set_path_times_result(&path, atime_value, mtime_value, nofollow)
+        set_path_times_result(&path, atime, mtime, nofollow)
     }
     #[cfg(not(unix))]
     {
-        let _ = (path, atime_value, mtime_value, nofollow);
+        let _ = (path, atime, mtime, nofollow);
         Ok(())
     }
 }
@@ -1737,8 +1850,10 @@ pub(crate) unsafe fn js_fs_utimes_result(
 #[no_mangle]
 pub extern "C" fn js_fs_utimes_sync(path_value: f64, atime_value: f64, mtime_value: f64) -> i32 {
     validate::validate_path("path", path_value);
+    let atime = to_unix_timestamp_or_throw(atime_value, "time");
+    let mtime = to_unix_timestamp_or_throw(mtime_value, "time");
     unsafe {
-        match js_fs_utimes_result(path_value, atime_value, mtime_value, false) {
+        match js_fs_utimes_result(path_value, atime, mtime, false) {
             Ok(()) => 1,
             Err(err_val) => crate::exception::js_throw(err_val),
         }
@@ -1749,8 +1864,10 @@ pub extern "C" fn js_fs_utimes_sync(path_value: f64, atime_value: f64, mtime_val
 #[no_mangle]
 pub extern "C" fn js_fs_lutimes_sync(path_value: f64, atime_value: f64, mtime_value: f64) -> i32 {
     validate::validate_path("path", path_value);
+    let atime = to_unix_timestamp_or_throw(atime_value, "time");
+    let mtime = to_unix_timestamp_or_throw(mtime_value, "time");
     unsafe {
-        match js_fs_utimes_result(path_value, atime_value, mtime_value, true) {
+        match js_fs_utimes_result(path_value, atime, mtime, true) {
             Ok(()) => 1,
             Err(err_val) => crate::exception::js_throw(err_val),
         }
@@ -1766,6 +1883,8 @@ pub(crate) unsafe fn js_fs_futimes_result(
     atime_value: f64,
     mtime_value: f64,
 ) -> Result<(), f64> {
+    let atime = to_unix_timestamp_or_throw(atime_value, "atime");
+    let mtime = to_unix_timestamp_or_throw(mtime_value, "mtime");
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
@@ -1775,10 +1894,7 @@ pub(crate) unsafe fn js_fs_futimes_result(
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
-            let times = [
-                seconds_to_timespec(atime_value),
-                seconds_to_timespec(mtime_value),
-            ];
+            let times = [seconds_to_timespec(atime), seconds_to_timespec(mtime)];
             if libc::futimens(file.as_raw_fd(), times.as_ptr()) == 0 {
                 Ok(())
             } else {
@@ -1790,7 +1906,7 @@ pub(crate) unsafe fn js_fs_futimes_result(
         }
         #[cfg(not(unix))]
         {
-            let _ = (file, atime_value, mtime_value);
+            let _ = (file, atime, mtime);
             Ok(())
         }
     })

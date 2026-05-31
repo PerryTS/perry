@@ -84,7 +84,7 @@ pub(crate) unsafe fn build_dirent_object(name: &str, parent_path: &str, kind: Di
     use crate::string::js_string_from_bytes;
     use crate::value::js_nanbox_string;
 
-    let obj = crate::object::js_object_alloc(0, 10);
+    let obj = crate::object::js_object_alloc(CLASS_ID_FS_DIRENT, 10);
 
     let set = |field: &str, v: f64| {
         let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);

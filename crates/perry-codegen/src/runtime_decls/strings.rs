@@ -374,6 +374,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_utimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_lutimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_futimes_sync", I32, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_to_unix_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fs_readv_sync", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_writev_sync", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_fs_statfs_sync", DOUBLE, &[DOUBLE]);
