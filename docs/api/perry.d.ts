@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2229 entries across 99 modules
+// Coverage: 2232 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2771,6 +2771,8 @@ declare module "process" {
   /** stdlib */
   export function addListener(...args: any[]): any;
   /** stdlib */
+  export function addUncaughtExceptionCaptureCallback(...args: any[]): any;
+  /** stdlib */
   export function availableMemory(...args: any[]): any;
   /** stdlib */
   export function chdir(...args: any[]): any;
@@ -2804,6 +2806,8 @@ declare module "process" {
   export function getgroups(...args: any[]): any;
   /** stdlib */
   export function getuid(...args: any[]): any;
+  /** stdlib */
+  export function hasUncaughtExceptionCaptureCallback(...args: any[]): any;
   /** stdlib */
   export function hrtime(...args: any[]): any;
   /** stdlib */
@@ -2842,6 +2846,8 @@ declare module "process" {
   export function setMaxListeners(...args: any[]): any;
   /** stdlib */
   export function setSourceMapsEnabled(...args: any[]): any;
+  /** stdlib */
+  export function setUncaughtExceptionCaptureCallback(...args: any[]): any;
   /** stdlib */
   export function setegid(...args: any[]): any;
   /** stdlib */

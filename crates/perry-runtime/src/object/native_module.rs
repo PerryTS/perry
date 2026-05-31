@@ -920,6 +920,12 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("process", "setSourceMapsEnabled") => Some(1),
+        (
+            "process",
+            "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback",
+        ) => Some(1),
+        ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
@@ -1378,6 +1384,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "kill")
             | ("process", "exit")
             | ("process", "umask")
+            | ("process", "setSourceMapsEnabled")
+            | ("process", "hasUncaughtExceptionCaptureCallback")
+            | ("process", "setUncaughtExceptionCaptureCallback")
+            | ("process", "addUncaughtExceptionCaptureCallback")
             | ("process", "threadCpuUsage")
             | ("process", "availableMemory")
             | ("process", "constrainedMemory")
@@ -3101,6 +3111,10 @@ pub(crate) unsafe fn get_native_module_constant(
         "module" => match property {
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "constants" => Some(crate::process::js_module_constants()),
+            _ => None,
+        },
+        "process" => match property {
+            "sourceMapsEnabled" => Some(crate::process::js_process_source_maps_enabled()),
             _ => None,
         },
         "dns" => match property {

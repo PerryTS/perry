@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2229 entries across 99 modules.
+Total: 2232 entries across 99 modules.
 
 ## Modules
 
@@ -2333,6 +2333,7 @@ Total: 2229 entries across 99 modules.
 
 - `abort` — module
 - `addListener` — module
+- `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
 - `chdir` — module
 - `constrainedMemory` — module
@@ -2350,6 +2351,7 @@ Total: 2229 entries across 99 modules.
 - `getgid` — module
 - `getgroups` — module
 - `getuid` — module
+- `hasUncaughtExceptionCaptureCallback` — module
 - `hrtime` — module
 - `initgroups` — module
 - `kill` — module
@@ -2370,6 +2372,7 @@ Total: 2229 entries across 99 modules.
 - `setMaxListeners` — module
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
+- `setUncaughtExceptionCaptureCallback` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
