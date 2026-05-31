@@ -444,6 +444,18 @@ pub(crate) fn function_class_id(value: f64) -> u32 {
     0
 }
 
+pub(crate) fn function_value_for_class_id(class_id: u32) -> Option<f64> {
+    if class_id == 0 {
+        return None;
+    }
+    FUNCTION_CLASS_IDS.read().ok().and_then(|guard| {
+        guard.as_ref().and_then(|map| {
+            map.iter()
+                .find_map(|(&bits, &cid)| (cid == class_id).then_some(f64::from_bits(bits)))
+        })
+    })
+}
+
 /// Register a class id so `js_value_typeof` can distinguish class refs
 /// (INT32-tagged with class_id payload) from real int32 numeric values.
 #[no_mangle]

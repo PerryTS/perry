@@ -562,6 +562,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boxed_primitive", DOUBLE, &[DOUBLE]);
+    // #3678: predicate tail.
+    module.declare_function("js_util_types_is_data_view", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_float16_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_weak_map", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_weak_set", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_external", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_proxy", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map_iterator", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set_iterator", DOUBLE, &[DOUBLE]);

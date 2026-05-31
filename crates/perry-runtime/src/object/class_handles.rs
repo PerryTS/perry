@@ -54,11 +54,8 @@ pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 
 /// Narrow registration hook for runtime code that needs to attach an
 /// EventEmitter listener without routing through the generic handle dispatcher.
-pub type EventEmitterOnFn = unsafe extern "C" fn(
-    handle: i64,
-    event: *const crate::string::StringHeader,
-    callback: i64,
-) -> i64;
+pub type EventEmitterOnFn =
+    unsafe extern "C" fn(handle: i64, event_bits: i64, callback: i64) -> i64;
 
 // Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)
 // and read from many threads thereafter (perry/thread workers run user code that

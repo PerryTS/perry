@@ -1041,6 +1041,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_init", DOUBLE, &[]);
 
     // ========== StringDecoder (issue #848) ==========
     // `js_string_decoder_new` allocates a real handle; `write` / `end`
