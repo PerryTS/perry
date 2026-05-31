@@ -405,6 +405,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"aborted",
             b"callbackify",
             b"convertProcessSignalToExitCode",
+            b"debug",
             b"debuglog",
             b"deprecate",
             b"diff",
@@ -542,6 +543,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         };
     }
 
+    if module_name == "util" && property_name == "debug" {
+        return bound_native_callable_export_value("util", "debuglog");
+    }
+
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
     }
@@ -632,6 +637,7 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
@@ -890,21 +896,6 @@ fn util_inspect_colors() -> f64 {
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
         value
     })
-}
-
-extern "C" fn util_debuglog_logger_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _arg: f64,
-) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-pub(crate) fn util_debuglog_logger_value() -> f64 {
-    let func_ptr = util_debuglog_logger_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, "debuglog");
-    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
@@ -1401,6 +1392,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
+            | ("util", "debug")
             | ("util", "aborted")
             | ("util", "debuglog")
             | ("util", "getCallSites")

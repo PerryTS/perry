@@ -1014,7 +1014,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "getCallSites") => crate::util_call_sites::js_util_get_call_sites(arg(0), arg(1)),
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
-        ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
+        ("util", "debuglog") | ("util", "debug") => {
+            crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
+        }
         ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {

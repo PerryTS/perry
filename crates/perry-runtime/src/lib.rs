@@ -159,6 +159,7 @@ mod ui_harmonyos_stubs;
 pub mod ui_text_registry;
 pub mod util_abort;
 pub mod util_call_sites;
+pub mod util_debuglog;
 pub mod util_diff;
 pub mod util_parse_args;
 pub mod util_parse_env;
