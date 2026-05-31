@@ -51,6 +51,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "tty"
+            && matches!(method.as_str(), "ReadStream" | "WriteStream")
+            && crate::tty::is_tty_stream_instance(value, method.as_str())
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
         if module == "console"
             && method == "Console"
             && crate::builtins::is_console_instance_value(value)

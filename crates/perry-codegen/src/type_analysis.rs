@@ -99,8 +99,10 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // of one byte (issue #584).
         Expr::TextEncoderEncode(_) => Some(HirType::Named("Uint8Array".into())),
         Expr::TextEncoderEncodeInto { .. } => Some(HirType::Object(Default::default())),
-        // TextDecoder.decode(buf) always produces a string.
-        Expr::TextDecoderDecode(_) => Some(HirType::String),
+        // TextDecoder.decode(buf) / .encoding always produce a string.
+        Expr::TextDecoderDecode { .. } => Some(HirType::String),
+        Expr::TextDecoderEncoding(_) => Some(HirType::String),
+        Expr::TextDecoderFatal(_) | Expr::TextDecoderIgnoreBom(_) => Some(HirType::Boolean),
         // string.split(sep) → Array<string>
         Expr::StringSplit { .. } => Some(HirType::Array(Box::new(HirType::String))),
         // Set.values() / Set.keys() → iterable, but Array.from wraps it

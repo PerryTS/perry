@@ -101,6 +101,40 @@ fn chain_roots_at_stream(expr: &ast::Expr) -> bool {
     }
 }
 
+/// #2874: does this expression's method chain originate from
+/// `Iterator.from(...)` (optionally through lazy helpers `map`/`filter`/
+/// `take`/`drop`/`flatMap`)? Such a chain yields a lazy iterator-helper
+/// OBJECT, not an array, so it must NOT be folded into `Expr::Array<Method>`
+/// ops — `js_array_map` would read garbage out of the helper's header. Keep it
+/// on dynamic dispatch so `dispatch_iterator_helper_method` runs. Mirrors
+/// `chain_roots_at_stream`; AST-only (no type info), so it catches the common
+/// inline-chain form.
+fn chain_roots_at_iterator_from(expr: &ast::Expr) -> bool {
+    let expr = unwrap_transparent_expr(expr);
+    let ast::Expr::Call(call) = expr else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(m) = callee.as_ref() else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &m.prop else {
+        return false;
+    };
+    match prop.sym.as_ref() {
+        // The static factory `Iterator.from(x)` is the root.
+        "from" => matches!(
+            unwrap_transparent_expr(m.obj.as_ref()),
+            ast::Expr::Ident(i) if i.sym.as_ref() == "Iterator"
+        ),
+        // Lazy helpers preserve the helper — recurse into the receiver.
+        "map" | "filter" | "take" | "drop" | "flatMap" => chain_roots_at_iterator_from(&m.obj),
+        _ => false,
+    }
+}
+
 use super::super::{
     extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
     resolve_typed_parse_ty, LoweringContext,
@@ -351,7 +385,9 @@ pub(super) fn try_array_only_methods(
                 // transforms return a Readable, not an array, so `js_array_map`
                 // would read garbage out of the stream object's header. Bail to
                 // dynamic dispatch so the runtime's iterator-helper stubs run.
-                let recv_is_class = recv_is_class || chain_roots_at_stream(member_obj);
+                let recv_is_class = recv_is_class
+                    || chain_roots_at_stream(member_obj)
+                    || chain_roots_at_iterator_from(member_obj);
                 match method_name {
                     "reduce" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;

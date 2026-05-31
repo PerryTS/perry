@@ -89,9 +89,10 @@ pub(crate) use formatting::{
 
 pub use globals::{
     js_decode_uri, js_decode_uri_component, js_drain_queued_microtasks, js_encode_uri,
-    js_encode_uri_component, js_queue_microtask, js_queue_next_tick, js_structured_clone,
-    js_text_decoder_decode, js_text_encoder_encode, restore_queued_microtask_contexts,
-    scan_queued_microtask_roots, scan_queued_microtask_roots_mut,
+    js_encode_uri_component, js_queue_microtask, js_queue_next_tick, js_queue_next_tick_args,
+    js_structured_clone, js_text_decoder_decode, js_text_encoder_encode,
+    restore_queued_microtask_contexts, scan_queued_microtask_roots,
+    scan_queued_microtask_roots_mut,
 };
 
 pub use numbers::{

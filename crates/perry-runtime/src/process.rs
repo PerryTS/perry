@@ -1,32 +1,33 @@
 //! Process module - provides access to environment and process information
 
+#[allow(unused_imports)]
+pub(crate) use crate::process_env_file::js_process_load_env_file;
+
+use crate::closure::{
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
+};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 
-/// Exit the process with the given exit code
-/// process.exit(code?: number) -> never
+/// Exit the process with the given exit code.
+/// process.exit(code?: number | string | null) -> never
 /// Uses libc::_exit() to bypass cleanup handlers that can cause SIGILL
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
-    // #2013 — `process.exit('foo')` throws TypeError ERR_INVALID_ARG_TYPE
-    // in Node (the exit code must be a number, null, or undefined). The
-    // numeric default of `1` for NaN/Infinity in the pre-fix code only
-    // matters for the inferred numeric-coerce path; keep that fallback
-    // for the (degenerate) numeric NaN/Infinity case so existing call
-    // sites that pass a parsed-out number aren't surprised.
-    let jv = JSValue::from_bits(code.to_bits());
-    if !jv.is_undefined() && !jv.is_null() && !crate::fs::validate::is_numeric(jv) {
-        let message = format!(
-            "The \"code\" argument must be of type number or null. Received {}",
-            crate::fs::validate::describe_received(code)
-        );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
-    let exit_code = if code.is_nan() || code.is_infinite() {
-        1 // Default to 1 for invalid codes
-    } else {
-        code as i32
+    // #3041 — match Node's `parseAndValidateExitCode`:
+    //   * `undefined` / `null`  → exit with the prior `process.exitCode`
+    //     (0 by default here, since the validated path never stored one).
+    //   * number                → must be a finite integer, else
+    //     RangeError [ERR_OUT_OF_RANGE] ("It must be an integer").
+    //   * string                → coerced with `Number()`; empty string or
+    //     a non-numeric string (`Number()` → NaN) throws
+    //     TypeError [ERR_INVALID_ARG_TYPE], otherwise it is validated as a
+    //     number (so `"2.5"` → RangeError, `"2"` → exit 2).
+    //   * anything else (boolean/object/array) → TypeError.
+    let exit_code = match validate_exit_code(code) {
+        Some(c) => c,
+        None => 0,
     };
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
@@ -47,6 +48,118 @@ pub extern "C" fn js_process_exit(code: f64) {
     }
     #[cfg(not(any(unix, windows)))]
     std::process::exit(exit_code);
+}
+
+/// Validate + coerce a `process.exit(code)` argument the way Node's
+/// `parseAndValidateExitCode` does, returning the truncated 32-bit exit
+/// status (Node wraps the integer into the platform's 0-255 byte; an
+/// `i32` cast reproduces that for the `_exit()` call). Returns `None` for
+/// nullish input (caller falls back to the prior `process.exitCode`, 0).
+/// Diverges via `js_throw` for invalid values.
+fn validate_exit_code(code: f64) -> Option<i32> {
+    let jv = JSValue::from_bits(code.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return None;
+    }
+    // Resolve `code` to a JS number. Strings are coerced with `Number()`
+    // (trim + hex/binary/octal/exponent), with empty-string and
+    // NaN-producing strings rejected as TypeError; everything that is not
+    // already a number is a TypeError too.
+    let n = if crate::fs::validate::is_numeric(jv) {
+        if jv.is_int32() {
+            jv.as_int32() as f64
+        } else {
+            jv.as_number()
+        }
+    } else if jv.is_any_string() {
+        match coerce_exit_code_string(code) {
+            Some(num) => num,
+            None => throw_exit_code_type_error(code),
+        }
+    } else {
+        throw_exit_code_type_error(code);
+    };
+    // Now validate as a number: must be a finite integer.
+    if !n.is_finite() || n.fract() != 0.0 {
+        throw_exit_code_range_error(n);
+    }
+    Some(n as i32)
+}
+
+/// `Number(string)` for `process.exit("…")`. Returns `None` for the empty
+/// string or any string `Number()` maps to `NaN` (Node throws TypeError
+/// for those rather than RangeError).
+fn coerce_exit_code_string(code: f64) -> Option<f64> {
+    let ptr = crate::value::js_get_string_pointer_unified(code) as *const StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    let s = unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    };
+    // Node's `Number("")` is 0, but `process.exit("")` throws TypeError;
+    // reject the empty string explicitly.
+    if s.is_empty() {
+        return None;
+    }
+    let n = js_number_coerce_string(&s);
+    if n.is_nan() {
+        None
+    } else {
+        Some(n)
+    }
+}
+
+/// JS `Number(s)` semantics for an exit-code string: trim ASCII
+/// whitespace, then parse decimal/hex/binary/octal/exponent. A
+/// whitespace-only string is 0 (mirrors `Number("  ")`). Returns `NaN`
+/// for anything that doesn't fully parse.
+fn js_number_coerce_string(s: &str) -> f64 {
+    let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
+    if t.is_empty() {
+        return 0.0;
+    }
+    let lower = t.to_ascii_lowercase();
+    let radix = |body: &str, base: u32| -> f64 {
+        i64::from_str_radix(body, base)
+            .map(|v| v as f64)
+            .unwrap_or(f64::NAN)
+    };
+    if let Some(body) = lower.strip_prefix("0x") {
+        return radix(body, 16);
+    }
+    if let Some(body) = lower.strip_prefix("0o") {
+        return radix(body, 8);
+    }
+    if let Some(body) = lower.strip_prefix("0b") {
+        return radix(body, 2);
+    }
+    match t {
+        "Infinity" | "+Infinity" => f64::INFINITY,
+        "-Infinity" => f64::NEG_INFINITY,
+        // Reject Rust-accepted forms JS `Number()` does not (underscores,
+        // `inf`, `nan`, leading/trailing dots are fine in JS though).
+        _ if t.bytes().any(|b| b == b'_') => f64::NAN,
+        _ => t.parse::<f64>().unwrap_or(f64::NAN),
+    }
+}
+
+fn throw_exit_code_type_error(code: f64) -> ! {
+    let message = format!(
+        "The \"code\" argument must be of type number. Received {}",
+        crate::fs::validate::describe_received(code)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_exit_code_range_error(n: f64) -> ! {
+    let message = format!(
+        "The value of \"code\" is out of range. It must be an integer. Received {}",
+        crate::fs::validate::format_received_number(n)
+    );
+    crate::fs::validate::throw_range_error_with_code(&message)
 }
 
 /// process.abort() -> never. Raises SIGABRT (no clean shutdown). Matches
@@ -236,6 +349,118 @@ pub extern "C" fn js_module_is_builtin(id: f64) -> f64 {
     })
 }
 
+/// `module.findPackageJSON(specifier[, base])` — resolve the nearest
+/// `package.json` for a resolved specifier (#3120). Perry implements the
+/// local-specifier path: the `specifier` is resolved against `base`'s
+/// directory (when relative/absolute) and Perry walks parent directories
+/// looking for `package.json`, returning its absolute path. The result is
+/// canonicalized to match Node's realpath-based output.
+///
+/// Argument validation matches Node's observable surface:
+///   * missing `specifier` → `TypeError [ERR_MISSING_ARGS]`
+///   * `base` that is not a string/URL (number, null, …) →
+///     `TypeError [ERR_INVALID_ARG_TYPE]`
+///   * no enclosing `package.json` → `undefined`
+#[no_mangle]
+pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    // `specifier` is required and must be a string (Perry covers the
+    // local-path/file-URL specifier shape).
+    if specifier.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::fs::validate::throw_error_with_code(
+            "The \"specifier\" argument must be specified",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let spec_value = JSValue::from_bits(specifier.to_bits());
+    let Some(spec_bytes) =
+        (unsafe { crate::string::js_string_key_bytes(spec_value, &mut sso_buf) })
+    else {
+        let message = format!(
+            "The \"specifier\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(specifier)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    };
+    let specifier_str = String::from_utf8_lossy(spec_bytes).into_owned();
+
+    // Resolve `base` to a directory. A missing/undefined base anchors at the
+    // current working directory (Node requires a base for relative specifiers,
+    // but the observable test surface always passes one).
+    let base_path = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        match crate::url::node_compat::module_base_to_path(base) {
+            Some(p) => p,
+            None => {
+                let message = format!(
+                    "The \"base\" argument must be of type string or an instance of URL. Received {}",
+                    crate::fs::validate::describe_received(base)
+                );
+                crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+            }
+        }
+    };
+
+    let Some(pkg_path) = find_nearest_package_json(&specifier_str, &base_path) else {
+        return undefined;
+    };
+    module_string_value(&pkg_path)
+}
+
+/// Resolve `specifier` against `base`'s directory, then walk parent
+/// directories looking for a `package.json`. Returns the canonicalized
+/// absolute path of the first match. `base` may name a file or a directory
+/// (trailing separator); both anchor at the containing directory.
+fn find_nearest_package_json(specifier: &str, base: &str) -> Option<String> {
+    use std::path::{Path, PathBuf};
+
+    let base_path = Path::new(base);
+    // A directory base (trailing separator) or an existing directory anchors
+    // resolution at itself; otherwise resolve against the parent directory of
+    // the base file.
+    let base_dir: PathBuf = if base.ends_with(std::path::MAIN_SEPARATOR) || base_path.is_dir() {
+        base_path.to_path_buf()
+    } else {
+        base_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+
+    let resolved = if Path::new(specifier).is_absolute() {
+        PathBuf::from(specifier)
+    } else {
+        base_dir.join(specifier)
+    };
+
+    // Start the upward walk at the directory containing the resolved target.
+    let mut dir = if resolved.is_dir() {
+        resolved
+    } else {
+        resolved
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or(base_dir)
+    };
+
+    loop {
+        let candidate = dir.join("package.json");
+        if candidate.is_file() {
+            let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            return Some(canonical.to_string_lossy().into_owned());
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return None,
+        }
+    }
+}
+
 /// process.getBuiltinModule(id) -> module namespace | undefined
 #[no_mangle]
 pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
@@ -328,23 +553,151 @@ pub extern "C" fn js_process_umask() -> f64 {
     }
 }
 
-/// process.umask(mask) -> number. Sets the file-mode creation mask to
-/// `mask` (coerced to integer) and returns the previous value.
+/// process.umask(mask) -> number. Validates and parses `mask` the way Node's
+/// `process.umask` (`parseMode`) does, sets the file-mode creation mask, and
+/// returns the previous value (#2920).
+///
+/// Node accepts either a 32-bit unsigned integer or an octal string:
+/// - a non-number / non-string (`null`, object, boolean, …) throws
+///   `TypeError [ERR_INVALID_ARG_TYPE]` ("must be of type number"); `null`
+///   reports as `Received undefined` to match Node's `parseMode`;
+/// - an octal string (`"077"`) is parsed via radix-8 `parseInt`; a string that
+///   is not all-octal-digits (empty, `"abc"`, `"8"`, `"0xff"`, leading/trailing
+///   whitespace) throws `TypeError [ERR_INVALID_ARG_VALUE]`;
+/// - a non-integer / `NaN` / `Infinity` number throws
+///   `RangeError [ERR_OUT_OF_RANGE]` ("must be an integer");
+/// - a value `< 0` or `> 4294967295` (either form) throws
+///   `RangeError [ERR_OUT_OF_RANGE]` ("must be >= 0 && <= 4294967295").
+///
+/// An explicit `undefined` is handled at the call site as the read-only
+/// no-argument form (so `js_process_umask` is called instead), matching Node's
+/// `umask(undefined)` no-op-returns-current behavior.
 #[no_mangle]
 pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
+    // An explicit `undefined` argument is the read-only form (Node:
+    // `umask(undefined)` returns the current mask without changing it).
+    if JSValue::from_bits(mask.to_bits()).is_undefined() {
+        return js_process_umask();
+    }
+    let parsed = parse_umask_mask(mask);
     #[cfg(unix)]
     unsafe {
-        let m = if mask.is_nan() || mask.is_infinite() {
-            0
-        } else {
-            mask as libc::mode_t
-        };
-        libc::umask(m) as f64
+        libc::umask(parsed as libc::mode_t) as f64
     }
     #[cfg(not(unix))]
     {
-        let _ = mask;
+        let _ = parsed;
         0.0
+    }
+}
+
+/// Node's `parseMode("mask", value)` for `process.umask`. Diverges via
+/// `js_throw` on an invalid value; otherwise returns the validated 32-bit
+/// unsigned mask.
+fn parse_umask_mask(mask: f64) -> u32 {
+    use crate::fs::validate::{
+        describe_received, is_numeric, throw_range_error_named, throw_type_error_with_code,
+    };
+    let jv = JSValue::from_bits(mask.to_bits());
+
+    if jv.is_any_string() {
+        let s = read_js_string_lossy(mask);
+        // Node parses the string with radix 8 (`parseInt(str, 8)`) but only
+        // after asserting the whole string is octal digits — leading/trailing
+        // whitespace, prefixes, empty, or non-octal chars are rejected.
+        let valid = !s.is_empty() && s.bytes().all(|b| (b'0'..=b'7').contains(&b));
+        let parsed = if valid {
+            u64::from_str_radix(&s, 8).ok()
+        } else {
+            None
+        };
+        match parsed {
+            Some(n) if n <= u32::MAX as u64 => return n as u32,
+            Some(n) => {
+                let message = format!(
+                    "The value of \"mask\" is out of range. It must be >= 0 && <= 4294967295. Received {}",
+                    n
+                );
+                throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+            }
+            None => {
+                let message = format!(
+                    "The argument 'mask' must be a 32-bit unsigned integer or an octal string. Received '{}'",
+                    s
+                );
+                throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+            }
+        }
+    }
+
+    if !is_numeric(jv) {
+        // Node's `parseMode` treats `null` like a missing value here, so its
+        // ERR_INVALID_ARG_TYPE renders `Received undefined`.
+        let received = if jv.is_null() {
+            "undefined".to_string()
+        } else {
+            describe_received(mask)
+        };
+        let message = format!(
+            "The \"mask\" argument must be of type number. Received {}",
+            received
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !(n.is_finite() && n.fract() == 0.0) {
+        let message = format!(
+            "The value of \"mask\" is out of range. It must be an integer. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    if n < 0.0 || n > u32::MAX as f64 {
+        let message = format!(
+            "The value of \"mask\" is out of range. It must be >= 0 && <= 4294967295. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    n as u32
+}
+
+/// Render a number the way Node prints the `Received …` clause of an
+/// `ERR_OUT_OF_RANGE` message (no `type number (...)` wrapper).
+fn format_out_of_range_number(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if n.fract() == 0.0 && n.abs() < 1e21 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
+    }
+}
+
+/// Read a JS string (heap `StringHeader` or inline SSO) into a Rust `String`.
+fn read_js_string_lossy(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
 }
 
@@ -413,11 +766,66 @@ fn unix_id_arg(value: f64) -> Option<u32> {
     None
 }
 
+/// Node-compatible argument validation for the POSIX credential setters
+/// (`setuid`/`seteuid`/`setgid`/`setegid`, #2919). Node's `validateId`:
+/// the `id` argument must be a number *or* a string (username/group-name);
+/// anything else throws `TypeError [ERR_INVALID_ARG_TYPE]`. A numeric `id`
+/// must be a non-negative integer `<= 4294967295`; a non-integer throws
+/// `RangeError [ERR_OUT_OF_RANGE]` ("must be an integer") and an out-of-range
+/// value throws ("must be >= 0 && <= 4294967295"). Diverges via `js_throw` on
+/// a bad value.
+///
+/// Returns `Some(u32)` for a valid numeric id (the syscall is then attempted),
+/// `None` for a valid string id (the username form is not yet resolved — that
+/// remains a no-op pending `getpwnam_r` plumbing, but it no longer *throws*).
+fn validate_credential_id(value: f64) -> Option<u32> {
+    use crate::fs::validate::{
+        describe_received, is_numeric, throw_range_error_named, throw_type_error_with_code,
+    };
+    let jv = JSValue::from_bits(value.to_bits());
+
+    // A string is a valid type (username / group-name form); accept without
+    // resolving it (no-op, preserving prior behavior).
+    if jv.is_any_string() {
+        return None;
+    }
+
+    if !is_numeric(jv) {
+        let message = format!(
+            "The \"id\" argument must be one of type number or string. Received {}",
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !(n.is_finite() && n.fract() == 0.0) {
+        let message = format!(
+            "The value of \"id\" is out of range. It must be an integer. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    if n < 0.0 || n > u32::MAX as f64 {
+        let message = format!(
+            "The value of \"id\" is out of range. It must be >= 0 && <= 4294967295. Received {}",
+            format_out_of_range_number(n)
+        );
+        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
+    }
+    Some(n as u32)
+}
+
 #[no_mangle]
 pub extern "C" fn js_process_setuid(uid: f64) {
+    let id = validate_credential_id(uid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(uid) {
+        if let Some(id) = id {
             unsafe {
                 libc::setuid(id as libc::uid_t);
             }
@@ -425,15 +833,16 @@ pub extern "C" fn js_process_setuid(uid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = uid;
+        let _ = id;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_seteuid(uid: f64) {
+    let id = validate_credential_id(uid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(uid) {
+        if let Some(id) = id {
             unsafe {
                 libc::seteuid(id as libc::uid_t);
             }
@@ -441,15 +850,16 @@ pub extern "C" fn js_process_seteuid(uid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = uid;
+        let _ = id;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_setgid(gid: f64) {
+    let id = validate_credential_id(gid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(gid) {
+        if let Some(id) = id {
             unsafe {
                 libc::setgid(id as libc::gid_t);
             }
@@ -457,15 +867,16 @@ pub extern "C" fn js_process_setgid(gid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = gid;
+        let _ = id;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_setegid(gid: f64) {
+    let id = validate_credential_id(gid);
     #[cfg(unix)]
     {
-        if let Some(id) = unix_id_arg(gid) {
+        if let Some(id) = id {
             unsafe {
                 libc::setegid(id as libc::gid_t);
             }
@@ -473,7 +884,7 @@ pub extern "C" fn js_process_setegid(gid: f64) {
     }
     #[cfg(not(unix))]
     {
-        let _ = gid;
+        let _ = id;
     }
 }
 
@@ -694,24 +1105,19 @@ pub extern "C" fn js_process_active_resources_info() -> f64 {
 
 /// process.cpuUsage(prior?) -> { user, system } µs.
 /// Reads CPU time consumed by the process via getrusage(RUSAGE_SELF) on
-/// unix. With a `prior` object, returns the diff (clamped to >= 0).
+/// unix. With a `prior` object, returns the diff from that sample.
 /// Non-unix targets return `{ user: 0, system: 0 }`.
 #[no_mangle]
 pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
-    // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
-    // is supplied but isn't an object (e.g. `process.cpuUsage('abc')`).
-    // Undefined / null fall through to the no-prior baseline read.
+    // #3040 — validate the previous-value object and its user/system
+    // fields like Node. `undefined`/`null` fall through to a baseline read;
+    // anything else must be a non-array object whose `user`/`system` fields
+    // are finite non-negative numbers, else TypeError [ERR_INVALID_ARG_TYPE]
+    // (wrong shape / non-number field) or RangeError [ERR_INVALID_ARG_VALUE]
+    // (negative / NaN / Infinity field value).
     let prior_jv = JSValue::from_bits(prior.to_bits());
-    if !prior_jv.is_undefined() && !prior_jv.is_null() && !prior_jv.is_pointer() {
-        let message = format!(
-            "The \"prevValue\" argument must be of type object. Received {}",
-            crate::fs::validate::describe_received(prior)
-        );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
     let (mut user_us, mut system_us) = read_process_cpu_micros();
-    let undef_bits = crate::value::TAG_UNDEFINED;
-    if prior.to_bits() != undef_bits && !prior_jv.is_null() {
+    if !prior_jv.is_undefined() && !prior_jv.is_null() {
         let (prev_user, prev_system) = extract_cpu_pair(prior);
         user_us = (user_us - prev_user).max(0.0);
         system_us = (system_us - prev_system).max(0.0);
@@ -742,73 +1148,347 @@ fn read_process_cpu_micros() -> (f64, f64) {
     (0.0, 0.0)
 }
 
-/// Read `.user` and `.system` (numbers, microseconds) from a JS object
-/// — used by `js_process_cpu_usage` to compute diffs. Missing fields
-/// or non-numeric values count as 0.
-fn extract_cpu_pair(value: f64) -> (f64, f64) {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return (0.0, 0.0);
+const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
+
+fn validate_cpu_usage_prior(value: f64) -> Option<(f64, f64)> {
+    if crate::value::js_is_truthy(value) == 0 {
+        return None;
     }
+
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() || is_array_value(jv) {
+        throw_cpu_prior_invalid_type(value);
+    }
+
     let obj_ptr = jv.as_pointer::<u8>() as *mut crate::object::ObjectHeader;
     if obj_ptr.is_null() {
-        return (0.0, 0.0);
+        throw_cpu_prior_invalid_type(value);
     }
-    let get_num = |name: &str| -> f64 {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key);
-        if v.is_nan() {
-            0.0
+
+    Some((
+        validate_cpu_usage_field(obj_ptr, "user"),
+        validate_cpu_usage_field(obj_ptr, "system"),
+    ))
+}
+
+fn validate_cpu_usage_field(obj: *mut crate::object::ObjectHeader, name: &'static str) -> f64 {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(obj, key);
+    let jv = JSValue::from_bits(value.to_bits());
+    if !crate::fs::validate::is_numeric(jv) {
+        let message = format!(
+            "The \"prevValue.{name}\" property must be of type number. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let n = numeric_value(jv);
+    if !previous_cpu_value_is_valid(n) {
+        let message = format!(
+            "The property 'prevValue.{name}' is invalid. Received {}",
+            format_node_number(n)
+        );
+        crate::fs::validate::throw_range_error_named(&message, "ERR_INVALID_ARG_VALUE");
+    }
+    n
+}
+
+fn previous_cpu_value_is_valid(value: f64) -> bool {
+    value.is_finite() && value >= 0.0 && value <= MAX_SAFE_INTEGER_F64
+}
+
+fn throw_cpu_prior_invalid_type(value: f64) -> ! {
+    let message = format!(
+        "The \"prevValue\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn numeric_value(jv: JSValue) -> f64 {
+    if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    }
+}
+
+fn format_node_number(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity"
         } else {
-            v
+            "Infinity"
         }
+        .to_string();
+    }
+    if value.fract() == 0.0 && value.abs() < 1e21 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
+}
+
+/// Validate a `process.cpuUsage(prevValue)` object and read its `.user`
+/// and `.system` fields (microseconds), matching Node's checks (#3040):
+///
+/// * `prevValue` must be a non-array object — otherwise TypeError
+///   [ERR_INVALID_ARG_TYPE] `The "prevValue" argument must be of type
+///   object.`
+/// * `user` then `system` must each be present and a number — otherwise
+///   TypeError [ERR_INVALID_ARG_TYPE] `The "prevValue.<field>" property
+///   must be of type number.`
+/// * each must be finite and `>= 0` — otherwise RangeError
+///   [ERR_INVALID_ARG_VALUE] `The property 'prevValue.<field>' is invalid.`
+///
+/// Diverges via `js_throw` for any failure. Only called after the caller
+/// has ruled out the nullish (baseline) case.
+fn extract_cpu_pair(value: f64) -> (f64, f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    // `prevValue` must be a non-array object.
+    if !jv.is_pointer() || crate::process::is_array_value(jv) {
+        let message = format!(
+            "The \"prevValue\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let obj_ptr = jv.as_pointer::<u8>() as *const crate::object::ObjectHeader;
+    if obj_ptr.is_null() {
+        let message = format!(
+            "The \"prevValue\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let read_field = |name: &str| -> f64 {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let field = crate::object::js_object_get_field_by_name(obj_ptr, key);
+        let field_f64 = f64::from_bits(field.bits());
+        // Field must be a number (missing → undefined → not numeric).
+        if !crate::fs::validate::is_numeric(field) {
+            let message = format!(
+                "The \"prevValue.{}\" property must be of type number. Received {}",
+                name,
+                crate::fs::validate::describe_received(field_f64)
+            );
+            crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+        }
+        let n = if field.is_int32() {
+            field.as_int32() as f64
+        } else {
+            field.as_number()
+        };
+        // Number, but must be a finite non-negative value.
+        if !n.is_finite() || n < 0.0 {
+            let message = format!(
+                "The property 'prevValue.{}' is invalid. Received {}",
+                name,
+                crate::fs::validate::format_received_number(n)
+            );
+            crate::fs::validate::throw_range_error_named(&message, "ERR_INVALID_ARG_VALUE");
+        }
+        n
     };
-    (get_num("user"), get_num("system"))
+    let user = read_field("user");
+    let system = read_field("system");
+    (user, system)
+}
+
+fn string_value(s: &str) -> f64 {
+    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn warning_value_to_string(v: f64) -> String {
+    if JSValue::from_bits(v.to_bits()).is_undefined() {
+        return String::new();
+    }
+    let ptr = crate::value::js_jsvalue_to_string(v);
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let header = &*ptr;
+        let len = header.byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn object_from_value(value: f64) -> Option<*mut crate::object::ObjectHeader> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>() as *mut u8;
+    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr as *const u8) {
+        return None;
+    }
+    Some(ptr as *mut crate::object::ObjectHeader)
+}
+
+fn object_string_field(obj_handle: &crate::gc::RuntimeHandle<'_>, name: &str) -> Option<String> {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        key,
+    );
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(warning_value_to_string(value))
+    }
+}
+
+fn set_error_string_prop(error: *mut crate::error::ErrorHeader, name: &str, value: &str) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error_handle = scope.root_raw_mut_ptr(error);
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(string_value(value));
+    crate::object::js_object_set_field_by_name(
+        error_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        key_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader,
+        value_handle.get_nanbox_f64(),
+    );
+}
+
+extern "C" fn process_warning_callback(closure: *const ClosureHeader) -> f64 {
+    use std::io::Write;
+
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let warning_handle = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
+    let line = warning_value_to_string(js_closure_get_capture_f64(closure, 1));
+    let detail = warning_value_to_string(js_closure_get_capture_f64(closure, 2));
+    let hint = warning_value_to_string(js_closure_get_capture_f64(closure, 3));
+
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{line}");
+    if !detail.is_empty() {
+        let _ = writeln!(stderr, "{detail}");
+    }
+    if !hint.is_empty() {
+        let _ = writeln!(stderr, "{hint}");
+    }
+
+    crate::os::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &str) {
+    let pid = std::process::id();
+    let line = if code.is_empty() {
+        format!("(node:{pid}) {label}: {msg}")
+    } else {
+        format!("(node:{pid}) [{code}] {label}: {msg}")
+    };
+    let hint_flag = if label == "DeprecationWarning" {
+        "--trace-deprecation"
+    } else {
+        "--trace-warnings"
+    };
+    let hint = format!("(Use `node {hint_flag} ...` to show where the warning was created)");
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let warning_handle = scope.root_nanbox_f64(warning);
+    let line_handle = scope.root_nanbox_f64(string_value(&line));
+    let detail_handle = scope.root_nanbox_f64(string_value(detail));
+    let hint_handle = scope.root_nanbox_f64(string_value(&hint));
+
+    let callback = js_closure_alloc(process_warning_callback as *const u8, 4);
+    if callback.is_null() {
+        return;
+    }
+    let callback_handle = scope.root_raw_mut_ptr(callback);
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        0,
+        warning_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        1,
+        line_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        2,
+        detail_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        3,
+        hint_handle.get_nanbox_f64(),
+    );
+    crate::builtins::js_queue_next_tick(callback_handle.get_raw_const_ptr::<ClosureHeader>() as i64);
 }
 
 /// process.emitWarning(warning[, type, code, ctor]) -> undefined.
-/// Writes a formatted warning to stderr matching Node's shape:
-/// `(node:<pid>) <Type> [CODE]: <message>`. Anything that can't be
-/// coerced to a string is rendered via `js_jsvalue_to_string`. The 4th
-/// `ctor` arg (Node's trace anchor) is accepted but ignored — Perry
-/// doesn't capture stack traces here.
+///
+/// The direct-call lowering still passes the first three JS values here. The
+/// runtime parses the modern options-object overload, creates an Error-like
+/// warning object, and queues the warning job so stderr/event delivery happens
+/// after the current synchronous frame.
 #[no_mangle]
 pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
-    use std::io::Write;
-    let undef_bits = crate::value::TAG_UNDEFINED;
-    let value_to_string = |v: f64| -> String {
-        if v.to_bits() == undef_bits {
-            return String::new();
-        }
-        let ptr = crate::value::js_jsvalue_to_string(v);
-        if ptr.is_null() {
-            return String::new();
-        }
-        unsafe {
-            let header = &*ptr;
-            let len = header.byte_len as usize;
-            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-        }
-    };
+    let msg = warning_value_to_string(warning);
 
-    let msg = value_to_string(warning);
-    let raw_type = value_to_string(type_name);
-    let raw_code = value_to_string(code);
+    let (raw_type, raw_code, detail) = if let Some(options) = object_from_value(type_name) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let options_handle = scope.root_raw_mut_ptr(options);
+        (
+            object_string_field(&options_handle, "type").unwrap_or_default(),
+            object_string_field(&options_handle, "code").unwrap_or_default(),
+            object_string_field(&options_handle, "detail").unwrap_or_default(),
+        )
+    } else {
+        (
+            warning_value_to_string(type_name),
+            warning_value_to_string(code),
+            String::new(),
+        )
+    };
     let label = if raw_type.is_empty() {
         "Warning".to_string()
     } else {
         raw_type
     };
-    let code_part = if raw_code.is_empty() {
-        String::new()
-    } else {
-        format!(" [{}]", raw_code)
-    };
-    let pid = std::process::id();
-    let line = format!("(node:{}) {}{}: {}\n", pid, label, code_part, msg);
-    let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(line.as_bytes());
+
+    let message_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let warning_error = crate::error::js_error_new_with_message(message_ptr);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let warning_handle = scope.root_raw_mut_ptr(warning_error);
+    set_error_string_prop(
+        warning_handle.get_raw_mut_ptr::<crate::error::ErrorHeader>(),
+        "name",
+        &label,
+    );
+    if !raw_code.is_empty() {
+        set_error_string_prop(
+            warning_handle.get_raw_mut_ptr::<crate::error::ErrorHeader>(),
+            "code",
+            &raw_code,
+        );
+    }
+    if !detail.is_empty() {
+        set_error_string_prop(
+            warning_handle.get_raw_mut_ptr::<crate::error::ErrorHeader>(),
+            "detail",
+            &detail,
+        );
+    }
+    let warning_value = crate::value::js_nanbox_pointer(
+        warning_handle.get_raw_const_ptr::<crate::error::ErrorHeader>() as i64,
+    );
+    schedule_warning(warning_value, &label, &raw_code, &msg, &detail);
 }
 
 /// process.availableMemory() -> number. Free system memory available to
@@ -1016,6 +1696,11 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
 static KEEP_JS_SETENV: extern "C" fn(*const StringHeader, f64) = js_setenv;
 #[used]
 static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
+// #3120: codegen emits `js_module_find_package_json` only from generated `.o`,
+// so pin a retained reference edge for the auto-optimize whole-program build.
+#[used]
+static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
+    js_module_find_package_json;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
@@ -1165,13 +1850,17 @@ pub extern "C" fn js_process_env() -> f64 {
     boxed
 }
 
-/// process.threadCpuUsage() -> object { user, system } in microseconds.
+/// process.threadCpuUsage(prior?) -> object { user, system } in microseconds.
 /// CPU time consumed by the current thread. Uses CLOCK_THREAD_CPUTIME_ID
 /// (available on macOS 10.12+ and Linux). Platforms without the clock get
 /// 0.0 for both fields.
 #[no_mangle]
-pub extern "C" fn js_process_thread_cpu_usage() -> f64 {
-    let (user_us, system_us) = read_thread_cpu_micros();
+pub extern "C" fn js_process_thread_cpu_usage(prior: f64) -> f64 {
+    let (mut user_us, mut system_us) = read_thread_cpu_micros();
+    if let Some((prev_user, prev_system)) = validate_cpu_usage_prior(prior) {
+        user_us -= prev_user;
+        system_us -= prev_system;
+    }
 
     let obj = crate::object::js_object_alloc(0, 2);
     let set_field = |name: &str, value: f64| {
@@ -1196,7 +1885,7 @@ fn read_thread_cpu_micros() -> (f64, f64) {
     if ok != 0 {
         return (0.0, 0.0);
     }
-    let total_us = (ts.tv_sec as f64) * 1_000_000.0 + (ts.tv_nsec as f64) / 1_000.0;
+    let total_us = ((ts.tv_sec as f64) * 1_000_000.0 + (ts.tv_nsec as f64) / 1_000.0).floor();
     (total_us, 0.0)
 }
 
@@ -1234,91 +1923,6 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
-/// process.loadEnvFile(path?) — read a `.env`-formatted file from disk and
-/// merge its `KEY=value` entries into `process.env`. Node 20.12+. With no
-/// path, the default is `.env` in the current working directory. Throws a
-/// Node-shaped `Error` (`code: "ENOENT"`, `syscall: "open"`) when the file
-/// can't be opened. #2135 (#1399 follow-through): previously a no-op that
-/// returned undefined so probe-and-call sites didn't crash; with
-/// `process.env.X = v` now persisting via std::env (#1344), eager loading
-/// is meaningful.
-#[no_mangle]
-pub extern "C" fn js_process_load_env_file(path_ptr: *const StringHeader) {
-    let target = unsafe {
-        if path_ptr.is_null() {
-            ".env".to_string()
-        } else {
-            let len = (*path_ptr).byte_len as usize;
-            let data = (path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            match std::str::from_utf8(bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => return,
-            }
-        }
-    };
-    let contents = match std::fs::read_to_string(&target) {
-        Ok(s) => s,
-        Err(err) => unsafe {
-            throw_load_env_file_open_error(&err, &target);
-        },
-    };
-    for line in contents.lines() {
-        let trimmed = line.trim_start();
-        // Comments and blank lines.
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let Some((raw_key, raw_value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        let key = raw_key.trim();
-        if key.is_empty() {
-            continue;
-        }
-        // Strip a matched surrounding quote pair on the trimmed value;
-        // otherwise keep the trimmed text verbatim (so unquoted spaces
-        // around `=` are dropped but inner `=` survives — see Node's
-        // built-in `.env` parser).
-        let value_trimmed = raw_value.trim();
-        let value = strip_matched_quotes(value_trimmed);
-        std::env::set_var(key, value);
-    }
-}
-
-fn strip_matched_quotes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' || first == b'\'') && first == last {
-            return &s[1..s.len() - 1];
-        }
-    }
-    s
-}
-
-unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> ! {
-    use std::io::ErrorKind;
-    let code: &'static str = match err.kind() {
-        ErrorKind::NotFound => "ENOENT",
-        ErrorKind::PermissionDenied => "EACCES",
-        _ => "EIO",
-    };
-    let desc = match code {
-        "ENOENT" => "no such file or directory",
-        "EACCES" => "permission denied",
-        _ => "i/o error",
-    };
-    let message = format!("{code}: {desc}, open '{target}'");
-    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg_ptr, code);
-    crate::node_submodules::register_error_syscall(msg_ptr, "open");
-    crate::node_submodules::register_error_path(msg_ptr, target.to_string());
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
-}
-
 // Issue #2013 — process-arg-validation helpers shared by `js_process_chdir`
 // and `js_process_hrtime`. Sited here (not os.rs) so the process surface's
 // validation logic stays under the 2000-line file gate as the os.rs splits
@@ -1336,7 +1940,7 @@ pub unsafe extern "C" fn js_process_chdir_jsv(value: f64) {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_any_string() {
         let message = format!(
-            "The \"path\" argument must be of type string. Received {}",
+            "The \"directory\" argument must be of type string. Received {}",
             crate::fs::validate::describe_received(value)
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");

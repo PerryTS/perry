@@ -269,7 +269,7 @@ fn specialized_stdlib_call(expr: &Expr) -> Option<(&'static str, &'static str)> 
         Expr::ProcessArgv => ("process", "argv"),
         Expr::ProcessAbort => ("process", "abort"),
         Expr::ProcessUmask(_) => ("process", "umask"),
-        Expr::ProcessThreadCpuUsage => ("process", "threadCpuUsage"),
+        Expr::ProcessThreadCpuUsage(_) => ("process", "threadCpuUsage"),
         Expr::ProcessAvailableMemory => ("process", "availableMemory"),
         Expr::ProcessConstrainedMemory => ("process", "constrainedMemory"),
         Expr::ProcessPosixCredential(crate::ir::PosixCredentialKind::Uid) => ("process", "getuid"),
