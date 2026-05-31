@@ -140,14 +140,21 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "setSourceMapsEnabled" => {
-                            // #1400: process.setSourceMapsEnabled(bool) —
-                            // toggles runtime source-map resolution in Node.
-                            // Perry compiles AOT and has no resolver to
-                            // toggle, so the call is a no-op returning
-                            // undefined. Without this, framework startup
-                            // code that conditionally enables maps crashes
-                            // on "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            // #1400 / #3108: process.setSourceMapsEnabled(bool)
+                            // toggles the live source-map flag. Perry compiles
+                            // AOT and has no resolver, so the flag drives
+                            // nothing observable — but it round-trips through
+                            // process.sourceMapsEnabled and validates that the
+                            // argument is a boolean (else ERR_INVALID_ARG_TYPE),
+                            // matching Node. Lower to the runtime setter,
+                            // passing the original argument for validation.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setSourceMapsEnabled".to_string(),
+                                args,
+                            }));
                         }
                         "getBuiltinModule" => {
                             return Ok(Ok(Expr::NativeMethodCall {
@@ -197,21 +204,15 @@ pub(super) fn try_native_module_methods(
                             // didn't persist; #1344 has since wired writes
                             // through `std::env::set_var`, so we lower to a
                             // runtime call that actually reads the file.
-                            // Default the optional path to `.env` (Node's
-                            // default) so the dispatch-table row's single
-                            // NA_STR arg stays satisfied for the no-arg call
-                            // form.
-                            let call_args = if args.is_empty() {
-                                vec![Expr::String(".env".to_string())]
-                            } else {
-                                args
-                            };
+                            // Keep the original JS value: the runtime handles
+                            // omitted/undefined/null defaulting plus Buffer
+                            // and file-URL path objects.
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "process".to_string(),
                                 class_name: None,
                                 object: None,
                                 method: "loadEnvFile".to_string(),
-                                args: call_args,
+                                args,
                             }));
                         }
                         "exit" => {

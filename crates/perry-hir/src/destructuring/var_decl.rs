@@ -115,6 +115,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     | "Uint16Array"
                                     | "Int32Array"
                                     | "Uint32Array"
+                                    | "Float16Array"
                                     | "Float32Array"
                                     | "Float64Array"
                             ) {

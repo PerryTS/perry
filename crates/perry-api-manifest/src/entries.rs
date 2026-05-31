@@ -104,6 +104,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "querystring",
     "cluster",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
     "process",
@@ -142,7 +143,10 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
 pub const NODE_SUBMODULES: &[&str] = &[
+    "fs/promises",
     "stream/promises",
+    "stream/consumers",
+    "readline/promises",
     "punycode.ucs2",
     "sys",
     "test",
@@ -185,6 +189,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/tui",
     "perry/background",
     "tty",
+    "wasi",
     "perf_hooks",
     "v8",
 ];
@@ -2123,9 +2128,33 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    method("readline", "clearLine", false, None),
+    method("readline", "clearScreenDown", false, None),
+    method("readline", "cursorTo", false, None),
+    method("readline", "moveCursor", false, None),
+    method("readline", "emitKeypressEvents", false, None),
     method("readline", "question", true, None),
     method("readline", "on", true, None),
     method("readline", "close", true, None),
+    method("readline", "pause", true, None),
+    method("readline", "resume", true, None),
+    method("readline", "prompt", true, None),
+    method("readline", "setPrompt", true, None),
+    method("readline", "getPrompt", true, None),
+    method("readline", "write", true, None),
+    method("readline", "getCursorPos", true, None),
+    method_sig(
+        "readline/promises",
+        "createInterface",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Any,
+    ),
+    method("readline/promises", "question", true, None),
+    method("readline/promises", "close", true, None),
+    class("readline/promises", "Interface"),
+    class("readline/promises", "Readline"),
     method_sig(
         "worker_threads",
         "getEnvironmentData",
@@ -2746,7 +2775,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
     method("process", "getBuiltinModule", false, None),
-    method("process", "loadEnvFile", false, None),
+    method_sig(
+        "process",
+        "loadEnvFile",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "path",
+            ty: TypeSpec::Any,
+            optional: true,
+        }],
+        TypeSpec::Void,
+    ),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
     method("process", "threadCpuUsage", false, None),
@@ -2783,6 +2823,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "resourceUsage", false, None),
     method("process", "getActiveResourcesInfo", false, None),
     method("process", "hrtime", false, None),
+    // #3108 (Node process parity): source-map flag accessor + setter,
+    // dispatched as receiver-less methods via NATIVE_MODULE_TABLE.
+    method("process", "sourceMapsEnabled", false, None),
+    method("process", "setSourceMapsEnabled", false, None),
     property("process", "argv"),
     property("process", "platform"),
     property("process", "arch"),
@@ -2832,11 +2876,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // at the same address.
     method("querystring", "decode", false, None),
     method("querystring", "encode", false, None),
-    // node:cluster — shape-only surface. The fixture probes
-    // typeof properties + reads constants; we never actually fork.
-    // Methods are wired through `is_native_module_callable_export`
-    // (bound-method closure path) so `typeof cluster.fork === "function"`
-    // holds without us implementing a real fork.
+    // node:cluster — primary lifecycle surface. `setupPrimary` /
+    // `setupMaster`, `fork`, and `disconnect` route through the native
+    // module bound-method path; handle sharing/listening distribution is
+    // outside this manifest entry.
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),
@@ -2966,6 +3009,43 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "watch", false, None),
     property("fs", "promises"),
     property("fs", "constants"),
+    // --- node:fs/promises direct submodule (#2728). Only the named exports
+    // Perry actually backs with runtime thunks (see
+    // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
+    // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
+    // intentionally omitted — they are tracked separately (#2133). The parent
+    // `fs.promises` namespace above still resolves to the same surface.
+    method("fs/promises", "access", false, None),
+    method("fs/promises", "appendFile", false, None),
+    method("fs/promises", "chmod", false, None),
+    method("fs/promises", "chown", false, None),
+    method("fs/promises", "copyFile", false, None),
+    method("fs/promises", "cp", false, None),
+    method("fs/promises", "glob", false, None),
+    method("fs/promises", "lchmod", false, None),
+    method("fs/promises", "lchown", false, None),
+    method("fs/promises", "link", false, None),
+    method("fs/promises", "lstat", false, None),
+    method("fs/promises", "lutimes", false, None),
+    method("fs/promises", "mkdir", false, None),
+    method("fs/promises", "mkdtemp", false, None),
+    method("fs/promises", "open", false, None),
+    method("fs/promises", "opendir", false, None),
+    method("fs/promises", "readFile", false, None),
+    method("fs/promises", "readdir", false, None),
+    method("fs/promises", "readlink", false, None),
+    method("fs/promises", "realpath", false, None),
+    method("fs/promises", "rename", false, None),
+    method("fs/promises", "rm", false, None),
+    method("fs/promises", "rmdir", false, None),
+    method("fs/promises", "stat", false, None),
+    method("fs/promises", "statfs", false, None),
+    method("fs/promises", "symlink", false, None),
+    method("fs/promises", "truncate", false, None),
+    method("fs/promises", "unlink", false, None),
+    method("fs/promises", "utimes", false, None),
+    method("fs/promises", "watch", false, None),
+    method("fs/promises", "writeFile", false, None),
     // --- console (Node global console exposed as node:console too). ---
     class("console", "Console"),
     method("console", "log", false, None),
@@ -2996,6 +3076,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "inspect", false, None),
     method("util", "format", false, None),
     method("util", "convertProcessSignalToExitCode", false, None),
+    method("util", "debug", false, None),
     method("util", "diff", false, None),
     // #2514: libuv-style errno helpers.
     method("util", "getSystemErrorName", false, None),
@@ -3083,6 +3164,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
     method("sys", "convertProcessSignalToExitCode", false, None),
+    method("sys", "debug", false, None),
     method("sys", "diff", false, None),
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
@@ -3229,6 +3311,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("stream", "promises"),
     method("stream/promises", "pipeline", false, None),
     method("stream/promises", "finished", false, None),
+    // Direct `node:stream/consumers` submodule exports.
+    method("stream/consumers", "arrayBuffer", false, None),
+    method("stream/consumers", "blob", false, None),
+    method("stream/consumers", "buffer", false, None),
+    method("stream/consumers", "bytes", false, None),
+    method("stream/consumers", "json", false, None),
+    method("stream/consumers", "text", false, None),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does
@@ -3384,6 +3473,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("tty", "removeListener", true, Some("WriteStream")),
     method("tty", "off", true, Some("WriteStream")),
     method("tty", "removeAllListeners", true, Some("WriteStream")),
+    // --- wasi ---
+    class("wasi", "WASI"),
+    method("wasi", "WASI", false, None),
+    method("wasi", "getImportObject", true, Some("WASI")),
+    method("wasi", "start", true, Some("WASI")),
+    method("wasi", "initialize", true, Some("WASI")),
+    method("wasi", "finalizeBindings", true, Some("WASI")),
+    property("wasi", "wasiImport"),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     method("perf_hooks", "now", false, None),
     method("perf_hooks", "mark", false, None),
@@ -3397,10 +3494,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perf_hooks", "toJSON", false, None),
     method("perf_hooks", "clearResourceTimings", false, None),
     method("perf_hooks", "setResourceTimingBufferSize", false, None),
-    // #1478: stub — records the entry (no-op today, see codegen).
+    // Resource timing entries are recorded through the perf_hooks timeline.
     method("perf_hooks", "markResourceTiming", false, None),
-    // #1335: returns `fn` unchanged today; the spec'd "wraps fn to
-    // record a 'function' timeline entry" piece isn't recorded yet.
+    // timerify returns a wrapper that emits observer-visible function entries.
     method("perf_hooks", "timerify", false, None),
     // #1336: monitorEventLoopDelay() / createHistogram() return a
     // Histogram-shaped object whose method/property reads route
@@ -4055,6 +4151,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "close", true, Some("Http2SecureServer")),
     method("http2", "on", true, Some("Http2SecureServer")),
     method("http2", "address", true, Some("Http2SecureServer")),
+    // --- node:http2 settings helpers (issue #3168) ---
+    method("http2", "getDefaultSettings", false, None),
+    method("http2", "getPackedSettings", false, None),
+    method("http2", "getUnpackedSettings", false, None),
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

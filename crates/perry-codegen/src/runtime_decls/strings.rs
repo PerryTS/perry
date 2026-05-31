@@ -516,6 +516,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_format", DOUBLE, &[I64]);
     module.declare_function("js_util_format_with_options", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_util_inspect", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_util_debuglog", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_diff", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_is_deep_strict_equal", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_util_strip_vt_control_characters", DOUBLE, &[DOUBLE]);
@@ -638,6 +639,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
+    // #3108: process.sourceMapsEnabled getter + setSourceMapsEnabled(bool).
+    module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
+    module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_find_package_json", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64, I64]);
@@ -651,6 +655,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_tty_isatty", DOUBLE, &[DOUBLE]);
     module.declare_function("js_tty_read_stream_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_tty_write_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_wasi_constructor_call", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_stdin_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stdout_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stderr_isatty", DOUBLE, &[]);

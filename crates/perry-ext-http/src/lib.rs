@@ -48,6 +48,11 @@ extern crate perry_ext_http_server as _server_link;
 mod agent;
 pub use agent::*;
 
+// Client factory overload normalization (#3226 / #3227 / #3228) —
+// extracted from this file to stay under the 2000-line lint cap.
+mod client_overload;
+use client_overload::{merge_url_and_options, method_for_overload, parse_client_args};
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -1072,6 +1077,53 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
     get_common(arg_f64, callback_i64, "https")
 }
 
+// ------------------------------------------------------------------
+// FFI: overload-normalizing client factories (#3226 / #3227 / #3228)
+//
+// Codegen routes `http.request` / `http.get` / `https.request` /
+// `https.get` to these `*_overload` entry points with a single
+// `NA_VARARGS` argument — a JS array holding every user argument.
+// `parse_client_args` resolves `(url, options, callback)` by value
+// type so all overloads work: `(url[, cb])`, `(options[, cb])`, and
+// `(url, options[, cb])`. The URL supplies protocol/host/port/path;
+// options override method/headers/timeout/agent (and any explicitly
+// set protocol/host/port/path).
+// ------------------------------------------------------------------
+
+unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
+    ensure_gc_scanner_registered();
+    let parsed = parse_client_args(args_array);
+    let method = method_for_overload(parsed.opts, force_get);
+    let (url, headers, timeout, agent_handle) =
+        merge_url_and_options(parsed.url, parsed.opts, default_protocol);
+    let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    if force_get {
+        // `get()` auto-`end()`s, kicking off the request.
+        js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
+    }
+    handle
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_request_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_http_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "http", true)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_https_get_overload(args_array: i64) -> Handle {
+    request_overload(args_array, "https", true)
+}
+
 // http.Agent / https.Agent (#2129 / #2154) lives in `agent.rs`.
 
 // ------------------------------------------------------------------
@@ -1686,6 +1738,10 @@ mod force_link_http_server {
         pub fn js_node_http2_server_close();
         pub fn js_node_http2_server_on();
         pub fn js_node_http2_server_address_json();
+        // http2 settings helpers (#3168).
+        pub fn js_node_http2_get_default_settings();
+        pub fn js_node_http2_get_packed_settings();
+        pub fn js_node_http2_get_unpacked_settings();
     }
 }
 
@@ -1752,5 +1808,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http2_server_close,
         js_node_http2_server_on,
         js_node_http2_server_address_json,
+        js_node_http2_get_default_settings,
+        js_node_http2_get_packed_settings,
+        js_node_http2_get_unpacked_settings,
     ]
 };

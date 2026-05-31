@@ -1081,6 +1081,11 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
+            Expr::ObjectCoerce(val) => {
+                self.output.push_str("Object(");
+                self.emit_expr(val);
+                self.output.push(')');
+            }
             Expr::BooleanCoerce(val) => {
                 self.output.push_str("Boolean(");
                 self.emit_expr(val);

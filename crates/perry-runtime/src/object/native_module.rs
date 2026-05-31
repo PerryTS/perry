@@ -405,6 +405,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"aborted",
             b"callbackify",
             b"convertProcessSignalToExitCode",
+            b"debug",
             b"debuglog",
             b"deprecate",
             b"diff",
@@ -542,6 +543,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         };
     }
 
+    if module_name == "util" && property_name == "debug" {
+        return bound_native_callable_export_value("util", "debuglog");
+    }
+
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
     }
@@ -575,6 +580,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
+    }
+    if module_name == "wasi" && property_name == "WASI" {
+        crate::wasi::attach_wasi_constructor_prototype(value);
     }
     if module_name == "stream" && property_name == "Stream" {
         attach_stream_legacy_prototype(value);
@@ -632,12 +640,18 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        ("wasi", "WASI") => Some(0),
+        // #3119/#3126/#3263 node:module helpers.
+        ("module", "createRequire") => Some(1),
+        ("module", "syncBuiltinESMExports") => Some(0),
+        ("module", "runMain") => Some(0),
         _ => None,
     }
 }
@@ -892,21 +906,6 @@ fn util_inspect_colors() -> f64 {
     })
 }
 
-extern "C" fn util_debuglog_logger_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _arg: f64,
-) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-pub(crate) fn util_debuglog_logger_value() -> f64 {
-    let func_ptr = util_debuglog_logger_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, "debuglog");
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
     crate::tty::attach_tty_constructor_prototype(constructor_value, name);
 }
@@ -1064,6 +1063,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
         // #1533: node:stream `promises` namespace exports.
         ("stream/promises", "pipeline")
             | ("stream/promises", "finished")
+            | (
+                "readline",
+                "clearLine"
+                    | "clearScreenDown"
+                    | "cursorTo"
+                    | "moveCursor"
+                    | "emitKeypressEvents",
+            )
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
@@ -1140,6 +1147,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
+            | ("wasi", "WASI")
             | ("net", "createServer")
             | ("net", "Server")
             | ("net", "Socket")
@@ -1336,16 +1344,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_hooks", "toJSON")
             | ("perf_hooks", "clearResourceTimings")
             | ("perf_hooks", "setResourceTimingBufferSize")
-            // #1478: performance.markResourceTiming(info) records a
-            // PerformanceResourceTiming. Perry's runtime no-ops it but
-            // the property must still read as a function for
-            // feature-detection (`typeof X === "function"`) wrappers.
+            // performance.markResourceTiming(info) records a resource entry;
+            // the property also reads as a function for feature-detection
+            // wrappers.
             | ("perf_hooks", "markResourceTiming")
-            // #1335: performance.timerify(fn) wraps `fn` to record a
-            // 'function' timeline entry per call. Perry currently
-            // returns `fn` unchanged (no entry recorded), but the
-            // property must still read as a function for
-            // feature-detection.
+            // performance.timerify(fn) returns a wrapper that preserves the
+            // result and emits observer-visible function entries.
             | ("perf_hooks", "timerify")
             // #1366: `crypto.getRandomValues` is the WebCrypto sync
             // randomness API. Perry lowers the call form via a
@@ -1391,9 +1395,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("perf_histogram", "percentileBigInt")
             // node:cluster — namespace property reads of these callables
             // need to satisfy `typeof cluster.fork === "function"` etc.
-            // The fixtures only probe types, but compiled npm code that
-            // calls `cluster.fork()` would also land on the bound-method
-            // dispatch (currently a stub — see runtime entries below).
+            // Calls dispatch through the native module method table, where
+            // the primary-side settings / Worker lifecycle is implemented.
             | ("cluster", "fork")
             | ("cluster", "disconnect")
             | ("cluster", "setupPrimary")
@@ -1406,6 +1409,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
+            | ("util", "debug")
             | ("util", "aborted")
             | ("util", "debuglog")
             | ("util", "getCallSites")
@@ -2801,6 +2805,10 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "test" => crate::node_test::property(property),
+        "wasi" => match property {
+            "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
+            _ => None,
+        },
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(unsafe {
@@ -2891,39 +2899,9 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "http2.constants" => http2_const(property),
         "dns" => dns_const(property),
-        // node:cluster — all property reads are static constants on the
-        // primary process. The test fixture only exercises shape, never
-        // forks a worker; the `fork` / `disconnect` / `setupPrimary` /
-        // `setupMaster` / `Worker` callables are produced separately by
-        // `is_native_module_callable_export` (bound-method closure path).
-        "cluster" => match property {
-            // Identity flags: we always identify as the primary
-            // process. A future `cluster.fork` impl would need to flip
-            // these in the spawned child.
-            "isPrimary" | "isMaster" => Some(f64::from_bits(JSValue::bool(true).bits())),
-            "isWorker" => Some(f64::from_bits(JSValue::bool(false).bits())),
-            // No active worker on the primary side.
-            "worker" => Some(f64::from_bits(JSValue::undefined().bits())),
-            // Empty registries — each read allocates a fresh empty
-            // object (the test only reads them once, so the allocation
-            // churn is irrelevant).
-            "workers" | "settings" => {
-                let obj = unsafe { js_object_alloc(0, 0) };
-                Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
-            }
-            // SCHED_RR is the cross-platform default (port-based on
-            // Linux/macOS, manual scheduling on Windows). `SCHED_NONE`
-            // is 1, `SCHED_RR` is 2; `schedulingPolicy` defaults to RR.
-            "schedulingPolicy" | "SCHED_RR" => Some(2.0),
-            "SCHED_NONE" => Some(1.0),
-            // EventEmitter methods on the cluster module aren't named
-            // exports — Node's namespace import reads them as
-            // `undefined`. We register them in the api-manifest so the
-            // #463 gate doesn't reject the typeof read at compile time;
-            // here we resolve them to undefined at runtime.
-            "on" | "addListener" => Some(f64::from_bits(JSValue::undefined().bits())),
-            _ => None,
-        },
+        // node:cluster — primary-side settings and Worker handles are backed
+        // by `crate::cluster`; scheduling/identity constants remain static.
+        "cluster" => crate::cluster::cluster_property(property),
         // #1336: Histograms returned by perf_hooks.monitorEventLoopDelay /
         // .createHistogram expose numeric stats via property read. Perry's
         // stub doesn't record samples so every accessor reads 0; `exceeds`

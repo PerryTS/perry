@@ -1128,6 +1128,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::StringCoerce(value) => {
             collect_assigned_locals_expr(value, assigned);
         }
+        Expr::ObjectCoerce(value) => {
+            collect_assigned_locals_expr(value, assigned);
+        }
         Expr::BooleanCoerce(value) => {
             collect_assigned_locals_expr(value, assigned);
         }

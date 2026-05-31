@@ -248,6 +248,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => expr_uses_this_as_value(operand, fields),
         Expr::Conditional {

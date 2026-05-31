@@ -195,6 +195,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => expr_has_mutation(operand, id),
         Expr::Call { callee, args, .. } => {

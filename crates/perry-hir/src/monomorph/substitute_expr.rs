@@ -865,6 +865,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::StringCoerce(value) => {
             Expr::StringCoerce(Box::new(substitute_expr(value, substitutions)))
         }
+        Expr::ObjectCoerce(value) => {
+            Expr::ObjectCoerce(Box::new(substitute_expr(value, substitutions)))
+        }
         Expr::IsNaN(value) => Expr::IsNaN(Box::new(substitute_expr(value, substitutions))),
         Expr::IsUndefinedOrBareNan(value) => {
             Expr::IsUndefinedOrBareNan(Box::new(substitute_expr(value, substitutions)))
