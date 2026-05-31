@@ -165,6 +165,66 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Buffer",
 ];
 
+/// #3655: spec `length` (declared-parameter count) for each built-in
+/// constructor, so `Ctor.length` reads the right arity through the runtime
+/// value path (`const C = DataView; C.length === 1`) and
+/// `Object.getOwnPropertyDescriptor(Ctor, 'length').value` matches Node. The
+/// HIR also folds bare `Ctor.length` constants (`analysis::builtin_constructor_length`);
+/// these are the runtime fallback for rebound / passed-as-value constructors.
+/// Values verified against `node --experimental-strip-types`. Unlisted names
+/// fall through to the closure arity registry (0).
+pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
+    let len = match name {
+        "Symbol"
+        | "Map"
+        | "Set"
+        | "WeakMap"
+        | "WeakSet"
+        | "TextEncoder"
+        | "TextDecoder"
+        | "TextEncoderStream"
+        | "TextDecoderStream"
+        | "URLSearchParams"
+        | "AbortController"
+        | "AbortSignal"
+        | "FormData"
+        | "Blob"
+        | "Headers"
+        | "Response"
+        | "DisposableStack"
+        | "AsyncDisposableStack" => 0,
+        "Array"
+        | "Object"
+        | "String"
+        | "Number"
+        | "Boolean"
+        | "Function"
+        | "Error"
+        | "TypeError"
+        | "RangeError"
+        | "SyntaxError"
+        | "ReferenceError"
+        | "EvalError"
+        | "URIError"
+        | "WeakRef"
+        | "BigInt"
+        | "ArrayBuffer"
+        | "SharedArrayBuffer"
+        | "DataView"
+        | "URL"
+        | "Request"
+        | "FinalizationRegistry"
+        | "Promise" => 1,
+        "RegExp" | "Proxy" | "AggregateError" | "File" => 2,
+        "Date" => 7,
+        "SuppressedError" | "Buffer" | "Uint8Array" | "Int8Array" | "Uint16Array"
+        | "Int16Array" | "Uint32Array" | "Int32Array" | "Float16Array" | "Float32Array"
+        | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array" | "BigUint64Array" => 3,
+        _ => return None,
+    };
+    Some(len)
+}
+
 /// JS built-in namespaces (typeof === "object", not "function"). Same
 /// shape on the singleton — a backing object with `prototype` so chained
 /// reads degrade gracefully — but typeof reports "object".
@@ -886,12 +946,28 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if name == "Number" {
             install_number_static_data_properties(closure_ptr);
         }
-        if matches!(
-            name,
-            "Blob" | "File" | "EvalError" | "URIError" | "Uint8Array"
-        ) {
-            super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        // #3655: every constructor carries spec-correct own `name`/`length`
+        // data properties (`{ writable:false, enumerable:false,
+        // configurable:true }`). The shared no-op thunk can't carry a name via
+        // the func-ptr registry (every constructor would read the same one),
+        // so record both per-closure. Without this, a rebound constructor read
+        // `Date.name === ""` / `Date.length === 0` and test262's
+        // `verifyProperty(Ctor, 'name'|'length', …)` failed "should be an own
+        // property".
+        super::native_module::set_bound_native_closure_name(closure_ptr, name);
+        if let Some(len) = builtin_constructor_spec_length(name) {
+            super::native_module::set_builtin_closure_length(closure_ptr as usize, len);
         }
+        super::set_builtin_property_attrs(
+            closure_ptr as usize,
+            "name".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
+        super::set_builtin_property_attrs(
+            closure_ptr as usize,
+            "length".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }

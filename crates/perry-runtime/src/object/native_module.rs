@@ -655,6 +655,30 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
         ]),
+        "https" => Some(&[
+            b"Agent",
+            b"Server",
+            b"createServer",
+            b"get",
+            b"request",
+            b"globalAgent",
+        ]),
+        "events" => Some(&[
+            b"EventEmitter",
+            b"defaultMaxListeners",
+            b"usingDomains",
+            b"captureRejections",
+            b"captureRejectionSymbol",
+            b"errorMonitor",
+            b"init",
+            b"listenerCount",
+            b"on",
+            b"once",
+            b"addAbortListener",
+            b"getEventListeners",
+            b"getMaxListeners",
+            b"setMaxListeners",
+        ]),
         _ => None,
     }
 }
@@ -750,6 +774,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             )
         };
     }
+    if module_name == "dns" && property_name == "promises" {
+        crate::dns::dns_promises_init_servers_from_callback_if_unset();
+        let submodule = "dns/promises";
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    }
 
     if module_name == "util" && property_name == "debug" {
         return bound_native_callable_export_value("util", "debuglog");
@@ -815,6 +844,16 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
     if module_name == "events" && property_name == "EventEmitter" {
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "usingDomains",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "init",
+            bound_native_callable_export_value("events", "init"),
+        );
     }
 
     if module_name == "util" && property_name == "promisify" {
@@ -855,6 +894,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "_createServerHandle") => Some(5),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        ("events", "init") => Some(0),
         ("wasi", "WASI") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
@@ -1379,6 +1419,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "fork")
             | ("events", "EventEmitter")
             | ("events", "on")
+            | ("events", "init")
             | ("stream", "compose")
             | ("stream", "duplexPair")
             | ("stream", "pipeline")
@@ -3015,7 +3056,10 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "dns" => match property {
-            "promises" => Some(create_sub_namespace("dns/promises")),
+            "promises" => {
+                crate::dns::dns_promises_init_servers_from_callback_if_unset();
+                Some(create_sub_namespace("dns/promises"))
+            }
             _ => dns_lookup_flag_constant(property)
                 .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
         },
@@ -3216,11 +3260,13 @@ pub(crate) unsafe fn get_native_module_constant(
         "crypto.constants" => crypto_const(property),
         "events" => match property {
             "defaultMaxListeners" => Some(10.0),
+            "usingDomains" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "errorMonitor" => Some(crate::symbol::js_symbol_for(str_val("events.errorMonitor"))),
             "captureRejectionSymbol" => {
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
+            "init" => Some(bound_native_callable_export_value("events", "init")),
             _ => None,
         },
         // node:worker_threads value-shaped exports. Perry doesn't spawn JS
@@ -3265,6 +3311,10 @@ pub(crate) unsafe fn get_native_module_constant(
         // pointer) and hand it back for every read.
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
+            _ => None,
+        },
+        "https" => match property {
+            "globalAgent" => Some(unsafe { https_global_agent_object() }),
             _ => None,
         },
         // node:http2 — `constants` is a sub-namespace object (the spec exposes
@@ -3403,6 +3453,46 @@ unsafe fn http_methods_array() -> f64 {
         Ordering::Relaxed,
     );
     value
+}
+
+unsafe fn https_global_agent_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("https.globalAgent").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    let field_names = [
+        "defaultPort",
+        "protocol",
+        "keepAlive",
+        "maxSockets",
+        "maxFreeSockets",
+    ];
+    let packed = field_names.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF12,
+        field_names.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    js_object_set_field(obj, 0, JSValue::number(443.0));
+    let protocol = crate::string::js_string_from_bytes(b"https:".as_ptr(), 6);
+    js_object_set_field(obj, 1, JSValue::string_ptr(protocol));
+    js_object_set_field(obj, 2, JSValue::bool(true));
+    js_object_set_field(obj, 3, JSValue::number(f64::INFINITY));
+    js_object_set_field(obj, 4, JSValue::number(256.0));
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("https.globalAgent".to_string(), result.to_bits());
+    });
+    result
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.
