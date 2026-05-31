@@ -32,6 +32,8 @@ const KEY_CONNECTED: &[u8] = b"__perryDgramConnected";
 const KEY_REMOTE_ADDRESS: &[u8] = b"__perryDgramRemoteAddress";
 const KEY_REMOTE_FAMILY: &[u8] = b"__perryDgramRemoteFamily";
 const KEY_REMOTE_PORT: &[u8] = b"__perryDgramRemotePort";
+const KEY_RECV_BUFFER_SIZE: &[u8] = b"__perryDgramRecvBufferSize";
+const KEY_SEND_BUFFER_SIZE: &[u8] = b"__perryDgramSendBufferSize";
 
 type MethodThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
 
@@ -99,55 +101,55 @@ const SOCKET_METHODS: &[MethodSpec] = &[
     },
     MethodSpec {
         name: "addMembership",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_add_membership_thunk,
     },
     MethodSpec {
         name: "dropMembership",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_drop_membership_thunk,
     },
     MethodSpec {
         name: "addSourceSpecificMembership",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_add_source_membership_thunk,
     },
     MethodSpec {
         name: "dropSourceSpecificMembership",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_drop_source_membership_thunk,
     },
     MethodSpec {
         name: "setBroadcast",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_set_broadcast_thunk,
     },
     MethodSpec {
         name: "setMulticastTTL",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_set_multicast_ttl_thunk,
     },
     MethodSpec {
         name: "setMulticastLoopback",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_set_multicast_loopback_thunk,
     },
     MethodSpec {
         name: "setMulticastInterface",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_set_multicast_interface_thunk,
     },
     MethodSpec {
         name: "setTTL",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_set_ttl_thunk,
     },
     MethodSpec {
         name: "setRecvBufferSize",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_set_recv_buffer_size_thunk,
     },
     MethodSpec {
         name: "setSendBufferSize",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_set_send_buffer_size_thunk,
     },
     MethodSpec {
         name: "getRecvBufferSize",
-        thunk: dgram_buffer_size_thunk,
+        thunk: dgram_get_recv_buffer_size_thunk,
     },
     MethodSpec {
         name: "getSendBufferSize",
-        thunk: dgram_buffer_size_thunk,
+        thunk: dgram_get_send_buffer_size_thunk,
     },
     MethodSpec {
         name: "getSendQueueSize",
@@ -368,6 +370,8 @@ fn socket_object(socket_type: &str) -> f64 {
     set_hidden_value(socket, KEY_FAMILY, str_value(family_for_type(socket_type)));
     set_hidden_value(socket, KEY_PORT, 0.0);
     set_hidden_value(socket, KEY_REMOTE_PORT, 0.0);
+    set_hidden_value(socket, KEY_RECV_BUFFER_SIZE, 65536.0);
+    set_hidden_value(socket, KEY_SEND_BUFFER_SIZE, 65536.0);
     for method in SOCKET_METHODS {
         js_object_set_field_by_name(
             obj,
@@ -524,6 +528,72 @@ fn throw_not_bound() -> ! {
 
 fn throw_not_connected() -> ! {
     crate::fs::validate::throw_error_with_code("Not connected", "ERR_SOCKET_DGRAM_NOT_CONNECTED")
+}
+
+fn throw_socket_errno(syscall: &'static str, code: &'static str) -> ! {
+    let message = format!("{syscall} {code}");
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    crate::node_submodules::register_error_syscall(msg, syscall);
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn throw_socket_buffer_size(syscall: &'static str) -> ! {
+    let message =
+        format!("Could not get or set buffer size: {syscall} returned EBADF (bad file descriptor)");
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_SOCKET_BUFFER_SIZE");
+    crate::node_submodules::register_error_syscall(msg, syscall);
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn throw_invalid_arg_type(arg_name: &str, expected: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{}\" argument must be of type {}. Received {}",
+        arg_name,
+        expected,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_missing_arg(arg_name: &str) -> ! {
+    let message = format!("The \"{arg_name}\" argument must be specified");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_MISSING_ARGS")
+}
+
+fn throw_bad_buffer_size() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "Buffer size must be a positive integer",
+        "ERR_SOCKET_BAD_BUFFER_SIZE",
+    )
+}
+
+fn ensure_running(socket: f64, syscall: &'static str) {
+    if !is_truthy_hidden(socket, KEY_BOUND) {
+        throw_socket_errno(syscall, "EBADF");
+    }
+}
+
+fn ensure_buffer_running(socket: f64, syscall: &'static str) {
+    if !is_truthy_hidden(socket, KEY_BOUND) {
+        throw_socket_buffer_size(syscall);
+    }
+}
+
+fn validate_number_arg(value: f64, arg_name: &str) -> f64 {
+    number_value(value).unwrap_or_else(|| throw_invalid_arg_type(arg_name, "number", value))
+}
+
+fn validate_string_arg(value: f64, arg_name: &str) -> String {
+    string_to_rust(value).unwrap_or_else(|| throw_invalid_arg_type(arg_name, "string", value))
+}
+
+fn is_missing_membership_arg(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    jsval.is_undefined() || jsval.is_null() || (jsval.is_bool() && !jsval.as_bool())
 }
 
 fn callback_from_args(args: &[f64]) -> Option<f64> {
@@ -1077,6 +1147,98 @@ fn send_impl(socket: f64, args: &[f64]) -> f64 {
     undefined_value()
 }
 
+fn membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    let multicast_address = args.first().copied().unwrap_or_else(undefined_value);
+    if is_missing_membership_arg(multicast_address) {
+        throw_missing_arg("multicastAddress");
+    }
+    let Some(multicast_address) = string_to_rust(multicast_address) else {
+        throw_socket_errno(syscall, "EINVAL");
+    };
+    if multicast_address.is_empty() {
+        throw_socket_errno(syscall, "EINVAL");
+    }
+    undefined_value()
+}
+
+fn source_membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    let source_address = validate_string_arg(
+        args.first().copied().unwrap_or_else(undefined_value),
+        "sourceAddress",
+    );
+    let group_address = validate_string_arg(
+        args.get(1).copied().unwrap_or_else(undefined_value),
+        "groupAddress",
+    );
+    if source_address.is_empty() || group_address.is_empty() {
+        throw_socket_errno(syscall, "EINVAL");
+    }
+    undefined_value()
+}
+
+fn set_broadcast_impl(socket: f64, _args: &[f64]) -> f64 {
+    ensure_running(socket, "setBroadcast");
+    undefined_value()
+}
+
+fn set_ttl_impl(socket: f64, args: &[f64]) -> f64 {
+    let ttl = validate_number_arg(args.first().copied().unwrap_or_else(undefined_value), "ttl");
+    if !ttl.is_finite() || ttl < 1.0 || ttl > 255.0 {
+        throw_socket_errno("setTTL", "EINVAL");
+    }
+    ensure_running(socket, "setTTL");
+    ttl
+}
+
+fn set_multicast_ttl_impl(socket: f64, args: &[f64]) -> f64 {
+    let ttl = validate_number_arg(args.first().copied().unwrap_or_else(undefined_value), "ttl");
+    if ttl < 0.0 || ttl > 255.0 {
+        throw_socket_errno("setMulticastTTL", "EINVAL");
+    }
+    ensure_running(socket, "setMulticastTTL");
+    ttl
+}
+
+fn set_multicast_loopback_impl(socket: f64, args: &[f64]) -> f64 {
+    let arg = args.first().copied().unwrap_or_else(undefined_value);
+    ensure_running(socket, "setMulticastLoopback");
+    arg
+}
+
+fn set_multicast_interface_impl(socket: f64, args: &[f64]) -> f64 {
+    let interface_address = validate_string_arg(
+        args.first().copied().unwrap_or_else(undefined_value),
+        "interfaceAddress",
+    );
+    if interface_address.is_empty() {
+        throw_socket_errno("setMulticastInterface", "EINVAL");
+    }
+    ensure_running(socket, "setMulticastInterface");
+    undefined_value()
+}
+
+fn validate_buffer_size(value: f64) -> f64 {
+    let Some(size) = number_value(value) else {
+        throw_bad_buffer_size();
+    };
+    if !size.is_finite() || size < 0.0 || size.fract() != 0.0 {
+        throw_bad_buffer_size();
+    }
+    size
+}
+
+fn set_buffer_size_impl(socket: f64, args: &[f64], key: &[u8], syscall: &'static str) -> f64 {
+    let size = validate_buffer_size(args.first().copied().unwrap_or_else(undefined_value));
+    ensure_buffer_running(socket, syscall);
+    set_hidden_value(socket, key, size.max(1.0));
+    undefined_value()
+}
+
+fn get_buffer_size_impl(socket: f64, key: &[u8], syscall: &'static str) -> f64 {
+    ensure_buffer_running(socket, syscall);
+    get_hidden_value(socket, key).unwrap_or(65536.0)
+}
+
 extern "C" fn dgram_send_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
     send_impl(this_value(closure), &collect_rest_args(rest))
 }
@@ -1146,12 +1308,94 @@ extern "C" fn dgram_listener_count_thunk(closure: *const ClosureHeader, rest: f6
     listener_snapshot(this_value(closure), event).len() as f64
 }
 
-extern "C" fn dgram_chain_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
-    this_value(closure)
+extern "C" fn dgram_add_membership_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    membership_impl(
+        this_value(closure),
+        &collect_rest_args(rest),
+        "addMembership",
+    )
 }
 
-extern "C" fn dgram_buffer_size_thunk(_closure: *const ClosureHeader, _rest: f64) -> f64 {
-    65536.0
+extern "C" fn dgram_drop_membership_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    membership_impl(
+        this_value(closure),
+        &collect_rest_args(rest),
+        "dropMembership",
+    )
+}
+
+extern "C" fn dgram_add_source_membership_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    source_membership_impl(
+        this_value(closure),
+        &collect_rest_args(rest),
+        "addSourceSpecificMembership",
+    )
+}
+
+extern "C" fn dgram_drop_source_membership_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    source_membership_impl(
+        this_value(closure),
+        &collect_rest_args(rest),
+        "dropSourceSpecificMembership",
+    )
+}
+
+extern "C" fn dgram_set_broadcast_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    set_broadcast_impl(this_value(closure), &collect_rest_args(rest))
+}
+
+extern "C" fn dgram_set_multicast_ttl_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    set_multicast_ttl_impl(this_value(closure), &collect_rest_args(rest))
+}
+
+extern "C" fn dgram_set_multicast_loopback_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    set_multicast_loopback_impl(this_value(closure), &collect_rest_args(rest))
+}
+
+extern "C" fn dgram_set_multicast_interface_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    set_multicast_interface_impl(this_value(closure), &collect_rest_args(rest))
+}
+
+extern "C" fn dgram_set_ttl_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    set_ttl_impl(this_value(closure), &collect_rest_args(rest))
+}
+
+extern "C" fn dgram_set_recv_buffer_size_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    set_buffer_size_impl(
+        this_value(closure),
+        &collect_rest_args(rest),
+        KEY_RECV_BUFFER_SIZE,
+        "uv_recv_buffer_size",
+    )
+}
+
+extern "C" fn dgram_set_send_buffer_size_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    set_buffer_size_impl(
+        this_value(closure),
+        &collect_rest_args(rest),
+        KEY_SEND_BUFFER_SIZE,
+        "uv_send_buffer_size",
+    )
+}
+
+extern "C" fn dgram_get_recv_buffer_size_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+    get_buffer_size_impl(
+        this_value(closure),
+        KEY_RECV_BUFFER_SIZE,
+        "uv_recv_buffer_size",
+    )
+}
+
+extern "C" fn dgram_get_send_buffer_size_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+    get_buffer_size_impl(
+        this_value(closure),
+        KEY_SEND_BUFFER_SIZE,
+        "uv_send_buffer_size",
+    )
+}
+
+extern "C" fn dgram_chain_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+    this_value(closure)
 }
 
 extern "C" fn dgram_zero_thunk(_closure: *const ClosureHeader, _rest: f64) -> f64 {
@@ -1256,13 +1500,131 @@ pub extern "C" fn js_dgram_socket_listener_count(handle: i64, args: *const Array
 }
 
 #[no_mangle]
-pub extern "C" fn js_dgram_socket_chain(handle: i64, _args: *const ArrayHeader) -> f64 {
-    socket_value_from_handle(handle)
+pub extern "C" fn js_dgram_socket_add_membership(handle: i64, args: *const ArrayHeader) -> f64 {
+    membership_impl(
+        socket_value_from_handle(handle),
+        &collect_args(args),
+        "addMembership",
+    )
 }
 
 #[no_mangle]
-pub extern "C" fn js_dgram_socket_buffer_size(_handle: i64, _args: *const ArrayHeader) -> f64 {
-    65536.0
+pub extern "C" fn js_dgram_socket_drop_membership(handle: i64, args: *const ArrayHeader) -> f64 {
+    membership_impl(
+        socket_value_from_handle(handle),
+        &collect_args(args),
+        "dropMembership",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_add_source_membership(
+    handle: i64,
+    args: *const ArrayHeader,
+) -> f64 {
+    source_membership_impl(
+        socket_value_from_handle(handle),
+        &collect_args(args),
+        "addSourceSpecificMembership",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_drop_source_membership(
+    handle: i64,
+    args: *const ArrayHeader,
+) -> f64 {
+    source_membership_impl(
+        socket_value_from_handle(handle),
+        &collect_args(args),
+        "dropSourceSpecificMembership",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_set_broadcast(handle: i64, args: *const ArrayHeader) -> f64 {
+    set_broadcast_impl(socket_value_from_handle(handle), &collect_args(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_set_multicast_ttl(handle: i64, args: *const ArrayHeader) -> f64 {
+    set_multicast_ttl_impl(socket_value_from_handle(handle), &collect_args(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_set_multicast_loopback(
+    handle: i64,
+    args: *const ArrayHeader,
+) -> f64 {
+    set_multicast_loopback_impl(socket_value_from_handle(handle), &collect_args(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_set_multicast_interface(
+    handle: i64,
+    args: *const ArrayHeader,
+) -> f64 {
+    set_multicast_interface_impl(socket_value_from_handle(handle), &collect_args(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_set_ttl(handle: i64, args: *const ArrayHeader) -> f64 {
+    set_ttl_impl(socket_value_from_handle(handle), &collect_args(args))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_set_recv_buffer_size(
+    handle: i64,
+    args: *const ArrayHeader,
+) -> f64 {
+    set_buffer_size_impl(
+        socket_value_from_handle(handle),
+        &collect_args(args),
+        KEY_RECV_BUFFER_SIZE,
+        "uv_recv_buffer_size",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_set_send_buffer_size(
+    handle: i64,
+    args: *const ArrayHeader,
+) -> f64 {
+    set_buffer_size_impl(
+        socket_value_from_handle(handle),
+        &collect_args(args),
+        KEY_SEND_BUFFER_SIZE,
+        "uv_send_buffer_size",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_get_recv_buffer_size(
+    handle: i64,
+    _args: *const ArrayHeader,
+) -> f64 {
+    get_buffer_size_impl(
+        socket_value_from_handle(handle),
+        KEY_RECV_BUFFER_SIZE,
+        "uv_recv_buffer_size",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_get_send_buffer_size(
+    handle: i64,
+    _args: *const ArrayHeader,
+) -> f64 {
+    get_buffer_size_impl(
+        socket_value_from_handle(handle),
+        KEY_SEND_BUFFER_SIZE,
+        "uv_send_buffer_size",
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_chain(handle: i64, _args: *const ArrayHeader) -> f64 {
+    socket_value_from_handle(handle)
 }
 
 #[no_mangle]

@@ -1077,6 +1077,26 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "worker_threads"
+                    && class_name == "MessageChannel"
+                    && matches!(property_name.as_str(), "port1" | "port2")
+                {
+                    // #3157: `new MessageChannel()` returns a real heap object
+                    // `{ port1, port2 }`. Reading `chan.port1` must be a plain
+                    // object field load (returning the port object, whose
+                    // methods are closure-valued fields) — NOT a zero-arg
+                    // native getter, which would discard the same-process
+                    // paired-port delivery. The port objects themselves are not
+                    // registered native instances, so `port.postMessage(...)` /
+                    // `port.on(...)` already lower as ordinary object-method
+                    // calls (invoking the bound closures). parentPort stays on
+                    // the native-receiver dispatch path (it's a singleton
+                    // handle, not a real object).
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"

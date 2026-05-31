@@ -153,9 +153,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "TransformStream" => 0xFFFF0062u32,
                 // node:perf_hooks entry classes. Runtime classifies the
                 // shaped entry objects returned by performance.mark/measure.
+                "Performance" => 0xFFFF0087u32,
                 "PerformanceEntry" => 0xFFFF0080u32,
                 "PerformanceMark" => 0xFFFF0081u32,
                 "PerformanceMeasure" => 0xFFFF0082u32,
+                "PerformanceObserverEntryList" => 0xFFFF0088u32,
+                "PerformanceResourceTiming" => 0xFFFF0086u32,
                 "Console" => 0xFFFF0083u32,
                 "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,

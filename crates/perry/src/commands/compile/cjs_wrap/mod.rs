@@ -227,6 +227,40 @@ module.exports = inner;
     }
 
     #[test]
+    fn wrap_module_and_exports_are_reassignable_vars() {
+        // #3527: a CJS body may rebind `module`/`exports` (iconv-lite's
+        // `for (...) { var module = modules[i]; mergeModules(exports, module); }`).
+        // The wrapper must expose them as reassignable `var`s — not a `const`
+        // the body would silently fail to rebind — while reading the real
+        // exports back from a stable, body-untouchable `__cjs_module`.
+        let src = "exports.foo = 42;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        assert!(
+            wrapped.contains("const __cjs_module = { exports: {} };"),
+            "expected stable __cjs_module, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("var module = __cjs_module;"),
+            "expected reassignable `var module`, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("var exports = __cjs_module.exports;"),
+            "expected reassignable `var exports`, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("return __cjs_module.exports;"),
+            "export must be read from the stable ref, got:\n{}",
+            wrapped
+        );
+        // The body must NOT re-collide with a `const module`/`const exports`.
+        assert!(!wrapped.contains("const module = "));
+        assert!(!wrapped.contains("const exports = "));
+    }
+
+    #[test]
     fn wrap_hoists_require_as_import() {
         // Issue #665 (third pass): when the CJS source has a unique alias
         // `var dep = require('./dep')`, the wrap uses the alias name as the
