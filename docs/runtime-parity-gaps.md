@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 18 | 472 | n/a |
-| Partial-module gaps | 29 | 1646 | 371 |
+| Partial-module gaps | 29 | 1643 | 374 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2400** |  |
+| **Total true gaps** |  | **2397** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -19,7 +19,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:fs` — 139
 - `node:crypto` — 128
 - `node:process (and global `process`)` — 101
-- `node:util` — 95
+- `node:util` — 92
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:http` — 89
@@ -646,16 +646,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:util
 
-**Gap APIs: 92** · Already covered: 10
+**Gap APIs: 89** · Already covered: 13
 
 #### Missing from Perry
 
 - `util.debuglog(section[, callback])`
 - `util.debug(section)`
 - `util.formatWithOptions(inspectOptions, format[, ...args])`
-- `util.getSystemErrorName(err)`
-- `util.getSystemErrorMap()`
-- `util.getSystemErrorMessage(err)`
 - `util.parseEnv(content)`
 - `util.stripVTControlCharacters(str)`
 - `util.toUSVString(string)`
@@ -703,6 +700,9 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `util.deprecate(fn, msg[, code[, options]])` | `manifest:util.deprecate` |
 | `util.format(format[, ...args])` | `manifest:util.format` |
 | `util.getCallSites([frameCount][, options])` | `manifest:util.getCallSites` |
+| `util.getSystemErrorName(err)` | `manifest:util.getSystemErrorName` |
+| `util.getSystemErrorMap()` | `manifest:util.getSystemErrorMap` |
+| `util.getSystemErrorMessage(err)` | `manifest:util.getSystemErrorMessage` |
 | `util.inherits(constructor, superConstructor)` | `manifest:util.inherits` |
 | `util.inspect(object[, options])` | `manifest:util.inspect` |
 | `util.isDeepStrictEqual(val1, val2[, options])` | `manifest:util.isDeepStrictEqual` |
