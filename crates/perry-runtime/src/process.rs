@@ -5,11 +5,11 @@ use crate::closure::{
 };
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Whether the `(Use \`node --trace-warnings ...\`)` hint has already been
 /// printed this process. Node emits it only on the first warning (#2933).
-static WARNING_HINT_SHOWN: AtomicBool = AtomicBool::new(false);
+static WARNING_HINT_SHOWN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 mod credentials;
 pub use credentials::{
@@ -1091,7 +1091,7 @@ extern "C" fn process_warning_callback(closure: *const ClosureHeader) -> f64 {
     // process — on the first warning — not after every warning. Suppress it on
     // subsequent warnings to match (#2933 gap test was off-by-one stderr line
     // when two MaxListenersExceededWarnings fired).
-    if !hint.is_empty() && !WARNING_HINT_SHOWN.swap(true, Ordering::SeqCst) {
+    if !hint.is_empty() && !WARNING_HINT_SHOWN.swap(true, std::sync::atomic::Ordering::SeqCst) {
         let _ = writeln!(stderr, "{hint}");
     }
 
