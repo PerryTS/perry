@@ -3188,6 +3188,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "promisify", false, None),
     method("util", "callbackify", false, None),
     method("util", "debuglog", false, None),
+    method("util", "_extend", false, None),
+    method("util", "_errnoException", false, None),
+    method("util", "_exceptionWithHostPort", false, None),
     method("util", "deprecate", false, None),
     method("util", "inherits", false, None),
     method_sig(
@@ -3202,6 +3205,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
     method("util", "styleText", false, None),
+    class("util", "MIMEType"),
+    class("util", "MIMEParams"),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. Required
@@ -3276,6 +3281,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "promisify", false, None),
     method("sys", "callbackify", false, None),
     method("sys", "debuglog", false, None),
+    method("sys", "_extend", false, None),
+    method("sys", "_errnoException", false, None),
+    method("sys", "_exceptionWithHostPort", false, None),
     method("sys", "deprecate", false, None),
     method("sys", "inherits", false, None),
     method_sig(
@@ -3292,6 +3300,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
     method("sys", "setTraceSigInt", false, None),
+    class("sys", "MIMEType"),
+    class("sys", "MIMEParams"),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),

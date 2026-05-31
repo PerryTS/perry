@@ -643,6 +643,9 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"decode",
         ]),
         "util" => Some(&[
+            b"_errnoException",
+            b"_exceptionWithHostPort",
+            b"_extend",
             b"aborted",
             b"callbackify",
             b"convertProcessSignalToExitCode",
@@ -667,6 +670,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"setTraceSigInt",
             b"types",
             b"parseArgs",
+            b"MIMEParams",
+            b"MIMEType",
             b"TextDecoder",
             b"TextEncoder",
             b"transferableAbortController",
@@ -921,6 +926,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         ("util", "debug" | "debuglog") => Some(2),
+        ("util", "MIMEParams") => Some(0),
+        ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
@@ -1688,6 +1695,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("buffer", "atob")
             | ("buffer", "btoa")
             | ("util", "convertProcessSignalToExitCode")
+            | ("util", "_errnoException")
+            | ("util", "_exceptionWithHostPort")
+            | ("util", "_extend")
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
@@ -1713,6 +1723,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "styleText")
             | ("util", "toUSVString")
             | ("util", "setTraceSigInt")
+            | ("util", "MIMEParams")
+            | ("util", "MIMEType")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")

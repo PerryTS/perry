@@ -112,7 +112,15 @@ pub(super) fn try_static_method_and_instance(
                             | "readable_stream_reader"
                             | "writable_stream_writer"
                     );
-                    if is_stream_module && !is_stream_api_method(&module_name, &method_name) {
+                    let is_util_mime_instance = matches!(module_name.as_str(), "util" | "sys")
+                        && matches!(class_name.as_str(), "MIMEType" | "MIMEParams");
+                    if is_util_mime_instance {
+                        // MIMEType/MIMEParams methods are ordinary object
+                        // prototype methods registered in the runtime class
+                        // vtable; let the generic property-call path bind
+                        // `this` dynamically.
+                    } else if is_stream_module && !is_stream_api_method(&module_name, &method_name)
+                    {
                         // Fall through — let the regular method-call
                         // dispatch further down handle the user-class
                         // method.
