@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2003 entries across 95 modules.
+Total: 2006 entries across 95 modules.
 
 ## Modules
 
@@ -1256,6 +1256,9 @@ Total: 2003 entries across 95 modules.
 - `address` — instance *(class: `Http2SecureServer`)*
 - `close` — instance *(class: `Http2SecureServer`)*
 - `createSecureServer` — module
+- `getDefaultSettings` — module
+- `getPackedSettings` — module
+- `getUnpackedSettings` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
 - `on` — instance *(class: `Http2SecureServer`)*
 
