@@ -27,8 +27,10 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
+use crate::promise::{Promise, PromiseState};
 use crate::timer::{
-    js_callback_timer_next_deadline, js_interval_timer_next_deadline, js_timer_next_deadline,
+    js_callback_timer_has_pending, js_callback_timer_next_deadline, js_interval_timer_has_pending,
+    js_interval_timer_next_deadline, js_timer_has_pending, js_timer_next_deadline,
 };
 
 // ============================================================================
@@ -307,6 +309,40 @@ pub extern "C" fn perry_has_work() -> i32 {
         return 1;
     }
     0
+}
+
+fn event_loop_has_refed_work() -> bool {
+    // Promise timers route through js_timer_has_pending(), which intentionally
+    // ignores timers scheduled with { ref: false }. A pending promise alone is
+    // not a loop handle, so awaited unref-only timers must be allowed to exit.
+    (unsafe { js_microtasks_pending() > 0 }) || {
+        js_timer_has_pending() != 0
+            || js_callback_timer_has_pending() != 0
+            || js_interval_timer_has_pending() != 0
+            || unsafe { js_stdlib_has_active_handles() != 0 }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_loop_has_refed_work() -> i32 {
+    event_loop_has_refed_work() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn js_pending_await_should_exit(promise: *mut Promise) -> i32 {
+    if promise.is_null() {
+        return 0;
+    }
+    if unsafe { (*promise).state } != PromiseState::Pending {
+        return 0;
+    }
+    (!event_loop_has_refed_work()) as i32
+}
+
+#[no_mangle]
+pub extern "C" fn js_unsettled_top_level_await_exit() {
+    eprintln!("Warning: Detected unsettled top-level await");
+    std::process::exit(13);
 }
 
 /// Returns the closest pending wake-up across all 3 timer queues, in

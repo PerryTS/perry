@@ -140,6 +140,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let drain_once_idx = ctx.new_block("await.drain_once");
             let check_idx = ctx.new_block("await.check");
             let wait_idx = ctx.new_block("await.wait");
+            let wait_event_idx = ctx.new_block("await.wait_event");
+            let unsettled_exit_idx = ctx.new_block("await.unsettled_exit");
             let settled_idx = ctx.new_block("await.settled");
             let reject_idx = ctx.new_block("await.reject");
             let done_idx = ctx.new_block("await.done");
@@ -148,6 +150,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let drain_once_label = ctx.block_label(drain_once_idx);
             let check_label = ctx.block_label(check_idx);
             let wait_label = ctx.block_label(wait_idx);
+            let wait_event_label = ctx.block_label(wait_event_idx);
+            let unsettled_exit_label = ctx.block_label(unsettled_exit_idx);
             let settled_label = ctx.block_label(settled_idx);
             let reject_label = ctx.block_label(reject_idx);
             let done_label = ctx.block_label(done_idx);
@@ -196,10 +200,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let _ = ctx.block().call(I32, "js_timer_tick", &[]);
             let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
             let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
+            let promise_handle_wait = unbox_to_i64(ctx.block(), &promise_box);
+            let should_exit = ctx.block().call(
+                I32,
+                "js_pending_await_should_exit",
+                &[(I64, &promise_handle_wait)],
+            );
+            let should_exit_bool = ctx.block().icmp_ne(I32, &should_exit, "0");
+            ctx.block()
+                .cond_br(&should_exit_bool, &unsettled_exit_label, &wait_event_label);
+
+            // === unsettled_exit ===
+            // Node exits with status 13 for an unsettled top-level await once
+            // the event loop has no refed work left. In Perry's synchronous
+            // await lowering, that same liveness boundary appears here: the
+            // awaited Promise is still pending after all pumps/ticks, and no
+            // refed source can ever wake the loop.
+            ctx.current_block = unsettled_exit_idx;
+            ctx.block()
+                .call_void("js_unsettled_top_level_await_exit", &[]);
+            ctx.block().unreachable();
+
+            // === wait_event ===
             // Issue #84: condvar wait — wakes the instant the awaited
             // promise's resolver (or any other tokio queue push) calls
             // js_notify_main_thread, instead of paying the old 1 ms
             // hard-sleep quantum per await iteration.
+            ctx.current_block = wait_event_idx;
             ctx.block().call_void("js_wait_for_event", &[]);
             ctx.block().br(&check_label);
 
