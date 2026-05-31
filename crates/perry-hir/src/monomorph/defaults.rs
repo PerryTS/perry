@@ -138,15 +138,12 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
                 let arg_count = args.len();
 
                 if arg_count < param_count {
-                    // Fill in missing arguments with defaults
-                    for i in arg_count..param_count {
-                        if let Some(ref default_expr) = defaults[i] {
-                            args.push(default_expr.clone());
-                        } else {
-                            // No default for this parameter - this is an error
-                            // For now, push a null placeholder
-                            args.push(Expr::Null);
-                        }
+                    // Fill missing constructor slots with `undefined`.
+                    // Constructor bodies already prepend default-param
+                    // checks, so default expressions must run in the
+                    // constructor boundary rather than at the `new` site.
+                    for _ in arg_count..param_count {
+                        args.push(Expr::Undefined);
                     }
                 }
             }

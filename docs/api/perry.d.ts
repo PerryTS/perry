@@ -2771,7 +2771,7 @@ declare module "process" {
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
   /** stdlib */
-  export function setSourceMapsEnabled(...args: any[]): any;
+  export function setSourceMapsEnabled(enabled: boolean): void;
   /** stdlib */
   export function setegid(...args: any[]): any;
   /** stdlib */
@@ -2783,7 +2783,7 @@ declare module "process" {
   /** stdlib */
   export function setuid(...args: any[]): any;
   /** stdlib */
-  export function sourceMapsEnabled(...args: any[]): any;
+  export function sourceMapsEnabled(): boolean;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */

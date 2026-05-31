@@ -22,6 +22,9 @@ use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 const RESULT_ORDER_VERBATIM: u8 = 0;
 const RESULT_ORDER_IPV4_FIRST: u8 = 1;
 
+#[cfg(unix)]
+const GETNAMEINFO_SERVICE_BUFFER_LEN: usize = 32;
+
 static DEFAULT_RESULT_ORDER: AtomicU8 = AtomicU8::new(RESULT_ORDER_VERBATIM);
 
 const RESOLVER_METHODS: &[&str] = &["cancel", "getServers", "setServers", "setLocalAddress"];
@@ -326,7 +329,7 @@ fn lookup_service(address: &str, port: u16) -> Result<(String, String), String> 
 #[cfg(unix)]
 unsafe fn getnameinfo(sa: &SocketAddr) -> Result<(String, String), String> {
     let mut host_buf = [0i8; libc::NI_MAXHOST as usize];
-    let mut serv_buf = [0i8; libc::NI_MAXSERV as usize];
+    let mut serv_buf = [0i8; GETNAMEINFO_SERVICE_BUFFER_LEN];
 
     let (sa_ptr, sa_len): (*const libc::sockaddr, libc::socklen_t) = match sa {
         SocketAddr::V4(v4) => {

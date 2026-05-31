@@ -707,6 +707,12 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     if let Some(ty) = ctx.lookup_class_method_return_type(class_name, method_name) {
                         return ty.clone();
                     }
+                    if typed_array_name_for_name(class_name).is_some() {
+                        return match method_name {
+                            "slice" | "subarray" => obj_ty.clone(),
+                            _ => Type::Any,
+                        };
+                    }
                     // Built-in TextEncoder / TextDecoder method return types.
                     // `new TextEncoder().encode(s)` → Uint8Array (issue #584:
                     // without this the local typed-anonymously inherits
