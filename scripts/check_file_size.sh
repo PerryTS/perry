@@ -128,6 +128,15 @@ crates/perry-hir/src/lower/expr_member.rs
 # snapshot/listener-limit validation). Splitting per concern (env/timing/
 # signals/emitter) is tracked under #1435.
 crates/perry-runtime/src/process.rs
+# fs dir/glob/watch implementation crossed the threshold on current main; split
+# by concern is deferred to the existing file-size cleanup queue.
+crates/perry-runtime/src/fs/dir_glob_watch.rs
+# stdlib common dispatch table crossed the threshold on current main; splitting
+# per native family is deferred to the existing file-size cleanup queue.
+crates/perry-stdlib/src/common/dispatch.rs
+# sqlite stdlib bridge crossed the threshold on current main; extracting query,
+# statement, and row helpers is deferred to the existing file-size cleanup queue.
+crates/perry-stdlib/src/sqlite.rs
 EOF
 )
 

@@ -640,6 +640,21 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     None
 }
 
+fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(options.to_bits());
+    if !jsval.is_pointer() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let obj = jsval.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(obj, key);
+    let value_f64 = f64::from_bits(value.bits());
+    f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
     let stream = js_object_alloc(0, 0);
@@ -1161,6 +1176,46 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::messaging::js_broadcast_channel_new(name);
+            }
+            "URL" => {
+                let input = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let input_ptr = crate::url::js_url_coerce_string(input);
+                let url = if let Some(base) = args.get(1).copied() {
+                    let base_ptr = crate::url::js_url_coerce_string(base);
+                    crate::url::js_url_new_with_base(input_ptr, base_ptr)
+                } else {
+                    crate::url::js_url_new(input_ptr)
+                };
+                return crate::value::js_nanbox_pointer(url as i64);
+            }
+            "URLSearchParams" => {
+                let params = if let Some(init) = args.first().copied() {
+                    crate::url::js_url_search_params_new_any(init)
+                } else {
+                    crate::url::js_url_search_params_new_empty()
+                };
+                return crate::value::js_nanbox_pointer(params as i64);
+            }
+            "TextEncoder" => {
+                let encoder = crate::text::js_text_encoder_new();
+                return crate::value::js_nanbox_pointer(encoder);
+            }
+            "TextDecoder" => {
+                let label = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let fatal = text_decoder_bool_option(options, "fatal");
+                let ignore_bom = text_decoder_bool_option(options, "ignoreBOM");
+                let decoder = crate::text::js_text_decoder_new(label, fatal, ignore_bom);
+                return crate::value::js_nanbox_pointer(decoder);
             }
             _ => {}
         }

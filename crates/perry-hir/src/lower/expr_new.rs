@@ -98,6 +98,85 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
     }
 }
 
+fn lower_optional_args(
+    ctx: &mut LoweringContext,
+    args: Option<&[ast::ExprOrSpread]>,
+) -> Result<Vec<Expr>> {
+    args.map(|args| {
+        args.iter()
+            .map(|a| lower_expr(ctx, &a.expr))
+            .collect::<Result<Vec<_>>>()
+    })
+    .transpose()
+    .map(|args| args.unwrap_or_default())
+}
+
+fn lower_url_encoding_constructor(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    args: Option<&[ast::ExprOrSpread]>,
+) -> Result<Option<Expr>> {
+    match class_name {
+        "URL" => {
+            let args = lower_optional_args(ctx, args)?;
+            let mut args_iter = args.into_iter();
+            let url_arg = args_iter
+                .next()
+                .ok_or_else(|| anyhow!("URL constructor requires at least 1 argument"))?;
+            let base_arg = args_iter.next();
+            Ok(Some(Expr::UrlNew {
+                url: Box::new(url_arg),
+                base: base_arg.map(Box::new),
+            }))
+        }
+        "URLSearchParams" => {
+            let args = lower_optional_args(ctx, args)?;
+            let init_arg = args.into_iter().next();
+            Ok(Some(Expr::UrlSearchParamsNew(init_arg.map(Box::new))))
+        }
+        "TextEncoder" => Ok(Some(Expr::TextEncoderNew)),
+        "TextDecoder" => Ok(Some(lower_text_decoder_new(ctx, args)?)),
+        _ => Ok(None),
+    }
+}
+
+fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Option<&'static str> {
+    match (module_name, method_name) {
+        ("url", Some("URL")) => Some("URL"),
+        ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
+        ("util", Some("TextEncoder")) => Some("TextEncoder"),
+        ("util", Some("TextDecoder")) => Some("TextDecoder"),
+        _ => None,
+    }
+}
+
+fn global_member_constructor_name(
+    ctx: &LoweringContext,
+    obj_name: &str,
+    prop_name: &str,
+) -> Option<&'static str> {
+    if obj_name == "globalThis" && ctx.lookup_local("globalThis").is_none() {
+        return match prop_name {
+            "URL" => Some("URL"),
+            "URLSearchParams" => Some("URLSearchParams"),
+            "TextEncoder" => Some("TextEncoder"),
+            "TextDecoder" => Some("TextDecoder"),
+            _ => None,
+        };
+    }
+
+    if let Some(module_name) = ctx.lookup_builtin_module_alias(obj_name) {
+        if let Some(name) = module_constructor_name(module_name, Some(prop_name)) {
+            return Some(name);
+        }
+    }
+    if let Some((module_name, None)) = ctx.lookup_native_module(obj_name) {
+        if let Some(name) = module_constructor_name(module_name, Some(prop_name)) {
+            return Some(name);
+        }
+    }
+    None
+}
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
 
@@ -116,6 +195,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             (peel_new_callee(member.obj.as_ref()), &member.prop)
         {
             let obj_name = obj_ident.sym.as_ref();
+            if let Some(class_name) =
+                global_member_constructor_name(ctx, obj_name, prop_ident.sym.as_ref())
+            {
+                if let Some(expr) =
+                    lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
+                {
+                    return Ok(expr);
+                }
+            }
+
             let is_net_module =
                 obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");
             if is_net_module && matches!(prop_ident.sym.as_ref(), "Socket" | "Stream" | "Server") {
@@ -533,6 +622,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                             method: method_name,
                             args,
                         });
+                    }
+                }
+            }
+
+            if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
+                if let Some(class_name) = module_constructor_name(module_name, method_name) {
+                    if let Some(expr) =
+                        lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
+                    {
+                        return Ok(expr);
                     }
                 }
             }
@@ -980,43 +1079,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
             // Handle URL class
             if class_name == "URL" {
-                // new URL(url) or new URL(url, base)
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                let mut args_iter = args.into_iter();
-                let url_arg = args_iter
-                    .next()
-                    .ok_or_else(|| anyhow!("URL constructor requires at least 1 argument"))?;
-                let base_arg = args_iter.next();
-                return Ok(Expr::UrlNew {
-                    url: Box::new(url_arg),
-                    base: base_arg.map(Box::new),
-                });
+                return Ok(
+                    lower_url_encoding_constructor(ctx, "URL", new_expr.args.as_deref())?.unwrap(),
+                );
             }
 
             // Handle URLSearchParams class
             if class_name == "URLSearchParams" {
-                // new URLSearchParams() or new URLSearchParams(init)
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                let init_arg = args.into_iter().next();
-                return Ok(Expr::UrlSearchParamsNew(init_arg.map(Box::new)));
+                return Ok(lower_url_encoding_constructor(
+                    ctx,
+                    "URLSearchParams",
+                    new_expr.args.as_deref(),
+                )?
+                .unwrap());
             }
 
             // Handle WeakRef class — wraps a value (object) in a weak reference object.
@@ -1055,11 +1130,21 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
             // Handle TextEncoder constructor
             if class_name == "TextEncoder" {
-                return Ok(Expr::TextEncoderNew);
+                return Ok(lower_url_encoding_constructor(
+                    ctx,
+                    "TextEncoder",
+                    new_expr.args.as_deref(),
+                )?
+                .unwrap());
             }
             // Handle TextDecoder constructor: new TextDecoder(label?, opts?)
             if class_name == "TextDecoder" {
-                return lower_text_decoder_new(ctx, new_expr.args.as_deref());
+                return Ok(lower_url_encoding_constructor(
+                    ctx,
+                    "TextDecoder",
+                    new_expr.args.as_deref(),
+                )?
+                .unwrap());
             }
 
             // Handle Uint8Array constructor

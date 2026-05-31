@@ -1497,6 +1497,15 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if module_name == "util" && property_name == "debug" {
         return bound_native_callable_export_value("util", "debuglog");
     }
+    if module_name == "url" && property_name == "URL" {
+        return js_get_global_this_builtin_value(b"URL".as_ptr(), "URL".len());
+    }
+    if module_name == "url" && property_name == "URLSearchParams" {
+        return js_get_global_this_builtin_value(
+            b"URLSearchParams".as_ptr(),
+            "URLSearchParams".len(),
+        );
+    }
 
     // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
     // `v8.promiseHooks` are object-valued exports; resolve them to
