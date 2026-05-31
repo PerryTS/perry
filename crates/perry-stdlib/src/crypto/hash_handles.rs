@@ -77,6 +77,16 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // #2944 — once `digest()` consumed the hasher state, Node throws
+    // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` for any
+    // subsequent `update`, `digest`, or `copy`. The `state` Mutex holds
+    // `None` after the first `digest()`, so a `None` here means finalized.
+    if matches!(method, "update" | "digest" | "copy") && h.state.lock().unwrap().is_none() {
+        perry_runtime::fs::validate::throw_error_with_code(
+            "Digest already called",
+            "ERR_CRYPTO_HASH_FINALIZED",
+        );
+    }
     match method {
         "update" if !args.is_empty() => {
             let encoding = arg_string(args, 1);
@@ -296,6 +306,18 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // #2945 — after the MAC is finalized by `digest()`, Node keeps a second
+    // `digest()` idempotent (returns `""` / empty Buffer) but throws
+    // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` on `update()`.
+    // The `state` Mutex holds `None` once finalized, so only the `update`
+    // path needs to throw here (the `digest` arm already returns the empty
+    // shape for a taken state).
+    if method == "update" && h.state.lock().unwrap().is_none() {
+        perry_runtime::fs::validate::throw_error_with_code(
+            "Digest already called",
+            "ERR_CRYPTO_HASH_FINALIZED",
+        );
+    }
     match method {
         "update" if !args.is_empty() => {
             let encoding = arg_string(args, 1);
