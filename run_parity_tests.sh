@@ -314,7 +314,8 @@ echo ""
 # *debug* build of perry that's slower at compile-time and runtime than the
 # release binary the prior step had just produced, and (b) adds cargo's own
 # per-invocation overhead × ~150 tests.
-PERRY_BIN="$SCRIPT_DIR/target/release/perry"
+TARGET_DIR="${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}"
+PERRY_BIN="$TARGET_DIR/release/perry"
 echo "Building compiler (release)..."
 if ! cargo build --release --quiet -p perry -p perry-runtime -p perry-stdlib 2>/dev/null; then
     echo -e "${RED}Failed to build compiler${NC}"
@@ -449,9 +450,14 @@ for test_file in "${TEST_FILES[@]}"; do
     perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
     perry_binary="/tmp/perry_parity_$safe_test_id"
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
+    parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     test_argv=()
     if [[ -n "$parity_argv_line" ]]; then
         read -r -a test_argv <<< "$parity_argv_line"
+    fi
+    node_argv=()
+    if [[ -n "$parity_node_argv_line" ]]; then
+        read -r -a node_argv <<< "$parity_node_argv_line"
     fi
 
     # Check if test should be skipped
@@ -477,7 +483,7 @@ for test_file in "${TEST_FILES[@]}"; do
     # rather than a `cmd | cap_output` pipeline.
     node_tmp=$(mktemp)
     run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
-        node --experimental-strip-types "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
+        node --experimental-strip-types "${node_argv[@]}" "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"

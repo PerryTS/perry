@@ -161,6 +161,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "MessageChannel",
     "MessagePort",
     "BroadcastChannel",
+    "Storage",
     "FinalizationRegistry",
     // #2875: TC39 explicit-resource-management globals. Backed by the
     // no-op constructor thunk so `typeof DisposableStack === "function"`;
@@ -200,6 +201,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Response"
         | "MessageChannel"
         | "MessagePort"
+        | "Storage"
         | "DisposableStack"
         | "AsyncDisposableStack" => 0,
         "Array"
@@ -1012,6 +1014,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "BroadcastChannel" => {
                 crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
             }
+            "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -1022,7 +1025,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
-            "MessageChannel" | "MessagePort" => {
+            "MessageChannel" | "MessagePort" | "Storage" => {
                 crate::closure::js_register_closure_arity(func_ptr, 0);
             }
             _ => {}
@@ -1056,7 +1059,6 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "length".to_string(),
             super::PropertyAttrs::new(false, false, true),
         );
-        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
@@ -1083,6 +1085,14 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             populate_builtin_prototype_methods(name, proto_obj);
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+            }
+            if name == "Storage" {
+                crate::web_storage::install_storage_globals(
+                    singleton,
+                    closure_ptr,
+                    proto_obj,
+                    ctor_value,
+                );
             }
             if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
                 super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);

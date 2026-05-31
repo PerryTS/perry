@@ -663,6 +663,17 @@ pub unsafe extern "C" fn js_native_call_method(
 
     let jsval = JSValue::from_bits(object.to_bits());
 
+    if crate::web_storage::is_storage_value(object_handle.get_nanbox_f64()) {
+        let args = refreshed_args();
+        if let Some(result) = crate::web_storage::dispatch_storage_method(
+            object_handle.get_nanbox_f64(),
+            method_name,
+            &args,
+        ) {
+            return result;
+        }
+    }
+
     // #1758 / epic #1785: a class-object VALUE reaching the *dynamic*
     // dispatcher is a STATIC method call. This happens when the static
     // analyzer couldn't prove the receiver is a class object — e.g.

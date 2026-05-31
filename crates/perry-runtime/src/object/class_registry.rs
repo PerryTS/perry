@@ -1193,6 +1193,9 @@ pub unsafe extern "C" fn js_new_function_construct(
             "MessagePort" => {
                 return crate::messaging::js_message_port_constructor_error();
             }
+            "Storage" => {
+                return crate::web_storage::storage_constructor_illegal(std::ptr::null());
+            }
             "BroadcastChannel" => {
                 let name = args
                     .first()
