@@ -345,6 +345,20 @@ pub(super) fn try_module_static_methods(
                                 )));
                             }
                         }
+                        "rawJSON" => {
+                            // #2900: `JSON.rawJSON(text)` -> raw-JSON wrapper.
+                            if !args.is_empty() {
+                                let text = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonRawJson(Box::new(text))));
+                            }
+                        }
+                        "isRawJSON" => {
+                            // #2900: `JSON.isRawJSON(value)` -> boolean.
+                            if !args.is_empty() {
+                                let value = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonIsRawJson(Box::new(value))));
+                            }
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }
@@ -1164,6 +1178,25 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // #2901: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)`
+            // static factories. Perry aliases Uint8Array → Buffer; route these
+            // through the buffer native-module dispatch table (no new HIR
+            // variant) so the runtime decodes into a fresh BufferHeader.
+            if obj_name == "Uint8Array" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if matches!(method_name, "fromBase64" | "fromHex") {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "buffer".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: method_name.to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
             // Check for child_process named imports (execSync, spawnSync, spawn, exec)
             let is_child_process_module =
                 ctx.lookup_builtin_module_alias(obj_name) == Some("child_process");
@@ -1320,14 +1353,14 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for AbortSignal.timeout(ms) static method call
+            // Check for AbortSignal static helpers: timeout / abort / any (#2582).
             if obj_ident.sym.as_ref() == "AbortSignal" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
-                    if method_name == "timeout" {
+                    if matches!(method_name, "timeout" | "abort" | "any") {
                         return Ok(Ok(Expr::StaticMethodCall {
                             class_name: "AbortSignal".to_string(),
-                            method_name: "timeout".to_string(),
+                            method_name: method_name.to_string(),
                             args,
                         }));
                     }

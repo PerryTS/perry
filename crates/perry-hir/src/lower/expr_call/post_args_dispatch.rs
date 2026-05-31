@@ -107,18 +107,26 @@ pub(super) fn try_object_has_own_call(
                         if let (ast::MemberProp::Ident(mid_prop), ast::Expr::Ident(mid_obj)) =
                             (&mid.prop, mid.obj.as_ref())
                         {
-                            if mid_obj.sym.as_ref() == "Object"
-                                && mid_prop.sym.as_ref() == "hasOwnProperty"
-                            {
-                                return Ok(Expr::Call {
-                                    callee: Box::new(Expr::ExternFuncRef {
-                                        name: "js_object_has_own".to_string(),
-                                        param_types: Vec::new(),
-                                        return_type: Type::Any,
-                                    }),
-                                    args,
-                                    type_args: Vec::new(),
-                                });
+                            if mid_obj.sym.as_ref() == "Object" {
+                                let runtime_fn = match mid_prop.sym.as_ref() {
+                                    "hasOwnProperty" => Some("js_object_has_own"),
+                                    // #2891: Object.propertyIsEnumerable.call(obj, key)
+                                    "propertyIsEnumerable" => {
+                                        Some("js_object_property_is_enumerable")
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(runtime_fn) = runtime_fn {
+                                    return Ok(Expr::Call {
+                                        callee: Box::new(Expr::ExternFuncRef {
+                                            name: runtime_fn.to_string(),
+                                            param_types: Vec::new(),
+                                            return_type: Type::Any,
+                                        }),
+                                        args,
+                                        type_args: Vec::new(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -158,6 +166,10 @@ pub(super) fn try_object_prototype_call(
                             let runtime_fn = match (mid_prop.sym.as_ref(), args.len()) {
                                 ("toString", 1) => Some("js_object_to_string"),
                                 ("hasOwnProperty", 2) => Some("js_object_has_own"),
+                                // #2891: Object.prototype.propertyIsEnumerable.call(obj, key)
+                                ("propertyIsEnumerable", 2) => {
+                                    Some("js_object_property_is_enumerable")
+                                }
                                 _ => None,
                             };
                             if let Some(runtime_fn) = runtime_fn {

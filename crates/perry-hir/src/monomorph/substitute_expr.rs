@@ -332,7 +332,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             mask.as_ref()
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         ),
-        Expr::ProcessThreadCpuUsage => Expr::ProcessThreadCpuUsage,
+        Expr::ProcessThreadCpuUsage(prior) => Expr::ProcessThreadCpuUsage(
+            prior
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        ),
         Expr::ProcessAvailableMemory => Expr::ProcessAvailableMemory,
         Expr::ProcessConstrainedMemory => Expr::ProcessConstrainedMemory,
         Expr::ProcessPosixCredential(k) => Expr::ProcessPosixCredential(*k),
@@ -664,6 +668,12 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::JsonParse(expr) => Expr::JsonParse(Box::new(substitute_expr(expr, substitutions))),
         Expr::JsonStringify(expr) => {
             Expr::JsonStringify(Box::new(substitute_expr(expr, substitutions)))
+        }
+        Expr::JsonRawJson(expr) => {
+            Expr::JsonRawJson(Box::new(substitute_expr(expr, substitutions)))
+        }
+        Expr::JsonIsRawJson(expr) => {
+            Expr::JsonIsRawJson(Box::new(substitute_expr(expr, substitutions)))
         }
 
         // Math operations

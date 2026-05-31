@@ -1463,6 +1463,12 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
 /// with POINTER_TAG before handing the result to user code.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64 {
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node. Other
+    // primitives box successfully and enumerate no own symbols (empty array).
+    let jv = crate::JSValue::from_bits(obj_f64.to_bits());
+    if jv.is_null() || jv.is_undefined() {
+        crate::object::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     let obj_key = obj_key_from_f64(obj_f64);
     if obj_key == 0 {
         return crate::array::js_array_alloc(0) as i64;

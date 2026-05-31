@@ -52,6 +52,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // - js_string_ends_with(s, suffix) -> i32
     module.declare_function("js_string_index_of", I32, &[I64, I64]);
     module.declare_function("js_string_index_of_from", I32, &[I64, I64, I32]);
+    // #2812: ToIntegerOrInfinity for String.includes(search, position).
+    module.declare_function("js_string_position_to_index", I32, &[DOUBLE]);
     module.declare_function("js_string_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_string_substring", I64, &[I64, I32, I32]);
     // Legacy substr(start, length); length sentinel i32::MIN = omitted (#2897).
@@ -437,6 +439,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_set_has", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_delete", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_size", I32, &[I64]);
+    // #2872: ES2024 Set composition methods.
+    module.declare_function("js_set_union", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_intersection", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_difference", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_symmetric_difference", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_subset_of", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_superset_of", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_is_disjoint_from", I32, &[I64, DOUBLE]);
     module.declare_function("js_string_to_lower_case", I64, &[I64]);
     module.declare_function("js_string_to_upper_case", I64, &[I64]);
     // Locale-aware casing + locales validation (#2781). The locales arg is a
@@ -467,7 +477,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
     module.declare_function("js_string_compare", I32, &[I64, I64]);
-    module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, I32]);
+    module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_random", DOUBLE, &[]);
     // WebAssembly host runtime (issue #76). All take/return NaN-boxed
     // doubles (JSValues). Implementations live in
@@ -579,7 +589,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_version", I64, &[]);
     module.declare_function("js_process_versions", DOUBLE, &[]);
     module.declare_function("js_process_memory_usage", DOUBLE, &[]);
-    module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[]);
+    // node:v8 (#3137/#3138/#3142).
+    module.declare_function("js_v8_serialize", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_deserialize", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_get_heap_statistics", DOUBLE, &[]);
+    module.declare_function("js_v8_get_heap_code_statistics", DOUBLE, &[]);
+    module.declare_function("js_v8_get_heap_space_statistics", DOUBLE, &[]);
+    module.declare_function("js_v8_cached_data_version_tag", DOUBLE, &[]);
+    module.declare_function("js_v8_gc_profiler_report", DOUBLE, &[]);
+    module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_available_memory", DOUBLE, &[]);
     module.declare_function("js_process_constrained_memory", DOUBLE, &[]);
     module.declare_function("js_process_getuid", DOUBLE, &[]);
@@ -621,7 +639,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_process_next_tick", VOID, &[I64]);
+    module.declare_function("js_module_find_package_json", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_process_next_tick", VOID, &[I64, I64]);
     module.declare_function("js_process_stdin", DOUBLE, &[]);
     module.declare_function("js_process_stdout", DOUBLE, &[]);
     module.declare_function("js_process_stderr", DOUBLE, &[]);
@@ -630,6 +649,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_readline_stdin_on", VOID, &[I64, I64]);
     // tty (#347 Phase 3) — isatty + stdout dimensions + resize handler.
     module.declare_function("js_tty_isatty", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_tty_read_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_tty_write_stream_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_stdin_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stdout_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stderr_isatty", DOUBLE, &[]);
@@ -964,6 +985,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Universal `.toString(encoding)` dispatch — branches on
     // is_registered_buffer at runtime, falls back to js_jsvalue_to_string.
     module.declare_function("js_value_to_string_with_encoding", I64, &[DOUBLE, I32]);
+    // Buffer-encoding OR number/bigint-radix dispatch (#2864): the string arg
+    // is ambiguous, so pass both the pre-parsed encoding tag and the raw arg.
+    module.declare_function(
+        "js_value_to_string_with_encoding_or_radix",
+        I64,
+        &[DOUBLE, I32, DOUBLE],
+    );
     module.declare_function("js_fs_unlink_sync", I32, &[DOUBLE]);
     module.declare_function("js_object_values", I64, &[I64]);
     module.declare_function("js_object_values_value", I64, &[DOUBLE]);
@@ -981,6 +1009,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_path_win32_parse", I64, &[I64]);
     module.declare_function("js_path_win32_format", I64, &[DOUBLE]);
     module.declare_function("js_path_win32_relative", I64, &[I64, I64]);
+    module.declare_function("js_path_win32_relative_checked", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_path_win32_resolve", I64, &[I64]);
     module.declare_function("js_path_win32_resolve_join", I64, &[I64, I64]);
     module.declare_function("js_path_win32_to_namespaced_path", I64, &[I64]);
@@ -991,6 +1020,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_path_dirname", I64, &[I64]);
     module.declare_function("js_path_resolve", I64, &[I64]);
     module.declare_function("js_path_relative", I64, &[I64, I64]);
+    module.declare_function("js_path_relative_checked", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_path_to_namespaced_path", I64, &[I64]);
     module.declare_function("js_path_to_namespaced_path_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_path_matches_glob", I32, &[I64, I64]);
@@ -1013,6 +1043,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // JSON.parse returns JSValue (u64) via integer register on ARM64,
     // not f64. Use I64 return + bitcast to avoid ABI mismatch crash.
     module.declare_function("js_json_parse", I64, &[I64]);
+    // #2900: JSON.rawJSON(text) / JSON.isRawJSON(value). Both take and return
+    // a NaN-boxed f64 (the wrapper object pointer / a boolean).
+    module.declare_function("js_json_raw_json", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_json_is_raw_json", DOUBLE, &[DOUBLE]);
     // JSON.parse(text) shim that returns `null` for a null `text_ptr`
     // instead of throwing. Used by NR_OBJ_FROM_JSON_STR dispatch rows
     // (e.g. `jwt.verify` on bad signature) — see issue #927.

@@ -155,6 +155,11 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "writeUintLE"
             | "writeIntBE"
             | "writeIntLE"
+            // #2901: TC39 Uint8Array base64/hex instance conversion APIs.
+            | "toBase64"
+            | "toHex"
+            | "setFromBase64"
+            | "setFromHex"
             // #2879: typed-array mutators that reach buffer dispatch for the
             // Uint8Array/Buffer shape.
             | "copyWithin"
@@ -376,6 +381,26 @@ pub unsafe fn dispatch_buffer_method(
                 crate::buffer::js_buffer_to_string(buf_ptr, enc)
             };
             f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+        }
+        // TC39 Uint8Array base64/hex conversion APIs (#2901). Perry aliases
+        // Uint8Array → Buffer, so these instance methods reach buffer dispatch.
+        "toBase64" => {
+            let opts = arg_or_zero(0);
+            let s = crate::buffer::js_u8_to_base64(addr as i64, opts);
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        }
+        "toHex" => {
+            let s = crate::buffer::js_u8_to_hex(addr as i64);
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        }
+        "setFromBase64" => {
+            let str_handle = arg_or_zero(0).to_bits() as i64;
+            let opts = arg_or_zero(1);
+            crate::buffer::js_u8_set_from_base64(addr as i64, str_handle, opts)
+        }
+        "setFromHex" => {
+            let str_handle = arg_or_zero(0).to_bits() as i64;
+            crate::buffer::js_u8_set_from_hex(addr as i64, str_handle)
         }
         "inspect" => {
             crate::builtins::js_util_inspect(buf_f64, f64::from_bits(crate::value::TAG_UNDEFINED))

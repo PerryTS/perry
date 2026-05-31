@@ -660,7 +660,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(set, assigned);
         }
         // JSON operations
-        Expr::JsonParse(expr) | Expr::JsonStringify(expr) => {
+        Expr::JsonParse(expr)
+        | Expr::JsonStringify(expr)
+        | Expr::JsonRawJson(expr)
+        | Expr::JsonIsRawJson(expr) => {
             collect_assigned_locals_expr(expr, assigned);
         }
         // Math operations
@@ -970,6 +973,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::UrlSearchParamsNew(init) => {
             if let Some(init_expr) = init {
                 collect_assigned_locals_expr(init_expr, assigned);
+            }
+        }
+        Expr::UrlSearchParamsMissingArgs { params, args, .. } => {
+            collect_assigned_locals_expr(params, assigned);
+            for arg in args {
+                collect_assigned_locals_expr(arg, assigned);
             }
         }
         Expr::UrlSearchParamsGet { params, name }

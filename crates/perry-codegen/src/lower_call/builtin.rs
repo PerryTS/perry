@@ -485,6 +485,56 @@ pub(super) fn lower_builtin_new(
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // #2875: TC39 explicit-resource-management stacks. `new
+        // DisposableStack()` / `new AsyncDisposableStack()` allocate a
+        // GC-managed stack object (NaN-boxed pointer) so the instance methods
+        // (`use` / `adopt` / `defer` / `dispose` / `move` / `disposed`)
+        // dispatch through the `__disposable__` rows in native_table.
+        "DisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "AsyncDisposableStack" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_async_disposable_stack_new", &[]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // #2875: `new SuppressedError(error, suppressed, message?)` — an
+        // Error-subclass object carrying `.error` / `.suppressed` /
+        // `.message` / `.name`. The runtime ctor registers the class id as
+        // extending Error (once) so `instanceof Error` holds; the property
+        // reads flow through the ordinary by-name object getter.
+        "SuppressedError" => {
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let error = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let suppressed = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let message = if let Some(a) = args.get(2) {
+                lower_expr(ctx, a)?
+            } else {
+                undef.clone()
+            };
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_suppressed_error_new",
+                &[(DOUBLE, &error), (DOUBLE, &suppressed), (DOUBLE, &message)],
+            )))
+        }
         // decimal.js Decimal — `new Decimal(value)` where value is a number,
         // string, or another Decimal. Routes through `js_decimal_coerce_to_handle`
         // which NaN-decodes the JSValue and dispatches to `from_number` /
