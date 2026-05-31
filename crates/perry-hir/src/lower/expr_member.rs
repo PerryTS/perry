@@ -961,6 +961,14 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     // Fall through — let the regular member access path
                     // below handle the user-declared subclass field.
+                } else if matches!(module_name.as_str(), "util" | "sys")
+                    && matches!(class_name.as_str(), "MIMEType" | "MIMEParams")
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "stream" && is_classic_stream_method_name(&property_name) {
                     // Classic Node streams materialize core stream and
                     // EventEmitter methods as closure-valued fields on the
@@ -1111,6 +1119,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // the codegen binds it via `js_class_method_bind` so
                     // `typeof rs.getReader === "function"` and `const f =
                     // rs.getReader; f()` both work.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "http"
+                    && class_name == "IncomingMessage"
+                    && is_http_incoming_message_method_name(&property_name)
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "http"
+                    && class_name == "IncomingMessage"
+                    && is_http_incoming_message_runtime_property_name(&property_name)
+                {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1987,6 +2013,14 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "setMaxListeners"
             | "getMaxListeners"
     )
+}
+
+fn is_http_incoming_message_method_name(prop: &str) -> bool {
+    matches!(prop, "setEncoding")
+}
+
+fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {
+    matches!(prop, "rawHeaders")
 }
 
 fn is_dns_resolver_method_name(prop: &str) -> bool {

@@ -94,6 +94,14 @@ fn throw_invalid_legacy_url_arg(value: f64) -> ! {
     throw_url_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
+fn resolve_path_to_file_url_posix(path: &str) -> String {
+    let mut resolved = crate::path::resolve_posix_str(path);
+    if !path.is_empty() && path.ends_with('/') && !resolved.ends_with('/') {
+        resolved.push('/');
+    }
+    resolved
+}
+
 /// Read the `windows` option from a `{ windows }` options argument (#2975).
 /// Node treats a `true` value as force-Windows, anything else (including a
 /// missing/undefined options arg or `{ windows: false }`) as POSIX. Returns
@@ -347,7 +355,7 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
             }
         }
     } else {
-        let resolved = crate::path::resolve_posix_str(&path);
+        let resolved = resolve_path_to_file_url_posix(&path);
         let encoded = encode_file_url_path(&resolved);
         if encoded.starts_with('/') {
             format!("file://{}", encoded)

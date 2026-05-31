@@ -111,9 +111,19 @@ stop_tls_upgrade_server() {
 # if it exits 0 but with a different output we fall through to the expected-
 # file comparison (not a parity fail — the incompatibility is intentional).
 EXPECTED_DIR="$SCRIPT_DIR/test-parity/expected"
+EXPECTED_EXIT_DIR="$SCRIPT_DIR/test-parity/expected-exit"
 
 has_expected_output() {
     [[ -f "$EXPECTED_DIR/${1}.txt" ]]
+}
+
+expected_exit_code() {
+    local test_name=$1
+    if [[ -f "$EXPECTED_EXIT_DIR/${test_name}.txt" ]]; then
+        tr -d '[:space:]' < "$EXPECTED_EXIT_DIR/${test_name}.txt"
+    else
+        printf "0"
+    fi
 }
 
 # ── Counters ────────────────────────────────────────────────────────────────
@@ -542,9 +552,10 @@ for test_file in "${TEST_FILES[@]}"; do
     # instead of against Node.js.  This lets us verify Perry's behaviour
     # end-to-end without requiring Node.js to speak the same API.
     if has_expected_output "$test_name"; then
+        expected_exit=$(expected_exit_code "$test_name")
         expected_normalized=$(normalize_output "$(cat "$EXPECTED_DIR/${test_name}.txt")")
         perry_normalized=$(normalize_output "$perry_output")
-        if [[ "$perry_normalized" == "$expected_normalized" ]]; then
+        if [[ "$perry_exit" == "$expected_exit" && "$perry_normalized" == "$expected_normalized" ]]; then
             echo -e "${GREEN}PASS${NC}  $test_id (expected-output)"
             ((PARITY_PASS++))
             status="pass"
@@ -553,6 +564,8 @@ for test_file in "${TEST_FILES[@]}"; do
             ((PARITY_FAIL++))
             PARITY_FAILURES+=("$test_id")
             status="fail"
+            echo "       Expected exit: $expected_exit"
+            echo "       Perry exit:    $perry_exit"
             echo "       Expected: $(cat "$EXPECTED_DIR/${test_name}.txt" | head -1)"
             echo "       Perry:    $(echo "$perry_output" | head -1)"
         fi

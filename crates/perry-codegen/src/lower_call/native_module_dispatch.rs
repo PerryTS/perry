@@ -37,6 +37,7 @@ pub fn native_module_lookup(
     // of which alias the user imported from.
     let normalized = match module {
         "redis" => "ioredis",
+        "sys" => "util",
         m => m,
     };
     // First pass: look for an exact class_filter match.

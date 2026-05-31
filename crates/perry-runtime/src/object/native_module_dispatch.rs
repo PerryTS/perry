@@ -977,13 +977,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0))),
         ("path", "basename") => path_basename_value(false),
         ("path", "extname") => str_to_f64(crate::path::js_path_extname(require_path_str_ptr(0))),
+        ("path", "normalize") => {
+            str_to_f64(crate::path::js_path_normalize(require_path_str_ptr(0)))
+        }
         ("path", "resolve") => path_resolve_value(false),
         ("path", "join") => path_join_value(false),
+        ("path", "relative") => str_to_f64(crate::path::js_path_relative(
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
+        )),
         ("path", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
         ("path", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
         ("path", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
+        ("path", "matchesGlob") => bool_to_f64(crate::path::js_path_matches_glob(
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
+        )),
+        ("path", "parse") => f64::from_bits(
+            JSValue::pointer(crate::path::js_path_parse(require_path_str_ptr(0)) as *const u8)
+                .bits(),
+        ),
+        ("path", "format") => str_to_f64(crate::path::js_path_format(arg(0))),
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -1088,6 +1104,19 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "debuglog") | ("util", "debug") => {
             crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
         }
+        ("util", "_extend") => crate::util_mime::js_util_extend(arg(0), arg(1)),
+        ("util", "_errnoException") => {
+            crate::util_mime::js_util_errno_exception(arg(0), arg(1), arg(2))
+        }
+        ("util", "_exceptionWithHostPort") => crate::util_mime::js_util_exception_with_host_port(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+        ),
+        ("util", "MIMEType") => crate::util_mime::js_util_mime_type_new(arg(0)),
+        ("util", "MIMEParams") => crate::util_mime::js_util_mime_params_new(),
         ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
@@ -1523,9 +1552,23 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
             }
         }
-        ("querystring", "unescapeBuffer") => {
+        (
+            "querystring",
+            "unescapeBuffer" | "unescape" | "escape" | "stringify" | "encode" | "parse" | "decode",
+        ) => {
             let ptr = crate::value::JS_NATIVE_QUERYSTRING_DISPATCH
                 .load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
+        ("domain", "Domain" | "createDomain" | "create") => {
+            let ptr =
+                crate::value::JS_NATIVE_DOMAIN_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
             if ptr.is_null() {
                 f64::from_bits(JSValue::undefined().bits())
             } else {
