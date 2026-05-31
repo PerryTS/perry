@@ -246,11 +246,16 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ProcessUmask(mask)));
                         }
                         "threadCpuUsage" => {
-                            // process.threadCpuUsage() — CPU time used by
-                            // the current thread, as { user, system } in
-                            // microseconds. Ignores any arguments (Node
-                            // accepts none).
-                            return Ok(Ok(Expr::ProcessThreadCpuUsage));
+                            // process.threadCpuUsage(prior?) — CPU time used
+                            // by the current thread, as { user, system } in
+                            // microseconds. If prior is given, returns the
+                            // validated delta.
+                            let prior = if !args.is_empty() {
+                                Some(Box::new(args.into_iter().next().unwrap()))
+                            } else {
+                                None
+                            };
+                            return Ok(Ok(Expr::ProcessThreadCpuUsage(prior)));
                         }
                         "availableMemory" => {
                             // process.availableMemory() — free system memory

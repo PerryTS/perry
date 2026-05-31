@@ -429,7 +429,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::IterResultGetValue | Expr::IterResultGetDone
         // Process leaf intrinsics
         | Expr::ProcessCwd | Expr::ProcessUptime | Expr::ProcessArgv
-        | Expr::ProcessMemoryUsage | Expr::ProcessThreadCpuUsage
+        | Expr::ProcessMemoryUsage | Expr::ProcessThreadCpuUsage(_)
         | Expr::ProcessAvailableMemory | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
         | Expr::ProcessCpuUsage(_)

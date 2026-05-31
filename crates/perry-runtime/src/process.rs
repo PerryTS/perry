@@ -6,8 +6,8 @@ use crate::closure::{
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 
-/// Exit the process with the given exit code
-/// process.exit(code?: number) -> never
+/// Exit the process with the given exit code.
+/// process.exit(code?: number | string | null) -> never
 /// Uses libc::_exit() to bypass cleanup handlers that can cause SIGILL
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
@@ -344,6 +344,118 @@ pub extern "C" fn js_module_is_builtin(id: f64) -> f64 {
     } else {
         crate::value::TAG_FALSE
     })
+}
+
+/// `module.findPackageJSON(specifier[, base])` — resolve the nearest
+/// `package.json` for a resolved specifier (#3120). Perry implements the
+/// local-specifier path: the `specifier` is resolved against `base`'s
+/// directory (when relative/absolute) and Perry walks parent directories
+/// looking for `package.json`, returning its absolute path. The result is
+/// canonicalized to match Node's realpath-based output.
+///
+/// Argument validation matches Node's observable surface:
+///   * missing `specifier` → `TypeError [ERR_MISSING_ARGS]`
+///   * `base` that is not a string/URL (number, null, …) →
+///     `TypeError [ERR_INVALID_ARG_TYPE]`
+///   * no enclosing `package.json` → `undefined`
+#[no_mangle]
+pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    // `specifier` is required and must be a string (Perry covers the
+    // local-path/file-URL specifier shape).
+    if specifier.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::fs::validate::throw_error_with_code(
+            "The \"specifier\" argument must be specified",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let spec_value = JSValue::from_bits(specifier.to_bits());
+    let Some(spec_bytes) =
+        (unsafe { crate::string::js_string_key_bytes(spec_value, &mut sso_buf) })
+    else {
+        let message = format!(
+            "The \"specifier\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(specifier)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    };
+    let specifier_str = String::from_utf8_lossy(spec_bytes).into_owned();
+
+    // Resolve `base` to a directory. A missing/undefined base anchors at the
+    // current working directory (Node requires a base for relative specifiers,
+    // but the observable test surface always passes one).
+    let base_path = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        match crate::url::node_compat::module_base_to_path(base) {
+            Some(p) => p,
+            None => {
+                let message = format!(
+                    "The \"base\" argument must be of type string or an instance of URL. Received {}",
+                    crate::fs::validate::describe_received(base)
+                );
+                crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+            }
+        }
+    };
+
+    let Some(pkg_path) = find_nearest_package_json(&specifier_str, &base_path) else {
+        return undefined;
+    };
+    module_string_value(&pkg_path)
+}
+
+/// Resolve `specifier` against `base`'s directory, then walk parent
+/// directories looking for a `package.json`. Returns the canonicalized
+/// absolute path of the first match. `base` may name a file or a directory
+/// (trailing separator); both anchor at the containing directory.
+fn find_nearest_package_json(specifier: &str, base: &str) -> Option<String> {
+    use std::path::{Path, PathBuf};
+
+    let base_path = Path::new(base);
+    // A directory base (trailing separator) or an existing directory anchors
+    // resolution at itself; otherwise resolve against the parent directory of
+    // the base file.
+    let base_dir: PathBuf = if base.ends_with(std::path::MAIN_SEPARATOR) || base_path.is_dir() {
+        base_path.to_path_buf()
+    } else {
+        base_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+
+    let resolved = if Path::new(specifier).is_absolute() {
+        PathBuf::from(specifier)
+    } else {
+        base_dir.join(specifier)
+    };
+
+    // Start the upward walk at the directory containing the resolved target.
+    let mut dir = if resolved.is_dir() {
+        resolved
+    } else {
+        resolved
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or(base_dir)
+    };
+
+    loop {
+        let candidate = dir.join("package.json");
+        if candidate.is_file() {
+            let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            return Some(canonical.to_string_lossy().into_owned());
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return None,
+        }
+    }
 }
 
 /// process.getBuiltinModule(id) -> module namespace | undefined
@@ -990,7 +1102,7 @@ pub extern "C" fn js_process_active_resources_info() -> f64 {
 
 /// process.cpuUsage(prior?) -> { user, system } µs.
 /// Reads CPU time consumed by the process via getrusage(RUSAGE_SELF) on
-/// unix. With a `prior` object, returns the diff (clamped to >= 0).
+/// unix. With a `prior` object, returns the diff from that sample.
 /// Non-unix targets return `{ user: 0, system: 0 }`.
 #[no_mangle]
 pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
@@ -1031,6 +1143,91 @@ fn read_process_cpu_micros() -> (f64, f64) {
 #[cfg(not(unix))]
 fn read_process_cpu_micros() -> (f64, f64) {
     (0.0, 0.0)
+}
+
+const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
+
+fn validate_cpu_usage_prior(value: f64) -> Option<(f64, f64)> {
+    if crate::value::js_is_truthy(value) == 0 {
+        return None;
+    }
+
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() || is_array_value(jv) {
+        throw_cpu_prior_invalid_type(value);
+    }
+
+    let obj_ptr = jv.as_pointer::<u8>() as *mut crate::object::ObjectHeader;
+    if obj_ptr.is_null() {
+        throw_cpu_prior_invalid_type(value);
+    }
+
+    Some((
+        validate_cpu_usage_field(obj_ptr, "user"),
+        validate_cpu_usage_field(obj_ptr, "system"),
+    ))
+}
+
+fn validate_cpu_usage_field(obj: *mut crate::object::ObjectHeader, name: &'static str) -> f64 {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(obj, key);
+    let jv = JSValue::from_bits(value.to_bits());
+    if !crate::fs::validate::is_numeric(jv) {
+        let message = format!(
+            "The \"prevValue.{name}\" property must be of type number. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let n = numeric_value(jv);
+    if !previous_cpu_value_is_valid(n) {
+        let message = format!(
+            "The property 'prevValue.{name}' is invalid. Received {}",
+            format_node_number(n)
+        );
+        crate::fs::validate::throw_range_error_named(&message, "ERR_INVALID_ARG_VALUE");
+    }
+    n
+}
+
+fn previous_cpu_value_is_valid(value: f64) -> bool {
+    value.is_finite() && value >= 0.0 && value <= MAX_SAFE_INTEGER_F64
+}
+
+fn throw_cpu_prior_invalid_type(value: f64) -> ! {
+    let message = format!(
+        "The \"prevValue\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn numeric_value(jv: JSValue) -> f64 {
+    if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    }
+}
+
+fn format_node_number(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if value.fract() == 0.0 && value.abs() < 1e21 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
 }
 
 /// Validate a `process.cpuUsage(prevValue)` object and read its `.user`
@@ -1496,6 +1693,11 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
 static KEEP_JS_SETENV: extern "C" fn(*const StringHeader, f64) = js_setenv;
 #[used]
 static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
+// #3120: codegen emits `js_module_find_package_json` only from generated `.o`,
+// so pin a retained reference edge for the auto-optimize whole-program build.
+#[used]
+static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
+    js_module_find_package_json;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
@@ -1645,13 +1847,17 @@ pub extern "C" fn js_process_env() -> f64 {
     boxed
 }
 
-/// process.threadCpuUsage() -> object { user, system } in microseconds.
+/// process.threadCpuUsage(prior?) -> object { user, system } in microseconds.
 /// CPU time consumed by the current thread. Uses CLOCK_THREAD_CPUTIME_ID
 /// (available on macOS 10.12+ and Linux). Platforms without the clock get
 /// 0.0 for both fields.
 #[no_mangle]
-pub extern "C" fn js_process_thread_cpu_usage() -> f64 {
-    let (user_us, system_us) = read_thread_cpu_micros();
+pub extern "C" fn js_process_thread_cpu_usage(prior: f64) -> f64 {
+    let (mut user_us, mut system_us) = read_thread_cpu_micros();
+    if let Some((prev_user, prev_system)) = validate_cpu_usage_prior(prior) {
+        user_us -= prev_user;
+        system_us -= prev_system;
+    }
 
     let obj = crate::object::js_object_alloc(0, 2);
     let set_field = |name: &str, value: f64| {
@@ -1676,7 +1882,7 @@ fn read_thread_cpu_micros() -> (f64, f64) {
     if ok != 0 {
         return (0.0, 0.0);
     }
-    let total_us = (ts.tv_sec as f64) * 1_000_000.0 + (ts.tv_nsec as f64) / 1_000.0;
+    let total_us = ((ts.tv_sec as f64) * 1_000_000.0 + (ts.tv_nsec as f64) / 1_000.0).floor();
     (total_us, 0.0)
 }
 

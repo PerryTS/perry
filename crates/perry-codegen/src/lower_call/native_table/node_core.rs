@@ -20,6 +20,19 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #3120: module.findPackageJSON(specifier[, base]) — walks parent
+    // directories from the resolved specifier looking for package.json.
+    // `specifier` (string) and `base` (string or URL object) both ride in
+    // the NaN-boxed F64 slot; a missing `base` is padded with TAG_UNDEFINED.
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "findPackageJSON",
+        class_filter: None,
+        runtime: "js_module_find_package_json",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node test runner shape stubs ==========
     NativeModSig {
         module: "test",

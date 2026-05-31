@@ -493,8 +493,8 @@ pub enum Expr {
     ProcessExit(Option<Box<Expr>>), // process.exit(code?) -> never; None means code 0
     ProcessAbort,                   // process.abort() -> never; raises SIGABRT
     ProcessUmask(Option<Box<Expr>>), // process.umask(mask?) -> number; no-arg reads, arg sets and returns previous
-    ProcessThreadCpuUsage,           // process.threadCpuUsage() -> { user, system } microseconds
-    ProcessAvailableMemory,          // process.availableMemory() -> number (free memory bytes)
+    ProcessThreadCpuUsage(Option<Box<Expr>>), // process.threadCpuUsage(prior?) -> { user, system } µs
+    ProcessAvailableMemory, // process.availableMemory() -> number (free memory bytes)
     ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
     ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
     ProcessEmitWarning(Vec<Expr>), // process.emitWarning(warning[, type, code, ctor]) -> undefined (#1375)

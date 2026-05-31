@@ -92,7 +92,7 @@ impl SH for Expr {
             Expr::ProcessExit(e) => { tag(h, 69); e.hash(h); }
             Expr::ProcessAbort => tag(h, 11224),
             Expr::ProcessUmask(e) => { tag(h, 11225); e.hash(h); }
-            Expr::ProcessThreadCpuUsage => tag(h, 11226),
+            Expr::ProcessThreadCpuUsage(e) => { tag(h, 11226); e.hash(h); }
             Expr::ProcessAvailableMemory => tag(h, 11227),
             Expr::ProcessConstrainedMemory => tag(h, 11228),
             Expr::ProcessPosixCredential(k) => { tag(h, 11229); (*k as u8).hash(h); }
