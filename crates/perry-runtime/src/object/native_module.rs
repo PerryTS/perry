@@ -736,6 +736,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
         module_name,
         "assert/strict"
             | "constants"
+            | "fs.constants"
             | "process"
             | "util"
             | "util.types"

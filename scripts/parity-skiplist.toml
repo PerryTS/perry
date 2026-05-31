@@ -41,7 +41,6 @@
 "punycode" = "Deprecated since Node 7; userland alternatives exist."
 
 # Out-of-scope test surface.
-"test/reporters" = "Test-runner reporter API; covered transitively by node:test if pursued."
 "test/mock" = "Test-runner mocking; covered transitively by node:test if pursued."
 
 [skip-apis]

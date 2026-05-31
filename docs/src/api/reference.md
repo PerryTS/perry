@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2303 entries across 99 modules.
+Total: 2337 entries across 102 modules.
 
 ## Modules
 
@@ -29,6 +29,7 @@ Total: 2303 entries across 99 modules.
 - [`dayjs`](#dayjs)
 - [`decimal.js`](#decimal-js)
 - [`dgram`](#dgram)
+- [`diagnostics_channel`](#diagnostics-channel)
 - [`dns`](#dns)
 - [`dns/promises`](#dns-promises)
 - [`dotenv`](#dotenv)
@@ -88,10 +89,12 @@ Total: 2303 entries across 99 modules.
 - [`stream`](#stream)
 - [`stream/consumers`](#stream-consumers)
 - [`stream/promises`](#stream-promises)
+- [`stream/web`](#stream-web)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
 - [`sys`](#sys)
 - [`test`](#test)
+- [`test/reporters`](#test-reporters)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -823,6 +826,24 @@ Total: 2303 entries across 99 modules.
 - `setTTL` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 
+## `diagnostics_channel`
+
+### Classes
+
+- `Channel`
+
+### Methods
+
+- `channel` — module
+- `hasSubscribers` — module
+- `subscribe` — module
+- `tracingChannel` — module
+- `unsubscribe` — module
+
+### Properties
+
+- `default`
+
 ## `dns`
 
 ### Classes
@@ -1261,6 +1282,11 @@ Total: 2303 entries across 99 modules.
 - `utimes` — module
 - `watch` — module
 - `writeFile` — module
+
+### Properties
+
+- `constants`
+- `default`
 
 ## `http`
 
@@ -2562,6 +2588,10 @@ Total: 2303 entries across 99 modules.
 - `json` — module
 - `text` — module
 
+### Properties
+
+- `default`
+
 ## `stream/promises`
 
 ### Methods
@@ -2570,6 +2600,32 @@ Total: 2303 entries across 99 modules.
 - `finished` — module
 - `pipeline` — module
 - `pipeline` — module
+
+## `stream/web`
+
+### Classes
+
+- `ByteLengthQueuingStrategy`
+- `CompressionStream`
+- `CountQueuingStrategy`
+- `DecompressionStream`
+- `ReadableByteStreamController`
+- `ReadableStream`
+- `ReadableStreamBYOBReader`
+- `ReadableStreamBYOBRequest`
+- `ReadableStreamDefaultController`
+- `ReadableStreamDefaultReader`
+- `TextDecoderStream`
+- `TextEncoderStream`
+- `TransformStream`
+- `TransformStreamDefaultController`
+- `WritableStream`
+- `WritableStreamDefaultController`
+- `WritableStreamDefaultWriter`
+
+### Properties
+
+- `default`
 
 ## `streams`
 
@@ -2657,6 +2713,20 @@ Total: 2303 entries across 99 modules.
 
 - `mock`
 - `snapshot`
+
+## `test/reporters`
+
+### Methods
+
+- `dot` — module
+- `junit` — module
+- `lcov` — module
+- `spec` — module
+- `tap` — module
+
+### Properties
+
+- `default`
 
 ## `tls`
 

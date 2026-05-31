@@ -200,7 +200,12 @@ pub fn emit_dts(_perry_version: &str) -> String {
                 source_dts_tag(e),
                 if e.stub { " — stub" } else { "" }
             );
-            let _ = writeln!(out, "  export const {}: any;", ts_ident(e.name));
+            if e.name == "default" {
+                let _ = writeln!(out, "  const _default: any;");
+                let _ = writeln!(out, "  export default _default;");
+            } else {
+                let _ = writeln!(out, "  export const {}: any;", ts_ident(e.name));
+            }
         }
 
         // Module-level functions (has_receiver: false, no class_filter).
