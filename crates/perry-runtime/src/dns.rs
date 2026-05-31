@@ -325,8 +325,9 @@ fn lookup_service(address: &str, port: u16) -> Result<(String, String), String> 
 
 #[cfg(unix)]
 unsafe fn getnameinfo(sa: &SocketAddr) -> Result<(String, String), String> {
+    const NI_MAXSERV_FALLBACK: usize = 32;
     let mut host_buf = [0i8; libc::NI_MAXHOST as usize];
-    let mut serv_buf = [0i8; libc::NI_MAXSERV as usize];
+    let mut serv_buf = [0i8; NI_MAXSERV_FALLBACK];
 
     let (sa_ptr, sa_len): (*const libc::sockaddr, libc::socklen_t) = match sa {
         SocketAddr::V4(v4) => {
