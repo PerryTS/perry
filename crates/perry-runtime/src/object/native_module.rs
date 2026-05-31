@@ -679,6 +679,10 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "_createServerHandle") => Some(5),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        // #3119/#3126/#3263 node:module helpers.
+        ("module", "createRequire") => Some(1),
+        ("module", "syncBuiltinESMExports") => Some(0),
+        ("module", "runMain") => Some(0),
         _ => None,
     }
 }

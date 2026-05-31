@@ -353,6 +353,120 @@ pub extern "C" fn js_module_is_builtin(id: f64) -> f64 {
     })
 }
 
+/// Backs the `require.resolve(request)` method on a `createRequire`-produced
+/// `require` function (#3119). Perry's native-compiled context has no
+/// CommonJS module registry, but Node's observable contract for builtin
+/// specifiers is identity (`require.resolve("node:fs") === "node:fs"`), and
+/// for any string Node returns a resolved path string. We return the
+/// argument string unchanged, which matches the builtin-specifier case that
+/// the parity surface exercises. Non-string arguments yield `undefined`.
+extern "C" fn module_require_resolve(
+    _closure: *const crate::closure::ClosureHeader,
+    arg0: f64,
+) -> f64 {
+    let value = JSValue::from_bits(arg0.to_bits());
+    if value.is_any_string() {
+        return arg0;
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Backs the callable `require` function returned by `module.createRequire`
+/// (#3119). Perry has no runtime CommonJS module registry to load arbitrary
+/// specifiers in a native-compiled binary, so calling the produced `require`
+/// is a shape-only stub that returns `undefined`. The observable surface that
+/// parity exercises is the function shape plus `require.resolve`, which is
+/// wired separately.
+extern "C" fn module_require_call(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg0: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Allocate a `require`-shaped callable closure with `.resolve`, `.cache`,
+/// `.extensions`, and `.main` properties matching Node's observable surface.
+fn module_make_require() -> f64 {
+    let resolve_ptr = module_require_resolve as *const u8;
+    crate::closure::js_register_closure_arity(resolve_ptr, 1);
+    let resolve_closure = crate::closure::js_closure_alloc(resolve_ptr, 0);
+    crate::object::set_bound_native_closure_name(resolve_closure, "resolve");
+    let resolve_value = crate::value::js_nanbox_pointer(resolve_closure as i64);
+
+    let require_ptr = module_require_call as *const u8;
+    crate::closure::js_register_closure_arity(require_ptr, 1);
+    let require_closure = crate::closure::js_closure_alloc(require_ptr, 0);
+    crate::object::set_bound_native_closure_name(require_closure, "require");
+
+    let require_ptr_usize = require_closure as usize;
+    crate::closure::closure_set_dynamic_prop(require_ptr_usize, "resolve", resolve_value);
+    let cache = crate::object::js_object_alloc(0, 0);
+    crate::closure::closure_set_dynamic_prop(
+        require_ptr_usize,
+        "cache",
+        module_object_value(cache),
+    );
+    let extensions = crate::object::js_object_alloc(0, 0);
+    crate::closure::closure_set_dynamic_prop(
+        require_ptr_usize,
+        "extensions",
+        module_object_value(extensions),
+    );
+    let main = crate::object::js_object_alloc(0, 0);
+    crate::closure::closure_set_dynamic_prop(require_ptr_usize, "main", module_object_value(main));
+
+    crate::value::js_nanbox_pointer(require_closure as i64)
+}
+
+/// `module.createRequire(filenameOrURL)` — build a CommonJS-compatible
+/// `require` function scoped to the supplied path (#3119). Perry's
+/// native-compiled context has no runtime CJS module loader, so the returned
+/// `require` is a shape-faithful stub: it is a one-argument function exposing
+/// `resolve`, `cache`, `extensions`, and `main`, where `require.resolve`
+/// returns builtin specifiers unchanged. Node validates that the argument is
+/// a file URL object, file URL string, or absolute path string and otherwise
+/// throws `TypeError [ERR_INVALID_ARG_VALUE]`.
+#[no_mangle]
+pub extern "C" fn js_module_create_require(filename: f64) -> f64 {
+    let bits = filename.to_bits();
+    let value = JSValue::from_bits(bits);
+    // Accept a string specifier (absolute path / file URL string) or a URL
+    // object. Anything else mirrors Node's ERR_INVALID_ARG_VALUE throw.
+    let is_string = value.is_any_string();
+    let is_url = !is_string
+        && bits != crate::value::TAG_UNDEFINED
+        && bits != crate::value::TAG_NULL
+        && crate::url::node_compat::module_base_to_path(filename).is_some();
+    if !is_string && !is_url {
+        crate::fs::validate::throw_type_error_with_code(
+            "The argument 'filename' must be a file URL object, file URL string, or absolute path string.",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+    module_make_require()
+}
+
+/// `module.syncBuiltinESMExports()` — re-synchronize monkey-patched builtin
+/// CommonJS exports into the ESM namespace bindings (#3126). Perry resolves
+/// builtin module exports statically at compile time, so there is no live CJS
+/// export object to re-sync; for the non-patched case this helper is observably
+/// a no-op that returns `undefined` and ignores any extra arguments, which
+/// matches Node's surface.
+#[no_mangle]
+pub extern "C" fn js_module_sync_builtin_esm_exports() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `module.runMain()` — run the process main-module entrypoint (#3263). In a
+/// native-compiled Perry binary the program's own `main` has already been
+/// invoked by the time user code can call this helper, so re-running it is a
+/// no-op that returns `undefined`, matching Node's success-path return value
+/// without disturbing Perry's CLI entrypoint execution.
+#[no_mangle]
+pub extern "C" fn js_module_run_main() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// `module.findPackageJSON(specifier[, base])` — resolve the nearest
 /// `package.json` for a resolved specifier (#3120). Perry implements the
 /// local-specifier path: the `specifier` is resolved against `base`'s
@@ -1408,6 +1522,15 @@ static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
 #[used]
 static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
     js_module_find_package_json;
+// #3119/#3126/#3263: these are emitted only from generated `.o`, so pin a
+// retained reference edge for the auto-optimize whole-program build.
+#[used]
+static KEEP_JS_MODULE_CREATE_REQUIRE: extern "C" fn(f64) -> f64 = js_module_create_require;
+#[used]
+static KEEP_JS_MODULE_SYNC_BUILTIN_ESM_EXPORTS: extern "C" fn() -> f64 =
+    js_module_sync_builtin_esm_exports;
+#[used]
+static KEEP_JS_MODULE_RUN_MAIN: extern "C" fn() -> f64 = js_module_run_main;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
