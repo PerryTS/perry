@@ -54,6 +54,7 @@ use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcR
 
 mod handle_dispatch;
 mod http2_server;
+mod http2_settings;
 mod https_server;
 mod request;
 mod response;
@@ -64,6 +65,7 @@ mod upgrade;
 
 pub use handle_dispatch::*;
 pub use http2_server::*;
+pub use http2_settings::*;
 pub use https_server::*;
 pub use request::*;
 pub use response::*;

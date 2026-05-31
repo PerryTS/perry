@@ -153,6 +153,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http2_server_on", DOUBLE, &[I64, I64, I64]);
+    // node:http2 settings helpers (#3168) — getDefaultSettings()/
+    // getUnpackedSettings() return a JSON StringHeader (reparsed via
+    // NR_OBJ_FROM_JSON_STR); getPackedSettings() returns a Buffer pointer.
+    module.declare_function("js_node_http2_get_default_settings", I64, &[]);
+    module.declare_function("js_node_http2_get_packed_settings", I64, &[I64]);
+    module.declare_function("js_node_http2_get_unpacked_settings", I64, &[I64]);
 
     // ========== PostgreSQL (pg) ==========
     module.declare_function("js_pg_client_connect", I64, &[I64]);

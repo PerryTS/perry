@@ -4129,6 +4129,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http2", "close", true, Some("Http2SecureServer")),
     method("http2", "on", true, Some("Http2SecureServer")),
     method("http2", "address", true, Some("Http2SecureServer")),
+    // --- node:http2 settings helpers (issue #3168) ---
+    method("http2", "getDefaultSettings", false, None),
+    method("http2", "getPackedSettings", false, None),
+    method("http2", "getUnpackedSettings", false, None),
     class("http2", "Http2SecureServer"),
     class("http2", "Http2ServerRequest"),
     class("http2", "Http2ServerResponse"),

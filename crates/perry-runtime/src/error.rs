@@ -206,6 +206,77 @@ pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut Erro
     unsafe { alloc_error(ERROR_KIND_REFERENCE_ERROR, b"ReferenceError", message) }
 }
 
+thread_local! {
+    /// Interned `&'static str` for each distinct Node `ERR_*` code passed
+    /// across the FFI boundary, so it can be stored in the
+    /// message→code side table read by the `.code` getter. Bounded: each
+    /// distinct code string leaks at most once per thread.
+    static INTERNED_ERROR_CODES: std::cell::RefCell<std::collections::HashMap<String, &'static str>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn intern_error_code(code: &str) -> &'static str {
+    INTERNED_ERROR_CODES.with(|m| {
+        if let Some(v) = m.borrow().get(code) {
+            return *v;
+        }
+        let leaked: &'static str = Box::leak(code.to_string().into_boxed_str());
+        m.borrow_mut().insert(code.to_string(), leaked);
+        leaked
+    })
+}
+
+/// Generic "throw a JS Error subclass carrying a Node `.code`" FFI entry
+/// point for out-of-crate callers (e.g. `perry-ext-http-server`'s http2
+/// settings helpers) that have no direct access to `perry-runtime`'s Rust
+/// API. Building + registering + throwing in this single extern symbol
+/// guarantees the message→code registration and the later `.code` read
+/// resolve through the same runtime copy, avoiding the staticlib
+/// thread-local divergence that split registration/read paths hit.
+///
+/// `kind`: 0 = Error, 1 = TypeError, 2 = RangeError. The message and code
+/// are UTF-8 byte slices. Diverges via `js_throw`.
+///
+/// # Safety
+/// `msg_ptr` must point to `msg_len` valid bytes; `code_ptr` must point to
+/// `code_len` valid bytes or be null with `code_len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn js_throw_error_with_code(
+    msg_ptr: *const u8,
+    msg_len: usize,
+    code_ptr: *const u8,
+    code_len: usize,
+    kind: i32,
+) -> ! {
+    let msg = js_string_from_bytes(msg_ptr, msg_len as u32);
+    if !code_ptr.is_null() && code_len > 0 {
+        let code_bytes = std::slice::from_raw_parts(code_ptr, code_len);
+        if let Ok(code_str) = std::str::from_utf8(code_bytes) {
+            let interned = intern_error_code(code_str);
+            crate::node_submodules::register_error_code_pub(msg, interned);
+        }
+    }
+    let err = match kind {
+        1 => js_typeerror_new(msg),
+        2 => js_rangeerror_new(msg),
+        _ => js_error_new_with_message(msg),
+    };
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+// `js_throw_error_with_code` is referenced only from the prebuilt
+// `perry-ext-http-server` archive (linked after the runtime's bitcode is
+// optimized), so the auto-optimize LTO pass would otherwise dead-strip it
+// (see project_auto_optimize_keepalive_3320). The `#[used]` anchor pins it.
+#[used]
+static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    i32,
+) -> ! = js_throw_error_with_code;
+
 /// Create a new SyntaxError with a message
 #[no_mangle]
 pub extern "C" fn js_syntaxerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
