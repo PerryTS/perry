@@ -977,6 +977,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | "close"
                             | "exec"
                             | "prepare"
+                            | "createTagStore"
                             | "enableLoadExtension"
                             | "loadExtension"
                             | "location"
@@ -985,6 +986,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // `node:sqlite` DatabaseSync methods are callable fields.
                     // Bare reads like `typeof db.close` must not invoke the
                     // lifecycle method as a zero-arg getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "SQLTagStore"
+                    && matches!(
+                        property_name.as_str(),
+                        "run" | "get" | "all" | "iterate" | "clear"
+                    )
+                {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),

@@ -1586,6 +1586,13 @@ pub extern "C" fn js_object_get_field_by_name(
                         let key_len = (*key).byte_len as usize;
                         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                         if key_bytes == b"constructor" {
+                            if let Some(dispatch) = handle_property_dispatch() {
+                                let bits = dispatch(raw as i64, key_ptr, key_len);
+                                let value = JSValue::from_bits(bits.to_bits());
+                                if !value.is_undefined() {
+                                    return value;
+                                }
+                            }
                             let null_obj_ptr =
                                 &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                             return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
@@ -2915,6 +2922,12 @@ pub extern "C" fn js_object_get_field_ic_miss(
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             if key_bytes == b"constructor" {
+                if let Some(dispatch) = handle_property_dispatch() {
+                    let bits = dispatch(obj as i64, key_ptr, key_len);
+                    if bits.to_bits() != crate::value::TAG_UNDEFINED {
+                        return bits;
+                    }
+                }
                 let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                 return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
             }

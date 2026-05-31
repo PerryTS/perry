@@ -66,6 +66,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "close"
             | "exec"
             | "prepare"
+            | "createTagStore"
             | "enableLoadExtension"
             | "loadExtension"
             | "location"
@@ -74,6 +75,18 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     ) {
         if let Some(result) =
             crate::sqlite::dispatch_node_sqlite_database_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite SQLTagStore handle. Keep this before StatementSync because
+    // the query execution method names overlap but tag stores consume tagged
+    // template arguments and bind them positionally.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(method_name, "run" | "get" | "all" | "iterate" | "clear") {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_tag_store_method(handle, method_name, &args)
         {
             return result;
         }
@@ -1239,6 +1252,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     {
         if let Some(v) =
             crate::sqlite::dispatch_node_sqlite_database_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_tag_store_property(handle, property_name)
         {
             return v;
         }

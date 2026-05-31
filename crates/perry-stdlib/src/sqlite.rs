@@ -7,14 +7,15 @@ use crate::common::{get_handle, register_handle, Handle};
 use perry_runtime::{
     buffer::{buffer_alloc, buffer_data, buffer_data_mut, is_registered_buffer, BufferHeader},
     closure::{is_closure_ptr, js_closure_call1, ClosureHeader},
-    js_array_alloc, js_array_get, js_array_length, js_array_push, js_array_push_f64,
-    js_get_string_pointer_unified, js_nanbox_pointer, js_object_alloc, js_object_alloc_null_proto,
-    js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field,
-    js_object_set_field_by_name, js_object_set_keys, js_promise_rejected, js_promise_resolved,
-    js_string_from_bytes, ArrayHeader, BigIntHeader, JSValue, ObjectHeader, Promise, StringHeader,
+    js_array_alloc, js_array_get, js_array_is_array, js_array_length, js_array_push,
+    js_array_push_f64, js_get_string_pointer_unified, js_nanbox_pointer, js_object_alloc,
+    js_object_alloc_null_proto, js_object_alloc_with_shape, js_object_get_field_by_name,
+    js_object_set_field, js_object_set_field_by_name, js_object_set_keys, js_promise_rejected,
+    js_promise_resolved, js_string_from_bytes, ArrayHeader, BigIntHeader, JSValue, ObjectHeader,
+    Promise, StringHeader,
 };
 use rusqlite::{ffi, limits::Limit, types::Value as SqliteValue, Connection, OpenFlags};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -829,6 +830,19 @@ unsafe fn ensure_open_node_database(db_handle: Handle) {
     }
 }
 
+unsafe fn ensure_open_node_database_lowercase(db_handle: Handle) {
+    let db = get_handle::<NodeSqliteDbHandle>(db_handle)
+        .unwrap_or_else(|| throw_invalid_state("database is not open"));
+    let conn = db
+        .conn
+        .lock()
+        .unwrap_or_else(|_| throw_invalid_state("database is not open"));
+    if conn.is_none() {
+        drop(conn);
+        throw_invalid_state("database is not open");
+    }
+}
+
 unsafe fn finalize_node_sqlite_statements(db: &NodeSqliteDbHandle) {
     let handles: Vec<Handle> = db
         .statements
@@ -839,6 +853,18 @@ unsafe fn finalize_node_sqlite_statements(db: &NodeSqliteDbHandle) {
     for handle in handles {
         if let Some(stmt) = get_handle::<NodeSqliteStmtHandle>(handle) {
             stmt.finalized.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+unsafe fn finalize_node_sqlite_statement_handle(stmt_handle: Handle) {
+    let Some(stmt) = get_handle::<NodeSqliteStmtHandle>(stmt_handle) else {
+        return;
+    };
+    stmt.finalized.store(true, Ordering::Relaxed);
+    if let Some(db) = get_handle::<NodeSqliteDbHandle>(stmt.db_handle) {
+        if let Ok(mut statements) = db.statements.lock() {
+            statements.remove(&stmt_handle);
         }
     }
 }
@@ -873,6 +899,74 @@ pub struct NodeSqliteDbHandle {
 
 pub struct NodeSqliteLimitsHandle {
     pub db_handle: Handle,
+}
+
+pub struct NodeSqliteTagStoreHandle {
+    pub db_handle: Handle,
+    pub capacity: usize,
+    pub cache: Mutex<NodeSqliteTagStoreCache>,
+}
+
+pub struct NodeSqliteTagStoreCache {
+    statements: HashMap<String, Handle>,
+    recency: VecDeque<String>,
+}
+
+impl NodeSqliteTagStoreCache {
+    fn new() -> Self {
+        Self {
+            statements: HashMap::new(),
+            recency: VecDeque::new(),
+        }
+    }
+
+    fn touch(&mut self, sql: &str) {
+        self.recency.retain(|cached| cached != sql);
+        self.recency.push_back(sql.to_string());
+    }
+
+    fn get(&mut self, sql: &str) -> Option<Handle> {
+        let handle = *self.statements.get(sql)?;
+        self.touch(sql);
+        Some(handle)
+    }
+
+    fn remove(&mut self, sql: &str) -> Option<Handle> {
+        self.recency.retain(|cached| cached != sql);
+        self.statements.remove(sql)
+    }
+
+    fn put(&mut self, sql: String, handle: Handle, capacity: usize) -> Vec<Handle> {
+        let mut finalized = Vec::new();
+        if capacity == 0 {
+            finalized.push(handle);
+            return finalized;
+        }
+
+        if let Some(previous) = self.statements.insert(sql.clone(), handle) {
+            finalized.push(previous);
+        }
+        self.touch(&sql);
+
+        while self.statements.len() > capacity {
+            let Some(oldest) = self.recency.pop_front() else {
+                break;
+            };
+            if let Some(evicted) = self.statements.remove(&oldest) {
+                finalized.push(evicted);
+            }
+        }
+        finalized
+    }
+
+    fn clear(&mut self) -> Vec<Handle> {
+        self.recency.clear();
+        self.statements.drain().map(|(_, handle)| handle).collect()
+    }
+
+    fn len(&self) -> usize {
+        self.statements.len()
+    }
 }
 
 pub struct NodeSqliteStmtHandle {
@@ -2194,6 +2288,264 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_prepare(
     handle
 }
 
+fn node_sqlite_tag_store_capacity(value: f64) -> usize {
+    let js = value_from_f64(value);
+    let number = if js.is_int32() {
+        js.as_int32() as f64
+    } else if js.is_number() {
+        js.as_number()
+    } else {
+        return 1000;
+    };
+
+    if !number.is_finite() {
+        return if number.is_sign_positive() {
+            i32::MAX as usize
+        } else {
+            0
+        };
+    }
+    let truncated = number.trunc();
+    if truncated <= 0.0 {
+        0
+    } else if truncated >= i32::MAX as f64 {
+        i32::MAX as usize
+    } else {
+        truncated as usize
+    }
+}
+
+unsafe fn node_sqlite_tag_store_template_args(args_arr: *const ArrayHeader) -> (String, Vec<f64>) {
+    let args = node_args_from_array(args_arr);
+    let strings_value = args.first().copied().unwrap_or_else(undefined_f64);
+    let is_array = value_from_f64(js_array_is_array(strings_value));
+    if !is_array.is_bool() || !is_array.as_bool() {
+        throw_type("First argument must be an array of strings (template literal).");
+    }
+
+    let strings_ptr = raw_addr_from_value(strings_value) as *const ArrayHeader;
+    if strings_ptr.is_null() {
+        throw_type("First argument must be an array of strings (template literal).");
+    }
+
+    let strings_len = js_array_length(strings_ptr);
+    let mut sql = String::new();
+    for index in 0..strings_len {
+        let Some(part) = string_key_from_js_value(js_array_get(strings_ptr, index)) else {
+            throw_type("Template literal parts must be strings.");
+        };
+        sql.push_str(&part);
+        if index + 1 < strings_len {
+            sql.push('?');
+        }
+    }
+
+    (sql, args.into_iter().skip(1).collect())
+}
+
+unsafe fn prepare_node_sqlite_tag_store_statement(db_handle: Handle, sql: &str) -> Handle {
+    let sql_ptr = js_string_from_bytes(sql.as_ptr(), sql.len() as u32);
+    js_node_sqlite_database_sync_prepare(
+        db_handle,
+        f64_from_jsvalue(JSValue::string_ptr(sql_ptr)),
+        undefined_f64(),
+    )
+}
+
+unsafe fn node_sqlite_tag_store_statement(
+    tag_store_handle: Handle,
+    args_arr: *const ArrayHeader,
+) -> (Handle, Vec<f64>, bool) {
+    let store = get_handle::<NodeSqliteTagStoreHandle>(tag_store_handle)
+        .unwrap_or_else(|| throw_invalid_state("SQLTagStore is not open"));
+    ensure_open_node_database_lowercase(store.db_handle);
+
+    let (sql, values) = node_sqlite_tag_store_template_args(args_arr);
+    if store.capacity == 0 {
+        let stmt = prepare_node_sqlite_tag_store_statement(store.db_handle, &sql);
+        return (stmt, values, true);
+    }
+
+    {
+        let mut cache = store
+            .cache
+            .lock()
+            .unwrap_or_else(|_| throw_invalid_state("SQLTagStore is not open"));
+        if let Some(stmt_handle) = cache.get(&sql) {
+            let finalized = get_handle::<NodeSqliteStmtHandle>(stmt_handle)
+                .map(|stmt| stmt.finalized.load(Ordering::Relaxed))
+                .unwrap_or(true);
+            if !finalized {
+                return (stmt_handle, values, false);
+            }
+            cache.remove(&sql);
+        }
+    }
+
+    let stmt_handle = prepare_node_sqlite_tag_store_statement(store.db_handle, &sql);
+    let evicted = {
+        let mut cache = store
+            .cache
+            .lock()
+            .unwrap_or_else(|_| throw_invalid_state("SQLTagStore is not open"));
+        cache.put(sql, stmt_handle, store.capacity)
+    };
+    for handle in evicted {
+        if handle != stmt_handle {
+            finalize_node_sqlite_statement_handle(handle);
+        }
+    }
+    (stmt_handle, values, false)
+}
+
+unsafe fn with_node_sqlite_tag_store_statement<R, F>(
+    tag_store_handle: Handle,
+    args_arr: *const ArrayHeader,
+    action: F,
+) -> R
+where
+    F: FnOnce(&Connection, &NodeSqliteStmtHandle, *mut ffi::sqlite3_stmt) -> R,
+{
+    let (stmt_handle, values, temporary) =
+        node_sqlite_tag_store_statement(tag_store_handle, args_arr);
+    let result = with_node_sqlite_statement_positional(stmt_handle, &values, action);
+    if temporary {
+        finalize_node_sqlite_statement_handle(stmt_handle);
+    }
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_database_sync_create_tag_store(
+    db_handle: Handle,
+    max_size_value: f64,
+) -> Handle {
+    ensure_open_node_database_lowercase(db_handle);
+    register_handle(NodeSqliteTagStoreHandle {
+        db_handle,
+        capacity: node_sqlite_tag_store_capacity(max_size_value),
+        cache: Mutex::new(NodeSqliteTagStoreCache::new()),
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_run(
+    tag_store_handle: Handle,
+    args_arr: *const ArrayHeader,
+) -> *mut ObjectHeader {
+    with_node_sqlite_tag_store_statement(tag_store_handle, args_arr, |conn, stmt, raw_stmt| {
+        loop {
+            let rc = ffi::sqlite3_step(raw_stmt);
+            match rc {
+                ffi::SQLITE_ROW => continue,
+                ffi::SQLITE_DONE => break,
+                _ => throw_sqlite_error(&sqlite_error_message(conn)),
+            }
+        }
+        let read_bigints = stmt.read_bigints.load(Ordering::Relaxed);
+        let changes = ffi::sqlite3_changes64(conn.handle());
+        let last_insert_rowid = ffi::sqlite3_last_insert_rowid(conn.handle());
+        let keys = vec!["changes".to_string(), "lastInsertRowid".to_string()];
+        let (packed_keys, shape_id) = build_packed_keys(&keys);
+        let obj =
+            js_object_alloc_with_shape(shape_id, 2, packed_keys.as_ptr(), packed_keys.len() as u32);
+        let changes_value = if read_bigints {
+            JSValue::bigint_ptr(perry_runtime::bigint::js_bigint_from_i64(changes))
+        } else {
+            node_sqlite_integer_value(changes, false)
+        };
+        let rowid_value = if read_bigints {
+            JSValue::bigint_ptr(perry_runtime::bigint::js_bigint_from_i64(last_insert_rowid))
+        } else {
+            node_sqlite_integer_value(last_insert_rowid, false)
+        };
+        js_object_set_field(obj, 0, changes_value);
+        js_object_set_field(obj, 1, rowid_value);
+        obj
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_get(
+    tag_store_handle: Handle,
+    args_arr: *const ArrayHeader,
+) -> f64 {
+    with_node_sqlite_tag_store_statement(tag_store_handle, args_arr, |conn, stmt, raw_stmt| {
+        match ffi::sqlite3_step(raw_stmt) {
+            ffi::SQLITE_ROW => f64_from_jsvalue(node_sqlite_row_value(stmt, raw_stmt)),
+            ffi::SQLITE_DONE => undefined_f64(),
+            _ => throw_sqlite_error(&sqlite_error_message(conn)),
+        }
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_all(
+    tag_store_handle: Handle,
+    args_arr: *const ArrayHeader,
+) -> *mut ArrayHeader {
+    with_node_sqlite_tag_store_statement(tag_store_handle, args_arr, |conn, stmt, raw_stmt| {
+        let mut rows = js_array_alloc(0);
+        loop {
+            match ffi::sqlite3_step(raw_stmt) {
+                ffi::SQLITE_ROW => {
+                    rows = js_array_push(rows, node_sqlite_row_value(stmt, raw_stmt));
+                }
+                ffi::SQLITE_DONE => break,
+                _ => throw_sqlite_error(&sqlite_error_message(conn)),
+            }
+        }
+        rows
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_iterate(
+    tag_store_handle: Handle,
+    args_arr: *const ArrayHeader,
+) -> f64 {
+    let rows = js_node_sqlite_sql_tag_store_all(tag_store_handle, args_arr);
+    perry_runtime::array::array_values_iter(f64_from_jsvalue(JSValue::array_ptr(rows)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_clear(tag_store_handle: Handle) -> i32 {
+    let store = get_handle::<NodeSqliteTagStoreHandle>(tag_store_handle)
+        .unwrap_or_else(|| throw_invalid_state("SQLTagStore is not open"));
+    let handles = store
+        .cache
+        .lock()
+        .map(|mut cache| cache.clear())
+        .unwrap_or_default();
+    for handle in handles {
+        finalize_node_sqlite_statement_handle(handle);
+    }
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_size(tag_store_handle: Handle) -> f64 {
+    let size = get_handle::<NodeSqliteTagStoreHandle>(tag_store_handle)
+        .and_then(|store| store.cache.lock().ok().map(|cache| cache.len()))
+        .unwrap_or(0);
+    f64_from_jsvalue(JSValue::number(size as f64))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_capacity(tag_store_handle: Handle) -> f64 {
+    let capacity = get_handle::<NodeSqliteTagStoreHandle>(tag_store_handle)
+        .map(|store| store.capacity)
+        .unwrap_or(0);
+    f64_from_jsvalue(JSValue::number(capacity as f64))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_sql_tag_store_db(tag_store_handle: Handle) -> Handle {
+    get_handle::<NodeSqliteTagStoreHandle>(tag_store_handle)
+        .map(|store| store.db_handle)
+        .unwrap_or(-1)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_node_sqlite_statement_sync_call(_arg0: f64, _arg1: f64) -> Handle {
     throw_illegal_constructor()
@@ -2571,6 +2923,10 @@ pub unsafe fn dispatch_node_sqlite_database_method(
             let stmt = js_node_sqlite_database_sync_prepare(handle, arg0, arg1);
             Some(js_nanbox_pointer(stmt))
         }
+        "createTagStore" => {
+            let store = js_node_sqlite_database_sync_create_tag_store(handle, arg0);
+            Some(js_nanbox_pointer(store))
+        }
         "enableLoadExtension" => {
             js_node_sqlite_database_sync_enable_load_extension(handle, arg0);
             Some(undefined_f64())
@@ -2601,6 +2957,7 @@ pub unsafe fn dispatch_node_sqlite_database_property(
         | "close"
         | "exec"
         | "prepare"
+        | "createTagStore"
         | "enableLoadExtension"
         | "loadExtension"
         | "location"
@@ -2616,6 +2973,82 @@ pub unsafe fn dispatch_node_sqlite_database_property(
             let instance = js_nanbox_pointer(handle);
             Some(js_class_method_bind(
                 instance,
+                property_name.as_ptr(),
+                property_name.len(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+extern "C" fn sql_tag_store_constructor_thunk(_closure: *const ClosureHeader) -> f64 {
+    throw_illegal_constructor()
+}
+
+unsafe fn sql_tag_store_constructor_value() -> f64 {
+    let func_ptr = sql_tag_store_constructor_thunk as *const u8;
+    perry_runtime::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = perry_runtime::closure::js_closure_alloc_singleton(func_ptr);
+    if closure.is_null() {
+        return undefined_f64();
+    }
+    let ptr = js_string_from_bytes(b"SQLTagStore".as_ptr(), "SQLTagStore".len() as u32);
+    perry_runtime::closure::closure_set_dynamic_prop(
+        closure as usize,
+        "name",
+        f64_from_jsvalue(JSValue::string_ptr(ptr)),
+    );
+    js_nanbox_pointer(closure as i64)
+}
+
+pub unsafe fn dispatch_node_sqlite_tag_store_method(
+    handle: Handle,
+    method: &str,
+    args: &[f64],
+) -> Option<f64> {
+    if js_node_sqlite_is_tag_store_handle(handle) == 0 {
+        return None;
+    }
+    let args_arr = packed_args_array(args);
+    match method {
+        "run" => Some(js_nanbox_pointer(
+            js_node_sqlite_sql_tag_store_run(handle, args_arr) as i64,
+        )),
+        "get" => Some(js_node_sqlite_sql_tag_store_get(handle, args_arr)),
+        "all" => Some(js_nanbox_pointer(
+            js_node_sqlite_sql_tag_store_all(handle, args_arr) as i64,
+        )),
+        "iterate" => Some(js_node_sqlite_sql_tag_store_iterate(handle, args_arr)),
+        "clear" => {
+            js_node_sqlite_sql_tag_store_clear(handle);
+            Some(undefined_f64())
+        }
+        _ => None,
+    }
+}
+
+pub unsafe fn dispatch_node_sqlite_tag_store_property(
+    handle: Handle,
+    property_name: &str,
+) -> Option<f64> {
+    if js_node_sqlite_is_tag_store_handle(handle) == 0 {
+        return None;
+    }
+    match property_name {
+        "size" => Some(js_node_sqlite_sql_tag_store_size(handle)),
+        "capacity" => Some(js_node_sqlite_sql_tag_store_capacity(handle)),
+        "db" => Some(js_nanbox_pointer(js_node_sqlite_sql_tag_store_db(handle))),
+        "constructor" => Some(sql_tag_store_constructor_value()),
+        "run" | "get" | "all" | "iterate" | "clear" => {
+            extern "C" {
+                fn js_class_method_bind(
+                    instance: f64,
+                    method_name_ptr: *const u8,
+                    method_name_len: usize,
+                ) -> f64;
+            }
+            Some(js_class_method_bind(
+                js_nanbox_pointer(handle),
                 property_name.as_ptr(),
                 property_name.len(),
             ))
@@ -2776,6 +3209,15 @@ pub unsafe extern "C" fn js_node_sqlite_is_limits_handle(handle: Handle) -> i32 
 #[no_mangle]
 pub unsafe extern "C" fn js_node_sqlite_is_statement_sync_handle(handle: Handle) -> i32 {
     if get_handle::<NodeSqliteStmtHandle>(handle).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_node_sqlite_is_tag_store_handle(handle: Handle) -> i32 {
+    if get_handle::<NodeSqliteTagStoreHandle>(handle).is_some() {
         1
     } else {
         0

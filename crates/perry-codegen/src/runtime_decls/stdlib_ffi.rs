@@ -653,6 +653,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
+        "js_node_sqlite_database_sync_create_tag_store",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
         "js_node_sqlite_database_sync_enable_load_extension",
         I32,
         &[I64, DOUBLE],
@@ -703,6 +708,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     );
     module.declare_function("js_node_sqlite_statement_sync_source_sql", I64, &[I64]);
     module.declare_function("js_node_sqlite_statement_sync_expanded_sql", I64, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_run", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_get", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_all", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_iterate", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_clear", I32, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_size", DOUBLE, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_capacity", DOUBLE, &[I64]);
+    module.declare_function("js_node_sqlite_sql_tag_store_db", I64, &[I64]);
 
     // ========== OS ==========
     module.declare_function("js_os_cpus", I64, &[]);

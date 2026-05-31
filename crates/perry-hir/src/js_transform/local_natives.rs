@@ -655,6 +655,7 @@ pub fn chained_native_class(module: &str, prior_method: &str) -> Option<&'static
     match (module, prior_method) {
         ("better-sqlite3", "prepare") => Some("Statement"),
         ("sqlite", "prepare") => Some("StatementSync"),
+        ("sqlite", "createTagStore") => Some("SQLTagStore"),
         ("mongodb", "db") => Some("Database"),
         ("mongodb", "collection") => Some("Collection"),
         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => Some("PoolConnection"),
@@ -1334,6 +1335,9 @@ pub fn detect_native_instance_creation_with_context(
                 ("sqlite", "DatabaseSync", "prepare") => {
                     Some((module.clone(), "StatementSync".to_string()))
                 }
+                ("sqlite", "DatabaseSync", "createTagStore") => {
+                    Some((module.clone(), "SQLTagStore".to_string()))
+                }
                 _ => None,
             }
         }
@@ -1360,6 +1364,9 @@ pub fn detect_native_instance_creation_with_context(
                             }
                             ("sqlite", "DatabaseSync", "prepare") => {
                                 Some((module.clone(), "StatementSync".to_string()))
+                            }
+                            ("sqlite", "DatabaseSync", "createTagStore") => {
+                                Some((module.clone(), "SQLTagStore".to_string()))
                             }
                             _ => None,
                         };

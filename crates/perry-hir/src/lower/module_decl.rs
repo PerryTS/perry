@@ -828,6 +828,9 @@ pub(crate) fn lower_module_decl(
                                                             ("sqlite", "prepare") => {
                                                                 Some("StatementSync")
                                                             }
+                                                            ("sqlite", "createTagStore") => {
+                                                                Some("SQLTagStore")
+                                                            }
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = returns_handle {
