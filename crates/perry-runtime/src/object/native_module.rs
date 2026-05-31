@@ -69,6 +69,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
 const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
+const DEFAULT_CORE_CIPHER_LIST: &str = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
@@ -171,19 +172,51 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"O_WRONLY",
     b"O_RDWR",
     b"O_NOFOLLOW",
+    b"O_NOCTTY",
+    b"O_DIRECTORY",
+    b"O_DIRECT",
+    b"O_NOATIME",
+    b"O_NONBLOCK",
+    b"O_SYNC",
+    b"O_DSYNC",
     b"O_CREAT",
     b"O_TRUNC",
     b"O_APPEND",
     b"O_EXCL",
+    b"UV_FS_O_FILEMAP",
+    b"UV_FS_SYMLINK_DIR",
+    b"UV_FS_SYMLINK_JUNCTION",
+    b"UV_FS_COPYFILE_EXCL",
+    b"UV_FS_COPYFILE_FICLONE",
+    b"UV_FS_COPYFILE_FICLONE_FORCE",
+    b"UV_DIRENT_UNKNOWN",
+    b"UV_DIRENT_FILE",
+    b"UV_DIRENT_DIR",
+    b"UV_DIRENT_LINK",
+    b"UV_DIRENT_FIFO",
+    b"UV_DIRENT_SOCKET",
+    b"UV_DIRENT_CHAR",
+    b"UV_DIRENT_BLOCK",
     b"COPYFILE_EXCL",
     b"COPYFILE_FICLONE",
     b"COPYFILE_FICLONE_FORCE",
+    b"S_IFMT",
+    b"S_IFREG",
+    b"S_IFDIR",
+    b"S_IFCHR",
+    b"S_IFBLK",
+    b"S_IFIFO",
+    b"S_IFLNK",
+    b"S_IFSOCK",
+    b"S_IRWXU",
     b"S_IRUSR",
     b"S_IWUSR",
     b"S_IXUSR",
+    b"S_IRWXG",
     b"S_IRGRP",
     b"S_IWGRP",
     b"S_IXGRP",
+    b"S_IRWXO",
     b"S_IROTH",
     b"S_IWOTH",
     b"S_IXOTH",
@@ -358,6 +391,7 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"TLS1_1_VERSION",
     b"TLS1_2_VERSION",
     b"TLS1_3_VERSION",
+    b"defaultCoreCipherList",
     b"POINT_CONVERSION_COMPRESSED",
     b"POINT_CONVERSION_UNCOMPRESSED",
     b"POINT_CONVERSION_HYBRID",
@@ -2049,6 +2083,104 @@ pub(crate) unsafe fn get_native_module_constant(
             0x800 as f64
         }
     };
+    let o_directory = {
+        #[cfg(target_os = "linux")]
+        {
+            Some(libc::O_DIRECTORY as f64)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Some(0x100000 as f64)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
+    };
+    let o_noctty = {
+        #[cfg(unix)]
+        {
+            Some(libc::O_NOCTTY as f64)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    };
+    let o_nonblock = {
+        #[cfg(unix)]
+        {
+            Some(libc::O_NONBLOCK as f64)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    };
+    let o_sync = {
+        #[cfg(unix)]
+        {
+            Some(libc::O_SYNC as f64)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    };
+    let o_dsync = {
+        #[cfg(target_os = "linux")]
+        {
+            Some(libc::O_DSYNC as f64)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Some(0x400000 as f64)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
+    };
+    let o_direct = {
+        #[cfg(target_os = "linux")]
+        {
+            Some(libc::O_DIRECT as f64)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    };
+    let o_noatime = {
+        #[cfg(target_os = "linux")]
+        {
+            Some(libc::O_NOATIME as f64)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    };
+    let o_symlink = {
+        #[cfg(target_os = "macos")]
+        {
+            Some(0x200000 as f64)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    };
+    let uv_fs_o_filemap = {
+        #[cfg(windows)]
+        {
+            0x2000_0000 as f64
+        }
+        #[cfg(not(windows))]
+        {
+            0.0
+        }
+    };
 
     // Helper for fs constants — shared between "fs" and "fs.constants" modules.
     // Using a nested match (module first, then property) instead of OR patterns
@@ -2064,19 +2196,52 @@ pub(crate) unsafe fn get_native_module_constant(
             "O_WRONLY" => Some(1.0),
             "O_RDWR" => Some(2.0),
             "O_NOFOLLOW" => Some(o_nofollow),
+            "O_NOCTTY" => o_noctty,
+            "O_DIRECTORY" => o_directory,
+            "O_DIRECT" => o_direct,
+            "O_NOATIME" => o_noatime,
+            "O_NONBLOCK" => o_nonblock,
+            "O_SYNC" => o_sync,
+            "O_DSYNC" => o_dsync,
+            "O_SYMLINK" => o_symlink,
             "O_CREAT" => Some(o_creat),
             "O_TRUNC" => Some(o_trunc),
             "O_APPEND" => Some(o_append),
             "O_EXCL" => Some(o_excl),
+            "UV_FS_O_FILEMAP" => Some(uv_fs_o_filemap),
+            "UV_FS_SYMLINK_DIR" => Some(1.0),
+            "UV_FS_SYMLINK_JUNCTION" => Some(2.0),
+            "UV_FS_COPYFILE_EXCL" => Some(1.0),
+            "UV_FS_COPYFILE_FICLONE" => Some(2.0),
+            "UV_FS_COPYFILE_FICLONE_FORCE" => Some(4.0),
+            "UV_DIRENT_UNKNOWN" => Some(0.0),
+            "UV_DIRENT_FILE" => Some(1.0),
+            "UV_DIRENT_DIR" => Some(2.0),
+            "UV_DIRENT_LINK" => Some(3.0),
+            "UV_DIRENT_FIFO" => Some(4.0),
+            "UV_DIRENT_SOCKET" => Some(5.0),
+            "UV_DIRENT_CHAR" => Some(6.0),
+            "UV_DIRENT_BLOCK" => Some(7.0),
             "COPYFILE_EXCL" => Some(1.0),
             "COPYFILE_FICLONE" => Some(2.0),
             "COPYFILE_FICLONE_FORCE" => Some(4.0),
+            "S_IFMT" => Some(0o170000 as f64),
+            "S_IFREG" => Some(0o100000 as f64),
+            "S_IFDIR" => Some(0o040000 as f64),
+            "S_IFCHR" => Some(0o020000 as f64),
+            "S_IFBLK" => Some(0o060000 as f64),
+            "S_IFIFO" => Some(0o010000 as f64),
+            "S_IFLNK" => Some(0o120000 as f64),
+            "S_IFSOCK" => Some(0o140000 as f64),
+            "S_IRWXU" => Some(0o700 as f64),
             "S_IRUSR" => Some(0o400 as f64),
             "S_IWUSR" => Some(0o200 as f64),
             "S_IXUSR" => Some(0o100 as f64),
+            "S_IRWXG" => Some(0o070 as f64),
             "S_IRGRP" => Some(0o040 as f64),
             "S_IWGRP" => Some(0o020 as f64),
             "S_IXGRP" => Some(0o010 as f64),
+            "S_IRWXO" => Some(0o007 as f64),
             "S_IROTH" => Some(0o004 as f64),
             "S_IWOTH" => Some(0o002 as f64),
             "S_IXOTH" => Some(0o001 as f64),
@@ -2653,7 +2818,11 @@ pub(crate) unsafe fn get_native_module_constant(
             .or_else(|| os_errno_const(property))
             .or_else(|| os_priority_const(property))
             .or_else(|| os_dlopen_const(property))
-            .or_else(|| crypto_const(property)),
+            .or_else(|| crypto_const(property))
+            .or_else(|| match property {
+                "defaultCoreCipherList" => Some(str_val(DEFAULT_CORE_CIPHER_LIST)),
+                _ => None,
+            }),
         "path" => match property {
             "sep" => {
                 if cfg!(windows) {
@@ -2833,7 +3002,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "subtle" => Some(create_sub_namespace("crypto.subtle")),
             _ => None,
         },
-        "crypto.constants" => crypto_const(property),
+        "crypto.constants" => crypto_const(property).or_else(|| match property {
+            "defaultCoreCipherList" => Some(str_val(DEFAULT_CORE_CIPHER_LIST)),
+            _ => None,
+        }),
         "events" => match property {
             "defaultMaxListeners" => Some(10.0),
             "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
