@@ -537,6 +537,13 @@ pub extern "C" fn js_array_join(
     if arr.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
+    // #3148: TypedArray receiver — join element-typed values (Node formatting).
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray::js_typed_array_join(
+            arr as *const crate::typedarray::TypedArrayHeader,
+            separator,
+        );
+    }
     unsafe {
         let length = (*arr).length;
 

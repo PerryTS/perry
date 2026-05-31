@@ -861,6 +861,57 @@ pub(crate) fn lower_array_method(
             );
             Ok(result)
         }
+        // #3148: TypedArray.prototype.set(source, offset?). Copies elements
+        // from an Array/TypedArray source into this typed array. The runtime
+        // helper no-ops for non-typed-array receivers, so it is safe under the
+        // broadened `is_array_expr` (which also routes plain arrays here).
+        "set" => {
+            let src_box = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
+            let off_box = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                double_literal(0.0)
+            };
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_typed_array_set_from",
+                &[(I64, &recv_handle), (DOUBLE, &src_box), (DOUBLE, &off_box)],
+            ))
+        }
+        // #3148: TypedArray.prototype.subarray(begin?, end?) — returns a new
+        // same-kind TypedArray over the selected range.
+        "subarray" => {
+            let (has_begin, begin_box) = if let Some(a) = args.first() {
+                ("1".to_string(), lower_expr(ctx, a)?)
+            } else {
+                ("0".to_string(), double_literal(0.0))
+            };
+            let (has_end, end_box) = if args.len() >= 2 {
+                ("1".to_string(), lower_expr(ctx, &args[1])?)
+            } else {
+                ("0".to_string(), double_literal(0.0))
+            };
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let result = blk.call(
+                I64,
+                "js_typed_array_subarray",
+                &[
+                    (I64, &recv_handle),
+                    (I32, &has_begin),
+                    (DOUBLE, &begin_box),
+                    (I32, &has_end),
+                    (DOUBLE, &end_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
         // Best-effort fallback: lower args for side effects, return
         // the receiver.
         _ => {

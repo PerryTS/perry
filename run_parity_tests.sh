@@ -435,6 +435,11 @@ for test_file in "${TEST_FILES[@]}"; do
     node_output_file="$OUTPUT_DIR/node/${safe_test_id}.txt"
     perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
     perry_binary="/tmp/perry_parity_$safe_test_id"
+    parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
+    test_argv=()
+    if [[ -n "$parity_argv_line" ]]; then
+        read -r -a test_argv <<< "$parity_argv_line"
+    fi
 
     # Check if test should be skipped
     if should_skip "$test_name"; then
@@ -459,7 +464,7 @@ for test_file in "${TEST_FILES[@]}"; do
     # rather than a `cmd | cap_output` pipeline.
     node_tmp=$(mktemp)
     run_with_timeout 10 env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
-        node --experimental-strip-types "$test_file" > "$node_tmp" 2>&1
+        node --experimental-strip-types "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
     node_output=$(cap_output < "$node_tmp")
     rm -f "$node_tmp"
@@ -523,7 +528,7 @@ for test_file in "${TEST_FILES[@]}"; do
 
     # Run Perry binary — same cap-via-tempfile protocol as Node above (#796).
     perry_tmp=$(mktemp)
-    run_with_timeout 10 "$perry_binary" > "$perry_tmp" 2>&1
+    run_with_timeout 10 "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"

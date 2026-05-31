@@ -272,6 +272,33 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         return unsafe { js_array_from_string_codepoints(s_ptr) };
     }
 
+    // Small native handles (Fetch Headers, streams, timers, etc.) are NaN-boxed
+    // as pointer-shaped ids. `Array.from(handle)` / `[...handle]` reach this
+    // helper after codegen strips the tag, so ask the generic iterator resolver
+    // before treating the id as a non-array and returning [].
+    if raw_addr > 0 && raw_addr < 0x100000 {
+        if let Some(dispatch) = crate::object::handle_property_dispatch() {
+            let method = b"@@iterator";
+            let iter_fn = unsafe { dispatch(raw_addr as i64, method.as_ptr(), method.len()) };
+            let fn_raw = crate::value::js_nanbox_get_pointer(iter_fn) as usize;
+            if iter_fn.to_bits() != crate::value::TAG_UNDEFINED
+                && fn_raw >= 0x10000
+                && crate::closure::is_closure_ptr(fn_raw)
+            {
+                let fn_ptr = fn_raw as *const crate::closure::ClosureHeader;
+                let iter = crate::closure::js_closure_call0(fn_ptr);
+                if js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
+                    let ptr = crate::value::js_nanbox_get_pointer(iter) as *mut ArrayHeader;
+                    if !ptr.is_null() {
+                        return ptr;
+                    }
+                }
+                return js_iterator_to_array(iter);
+            }
+        }
+        return js_array_alloc(0);
+    }
+
     // Check if this is actually a Set (type unknown at compile time)
     if !src.is_null() && crate::set::is_registered_set(src as usize) {
         return crate::set::js_set_to_array(src as *const crate::set::SetHeader);

@@ -197,21 +197,15 @@ pub(super) fn try_native_module_methods(
                             // didn't persist; #1344 has since wired writes
                             // through `std::env::set_var`, so we lower to a
                             // runtime call that actually reads the file.
-                            // Default the optional path to `.env` (Node's
-                            // default) so the dispatch-table row's single
-                            // NA_STR arg stays satisfied for the no-arg call
-                            // form.
-                            let call_args = if args.is_empty() {
-                                vec![Expr::String(".env".to_string())]
-                            } else {
-                                args
-                            };
+                            // Keep the original JS value: the runtime handles
+                            // omitted/undefined/null defaulting plus Buffer
+                            // and file-URL path objects.
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "process".to_string(),
                                 class_name: None,
                                 object: None,
                                 method: "loadEnvFile".to_string(),
-                                args: call_args,
+                                args,
                             }));
                         }
                         "exit" => {
@@ -414,6 +408,34 @@ pub(super) fn try_native_module_methods(
                         "getPriority" | "setPriority" => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "os".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
+                        }
+                        _ => {} // Fall through to generic handling
+                    }
+                }
+            }
+
+            // node:v8 module methods (#3137/#3138). serialize/deserialize and
+            // the heap-stat helpers lower to a receiver-less NativeMethodCall
+            // dispatched in codegen to the `js_v8_*` runtime entry points.
+            let is_v8_module =
+                obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
+            if is_v8_module {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    match method_name {
+                        "serialize"
+                        | "deserialize"
+                        | "getHeapStatistics"
+                        | "getHeapCodeStatistics"
+                        | "getHeapSpaceStatistics"
+                        | "cachedDataVersionTag" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "v8".to_string(),
                                 class_name: None,
                                 object: None,
                                 method: method_name.to_string(),

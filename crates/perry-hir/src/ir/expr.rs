@@ -1713,6 +1713,12 @@ pub enum Expr {
     // URLSearchParams operations
     /// new URLSearchParams(init?)
     UrlSearchParamsNew(Option<Box<Expr>>),
+    /// URLSearchParams method call missing required arguments.
+    UrlSearchParamsMissingArgs {
+        params: Box<Expr>,
+        args: Vec<Expr>,
+        name_and_value: bool,
+    },
     /// params.get(name) -> string | null
     UrlSearchParamsGet {
         params: Box<Expr>,
@@ -1960,6 +1966,9 @@ pub enum Expr {
     /// String(value) -> string
     /// Type coercion to string
     StringCoerce(Box<Expr>),
+    /// `Object(value)` plain-call coercion (#3149). Nullish/primitive → a fresh
+    /// `{}`; an existing object/array passes through unchanged.
+    ObjectCoerce(Box<Expr>),
     /// Boolean(value) -> boolean
     /// Type coercion to boolean via JS truthiness rules
     BooleanCoerce(Box<Expr>),

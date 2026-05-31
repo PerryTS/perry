@@ -975,6 +975,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(init_expr, assigned);
             }
         }
+        Expr::UrlSearchParamsMissingArgs { params, args, .. } => {
+            collect_assigned_locals_expr(params, assigned);
+            for arg in args {
+                collect_assigned_locals_expr(arg, assigned);
+            }
+        }
         Expr::UrlSearchParamsGet { params, name }
         | Expr::UrlSearchParamsGetAll { params, name } => {
             collect_assigned_locals_expr(params, assigned);
@@ -1120,6 +1126,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(value, assigned);
         }
         Expr::StringCoerce(value) => {
+            collect_assigned_locals_expr(value, assigned);
+        }
+        Expr::ObjectCoerce(value) => {
             collect_assigned_locals_expr(value, assigned);
         }
         Expr::BooleanCoerce(value) => {

@@ -110,6 +110,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // in that same registry so `encoded instanceof Uint8Array`
                 // returns true.
                 "Uint8Array" | "Buffer" => 0xFFFF0004u32,
+                // Other %TypedArray% kinds (#3148). The runtime resolves the
+                // actual kind via TYPED_ARRAY_REGISTRY + class_id_for_kind in
+                // instanceof.rs; these reserved ids must match the
+                // CLASS_ID_* constants in perry-runtime/src/typedarray.rs.
+                "Int8Array" => 0xFFFF0030u32,
+                "Int16Array" => 0xFFFF0032u32,
+                "Uint16Array" => 0xFFFF0033u32,
+                "Int32Array" => 0xFFFF0034u32,
+                "Uint32Array" => 0xFFFF0035u32,
+                "Float32Array" => 0xFFFF0036u32,
+                "Float64Array" => 0xFFFF0037u32,
+                "Uint8ClampedArray" => 0xFFFF0038u32,
+                "BigInt64Array" => 0xFFFF0039u32,
+                "BigUint64Array" => 0xFFFF003Au32,
                 // Built-in JS types: Date, RegExp, Map, Set. The runtime
                 // detects these via per-type registries (or, for Date,
                 // by checking that the value is a finite f64 timestamp).

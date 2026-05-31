@@ -1686,6 +1686,10 @@ mod force_link_http_server {
         pub fn js_node_http2_server_close();
         pub fn js_node_http2_server_on();
         pub fn js_node_http2_server_address_json();
+        // http2 settings helpers (#3168).
+        pub fn js_node_http2_get_default_settings();
+        pub fn js_node_http2_get_packed_settings();
+        pub fn js_node_http2_get_unpacked_settings();
     }
 }
 
@@ -1752,5 +1756,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http2_server_close,
         js_node_http2_server_on,
         js_node_http2_server_address_json,
+        js_node_http2_get_default_settings,
+        js_node_http2_get_packed_settings,
+        js_node_http2_get_unpacked_settings,
     ]
 };

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1992 entries across 94 modules.
+Total: 2160 entries across 97 modules.
 
 ## Modules
 
@@ -38,6 +38,7 @@ Total: 1992 entries across 94 modules.
 - [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`fs`](#fs)
+- [`fs/promises`](#fs-promises)
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
@@ -80,6 +81,7 @@ Total: 1992 entries across 94 modules.
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
+- [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
@@ -96,6 +98,7 @@ Total: 1992 entries across 94 modules.
 - [`util`](#util)
 - [`util/types`](#util-types)
 - [`uuid`](#uuid)
+- [`v8`](#v8)
 - [`validator`](#validator)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
@@ -833,32 +836,60 @@ Total: 1992 entries across 94 modules.
 ### Properties
 
 - `ADDRCONFIG`
+- `ADDRCONFIG`
+- `ADDRGETNETWORKPARAMS`
 - `ADDRGETNETWORKPARAMS`
 - `ALL`
+- `ALL`
+- `BADFAMILY`
 - `BADFAMILY`
 - `BADFLAGS`
+- `BADFLAGS`
+- `BADHINTS`
 - `BADHINTS`
 - `BADNAME`
+- `BADNAME`
+- `BADQUERY`
 - `BADQUERY`
 - `BADRESP`
+- `BADRESP`
+- `BADSTR`
 - `BADSTR`
 - `CANCELLED`
+- `CANCELLED`
+- `CONNREFUSED`
 - `CONNREFUSED`
 - `DESTRUCTION`
+- `DESTRUCTION`
+- `EOF`
 - `EOF`
 - `FILE`
+- `FILE`
+- `FORMERR`
 - `FORMERR`
 - `LOADIPHLPAPI`
+- `LOADIPHLPAPI`
+- `NODATA`
 - `NODATA`
 - `NOMEM`
+- `NOMEM`
+- `NONAME`
 - `NONAME`
 - `NOTFOUND`
+- `NOTFOUND`
+- `NOTIMP`
 - `NOTIMP`
 - `NOTINITIALIZED`
+- `NOTINITIALIZED`
+- `REFUSED`
 - `REFUSED`
 - `SERVFAIL`
+- `SERVFAIL`
+- `TIMEOUT`
 - `TIMEOUT`
 - `V4MAPPED`
+- `V4MAPPED`
+- `promises`
 
 ## `dns/promises`
 
@@ -892,6 +923,33 @@ Total: 1992 entries across 94 modules.
 - `reverse` — module
 - `setDefaultResultOrder` — module
 - `setServers` — module
+
+### Properties
+
+- `ADDRGETNETWORKPARAMS`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADNAME`
+- `BADQUERY`
+- `BADRESP`
+- `BADSTR`
+- `CANCELLED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `EOF`
+- `FILE`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NOMEM`
+- `NONAME`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `SERVFAIL`
+- `TIMEOUT`
 
 ## `dotenv`
 
@@ -1109,6 +1167,42 @@ Total: 1992 entries across 94 modules.
 - `constants`
 - `promises`
 
+## `fs/promises`
+
+### Methods
+
+- `access` — module
+- `appendFile` — module
+- `chmod` — module
+- `chown` — module
+- `copyFile` — module
+- `cp` — module
+- `glob` — module
+- `lchmod` — module
+- `lchown` — module
+- `link` — module
+- `lstat` — module
+- `lutimes` — module
+- `mkdir` — module
+- `mkdtemp` — module
+- `open` — module
+- `opendir` — module
+- `readFile` — module
+- `readdir` — module
+- `readlink` — module
+- `realpath` — module
+- `rename` — module
+- `rm` — module
+- `rmdir` — module
+- `stat` — module
+- `statfs` — module
+- `symlink` — module
+- `truncate` — module
+- `unlink` — module
+- `utimes` — module
+- `watch` — module
+- `writeFile` — module
+
 ## `http`
 
 ### Classes
@@ -1255,6 +1349,9 @@ Total: 1992 entries across 94 modules.
 - `address` — instance *(class: `Http2SecureServer`)*
 - `close` — instance *(class: `Http2SecureServer`)*
 - `createSecureServer` — module
+- `getDefaultSettings` — module
+- `getPackedSettings` — module
+- `getUnpackedSettings` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
 - `on` — instance *(class: `Http2SecureServer`)*
 
@@ -2236,9 +2333,34 @@ Total: 1992 entries across 94 modules.
 
 ### Methods
 
+- `clearLine` — module
+- `clearScreenDown` — module
 - `close` — instance
 - `createInterface` — module
+- `cursorTo` — module
+- `emitKeypressEvents` — module
+- `getCursorPos` — instance
+- `getPrompt` — instance
+- `moveCursor` — module
 - `on` — instance
+- `pause` — instance
+- `prompt` — instance
+- `question` — instance
+- `resume` — instance
+- `setPrompt` — instance
+- `write` — instance
+
+## `readline/promises`
+
+### Classes
+
+- `Interface`
+- `Readline`
+
+### Methods
+
+- `close` — instance
+- `createInterface` — module
 - `question` — instance
 
 ## `redis`
@@ -2416,7 +2538,10 @@ Total: 1992 entries across 94 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
 - `deprecate` — module
+- `diff` — module
 - `format` — module
 - `formatWithOptions` — module
 - `getCallSites` — module
@@ -2544,7 +2669,10 @@ Total: 1992 entries across 94 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
 - `deprecate` — module
+- `diff` — module
 - `format` — module
 - `formatWithOptions` — module
 - `getCallSites` — module
@@ -2614,6 +2742,73 @@ Total: 1992 entries across 94 modules.
 - `v4` — module
 - `v7` — module
 - `validate` — module
+
+## `v8`
+
+### Classes
+
+- `DefaultDeserializer`
+- `DefaultSerializer`
+- `Deserializer`
+- `GCProfiler`
+- `Serializer`
+
+### Methods
+
+- `DefaultDeserializer` — module
+- `DefaultSerializer` — module
+- `Deserializer` — module
+- `Serializer` — module
+- `_getDataCloneError` — instance *(class: `Serializer`)*
+- `_getDataCloneError` — instance *(class: `DefaultSerializer`)*
+- `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `Serializer`)*
+- `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `DefaultSerializer`)*
+- `cachedDataVersionTag` — module
+- `cachedDataVersionTag` — module
+- `deserialize` — module
+- `deserialize` — module
+- `getHeapCodeStatistics` — module
+- `getHeapCodeStatistics` — module
+- `getHeapSpaceStatistics` — module
+- `getHeapSpaceStatistics` — module
+- `getHeapStatistics` — module
+- `getHeapStatistics` — module
+- `getWireFormatVersion` — instance *(class: `Deserializer`)*
+- `getWireFormatVersion` — instance *(class: `DefaultDeserializer`)*
+- `readDouble` — instance *(class: `Deserializer`)*
+- `readDouble` — instance *(class: `DefaultDeserializer`)*
+- `readHeader` — instance *(class: `Deserializer`)*
+- `readHeader` — instance *(class: `DefaultDeserializer`)*
+- `readRawBytes` — instance *(class: `Deserializer`)*
+- `readRawBytes` — instance *(class: `DefaultDeserializer`)*
+- `readUint32` — instance *(class: `Deserializer`)*
+- `readUint32` — instance *(class: `DefaultDeserializer`)*
+- `readUint64` — instance *(class: `Deserializer`)*
+- `readUint64` — instance *(class: `DefaultDeserializer`)*
+- `readValue` — instance *(class: `Deserializer`)*
+- `readValue` — instance *(class: `DefaultDeserializer`)*
+- `releaseBuffer` — instance *(class: `Serializer`)*
+- `releaseBuffer` — instance *(class: `DefaultSerializer`)*
+- `serialize` — module
+- `serialize` — module
+- `start` — instance *(class: `GCProfiler`)*
+- `stop` — instance *(class: `GCProfiler`)*
+- `transferArrayBuffer` — instance *(class: `Serializer`)*
+- `transferArrayBuffer` — instance *(class: `DefaultSerializer`)*
+- `transferArrayBuffer` — instance *(class: `Deserializer`)*
+- `transferArrayBuffer` — instance *(class: `DefaultDeserializer`)*
+- `writeDouble` — instance *(class: `Serializer`)*
+- `writeDouble` — instance *(class: `DefaultSerializer`)*
+- `writeHeader` — instance *(class: `Serializer`)*
+- `writeHeader` — instance *(class: `DefaultSerializer`)*
+- `writeRawBytes` — instance *(class: `Serializer`)*
+- `writeRawBytes` — instance *(class: `DefaultSerializer`)*
+- `writeUint32` — instance *(class: `Serializer`)*
+- `writeUint32` — instance *(class: `DefaultSerializer`)*
+- `writeUint64` — instance *(class: `Serializer`)*
+- `writeUint64` — instance *(class: `DefaultSerializer`)*
+- `writeValue` — instance *(class: `Serializer`)*
+- `writeValue` — instance *(class: `DefaultSerializer`)*
 
 ## `validator`
 

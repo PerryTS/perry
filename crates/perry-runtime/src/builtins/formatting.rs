@@ -12,9 +12,11 @@ use super::*;
 mod array_buffer;
 mod boxed_primitives;
 mod collection_equality;
+pub(crate) use boxed_primitives::boxed_primitive_value;
 pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 mod collections;
 mod identity_equality;
+mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 
@@ -2040,6 +2042,12 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
     if has_raw_heap_operand {
         false
     } else if has_tagged_heap_operand {
+        // #2934: Node's default deepStrictEqual is prototype-sensitive — two
+        // objects with the same own properties but different `[[Prototype]]`
+        // are not equal. Gate before comparing the formatted body.
+        if prototype_equality::prototypes_differ(left, right) {
+            return false;
+        }
         format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
     } else {
         crate::value::js_jsvalue_equals(left, right) != 0

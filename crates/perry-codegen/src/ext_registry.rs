@@ -220,6 +220,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_node_http2_server_close",                  OwnerKind::WellKnown("http")),
     ("js_node_http2_server_address_json",           OwnerKind::WellKnown("http")),
     ("js_node_http2_server_on",                     OwnerKind::WellKnown("http")),
+    ("js_node_http2_get_default_settings",          OwnerKind::WellKnown("http")),
+    ("js_node_http2_get_packed_settings",           OwnerKind::WellKnown("http")),
+    ("js_node_http2_get_unpacked_settings",         OwnerKind::WellKnown("http")),
 
     // ── #1123 followup: node:net server-side ─────────────────────────
     // `perry-ext-net` defines `js_net_server_*`. These are emitted by

@@ -18,6 +18,12 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 mod headers;
 pub use headers::*;
 
+// Cached bound-method values for Fetch `Headers` handles — split out to keep
+// this file under the 2,000-line lint gate. Same child-module/`use super::*`
+// contract as `headers`.
+mod headers_method_value;
+pub(crate) use headers_method_value::headers_bound_method_value;
+
 // Untyped handle dispatch helpers (`dispatch_request_method`,
 // `dispatch_response_property`, …) — split out to keep this file under the
 // 2,000-line lint gate (#1698). Same child-module/`use super::*` contract as

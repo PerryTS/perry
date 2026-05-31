@@ -605,6 +605,10 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(String(toJsValue({})))", v)
             }
+            Expr::ObjectCoerce(val) => {
+                let v = self.emit_js_expr(val, locals);
+                format!("fromJsValue(Object(toJsValue({})))", v)
+            }
             Expr::MathFloor(x) => {
                 let v = self.emit_js_expr(x, locals);
                 format!("Math.floor({})", v)

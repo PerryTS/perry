@@ -40,7 +40,8 @@ pub(super) use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
 
 pub(super) use perry_runtime::{
     buffer::{
-        buffer_alloc, buffer_data_mut, is_registered_buffer, mark_as_uint8array, BufferHeader,
+        buffer_alloc, buffer_data_mut, is_registered_buffer, mark_as_array_buffer,
+        mark_as_uint8array, BufferHeader,
     },
     js_object_alloc, js_object_set_field_by_name, js_promise_resolved, JSValue, Promise,
     StringHeader,
@@ -300,6 +301,22 @@ pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHea
     buf
 }
 
+/// Allocate a fresh Buffer marked as ArrayBuffer (so `instanceof ArrayBuffer`
+/// is true and `ArrayBuffer.isView()` is false), copy `bytes` in. #2932.
+pub(super) unsafe fn alloc_array_buffer_from_slice(bytes: &[u8]) -> *mut BufferHeader {
+    let buf = buffer_alloc(bytes.len() as u32);
+    if buf.is_null() {
+        return buf;
+    }
+    (*buf).length = bytes.len() as u32;
+    if !bytes.is_empty() {
+        let dst = buffer_data_mut(buf);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
+    }
+    mark_as_array_buffer(buf as usize);
+    buf
+}
+
 /// Wrap a heap value (NaN-boxed bits) in an already-resolved Promise.
 pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
     js_promise_resolved(f64::from_bits(bits))
@@ -333,9 +350,14 @@ pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mu
     perry_runtime::js_promise_rejected(obj_val)
 }
 
-/// Resolve a Promise with a Uint8Array view of `bytes`.
+/// Resolve a Promise with an `ArrayBuffer` of `bytes`. #2932: Node's
+/// WebCrypto byte-producing operations (digest/sign/encrypt/decrypt/
+/// deriveBits/wrapKey/raw exportKey) resolve their promises with raw
+/// `ArrayBuffer` values, so `result instanceof ArrayBuffer` is true and
+/// `ArrayBuffer.isView(result)` is false. Previously this returned a
+/// Uint8Array view, which diverged on both shape checks.
 pub(super) unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
-    let buf = alloc_uint8array_from_slice(bytes);
+    let buf = alloc_array_buffer_from_slice(bytes);
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }

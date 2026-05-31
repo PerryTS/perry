@@ -1463,6 +1463,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathMax(..)
         | Expr::MathMaxSpread(..)
         | Expr::StringCoerce(..)
+        | Expr::ObjectCoerce(..)
         | Expr::BooleanCoerce(..)
         | Expr::ArraySlice { .. }
         | Expr::ArrayShift(..)
@@ -1916,6 +1917,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::UrlParse(..)
         | Expr::UrlParseWithBase { .. }
         | Expr::UrlSearchParamsNew(..)
+        | Expr::UrlSearchParamsMissingArgs { .. }
         | Expr::UrlSearchParamsGet { .. }
         | Expr::UrlSearchParamsHas { .. }
         | Expr::UrlSearchParamsSet { .. }

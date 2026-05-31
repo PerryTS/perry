@@ -153,6 +153,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http2_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http2_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http2_server_on", DOUBLE, &[I64, I64, I64]);
+    // node:http2 settings helpers (#3168) — getDefaultSettings()/
+    // getUnpackedSettings() return a JSON StringHeader (reparsed via
+    // NR_OBJ_FROM_JSON_STR); getPackedSettings() returns a Buffer pointer.
+    module.declare_function("js_node_http2_get_default_settings", I64, &[]);
+    module.declare_function("js_node_http2_get_packed_settings", I64, &[I64]);
+    module.declare_function("js_node_http2_get_unpacked_settings", I64, &[I64]);
 
     // ========== PostgreSQL (pg) ==========
     module.declare_function("js_pg_client_connect", I64, &[I64]);
@@ -370,10 +376,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
     // #3092 — callback is passed as a full NaN-boxed value (DOUBLE), not a raw
     // pointer, so the runtime can reject non-callable callbacks.
-    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
     module.declare_function("js_async_local_storage_new", I64, &[]);
-    module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_async_local_storage_run",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, I64],
+    );
 
     // ========== #2875 DisposableStack / AsyncDisposableStack / SuppressedError ==========
     // `new` ctors (dispatched by lower_builtin_new). Instance methods are
@@ -551,6 +561,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_set_href", VOID, &[I64, DOUBLE]);
     module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_delete2", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_throw_missing_args", DOUBLE, &[I32]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_delete", VOID, &[I64, DOUBLE]);
     module.declare_function("js_url_search_params_get", I64, &[I64, DOUBLE]);
@@ -1206,7 +1217,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
     module.declare_function("js_call_value", DOUBLE, &[DOUBLE, I64, I64]);
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
+    // (closure_env i64, args_ptr, args_len i64). The args pointer is a real
+    // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
+    // to I64 in the integer register class) so call sites can pass an alloca
+    // directly. See `try_lower_closure_call_fallthrough` (#3527).
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,
@@ -1307,6 +1322,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_to_json", DOUBLE, &[]);
     module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
     module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_perf_mark_resource_timing",
+        DOUBLE,
+        &[
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function("js_perf_timerify", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);
