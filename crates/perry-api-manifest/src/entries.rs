@@ -682,9 +682,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dns/promises", "getServers", true, Some("Resolver")),
     method("dns/promises", "setServers", true, Some("Resolver")),
     method("dns/promises", "setLocalAddress", true, Some("Resolver")),
-    // node:dgram UDP support is currently a runtime-only shape stub:
-    // createSocket returns a socket-like object with callable methods so
-    // feature detection and inventory probes compile without claiming packet IO.
+    // node:dgram has deterministic in-process loopback coverage for the
+    // unicast subset; multicast/queue option methods remain shape-compatible.
     method("dgram", "createSocket", false, None),
     class("dgram", "Socket"),
     method("dgram", "Socket", false, None),
@@ -692,10 +691,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "bind", true, Some("Socket")),
     method("dgram", "close", true, Some("Socket")),
     method("dgram", "address", true, Some("Socket")),
+    method("dgram", "remoteAddress", true, Some("Socket")),
     method("dgram", "connect", true, Some("Socket")),
     method("dgram", "disconnect", true, Some("Socket")),
+    method("dgram", "on", true, Some("Socket")),
+    method("dgram", "addListener", true, Some("Socket")),
+    method("dgram", "once", true, Some("Socket")),
+    method("dgram", "off", true, Some("Socket")),
+    method("dgram", "removeListener", true, Some("Socket")),
+    method("dgram", "emit", true, Some("Socket")),
+    method("dgram", "listenerCount", true, Some("Socket")),
     method("dgram", "addMembership", true, Some("Socket")),
     method("dgram", "dropMembership", true, Some("Socket")),
+    method("dgram", "addSourceSpecificMembership", true, Some("Socket")),
+    method(
+        "dgram",
+        "dropSourceSpecificMembership",
+        true,
+        Some("Socket"),
+    ),
     method("dgram", "setBroadcast", true, Some("Socket")),
     method("dgram", "setMulticastTTL", true, Some("Socket")),
     method("dgram", "setMulticastLoopback", true, Some("Socket")),
@@ -705,6 +719,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "setSendBufferSize", true, Some("Socket")),
     method("dgram", "getRecvBufferSize", true, Some("Socket")),
     method("dgram", "getSendBufferSize", true, Some("Socket")),
+    method("dgram", "getSendQueueSize", true, Some("Socket")),
+    method("dgram", "getSendQueueCount", true, Some("Socket")),
     method("dgram", "ref", true, Some("Socket")),
     method("dgram", "unref", true, Some("Socket")),
     method_sig(
