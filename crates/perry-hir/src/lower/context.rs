@@ -48,6 +48,7 @@ impl LoweringContext {
             enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
+            immutable_locals: HashSet::new(),
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
             imported_functions: Vec::new(),
@@ -114,6 +115,7 @@ impl LoweringContext {
             is_entry_module: false,
             is_external_module: false,
             optional_require_try_depth: 0,
+            strict_mode: false,
         }
     }
 
@@ -574,6 +576,14 @@ impl LoweringContext {
         }
         self.locals.push((name, id, ty));
         id
+    }
+
+    pub(crate) fn mark_local_immutable(&mut self, id: LocalId) {
+        self.immutable_locals.insert(id);
+    }
+
+    pub(crate) fn is_local_immutable(&self, id: LocalId) -> bool {
+        self.immutable_locals.contains(&id)
     }
 
     /// Drop module-level LocalIds from a closure's `captures` list. Module-

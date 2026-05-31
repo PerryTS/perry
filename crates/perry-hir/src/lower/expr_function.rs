@@ -32,6 +32,11 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // Lower arrow function to a closure
     let func_id = ctx.fresh_func();
     let scope_mark = ctx.enter_scope();
+    let parent_strict = ctx.strict_mode;
+    if let ast::BlockStmtOrExpr::BlockStmt(block) = &*arrow.body {
+        ctx.strict_mode =
+            parent_strict || crate::lower::block_has_use_strict_directive(&block.stmts);
+    }
 
     // Enter a type-parameter scope for arrow generics — `<T extends string>
     // (self: T) => ...`. Without this scope the `T` reference in `self: T`
@@ -262,6 +267,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     }
 
     ctx.exit_scope(scope_mark);
+    ctx.strict_mode = parent_strict;
 
     // Exit the type-parameter scope opened at the top of `lower_arrow`.
     // Paired with `enter_type_param_scope` above so nested generic
@@ -300,6 +306,11 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // `this` binding determined by how they're called).
     let func_id = ctx.fresh_func();
     let scope_mark = ctx.enter_scope();
+    let parent_strict = ctx.strict_mode;
+    if let Some(block) = fn_expr.function.body.as_ref() {
+        ctx.strict_mode =
+            parent_strict || crate::lower::block_has_use_strict_directive(&block.stmts);
+    }
 
     // Track which locals exist before entering the closure scope
     let outer_locals: Vec<(String, LocalId)> = ctx
@@ -547,6 +558,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     }
 
     ctx.exit_scope(scope_mark);
+    ctx.strict_mode = parent_strict;
 
     let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
 
