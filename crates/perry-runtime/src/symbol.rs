@@ -208,6 +208,8 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
 // - SYMBOL_POINTERS is metadata-only: moved symbol addresses are rewritten, but
 //   tracking a pointer there does not by itself keep the symbol alive.
 static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
+static SYMBOL_ACCESSORS: Mutex<Option<HashMap<(usize, usize), crate::object::AccessorDescriptor>>> =
+    Mutex::new(None);
 
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
 // Symbol semantics are compatible with coarse locking.
@@ -492,7 +494,7 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
 /// Extract the raw object pointer from a NaN-boxed JSValue. Returns 0 if the
 /// value isn't a pointer-tagged object (and 0 is also a valid "no entries"
 /// sentinel for the side table).
-unsafe fn obj_key_from_f64(obj_f64: f64) -> usize {
+pub(crate) unsafe fn obj_key_from_f64(obj_f64: f64) -> usize {
     let bits = obj_f64.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag != POINTER_TAG {
@@ -503,7 +505,7 @@ unsafe fn obj_key_from_f64(obj_f64: f64) -> usize {
 
 /// Extract the raw symbol pointer from a NaN-boxed Symbol JSValue, or 0 if
 /// the value isn't a Symbol.
-unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
+pub(crate) unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
     let bits = sym_f64.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag != POINTER_TAG {
@@ -517,6 +519,76 @@ unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
         return 0;
     }
     ptr as usize
+}
+
+unsafe fn symbol_accessor_descriptor(
+    obj_f64: f64,
+    sym_f64: f64,
+) -> Option<crate::object::AccessorDescriptor> {
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return None;
+    }
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
+    guard
+        .as_ref()
+        .and_then(|m| m.get(&(obj_key, sym_key)).copied())
+}
+
+fn store_symbol_accessor_descriptor(
+    obj_key: usize,
+    sym_key: usize,
+    acc: crate::object::AccessorDescriptor,
+) {
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard.as_mut().unwrap().insert((obj_key, sym_key), acc);
+    }
+    crate::gc::runtime_write_barrier_root_raw_ptr(sym_key as *const SymbolHeader);
+    if acc.get != 0 {
+        crate::gc::runtime_write_barrier_root_nanbox(acc.get);
+    }
+    if acc.set != 0 {
+        crate::gc::runtime_write_barrier_root_nanbox(acc.set);
+    }
+}
+
+pub(crate) unsafe fn js_object_define_symbol_accessor(
+    obj_f64: f64,
+    sym_f64: f64,
+    getter: f64,
+    setter: f64,
+) -> f64 {
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return obj_f64;
+    }
+    let existing = symbol_accessor_descriptor(obj_f64, sym_f64).unwrap_or_default();
+    let undef = crate::value::TAG_UNDEFINED;
+    let get_bits = if getter.to_bits() == undef {
+        existing.get
+    } else {
+        crate::closure::clone_closure_rebind_this(getter.to_bits(), obj_f64)
+    };
+    let set_bits = if setter.to_bits() == undef {
+        existing.set
+    } else {
+        crate::closure::clone_closure_rebind_this(setter.to_bits(), obj_f64)
+    };
+    store_symbol_accessor_descriptor(
+        obj_key,
+        sym_key,
+        crate::object::AccessorDescriptor {
+            get: get_bits,
+            set: set_bits,
+        },
+    );
+    obj_f64
 }
 
 unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
@@ -587,13 +659,57 @@ fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64
 }
 
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
+    if let Some(acc) = symbol_accessor_descriptor(obj_f64, sym_f64) {
+        if acc.set != 0 {
+            let closure =
+                (acc.set & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+            if !closure.is_null() {
+                crate::closure::js_closure_call1(closure, value_f64);
+            }
+        }
+        return value_f64;
+    }
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    let has_own_data = object_symbol_data_property_exists(obj_key, sym_key);
+    if !has_own_data {
+        let bits = obj_f64.to_bits();
+        if (bits >> 48) == 0x7FFE {
+            let class_id = (bits & 0xFFFF_FFFF) as u32;
+            if crate::object::class_symbol_setter_apply(class_id, sym_key, obj_f64, value_f64, true)
+            {
+                return value_f64;
+            }
+        } else {
+            let jsval = crate::value::JSValue::from_bits(bits);
+            if jsval.is_pointer() {
+                let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
+                if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
+                    let class_id = crate::object::js_object_get_class_id(ptr);
+                    if class_id != 0
+                        && crate::object::class_symbol_setter_apply(
+                            class_id, sym_key, obj_f64, value_f64, false,
+                        )
+                    {
+                        return value_f64;
+                    }
+                }
+            }
+        }
+    }
     store_object_symbol_property_root(obj_key, sym_key, value_f64.to_bits());
     value_f64
+}
+
+fn object_symbol_data_property_exists(obj_key: usize, sym_key: usize) -> bool {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    guard.as_ref().is_some_and(|map| {
+        map.get(&obj_key)
+            .is_some_and(|entries| entries.iter().any(|&(sk, _)| sk == sym_key))
+    })
 }
 
 /// `obj[sym] = value` where `sym` is a Symbol. Stores into the side table.
@@ -666,6 +782,18 @@ pub fn class_static_symbol_lookup(class_id: u32, sym_f64: f64) -> Option<u64> {
     }
 }
 
+pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
+    let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+    guard
+        .as_ref()
+        .map(|map| {
+            map.keys()
+                .filter_map(|&(cid, sym_key)| (cid == class_id).then_some(sym_key))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn merge_symbol_property_entries(dst: &mut Vec<(usize, u64)>, src: Vec<(usize, u64)>) {
     for (sym_key, value_bits) in src {
         if let Some(existing) = dst.iter_mut().find(|entry| entry.0 == sym_key) {
@@ -683,6 +811,7 @@ pub fn scan_symbol_side_table_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_symbol_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_symbol_property_roots_mut(visitor);
+    scan_symbol_accessor_roots_mut(visitor);
     scan_class_static_symbol_roots_mut(visitor);
     scan_symbol_pointer_metadata_roots_mut(visitor);
 }
@@ -716,6 +845,39 @@ fn scan_symbol_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(entries);
             }
+        }
+    }
+}
+
+fn scan_symbol_accessor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut rewrites = Vec::new();
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+
+    for (old_owner, old_sym_key) in map.keys().copied().collect::<Vec<_>>() {
+        let Some(acc) = map.get_mut(&(old_owner, old_sym_key)) else {
+            continue;
+        };
+        let mut new_owner = old_owner;
+        let owner_moved = visitor.visit_metadata_usize_slot(&mut new_owner);
+        let mut new_sym_key = old_sym_key;
+        let sym_moved = visitor.visit_usize_slot(&mut new_sym_key);
+        if acc.get != 0 {
+            visitor.visit_nanbox_u64_slot(&mut acc.get);
+        }
+        if acc.set != 0 {
+            visitor.visit_nanbox_u64_slot(&mut acc.set);
+        }
+        if (owner_moved && new_owner != old_owner) || (sym_moved && new_sym_key != old_sym_key) {
+            rewrites.push(((old_owner, old_sym_key), (new_owner, new_sym_key)));
+        }
+    }
+
+    for (old_key, new_key) in rewrites {
+        if let Some(acc) = map.remove(&old_key) {
+            map.insert(new_key, acc);
         }
     }
 }
@@ -769,6 +931,7 @@ fn scan_symbol_pointer_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVi
 enum SymbolSideTableRootSlot {
     SymbolPropertyOwner { owner: usize },
     SymbolPropertyEntry { owner: usize, sym_key: usize },
+    SymbolAccessor { owner: usize, sym_key: usize },
     ClassStaticSymbol { class_id: u32, sym_key: usize },
     SymbolPointer { ptr: usize },
 }
@@ -817,6 +980,15 @@ fn symbol_side_table_root_snapshot() -> Vec<SymbolSideTableRootSlot> {
     }
 
     {
+        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
+        if let Some(map) = guard.as_ref() {
+            for &(owner, sym_key) in map.keys() {
+                slots.push(SymbolSideTableRootSlot::SymbolAccessor { owner, sym_key });
+            }
+        }
+    }
+
+    {
         let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         if let Some(map) = guard.as_ref() {
             for &(class_id, sym_key) in map.keys() {
@@ -857,11 +1029,43 @@ fn scan_symbol_side_table_root_slot(
             visitor.visit_usize_slot(entry_sym);
             visitor.visit_nanbox_u64_slot(value_bits);
         }
+        SymbolSideTableRootSlot::SymbolAccessor { owner, sym_key } => {
+            rewrite_symbol_accessor_entry_if_forwarded(visitor, owner, sym_key);
+        }
         SymbolSideTableRootSlot::ClassStaticSymbol { class_id, sym_key } => {
             rewrite_class_static_symbol_entry_if_forwarded(visitor, class_id, sym_key);
         }
         SymbolSideTableRootSlot::SymbolPointer { ptr } => {
             rewrite_symbol_pointer_metadata_if_forwarded(visitor, ptr);
+        }
+    }
+}
+
+fn rewrite_symbol_accessor_entry_if_forwarded(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    owner: usize,
+    sym_key: usize,
+) {
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    let Some(acc) = map.get_mut(&(owner, sym_key)) else {
+        return;
+    };
+    let mut new_owner = owner;
+    let owner_moved = visitor.visit_metadata_usize_slot(&mut new_owner);
+    let mut new_sym_key = sym_key;
+    let sym_moved = visitor.visit_usize_slot(&mut new_sym_key);
+    if acc.get != 0 {
+        visitor.visit_nanbox_u64_slot(&mut acc.get);
+    }
+    if acc.set != 0 {
+        visitor.visit_nanbox_u64_slot(&mut acc.set);
+    }
+    if (owner_moved && new_owner != owner) || (sym_moved && new_sym_key != sym_key) {
+        if let Some(acc) = map.remove(&(owner, sym_key)) {
+            map.insert((new_owner, new_sym_key), acc);
         }
     }
 }
@@ -931,6 +1135,7 @@ fn rewrite_symbol_pointer_metadata_if_forwarded(
 #[cfg(test)]
 pub(crate) fn test_clear_symbol_side_table_roots() {
     *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES) = None;
+    *crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS) = None;
     *crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS) = None;
 
     let mut persistent = Vec::new();
@@ -1048,6 +1253,9 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
+    if symbol_accessor_descriptor(obj_f64, sym_f64).is_some() {
+        return true;
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     if let Some(map) = guard.as_ref() {
         if let Some(entries) = map.get(&obj_key) {
@@ -1076,6 +1284,16 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
 /// `resolve_proto_chain_symbol`, which walks prototype objects itself and must
 /// therefore NOT recurse into the full chain-walking getter.
 pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    if let Some(acc) = symbol_accessor_descriptor(obj_f64, sym_f64) {
+        if acc.get != 0 {
+            let closure =
+                (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+            if !closure.is_null() {
+                return Some(crate::closure::js_closure_call0(closure));
+            }
+        }
+        return Some(f64::from_bits(TAG_UNDEFINED));
+    }
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {
@@ -1101,6 +1319,14 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     let bits = obj_f64.to_bits();
     if (bits >> 48) == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
+        let sym_key = sym_key_from_f64(sym_f64);
+        if sym_key != 0 {
+            if let Some(v) =
+                crate::object::class_symbol_getter_value(class_id, sym_key, obj_f64, true)
+            {
+                return v;
+            }
+        }
         if let Some(vb) = class_static_symbol_lookup(class_id, sym_f64) {
             return f64::from_bits(vb);
         }
@@ -1174,6 +1400,23 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
+    }
+    let sym_key = sym_key_from_f64(sym_f64);
+    if sym_key != 0 {
+        let jsval = crate::value::JSValue::from_bits(bits);
+        if jsval.is_pointer() {
+            let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
+            if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
+                let class_id = crate::object::js_object_get_class_id(ptr);
+                if class_id != 0 {
+                    if let Some(v) =
+                        crate::object::class_symbol_getter_value(class_id, sym_key, obj_f64, false)
+                    {
+                        return v;
+                    }
+                }
+            }
+        }
     }
     // Buffer extends Uint8Array in Node, so Buffer values must expose
     // @@iterator as values(). Perry's direct Buffer.from() paths often
@@ -1481,16 +1724,57 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if jv.is_null() || jv.is_undefined() {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
+    if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
+        let mut entries = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
+            crate::object::class_own_symbol_member_keys(class_id, false)
+        } else {
+            let mut keys = crate::object::class_own_symbol_member_keys(class_id, true);
+            for sym_key in class_static_symbol_keys_for_class(class_id) {
+                if !keys.contains(&sym_key) {
+                    keys.push(sym_key);
+                }
+            }
+            keys.sort_by_key(|sym_key| {
+                let ptr = *sym_key as *const SymbolHeader;
+                if ptr.is_null() {
+                    u64::MAX
+                } else {
+                    (*ptr).id
+                }
+            });
+            keys
+        };
+        let mut arr = crate::array::js_array_alloc(entries.len() as u32);
+        for sym_ptr_usize in entries.drain(..) {
+            let boxed = f64::from_bits(POINTER_TAG | (sym_ptr_usize as u64 & POINTER_MASK));
+            arr = crate::array::js_array_push_f64(arr, boxed);
+        }
+        return arr as i64;
+    }
     let obj_key = obj_key_from_f64(obj_f64);
     if obj_key == 0 {
         return crate::array::js_array_alloc(0) as i64;
     }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    let entries = match guard.as_ref().and_then(|m| m.get(&obj_key)) {
-        Some(v) if !v.is_empty() => v.clone(),
-        _ => return crate::array::js_array_alloc(0) as i64,
-    };
+    let mut entries = guard
+        .as_ref()
+        .and_then(|m| m.get(&obj_key))
+        .cloned()
+        .unwrap_or_default();
     drop(guard);
+    {
+        let accessors = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSORS);
+        if let Some(map) = accessors.as_ref() {
+            for &(owner, sym_key) in map.keys() {
+                if owner == obj_key && !entries.iter().any(|(existing, _)| *existing == sym_key) {
+                    entries.push((sym_key, 0));
+                }
+            }
+        }
+    }
+    if entries.is_empty() {
+        return crate::array::js_array_alloc(0) as i64;
+    }
     let mut arr = crate::array::js_array_alloc(entries.len() as u32);
     for (sym_ptr_usize, _val_bits) in entries.iter() {
         // Re-NaN-box each symbol pointer with POINTER_TAG so the array

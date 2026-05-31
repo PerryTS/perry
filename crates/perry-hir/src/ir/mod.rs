@@ -47,8 +47,9 @@ pub use widget::{
 
 // ---- decl.rs ----
 pub use decl::{
-    Class, ClassField, Decorator, Enum, EnumMember, EnumValue, Export, Function, Global, Import,
-    ImportSpecifier, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
+    Class, ClassComputedMember, ClassComputedMemberKind, ClassField, Decorator, Enum, EnumMember,
+    EnumValue, Export, Function, Global, Import, ImportSpecifier, Interface, InterfaceMethod,
+    InterfaceProperty, Param, TypeAlias,
 };
 
 // ---- stmt.rs ----

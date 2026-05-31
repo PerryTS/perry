@@ -189,6 +189,16 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         VOID,
         &[I32, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_register_class_computed_method",
+        VOID,
+        &[I64, DOUBLE, I64, I64, I64, I64],
+    );
+    module.declare_function(
+        "js_register_class_computed_accessor",
+        VOID,
+        &[I64, DOUBLE, I64, I64, I64],
+    );
     // v0.5.747: register a string-named static field on a class so reads
     // via the runtime dynamic-dispatch path (when the class ref is in an
     // Any-typed local) find the value. Refs #420 / #618 followup.
@@ -223,6 +233,24 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_object_set_symbol_property",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_to_property_key", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_object_set_property_key",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_object_get_property_key", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_object_set_property_key_method",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_object_super_get", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_object_super_call",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, PTR, I64],
     );
     module.declare_function(
         "js_object_literal_infer_computed_function_name",

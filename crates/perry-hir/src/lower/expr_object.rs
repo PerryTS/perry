@@ -76,13 +76,9 @@ fn resolve_keyvalue_key(ctx: &mut LoweringContext, key: &ast::PropName) -> KeyRe
                         }
                     }
                 }
-                ast::Expr::Lit(ast::Lit::Str(s)) => {
-                    KeyResolution::Static(s.value.as_str().unwrap_or("").to_string())
-                }
-                ast::Expr::Lit(ast::Lit::Num(n)) => KeyResolution::Static(n.value.to_string()),
-                // Identifier or any other expression — lower it and defer to
-                // post-init IndexSet so symbol-typed locals like `[symProp]`
-                // flow through the IndexSet symbol dispatch path.
+                // Even literal computed keys must flow through ToPropertyKey:
+                // `[1e55]` is `"1e+55"` in JS, not Rust's default decimal
+                // spelling, and symbols must survive without stringification.
                 _ => match lower_expr(ctx, computed.expr.as_ref()) {
                     Ok(e) => KeyResolution::Dynamic(e),
                     Err(_) => KeyResolution::Skip,
@@ -546,7 +542,26 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 if matches!(prop.as_ref(), ast::Prop::Getter(_) | ast::Prop::Setter(_))
         )
     });
-    if has_spread || has_accessor {
+    let has_computed = obj.props.iter().any(|p| {
+        matches!(
+            p,
+            ast::PropOrSpread::Prop(prop)
+                if match prop.as_ref() {
+                    ast::Prop::KeyValue(kv) => matches!(kv.key, ast::PropName::Computed(_)),
+                    ast::Prop::Method(m) => matches!(m.key, ast::PropName::Computed(_)),
+                    ast::Prop::Getter(g) => matches!(g.key, ast::PropName::Computed(_)),
+                    ast::Prop::Setter(s) => matches!(s.key, ast::PropName::Computed(_)),
+                    _ => false,
+                }
+        )
+    });
+    let has_method = obj.props.iter().any(|p| {
+        matches!(
+            p,
+            ast::PropOrSpread::Prop(prop) if matches!(prop.as_ref(), ast::Prop::Method(_))
+        )
+    });
+    if has_spread || has_accessor || has_computed || has_method {
         // #809: an object literal that mixes a `...spread` with computed
         // keys, methods, and `this`-binding methods. The old code lowered
         // this to `Expr::ObjectSpread { parts }`, whose `parts` list can
@@ -595,9 +610,21 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             Assign { src: Expr },
         }
 
-        // Pass 1: lower every entry's value (BEFORE the IIFE scope exists,
-        // mirroring the computed-key path which lowers method bodies
-        // outside the wrapper scope).
+        let iife_func_id = ctx.fresh_func();
+        let scope_mark = ctx.enter_scope();
+        let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
+        let param = Param {
+            id: param_id,
+            name: "__perry_obj_iife".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+        };
+
+        // Pass 1: lower every entry's value while the IIFE parameter is in
+        // scope. Object-literal `super` in a method body captures this hidden
+        // home object; the method call's dynamic `this` remains separate.
         let mut ops: Vec<SpreadOp> = Vec::new();
         for prop in &obj.props {
             match prop {
@@ -645,8 +672,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         });
                     }
                     ast::Prop::Method(method) => {
-                        let Some((mkey, value_expr, uses_this)) = lower_method_prop(ctx, method)?
-                        else {
+                        ctx.object_super_home_stack.push(param_id);
+                        let lowered_method = lower_method_prop(ctx, method);
+                        ctx.object_super_home_stack.pop();
+                        let Some((mkey, value_expr, uses_this)) = lowered_method? else {
                             continue;
                         };
                         match mkey {
@@ -683,9 +712,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     // Object-literal getters/setters (#2442): lower to a
                     // `js_object_define_accessor` op at this source position.
                     ast::Prop::Getter(getter) => {
-                        if let Some((gkey, closure)) =
-                            lower_accessor_prop(ctx, &getter.key, None, getter.body.as_ref())?
-                        {
+                        ctx.object_super_home_stack.push(param_id);
+                        let lowered_getter =
+                            lower_accessor_prop(ctx, &getter.key, None, getter.body.as_ref());
+                        ctx.object_super_home_stack.pop();
+                        if let Some((gkey, closure)) = lowered_getter? {
                             ops.push(SpreadOp::DefineAccessor {
                                 key: accessor_key_expr(gkey),
                                 getter: closure,
@@ -694,12 +725,15 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         }
                     }
                     ast::Prop::Setter(setter) => {
-                        if let Some((skey, closure)) = lower_accessor_prop(
+                        ctx.object_super_home_stack.push(param_id);
+                        let lowered_setter = lower_accessor_prop(
                             ctx,
                             &setter.key,
                             Some(setter.param.as_ref()),
                             setter.body.as_ref(),
-                        )? {
+                        );
+                        ctx.object_super_home_stack.pop();
+                        if let Some((skey, closure)) = lowered_setter? {
                             ops.push(SpreadOp::DefineAccessor {
                                 key: accessor_key_expr(skey),
                                 getter: Expr::Undefined,
@@ -714,17 +748,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
 
         // Pass 2: build the IIFE wrapper. `__o` starts as an empty object
         // and each op mutates it in source order.
-        let iife_func_id = ctx.fresh_func();
-        let scope_mark = ctx.enter_scope();
-        let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
-        let param = Param {
-            id: param_id,
-            name: "__perry_obj_iife".to_string(),
-            ty: Type::Any,
-            default: None,
-            decorators: Vec::new(),
-            is_rest: false,
-        };
         let extern_call = |name: &str, args: Vec<Expr>| Expr::Call {
             callee: Box::new(Expr::ExternFuncRef {
                 name: name.to_string(),
@@ -752,7 +775,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             name: key_name,
                             ty: Type::Any,
                             mutable: false,
-                            init: Some(key),
+                            init: Some(extern_call("js_to_property_key", vec![key])),
                         });
                         let value_name = format!("__perry_obj_iife_value_{}", body.len());
                         let value_id = ctx.define_local(value_name.clone(), Type::Any);
@@ -764,11 +787,14 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             mutable: false,
                             init: Some(value),
                         });
-                        body.push(Stmt::Expr(Expr::IndexSet {
-                            object: Box::new(Expr::LocalGet(param_id)),
-                            index: Box::new(Expr::LocalGet(key_id)),
-                            value: Box::new(Expr::LocalGet(value_id)),
-                        }));
+                        body.push(Stmt::Expr(extern_call(
+                            "js_object_set_property_key",
+                            vec![
+                                Expr::LocalGet(param_id),
+                                Expr::LocalGet(key_id),
+                                Expr::LocalGet(value_id),
+                            ],
+                        )));
                         body.push(Stmt::Expr(extern_call(
                             "js_object_literal_infer_computed_function_name",
                             vec![Expr::LocalGet(key_id), Expr::LocalGet(value_id)],
@@ -789,7 +815,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 }
                 SpreadOp::SymbolMethod { key, closure } => {
                     body.push(Stmt::Expr(extern_call(
-                        "js_object_set_symbol_method",
+                        "js_object_set_property_key_method",
                         vec![Expr::LocalGet(param_id), key, closure],
                     )));
                 }

@@ -67,12 +67,102 @@ pub unsafe extern "C" fn js_native_call_method_value(
     args_len: usize,
 ) -> f64 {
     let key_jsval = JSValue::from_bits(key.to_bits());
+    let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
+
+    if is_symbol_key {
+        let sym_key = crate::symbol::sym_key_from_f64(key);
+        if sym_key != 0 {
+            let bits = object.to_bits();
+            let top16 = bits >> 48;
+            if top16 == 0x7FFE {
+                let class_id = (bits & 0xFFFF_FFFF) as u32;
+                let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
+                if is_prototype_ref {
+                    if let Some((func_ptr, param_count, _has_rest)) =
+                        lookup_class_symbol_method_in_chain(class_id, sym_key, false)
+                    {
+                        return call_vtable_method(
+                            func_ptr,
+                            object.to_bits() as i64,
+                            args_ptr,
+                            args_len,
+                            param_count,
+                        );
+                    }
+                } else {
+                    if let Some((func_ptr, param_count, has_rest)) =
+                        lookup_class_symbol_method_in_chain(class_id, sym_key, true)
+                    {
+                        let prev_this = crate::object::js_implicit_this_set(object);
+                        let result = call_registered_static_method(
+                            func_ptr,
+                            args_ptr,
+                            args_len,
+                            param_count,
+                            has_rest,
+                        );
+                        crate::object::js_implicit_this_set(prev_this);
+                        return result;
+                    }
+                }
+            } else if is_class_object_value(object) {
+                let obj = JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+                let class_id = js_object_get_class_id(obj);
+                if let Some((func_ptr, param_count, has_rest)) =
+                    lookup_class_symbol_method_in_chain(class_id, sym_key, true)
+                {
+                    let prev_this = crate::object::js_implicit_this_set(object);
+                    let result = call_registered_static_method(
+                        func_ptr,
+                        args_ptr,
+                        args_len,
+                        param_count,
+                        has_rest,
+                    );
+                    crate::object::js_implicit_this_set(prev_this);
+                    return result;
+                }
+            } else if key_jsval.is_pointer() || JSValue::from_bits(bits).is_pointer() {
+                let obj_val = JSValue::from_bits(bits);
+                if obj_val.is_pointer() {
+                    let obj = obj_val.as_pointer::<ObjectHeader>();
+                    if !obj.is_null() && is_valid_obj_ptr(obj as *const u8) {
+                        let class_id = js_object_get_class_id(obj);
+                        if class_id != 0 {
+                            if let Some((func_ptr, param_count, _has_rest)) =
+                                lookup_class_symbol_method_in_chain(class_id, sym_key, false)
+                            {
+                                let this_i64 = obj as i64;
+                                return call_vtable_method(
+                                    func_ptr,
+                                    this_i64,
+                                    args_ptr,
+                                    args_len,
+                                    param_count,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let property_key = if is_symbol_key {
+        key
+    } else {
+        crate::object::js_to_property_key(key)
+    };
+    if !is_symbol_key && crate::symbol::js_is_symbol(property_key) != 0 {
+        return js_native_call_method_value(object, property_key, args_ptr, args_len);
+    }
 
     // String key (incl. SSO short strings): forward to the dispatch tower,
     // which both finds own-field closures and binds `this`.
-    if key_jsval.is_any_string() {
+    let property_key_jsval = JSValue::from_bits(property_key.to_bits());
+    if property_key_jsval.is_any_string() {
         let str_ptr =
-            crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+            crate::value::js_get_string_pointer_unified(property_key) as *const crate::StringHeader;
         if !str_ptr.is_null() {
             let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
             let bytes_len = (*str_ptr).byte_len as usize;
@@ -83,11 +173,10 @@ pub unsafe extern "C" fn js_native_call_method_value(
     // Non-string key: read the property value, then invoke it with `this`
     // bound to the receiver (the codegen `Expr::This` fallback reads
     // `IMPLICIT_THIS` when there's no lexical `this`).
-    let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
     let field = if is_symbol_key {
         crate::symbol::js_object_get_symbol_property(object, key)
     } else {
-        crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, key)
+        crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, property_key)
     };
     let fv = JSValue::from_bits(field.to_bits());
     if fv.is_undefined() || fv.is_null() {
@@ -600,6 +689,34 @@ pub unsafe extern "C" fn js_native_call_method(
     }
 
     let jsval = JSValue::from_bits(object.to_bits());
+    if (object.to_bits() >> 48) == 0x7FFE {
+        let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
+        if crate::object::class_prototype_ref_id(object).is_some() {
+            if let Some((func_ptr, param_count)) =
+                crate::object::class_registry::lookup_class_method_in_chain(class_id, method_name)
+            {
+                return crate::object::class_registry::call_vtable_method(
+                    func_ptr,
+                    object.to_bits() as i64,
+                    args_ptr,
+                    args_len,
+                    param_count,
+                );
+            }
+        } else if class_id != 0
+            && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
+                .is_some()
+        {
+            let args = refreshed_args();
+            return crate::object::class_registry::js_class_static_method_call(
+                object_handle.get_nanbox_f64(),
+                method_name_ptr as *const u8,
+                method_name_len,
+                args.as_ptr(),
+                args.len(),
+            );
+        }
+    }
 
     // #1758 / epic #1785: a class-object VALUE reaching the *dynamic*
     // dispatcher is a STATIC method call. This happens when the static
