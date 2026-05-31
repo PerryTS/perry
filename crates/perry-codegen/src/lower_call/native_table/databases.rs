@@ -717,4 +717,90 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_VOID,
     },
+    // ========== node:sqlite (#3183/#3184) ==========
+    // DatabaseSync / StatementSync reuse the same rusqlite-backed
+    // runtime as better-sqlite3 (the handle registry, parameter
+    // packing, and result conversion are identical). Only the module
+    // tag differs so the import gate + dispatch resolve `node:sqlite`'s
+    // distinct object names. `DatabaseSync` constructor itself lowers in
+    // `lower_builtin_new` (js_sqlite_open); the entries below are the
+    // instance/statement methods.
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "prepare",
+        class_filter: None,
+        runtime: "js_sqlite_prepare",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "exec",
+        class_filter: None,
+        runtime: "js_sqlite_exec",
+        args: &[NA_STR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "close",
+        class_filter: None,
+        runtime: "js_sqlite_close",
+        args: &[],
+        ret: NR_VOID,
+    },
+    // StatementSync methods. `run` returns `{ changes, lastInsertRowid }`,
+    // `get` a single row object (or undefined), `all` an array of row
+    // objects — matching Node's node:sqlite result shapes.
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "run",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_run",
+        args: &[NA_VARARGS],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "get",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_get",
+        args: &[NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "all",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_all",
+        args: &[NA_VARARGS],
+        ret: NR_PTR,
+    },
+    // `stmt.iterate(...)` returns an array Perry can `for...of`; backed
+    // by the same query path as `all`. `stmt.columns()` returns the
+    // column-metadata array. (#3184)
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "iterate",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_all",
+        args: &[NA_VARARGS],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sqlite",
+        has_receiver: true,
+        method: "columns",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_columns",
+        args: &[],
+        ret: NR_PTR,
+    },
 ];

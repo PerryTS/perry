@@ -824,6 +824,9 @@ pub(crate) fn lower_module_decl(
                                                             ("better-sqlite3", "prepare") => {
                                                                 Some("Statement")
                                                             }
+                                                            ("sqlite", "prepare") => {
+                                                                Some("StatementSync")
+                                                            }
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = returns_handle {

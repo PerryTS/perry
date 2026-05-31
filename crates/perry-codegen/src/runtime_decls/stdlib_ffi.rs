@@ -707,6 +707,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_sqlite_pragma", I64, &[I64, I64, I64]);
     module.declare_function("js_sqlite_prepare", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_all", I64, &[I64, I64]);
+    module.declare_function("js_sqlite_stmt_columns", I64, &[I64]);
     module.declare_function("js_sqlite_stmt_get", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_run", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
