@@ -285,9 +285,92 @@ pub(super) fn pipeline_single_chunk(value: f64) -> f64 {
     box_pointer(arr as *const u8)
 }
 
-pub(super) fn settle_pipeline_value(value: f64) -> Result<f64, f64> {
+#[derive(Clone, Copy)]
+pub(super) struct PipelineSettledValue {
+    pub(super) value: f64,
+    pub(super) fulfilled_promise: bool,
+}
+
+pub(super) fn settle_pipeline_value_with_origin(value: f64) -> Result<PipelineSettledValue, f64> {
     let value = crate::promise::adapt_foreign_promise_value(value);
-    settle_result(value)
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return Ok(PipelineSettledValue {
+            value,
+            fulfilled_promise: false,
+        });
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    for _ in 0..10_000 {
+        let current = value_handle.get_nanbox_f64();
+        if crate::promise::js_value_is_promise(current) == 0 {
+            return Ok(PipelineSettledValue {
+                value: current,
+                fulfilled_promise: true,
+            });
+        }
+        let promise = crate::value::js_nanbox_get_pointer(current) as *mut crate::promise::Promise;
+        if promise.is_null() {
+            return Ok(PipelineSettledValue {
+                value: current,
+                fulfilled_promise: false,
+            });
+        }
+        unsafe {
+            match (*promise).state {
+                crate::promise::PromiseState::Fulfilled => {
+                    return Ok(PipelineSettledValue {
+                        value: (*promise).value,
+                        fulfilled_promise: true,
+                    })
+                }
+                crate::promise::PromiseState::Rejected => return Err((*promise).reason),
+                crate::promise::PromiseState::Pending => {}
+            }
+        }
+
+        crate::event_pump::perry_poll();
+        let _ = crate::timer::js_timer_tick();
+        let _ = crate::timer::js_callback_timer_tick();
+        let _ = crate::timer::js_interval_timer_tick();
+        if crate::event_pump::perry_has_work() == 0 {
+            break;
+        }
+        crate::event_pump::js_wait_for_event();
+    }
+
+    let current = value_handle.get_nanbox_f64();
+    if crate::promise::js_value_is_promise(current) == 0 {
+        return Ok(PipelineSettledValue {
+            value: current,
+            fulfilled_promise: true,
+        });
+    }
+    let promise = crate::value::js_nanbox_get_pointer(current) as *mut crate::promise::Promise;
+    if promise.is_null() {
+        return Ok(PipelineSettledValue {
+            value: current,
+            fulfilled_promise: false,
+        });
+    }
+    unsafe {
+        match (*promise).state {
+            crate::promise::PromiseState::Fulfilled => Ok(PipelineSettledValue {
+                value: (*promise).value,
+                fulfilled_promise: true,
+            }),
+            crate::promise::PromiseState::Rejected => Err((*promise).reason),
+            crate::promise::PromiseState::Pending => Ok(PipelineSettledValue {
+                value,
+                fulfilled_promise: false,
+            }),
+        }
+    }
+}
+
+pub(super) fn settle_pipeline_value(value: f64) -> Result<f64, f64> {
+    settle_pipeline_value_with_origin(value).map(|settled| settled.value)
 }
 
 pub(super) fn catch_pipeline_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
@@ -415,12 +498,15 @@ pub(super) fn collect_pipeline_iterator_chunks(iterable: f64) -> Result<Option<f
     Ok(Some(box_pointer(out as *const u8)))
 }
 
-pub(super) fn call_pipeline_function_stage(stage: f64, source: f64) -> Result<f64, f64> {
+pub(super) fn call_pipeline_function_stage(
+    stage: f64,
+    source: f64,
+) -> Result<PipelineSettledValue, f64> {
     let args = [source];
     let result = catch_pipeline_throw(|| unsafe {
         crate::closure::js_native_call_value(stage, args.as_ptr(), args.len())
     })?;
-    settle_pipeline_value(result)
+    settle_pipeline_value_with_origin(result)
 }
 
 pub(super) fn write_pipeline_chunks_to_stream(
@@ -475,6 +561,16 @@ pub(super) fn complete_collected_pipeline(callback: f64, value: f64) {
     }
 }
 
+pub(super) fn complete_collected_pipeline_with_value(callback: f64, value: f64) {
+    if is_callable_value(callback) {
+        call_listener_args(
+            f64::from_bits(TAG_UNDEFINED),
+            callback,
+            &[f64::from_bits(TAG_UNDEFINED), value],
+        );
+    }
+}
+
 pub(super) fn run_collected_pipeline(
     stages: &[f64],
     callback: f64,
@@ -483,10 +579,14 @@ pub(super) fn run_collected_pipeline(
     let last = *stages.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED));
     let first = stages[0];
     let mut chunks = if is_callable_value(first) {
-        match call_pipeline_function_stage(first, f64::from_bits(TAG_UNDEFINED))
-            .and_then(collect_pipeline_chunks)
-        {
-            Ok(chunks) => chunks,
+        match call_pipeline_function_stage(first, f64::from_bits(TAG_UNDEFINED)) {
+            Ok(result) => match collect_pipeline_chunks(result.value) {
+                Ok(chunks) => chunks,
+                Err(err) => {
+                    fail_collected_pipeline(stages, callback, err);
+                    return last;
+                }
+            },
             Err(err) => {
                 fail_collected_pipeline(stages, callback, err);
                 return last;
@@ -508,18 +608,22 @@ pub(super) fn run_collected_pipeline(
         if is_callable_value(stage) {
             match call_pipeline_function_stage(stage, chunks) {
                 Ok(result) if is_last => {
-                    if pipeline_stage_has_next(result) {
-                        if let Err(err) = collect_pipeline_chunks(result) {
+                    if result.fulfilled_promise {
+                        complete_collected_pipeline_with_value(callback, result.value);
+                        return last;
+                    }
+                    if pipeline_stage_has_next(result.value) {
+                        if let Err(err) = collect_pipeline_chunks(result.value) {
                             fail_collected_pipeline(stages, callback, err);
                             return last;
                         }
                         complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
                     } else {
-                        complete_collected_pipeline(callback, result);
+                        complete_collected_pipeline(callback, result.value);
                     }
                     return last;
                 }
-                Ok(result) => match collect_pipeline_chunks(result) {
+                Ok(result) => match collect_pipeline_chunks(result.value) {
                     Ok(next_chunks) => chunks = next_chunks,
                     Err(err) => {
                         fail_collected_pipeline(stages, callback, err);
@@ -733,7 +837,8 @@ fn compose_process_stream_stage(stage: f64, chunks: f64, end_stage: bool) -> Res
 }
 
 fn compose_process_callable_stage(stage: f64, chunks: f64) -> Result<f64, f64> {
-    call_pipeline_function_stage(stage, chunks).and_then(collect_pipeline_chunks)
+    call_pipeline_function_stage(stage, chunks)
+        .and_then(|result| collect_pipeline_chunks(result.value))
 }
 
 fn compose_process_stages(stages: &[f64], input: f64, end_stages: bool) -> Result<f64, f64> {

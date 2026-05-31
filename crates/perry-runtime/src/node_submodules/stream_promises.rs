@@ -19,7 +19,7 @@ use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
 use crate::string::js_string_from_bytes;
-use crate::value::JSValue;
+use crate::value::{JSValue, TAG_FALSE, TAG_TRUE};
 use std::os::raw::c_int;
 
 #[inline]
@@ -112,6 +112,10 @@ pub(crate) fn options_signal(options: f64) -> Option<f64> {
         return None;
     }
     get_object_property(options, b"signal")
+}
+
+fn option_is_false(options: f64, name: &[u8]) -> bool {
+    get_object_property(options, name).is_some_and(|value| value.to_bits() == TAG_FALSE)
 }
 
 pub(crate) fn signal_aborted(signal: f64) -> bool {
@@ -522,6 +526,12 @@ fn direct_stream_promises_pipeline(source: f64, destination: f64, options: f64) 
     }
 }
 
+fn validate_pipeline_promise_args(source: f64, destination: f64) -> Option<f64> {
+    validate_stream_promises_pipeline_args(source, destination, &[])
+        .err()
+        .map(promise_rejected)
+}
+
 extern "C" fn stream_promises_pipeline_callback(
     closure: *const ClosureHeader,
     err: f64,
@@ -563,6 +573,10 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     destination: f64,
     options_or_rest: f64,
 ) -> f64 {
+    if let Some(rejection) = validate_pipeline_promise_args(source, destination) {
+        return rejection;
+    }
+
     let rest_values = match array_values(options_or_rest) {
         Some(values) => values,
         None => return direct_stream_promises_pipeline(source, destination, options_or_rest),

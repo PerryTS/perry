@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2196 entries across 99 modules.
+Total: 2229 entries across 99 modules.
 
 ## Modules
 
@@ -525,10 +525,17 @@ Total: 2196 entries across 99 modules.
 - `OPENSSL_VERSION_NUMBER`
 - `O_APPEND`
 - `O_CREAT`
+- `O_DIRECT`
+- `O_DIRECTORY`
+- `O_DSYNC`
 - `O_EXCL`
+- `O_NOATIME`
+- `O_NOCTTY`
 - `O_NOFOLLOW`
+- `O_NONBLOCK`
 - `O_RDONLY`
 - `O_RDWR`
+- `O_SYNC`
 - `O_TRUNC`
 - `O_WRONLY`
 - `POINT_CONVERSION_COMPRESSED`
@@ -607,9 +614,20 @@ Total: 2196 entries across 99 modules.
 - `SSL_OP_NO_TLSv1_3`
 - `SSL_OP_PRIORITIZE_CHACHA`
 - `SSL_OP_TLS_ROLLBACK_BUG`
+- `S_IFBLK`
+- `S_IFCHR`
+- `S_IFDIR`
+- `S_IFIFO`
+- `S_IFLNK`
+- `S_IFMT`
+- `S_IFREG`
+- `S_IFSOCK`
 - `S_IRGRP`
 - `S_IROTH`
 - `S_IRUSR`
+- `S_IRWXG`
+- `S_IRWXO`
+- `S_IRWXU`
 - `S_IWGRP`
 - `S_IWOTH`
 - `S_IWUSR`
@@ -620,8 +638,23 @@ Total: 2196 entries across 99 modules.
 - `TLS1_2_VERSION`
 - `TLS1_3_VERSION`
 - `TLS1_VERSION`
+- `UV_DIRENT_BLOCK`
+- `UV_DIRENT_CHAR`
+- `UV_DIRENT_DIR`
+- `UV_DIRENT_FIFO`
+- `UV_DIRENT_FILE`
+- `UV_DIRENT_LINK`
+- `UV_DIRENT_SOCKET`
+- `UV_DIRENT_UNKNOWN`
+- `UV_FS_COPYFILE_EXCL`
+- `UV_FS_COPYFILE_FICLONE`
+- `UV_FS_COPYFILE_FICLONE_FORCE`
+- `UV_FS_O_FILEMAP`
+- `UV_FS_SYMLINK_DIR`
+- `UV_FS_SYMLINK_JUNCTION`
 - `W_OK`
 - `X_OK`
+- `defaultCoreCipherList`
 
 ## `cron`
 

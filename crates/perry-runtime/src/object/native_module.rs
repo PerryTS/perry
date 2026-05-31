@@ -549,6 +549,7 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"UV_DIRENT_BLOCK",
     b"UV_FS_SYMLINK_DIR",
     b"UV_FS_SYMLINK_JUNCTION",
+    b"UV_FS_O_FILEMAP",
     b"UV_FS_COPYFILE_EXCL",
     b"UV_FS_COPYFILE_FICLONE",
     b"UV_FS_COPYFILE_FICLONE_FORCE",
@@ -560,6 +561,9 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"S_IFIFO",
     b"S_IFLNK",
     b"S_IFSOCK",
+    b"S_IRWXU",
+    b"S_IRWXG",
+    b"S_IRWXO",
     b"O_DIRECTORY",
     b"O_NOCTTY",
     b"O_NONBLOCK",
@@ -568,6 +572,35 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"O_SYMLINK",
     b"defaultCoreCipherList",
 ];
+
+// Linux-only open() flags: Node only enumerates these on platforms whose libc
+// defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
+// enumerable-key tail by target so `Object.keys(constants)` matches Node here.
+#[cfg(target_os = "linux")]
+fn deprecated_constants_keys() -> &'static [&'static [u8]] {
+    use std::sync::OnceLock;
+    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+    MERGED
+        .get_or_init(|| {
+            // Insert the Linux-only flags just before the trailing
+            // `defaultCoreCipherList` metadata entry, matching Node's order.
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 2);
+            for &k in DEPRECATED_CONSTANTS_KEYS {
+                if k == b"defaultCoreCipherList" {
+                    v.push(b"O_DIRECT");
+                    v.push(b"O_NOATIME");
+                }
+                v.push(k);
+            }
+            v
+        })
+        .as_slice()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn deprecated_constants_keys() -> &'static [&'static [u8]] {
+    DEPRECATED_CONSTANTS_KEYS
+}
 
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
@@ -599,7 +632,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
         "path" | "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
-        "constants" => Some(DEPRECATED_CONSTANTS_KEYS),
+        "constants" => Some(deprecated_constants_keys()),
         "querystring" => Some(&[
             b"unescapeBuffer",
             b"unescape",
@@ -2369,6 +2402,15 @@ pub(crate) unsafe fn get_native_module_constant(
             "UV_FS_COPYFILE_EXCL" => Some(1),
             "UV_FS_COPYFILE_FICLONE" => Some(2),
             "UV_FS_COPYFILE_FICLONE_FORCE" => Some(4),
+            // libuv filemap open flag (Windows-only; 0 elsewhere, matching Node).
+            #[cfg(windows)]
+            "UV_FS_O_FILEMAP" => Some(0x2000_0000),
+            #[cfg(not(windows))]
+            "UV_FS_O_FILEMAP" => Some(0),
+            // POSIX combined rwx permission masks (stable across platforms).
+            "S_IRWXU" => Some(0o700),
+            "S_IRWXG" => Some(0o070),
+            "S_IRWXO" => Some(0o007),
             // POSIX file-type masks (S_IFMT family) — stable across Linux/macOS.
             #[cfg(unix)]
             "S_IFMT" => Some(libc::S_IFMT as i64),
@@ -2417,6 +2459,12 @@ pub(crate) unsafe fn get_native_module_constant(
             "O_DSYNC" => Some(libc::O_DSYNC as i64),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             "O_SYMLINK" => Some(0x200000),
+            // Linux-only open() flags (Node returns undefined for these on
+            // platforms that lack them).
+            #[cfg(target_os = "linux")]
+            "O_DIRECT" => Some(libc::O_DIRECT as i64),
+            #[cfg(target_os = "linux")]
+            "O_NOATIME" => Some(libc::O_NOATIME as i64),
             #[cfg(not(unix))]
             "O_DIRECTORY" => Some(0x10000),
             #[cfg(not(unix))]
