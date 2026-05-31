@@ -216,7 +216,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// or malloc memory. These are read from the source thread's memory and stored
 /// as owned Rust data (`Vec<u8>`, `Vec<SerializedValue>`, etc.).
 #[derive(Debug)]
-pub(crate) enum SerializedValue {
+pub enum SerializedValue {
     /// A raw 64-bit value that needs no pointer fixup.
     /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
     Inline(u64),
@@ -278,7 +278,7 @@ unsafe impl Sync for SerializedValue {}
 /// # Safety
 /// The `bits` must be a valid NaN-boxed JSValue. Pointer-tagged values must
 /// point to valid, live objects in the current thread's arena or malloc heap.
-pub(crate) unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
+pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
     let tag = bits & TAG_MASK;
 
     // Fast path: values that are just bit patterns (no pointers)
@@ -509,7 +509,7 @@ pub(crate) unsafe fn test_store_thread_object_field(
 ///
 /// # Returns
 /// The raw u64 bits of the NaN-boxed JSValue.
-pub(crate) unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
+pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
     match sv {
         SerializedValue::Inline(bits) => *bits,
 

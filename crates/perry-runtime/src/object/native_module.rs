@@ -9,6 +9,8 @@
 
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
@@ -114,6 +116,32 @@ const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
+
+type WorkerThreadsValueGetter = extern "C" fn() -> f64;
+
+static WORKER_THREADS_WORKER_DATA_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_IS_MAIN_THREAD_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_PARENT_PORT_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_worker_threads_namespace_getters(
+    worker_data: WorkerThreadsValueGetter,
+    is_main_thread: WorkerThreadsValueGetter,
+    parent_port: WorkerThreadsValueGetter,
+) {
+    WORKER_THREADS_WORKER_DATA_GETTER.store(worker_data as *mut (), Ordering::Release);
+    WORKER_THREADS_IS_MAIN_THREAD_GETTER.store(is_main_thread as *mut (), Ordering::Release);
+    WORKER_THREADS_PARENT_PORT_GETTER.store(parent_port as *mut (), Ordering::Release);
+}
+
+fn call_worker_threads_getter(slot: &AtomicPtr<()>, fallback: impl FnOnce() -> f64) -> f64 {
+    let ptr = slot.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return fallback();
+    }
+    let getter: WorkerThreadsValueGetter = unsafe { std::mem::transmute(ptr) };
+    getter()
+}
 
 pub(crate) fn buffer_pool_size() -> f64 {
     f64::from_bits(BUFFER_POOL_SIZE_BITS.load(std::sync::atomic::Ordering::Relaxed))
@@ -5120,9 +5148,9 @@ pub(crate) unsafe fn get_native_module_constant(
             )),
             _ => None,
         },
-        // node:worker_threads value-shaped exports. Perry doesn't spawn JS
-        // workers, so the main thread is the only thread — `isMainThread`
-        // is always true, `threadId` is 0, `resourceLimits` is empty.
+        // node:worker_threads value-shaped exports. `workerData` and
+        // `parentPort` are dynamic for compiled Worker modules, so the
+        // namespace object must agree with the named-import getter lowering.
         // Pre-fix `const { isMainThread } = require('worker_threads')` read
         // `undefined`, which made the `if (!isMainThread) common.skip(...)`
         // guard Node uses in main-thread-only tests fire under Perry, so
@@ -5144,9 +5172,19 @@ pub(crate) unsafe fn get_native_module_constant(
                     ))
                 }
             }
-            "isMainThread" => Some(f64::from_bits(JSValue::bool(true).bits())),
+            "isMainThread" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_IS_MAIN_THREAD_GETTER,
+                || f64::from_bits(JSValue::bool(true).bits()),
+            )),
             "isInternalThread" => Some(f64::from_bits(JSValue::bool(false).bits())),
-            "parentPort" | "workerData" => Some(f64::from_bits(crate::value::TAG_NULL)),
+            "parentPort" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_PARENT_PORT_GETTER,
+                || f64::from_bits(crate::value::TAG_NULL),
+            )),
+            "workerData" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_WORKER_DATA_GETTER,
+                || f64::from_bits(crate::value::TAG_NULL),
+            )),
             "threadId" => Some(0.0),
             "threadName" => Some(str_val("")),
             "resourceLimits" => {

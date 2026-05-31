@@ -831,19 +831,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // the `.prototype` chained read on the locally-bound
                 // alias to throw `Cannot read properties of undefined`.
                 if is_global_this_builtin_name(property) {
-                    let global_box = ctx.block().call(DOUBLE, "js_get_global_this", &[]);
                     let key_idx = ctx.strings.intern(property);
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let blk = ctx.block();
-                    let obj_handle = unbox_to_i64(blk, &global_box);
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                    return Ok(blk.call(
+                    let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
+                    let key_len = property.len().to_string();
+                    return Ok(ctx.block().call(
                         DOUBLE,
-                        "js_object_get_field_by_name_f64",
-                        &[(I64, &obj_handle), (I64, &key_raw)],
+                        "js_get_global_this_builtin_value",
+                        &[(PTR, &key_bytes_global), (I64, &key_len)],
                     ));
                 }
                 return Ok(double_literal(0.0));

@@ -73,6 +73,51 @@ pub fn for_each_dynamic_import_mut<F: FnMut(&mut Expr)>(module: &mut Module, f: 
     }
 }
 
+/// Walk every expression in `module` and invoke `f` with each
+/// `&mut Expr::WorkerNew` node found. Worker filenames use the same
+/// deterministic resolver as dynamic `import()`, but they lower to a
+/// different runtime shape at codegen.
+pub fn for_each_worker_new_mut<F: FnMut(&mut Expr)>(module: &mut Module, f: &mut F) {
+    for stmt in &mut module.init {
+        visit_stmt_for_worker_new(stmt, f);
+    }
+    for func in &mut module.functions {
+        visit_function_for_worker_new(func, f);
+    }
+    for cls in &mut module.classes {
+        if let Some(ctor) = &mut cls.constructor {
+            visit_function_for_worker_new(ctor, f);
+        }
+        for m in &mut cls.methods {
+            visit_function_for_worker_new(m, f);
+        }
+        for (_, g) in &mut cls.getters {
+            visit_function_for_worker_new(g, f);
+        }
+        for (_, s) in &mut cls.setters {
+            visit_function_for_worker_new(s, f);
+        }
+        for m in &mut cls.static_methods {
+            visit_function_for_worker_new(m, f);
+        }
+        for field in &mut cls.fields {
+            if let Some(init) = &mut field.init {
+                visit_expr_for_worker_new(init, f);
+            }
+        }
+        for field in &mut cls.static_fields {
+            if let Some(init) = &mut field.init {
+                visit_expr_for_worker_new(init, f);
+            }
+        }
+    }
+    for global in &mut module.globals {
+        if let Some(init) = &mut global.init {
+            visit_expr_for_worker_new(init, f);
+        }
+    }
+}
+
 fn visit_function_for_dyn_imports<F: FnMut(&mut Expr)>(func: &mut Function, f: &mut F) {
     for stmt in &mut func.body {
         visit_stmt_for_dyn_imports(stmt, f);
@@ -204,6 +249,141 @@ fn visit_expr_for_dyn_imports<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
         }
     }
     walk_expr_children_mut(expr, &mut |child| visit_expr_for_dyn_imports(child, f));
+}
+
+fn visit_function_for_worker_new<F: FnMut(&mut Expr)>(func: &mut Function, f: &mut F) {
+    for stmt in &mut func.body {
+        visit_stmt_for_worker_new(stmt, f);
+    }
+    for param in &mut func.params {
+        if let Some(default) = &mut param.default {
+            visit_expr_for_worker_new(default, f);
+        }
+    }
+}
+
+fn visit_stmt_for_worker_new<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                visit_expr_for_worker_new(e, f);
+            }
+        }
+        Stmt::Expr(e) => visit_expr_for_worker_new(e, f),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                visit_expr_for_worker_new(e, f);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            visit_expr_for_worker_new(condition, f);
+            for s in then_branch {
+                visit_stmt_for_worker_new(s, f);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    visit_stmt_for_worker_new(s, f);
+                }
+            }
+        }
+        Stmt::While { condition, body } => {
+            visit_expr_for_worker_new(condition, f);
+            for s in body {
+                visit_stmt_for_worker_new(s, f);
+            }
+        }
+        Stmt::DoWhile { body, condition } => {
+            for s in body {
+                visit_stmt_for_worker_new(s, f);
+            }
+            visit_expr_for_worker_new(condition, f);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                visit_stmt_for_worker_new(i, f);
+            }
+            if let Some(c) = condition {
+                visit_expr_for_worker_new(c, f);
+            }
+            if let Some(u) = update {
+                visit_expr_for_worker_new(u, f);
+            }
+            for s in body {
+                visit_stmt_for_worker_new(s, f);
+            }
+        }
+        Stmt::Labeled { body, .. } => visit_stmt_for_worker_new(body, f),
+        Stmt::Throw(e) => visit_expr_for_worker_new(e, f),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                visit_stmt_for_worker_new(s, f);
+            }
+            if let Some(c) = catch {
+                for s in &mut c.body {
+                    visit_stmt_for_worker_new(s, f);
+                }
+            }
+            if let Some(fb) = finally {
+                for s in fb {
+                    visit_stmt_for_worker_new(s, f);
+                }
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            visit_expr_for_worker_new(discriminant, f);
+            for c in cases {
+                if let Some(t) = &mut c.test {
+                    visit_expr_for_worker_new(t, f);
+                }
+                for s in &mut c.body {
+                    visit_stmt_for_worker_new(s, f);
+                }
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
+}
+
+fn visit_expr_for_worker_new<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
+    if matches!(expr, Expr::WorkerNew { .. }) {
+        f(expr);
+        if let Expr::WorkerNew {
+            filename, options, ..
+        } = expr
+        {
+            visit_expr_for_worker_new(filename, f);
+            if let Some(options) = options {
+                visit_expr_for_worker_new(options, f);
+            }
+        }
+        return;
+    }
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            visit_stmt_for_worker_new(s, f);
+        }
+    }
+    walk_expr_children_mut(expr, &mut |child| visit_expr_for_worker_new(child, f));
 }
 
 /// The result of const-folding a dynamic `import()` path argument.

@@ -11,6 +11,20 @@ use super::*;
 /// Signatures cross-checked against `crates/perry-runtime/src/` and
 /// `crates/perry-stdlib/src/`.
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
+    // ========== worker_threads ==========
+    module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_worker_threads_worker_post_message",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_worker_threads_worker_on", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_once", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_off", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function("js_worker_threads_worker_terminate", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_ref", DOUBLE, &[I64]);
+    module.declare_function("js_worker_threads_worker_unref", DOUBLE, &[I64]);
+
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);

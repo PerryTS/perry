@@ -1883,9 +1883,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectGetMetadataKeys { .. }
         | Expr::ReflectGetOwnMetadataKeys { .. }
         | Expr::ReflectDeleteMetadata { .. } => proxy_reflect::lower(ctx, expr),
-        Expr::DynamicImport { .. } | Expr::ExternFuncRef { .. } | Expr::I18nString { .. } => {
-            dyn_extern_i18n::lower(ctx, expr)
-        }
+        Expr::DynamicImport { .. }
+        | Expr::WorkerNew { .. }
+        | Expr::ExternFuncRef { .. }
+        | Expr::I18nString { .. } => dyn_extern_i18n::lower(ctx, expr),
         Expr::ChildProcessExecSync { .. }
         | Expr::ChildProcessSpawnSync { .. }
         | Expr::ChildProcessSpawnBackground { .. }

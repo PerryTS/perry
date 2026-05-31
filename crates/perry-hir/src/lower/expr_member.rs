@@ -1268,6 +1268,20 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "worker_threads"
+                    && class_name == "Worker"
+                    && is_worker_instance_value_property(&property_name)
+                {
+                    // `Worker` exposes data properties (`threadName`,
+                    // `resourceLimits`) and method-valued properties (`ref`,
+                    // `terminate`, ...). Bare reads must return those object
+                    // fields; only call expressions should dispatch through
+                    // the native method table.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -2366,6 +2380,22 @@ fn is_headers_method_name(prop: &str) -> bool {
             | "keys"
             | "set"
             | "values"
+    )
+}
+
+fn is_worker_instance_value_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "threadId"
+            | "threadName"
+            | "resourceLimits"
+            | "postMessage"
+            | "terminate"
+            | "ref"
+            | "unref"
+            | "on"
+            | "once"
+            | "off"
     )
 }
 

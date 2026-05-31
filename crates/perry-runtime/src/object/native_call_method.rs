@@ -2039,54 +2039,48 @@ pub unsafe extern "C" fn js_native_call_method(
                 if (keys_ptr as u64) >> 48 == 0 && keys_ptr >= 0x10000 {
                     let key_count = crate::array::js_array_length(keys) as usize;
                     if key_count <= 65536 {
-                        let method_key = crate::string::js_string_from_bytes(
-                            method_name.as_ptr(),
-                            method_name.len() as u32,
-                        );
+                        let method_bytes = method_name.as_bytes();
                         for i in 0..key_count {
                             let key_val = crate::array::js_array_get(keys, i as u32);
-                            if key_val.is_string() {
-                                let stored_key = key_val.as_string_ptr();
-                                if crate::string::js_string_equals(method_key, stored_key) != 0 {
-                                    let field_val = js_object_get_field(obj as *mut _, i as u32);
-                                    // Always try the field as a callable —
-                                    // `js_native_call_value` validates
-                                    // CLOSURE_MAGIC internally and safely
-                                    // returns undefined for non-callables.
-                                    // The previous `is_pointer()` gate bailed
-                                    // on raw-pointer-bit values (e.g. the
-                                    // Promise executor's resolve/reject
-                                    // closures — stored as
-                                    // `transmute(ptr → f64)` without a
-                                    // POINTER_TAG). That turned
-                                    // `box.resolve(val)` into a no-op that
-                                    // returned the raw pointer bits instead
-                                    // of invoking `js_promise_resolve`, so
-                                    // the outer `await` hung forever
-                                    // (issue #87).
-                                    //
-                                    // Issue #519: bind `this` to the receiver
-                                    // for the duration of the call. Non-arrow
-                                    // function bodies read `this` from
-                                    // IMPLICIT_THIS (codegen Expr::This
-                                    // fallback when this_stack is empty);
-                                    // without this save/set/restore, the
-                                    // body sees `this = undefined` and any
-                                    // `this.foo()` call falls through to the
-                                    // issue #510 catch-all "(undefined).foo
-                                    // is not a function" TypeError. Hono's
-                                    // RegExpRouter.match (imported function
-                                    // assigned as a class field) hit this.
-                                    let recv_bits = jsval.bits();
-                                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
-                                    let result = crate::closure::js_native_call_value(
-                                        f64::from_bits(field_val.bits()),
-                                        args_ptr,
-                                        args_len,
-                                    );
-                                    IMPLICIT_THIS.with(|c| c.set(prev_this));
-                                    return result;
-                                }
+                            if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
+                                let field_val = js_object_get_field(obj as *mut _, i as u32);
+                                // Always try the field as a callable —
+                                // `js_native_call_value` validates
+                                // CLOSURE_MAGIC internally and safely
+                                // returns undefined for non-callables.
+                                // The previous `is_pointer()` gate bailed
+                                // on raw-pointer-bit values (e.g. the
+                                // Promise executor's resolve/reject
+                                // closures — stored as
+                                // `transmute(ptr → f64)` without a
+                                // POINTER_TAG). That turned
+                                // `box.resolve(val)` into a no-op that
+                                // returned the raw pointer bits instead
+                                // of invoking `js_promise_resolve`, so
+                                // the outer `await` hung forever
+                                // (issue #87).
+                                //
+                                // Issue #519: bind `this` to the receiver
+                                // for the duration of the call. Non-arrow
+                                // function bodies read `this` from
+                                // IMPLICIT_THIS (codegen Expr::This
+                                // fallback when this_stack is empty);
+                                // without this save/set/restore, the
+                                // body sees `this = undefined` and any
+                                // `this.foo()` call falls through to the
+                                // issue #510 catch-all "(undefined).foo
+                                // is not a function" TypeError. Hono's
+                                // RegExpRouter.match (imported function
+                                // assigned as a class field) hit this.
+                                let recv_bits = jsval.bits();
+                                let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                                let result = crate::closure::js_native_call_value(
+                                    f64::from_bits(field_val.bits()),
+                                    args_ptr,
+                                    args_len,
+                                );
+                                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                                return result;
                             }
                         }
                     }
@@ -2495,23 +2489,17 @@ pub unsafe extern "C" fn js_native_call_method(
                 if (keys_ptr as u64) >> 48 == 0 && keys_ptr >= 0x10000 {
                     let key_count = crate::array::js_array_length(keys) as usize;
                     if key_count <= 65536 {
-                        let method_key = crate::string::js_string_from_bytes(
-                            method_name.as_ptr(),
-                            method_name.len() as u32,
-                        );
+                        let method_bytes = method_name.as_bytes();
                         for i in 0..key_count {
                             let key_val = crate::array::js_array_get(keys, i as u32);
-                            if key_val.is_string() {
-                                let stored_key = key_val.as_string_ptr();
-                                if crate::string::js_string_equals(method_key, stored_key) != 0 {
-                                    let field_val = js_object_get_field(obj as *mut _, i as u32);
-                                    if field_val.is_pointer() {
-                                        return crate::closure::js_native_call_value(
-                                            f64::from_bits(field_val.bits()),
-                                            args_ptr,
-                                            args_len,
-                                        );
-                                    }
+                            if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
+                                let field_val = js_object_get_field(obj as *mut _, i as u32);
+                                if field_val.is_pointer() {
+                                    return crate::closure::js_native_call_value(
+                                        f64::from_bits(field_val.bits()),
+                                        args_ptr,
+                                        args_len,
+                                    );
                                 }
                             }
                         }
@@ -3040,43 +3028,28 @@ pub unsafe extern "C" fn js_native_call_method(
             let method_bytes = method_name.as_bytes();
             for i in 0..key_count {
                 let key_val = crate::array::js_array_get(keys, i as u32);
-                if key_val.is_string() {
-                    let stored_key = key_val.as_string_ptr();
-                    let matches = if !crate::string::is_valid_string_ptr(stored_key) {
-                        false
-                    } else {
-                        let blen = (*stored_key).byte_len as usize;
-                        if blen != method_bytes.len() {
-                            false
-                        } else {
-                            let stored_data = crate::string::string_data(stored_key);
-                            let stored = std::slice::from_raw_parts(stored_data, blen);
-                            stored == method_bytes
-                        }
-                    };
-                    if matches {
-                        // Found the method — delegate to `js_native_call_value`
-                        // which handles both NaN-boxed pointers (POINTER_TAG)
-                        // and raw-pointer-bits (e.g. the resolve/reject
-                        // closures from `js_promise_new_with_executor`,
-                        // transmuted `i64 → f64` so their bits live outside
-                        // the NaN range). The earlier `is_pointer()` gate
-                        // bailed on the raw-pointer case: `{ resolve }` on a
-                        // plain object caused `box.resolve(x)` to land here,
-                        // the tag check failed, we fell through to vtable
-                        // lookup, and returned NULL_OBJECT_BYTES without
-                        // invoking `js_promise_resolve` → the awaiter hung
-                        // forever (issue #87). `js_native_call_value`
-                        // validates CLOSURE_MAGIC before calling the func
-                        // pointer, so non-callable field values (numbers,
-                        // strings, booleans) safely return undefined.
-                        let field_val = js_object_get_field(obj as *mut _, i as u32);
-                        return crate::closure::js_native_call_value(
-                            f64::from_bits(field_val.bits()),
-                            args_ptr,
-                            args_len,
-                        );
-                    }
+                if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
+                    // Found the method — delegate to `js_native_call_value`
+                    // which handles both NaN-boxed pointers (POINTER_TAG)
+                    // and raw-pointer-bits (e.g. the resolve/reject
+                    // closures from `js_promise_new_with_executor`,
+                    // transmuted `i64 → f64` so their bits live outside
+                    // the NaN range). The earlier `is_pointer()` gate
+                    // bailed on the raw-pointer case: `{ resolve }` on a
+                    // plain object caused `box.resolve(x)` to land here,
+                    // the tag check failed, we fell through to vtable
+                    // lookup, and returned NULL_OBJECT_BYTES without
+                    // invoking `js_promise_resolve` → the awaiter hung
+                    // forever (issue #87). `js_native_call_value`
+                    // validates CLOSURE_MAGIC before calling the func
+                    // pointer, so non-callable field values (numbers,
+                    // strings, booleans) safely return undefined.
+                    let field_val = js_object_get_field(obj as *mut _, i as u32);
+                    return crate::closure::js_native_call_value(
+                        f64::from_bits(field_val.bits()),
+                        args_ptr,
+                        args_len,
+                    );
                 }
             }
         }
@@ -3084,14 +3057,23 @@ pub unsafe extern "C" fn js_native_call_method(
         let method_key =
             crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
         if !method_key.is_null() {
-            if let Some(method_value) =
+            if let Some(field_val) =
                 super::prototype_chain::resolve_inherited_field(obj as usize, method_key)
             {
-                return crate::closure::js_native_call_value(
-                    f64::from_bits(method_value.bits()),
-                    args_ptr,
-                    args_len,
-                );
+                if !field_val.is_undefined() && !field_val.is_null() {
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        field_val.bits(),
+                        f64::from_bits(jsval.bits()),
+                    );
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                    let result = crate::closure::js_native_call_value(
+                        f64::from_bits(bound),
+                        args_ptr,
+                        args_len,
+                    );
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
+                }
             }
         }
 

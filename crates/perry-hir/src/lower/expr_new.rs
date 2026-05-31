@@ -185,6 +185,32 @@ fn global_member_constructor_name(
     }
     None
 }
+
+fn lower_worker_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
+    let args = new_expr
+        .args
+        .as_ref()
+        .map(|args| {
+            args.iter()
+                .map(|a| lower_expr(ctx, &a.expr))
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut args = args.into_iter();
+    let filename = args.next().unwrap_or(Expr::Undefined);
+    let options = args.next().map(Box::new);
+    Ok(Expr::WorkerNew {
+        paths: Vec::new(),
+        filename: Box::new(filename),
+        options,
+    })
+}
+
+fn is_worker_threads_module_name(module_name: &str) -> bool {
+    module_name == "worker_threads" || module_name == "node:worker_threads"
+}
+
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
 
@@ -406,7 +432,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let is_worker_threads_module = module_alias == "worker_threads"
                 || ctx.lookup_builtin_module_alias(module_alias) == Some("worker_threads")
                 || match ctx.lookup_native_module(module_alias) {
-                    Some((module_name, _)) => module_name == "worker_threads",
+                    Some((module_name, _)) => is_worker_threads_module_name(module_name),
                     None => false,
                 };
             if is_worker_threads_module
@@ -432,6 +458,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     method: prop_ident.sym.to_string(),
                     args,
                 });
+            }
+            if is_worker_threads_module && prop_ident.sym.as_ref() == "Worker" {
+                return lower_worker_new(ctx, new_expr);
             }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
                 let class_name = prop_ident.sym.as_ref();
@@ -655,6 +684,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         return Ok(expr);
                     }
                 }
+            }
+
+            if class_name == "Worker"
+                && ctx
+                    .lookup_native_module("Worker")
+                    .map(|(module_name, export_name)| {
+                        is_worker_threads_module_name(module_name) && export_name == Some("Worker")
+                    })
+                    .unwrap_or(false)
+            {
+                return lower_worker_new(ctx, new_expr);
             }
 
             // #1677 `new Function(...)` handling, when `Function` is not

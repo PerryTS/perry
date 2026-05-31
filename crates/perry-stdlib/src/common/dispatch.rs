@@ -2226,6 +2226,11 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 *const perry_runtime::StringHeader,
             ) -> *mut perry_runtime::Promise,
         );
+        fn js_register_worker_threads_namespace_getters(
+            worker_data: extern "C" fn() -> f64,
+            is_main_thread: extern "C" fn() -> f64,
+            parent_port: extern "C" fn() -> f64,
+        );
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
@@ -2250,6 +2255,11 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_on(crate::events::js_event_emitter_on);
     super::net_socket_bridge::register_net_socket_handle_probe();
+    js_register_worker_threads_namespace_getters(
+        crate::worker_threads::js_worker_threads_get_worker_data,
+        crate::worker_threads::js_worker_threads_is_main_thread,
+        crate::worker_threads::js_worker_threads_parent_port,
+    );
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     #[cfg(feature = "crypto")]

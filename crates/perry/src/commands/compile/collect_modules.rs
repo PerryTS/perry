@@ -853,6 +853,55 @@ pub(super) fn collect_modules(
             }
         }
     });
+    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::WorkerNew {
+            paths, filename, ..
+        } = expr
+        {
+            if !paths.is_empty() {
+                return;
+            }
+            let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            match perry_hir::resolve_import_path_with_consts(
+                filename,
+                &module_const_locals,
+                &mut visiting,
+            ) {
+                perry_hir::Resolution::Set(set) => {
+                    if set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
+                        dyn_errors.push(format!(
+                            "worker_threads Worker in module {}: filename resolves to {} possible paths \
+                             (limit: {})",
+                            module_name,
+                            set.len(),
+                            perry_hir::DYNAMIC_IMPORT_PATH_CAP
+                        ));
+                        return;
+                    }
+                    if set.len() != 1 {
+                        dyn_errors.push(format!(
+                            "worker_threads Worker in module {}: filename must resolve to exactly one path for now, got {}",
+                            module_name,
+                            set.len()
+                        ));
+                        return;
+                    }
+                    for p in &set {
+                        if !new_dyn_imports.contains(p) {
+                            new_dyn_imports.push(p.clone());
+                        }
+                    }
+                    *paths = set;
+                }
+                perry_hir::Resolution::Unresolved(reason) => {
+                    dyn_errors.push(format!(
+                        "worker_threads Worker in module {}: {}",
+                        module_name, reason
+                    ));
+                }
+            }
+        }
+    });
     if !dyn_errors.is_empty() {
         return Err(anyhow!("{}", dyn_errors.join("\n")));
     }

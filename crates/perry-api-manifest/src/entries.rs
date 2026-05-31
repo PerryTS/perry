@@ -2536,6 +2536,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     internal_method("worker_threads", "postMessage", true, None),
+    method("worker_threads", "on", true, Some("Worker")),
+    method("worker_threads", "once", true, Some("Worker")),
+    method("worker_threads", "off", true, Some("Worker")),
+    method("worker_threads", "terminate", true, Some("Worker")),
+    method("worker_threads", "ref", true, Some("Worker")),
+    method("worker_threads", "unref", true, Some("Worker")),
     // node:worker_threads — value-shaped exports (#2135). Perry doesn't
     // spawn JS workers, so the main thread is the only thread: isMainThread
     // is always true, threadId is 0, resourceLimits is an empty object.

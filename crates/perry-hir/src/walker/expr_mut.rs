@@ -1726,5 +1726,13 @@ where
         Expr::DynamicImport { arg, .. } => {
             f(arg);
         }
+        Expr::WorkerNew {
+            filename, options, ..
+        } => {
+            f(filename);
+            if let Some(options) = options {
+                f(options);
+            }
+        }
     }
 }

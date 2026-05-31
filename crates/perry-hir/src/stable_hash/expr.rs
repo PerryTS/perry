@@ -590,6 +590,18 @@ impl SH for Expr {
             Expr::WebAssemblyInstantiate(bytes) => { tag(h, 12028); bytes.as_ref().hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
             Expr::DynamicImport { paths, arg } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); }
+            Expr::WorkerNew { paths, filename, options } => {
+                tag(h, 12055);
+                for p in paths { p.hash(h); }
+                filename.as_ref().hash(h);
+                match options {
+                    Some(e) => {
+                        true.hash(h);
+                        e.as_ref().hash(h);
+                    }
+                    None => false.hash(h),
+                }
+            }
         }
     }
 }
