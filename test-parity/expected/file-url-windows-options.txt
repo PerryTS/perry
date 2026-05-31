@@ -1,0 +1,13 @@
+fileURLToPath windows drive: "C:\\path\\with space"
+fileURLToPath windows unc: "\\\\server\\share\\f.txt"
+fileURLToPath windows encoded slash: TypeError ERR_INVALID_FILE_URL_PATH
+fileURLToPath windows encoded backslash: TypeError ERR_INVALID_FILE_URL_PATH
+fileURLToPath posix encoded backslash: "/tmp/a\\b"
+fileURLToPath posix unc host: TypeError ERR_INVALID_FILE_URL_HOST
+fileURLToPathBuffer invalid utf8: "2f746d702f61ff"
+fileURLToPathBuffer windows unc: "5c5c7365727665725c73686172655c662e747874"
+pathToFileURL windows drive: "file:///C:/path/a%20b"
+pathToFileURL windows unc input: "\\\\server\\share\\f.txt"
+pathToFileURL windows unc: "file://server/share/f.txt"
+pathToFileURL posix win-looking: "file:///tmp/C:%5Cpath%5Ca%20b"
+pathToFileURL escape set: "file:///tmp/%7E!*'():@&=+$,;%5B%5D%20%23%3F"

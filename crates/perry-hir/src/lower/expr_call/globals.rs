@@ -625,20 +625,6 @@ pub(super) fn try_global_builtins(
                 }
             }
 
-            // Check if this is a named import from url (e.g., fileURLToPath)
-            if module_name == "url" {
-                match func_name {
-                    "fileURLToPath" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::FileURLToPath(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                    }
-                    _ => {} // Fall through
-                }
-            }
-
             // Check if this is a named import from fs (e.g., existsSync, mkdirSync, etc.)
             if module_name == "fs" {
                 match func_name {
