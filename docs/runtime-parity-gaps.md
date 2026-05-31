@@ -6,11 +6,11 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 17 | 433 | n/a |
-| Partial-module gaps | 30 | 1669 | 387 |
+| Whole-module gaps (zero coverage) | 16 | 427 | n/a |
+| Partial-module gaps | 31 | 1672 | 390 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2384** |  |
+| **Total true gaps** |  | **2381** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -289,19 +289,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `stringDecoder.lastChar`
 - `stringDecoder.lastNeed`
 - `stringDecoder.lastTotal`
-
-### node:wasi
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `new WASI([options])`
-- `wasi.getImportObject()`
-- `wasi.start(instance)`
-- `wasi.initialize(instance)`
-- `wasi.finalizeBindings(instance[, options])`
-- `wasi.wasiImport`
 
 ### node:timers/promises
 
@@ -1817,6 +1804,24 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `als.exit(callback, ...args)` | `manifest:async_hooks.exit` |
 | `als.enterWith(store)` | `manifest:async_hooks.enterWith` |
 | `als.disable()` | `manifest:async_hooks.disable` |
+
+### node:wasi
+
+**Gap APIs: 3** · Already covered: 3
+
+#### Missing from Perry
+
+- `wasi.start(instance)`
+- `wasi.initialize(instance)`
+- `wasi.finalizeBindings(instance[, options])`
+
+#### Covered (sampled)
+
+| API | Coverage source |
+|-----|-----------------|
+| `new WASI([options])` | `manifest:wasi.WASI`; `test-parity/node-suite/wasi/classes/constructor-validation.ts` |
+| `wasi.getImportObject()` | `manifest:wasi.getImportObject`; `test-parity/node-suite/wasi/classes/import-object.ts` |
+| `wasi.wasiImport` | `manifest:wasi.wasiImport`; `test-parity/node-suite/wasi/classes/import-object.ts` |
 
 ### node:module
 
