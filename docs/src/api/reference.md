@@ -284,22 +284,10 @@ Total: 2234 entries across 99 modules.
 
 ### Methods
 
-- `alloc` — module
-- `allocUnsafe` — module
-- `allocUnsafeSlow` — module
 - `atob` — module
 - `btoa` — module
-- `byteLength` — module
-- `concat` — module
-- `copyBytesFrom` — module
-- `from` — module
-- `fromBase64` — module
-- `fromHex` — module
 - `isAscii` — module
-- `isBuffer` — module
-- `isEncoding` — module
 - `isUtf8` — module
-- `of` — module
 - `resolveObjectURL` — module
 - `transcode` — module
 
@@ -344,10 +332,6 @@ Total: 2234 entries across 99 modules.
 - `spawn` — module
 - `spawnSync` — module
 
-### Properties
-
-- `Stream`
-
 ## `cluster`
 
 ### Classes
@@ -365,14 +349,11 @@ Total: 2234 entries across 99 modules.
 
 - `SCHED_NONE`
 - `SCHED_RR`
-- `addListener`
 - `isMaster`
 - `isPrimary`
 - `isWorker`
-- `on`
 - `schedulingPolicy`
 - `settings`
-- `worker`
 - `workers`
 
 ## `commander`
@@ -701,7 +682,6 @@ Total: 2234 entries across 99 modules.
 - `getRandomValues` — module
 - `hash` — module
 - `hkdfSync` — module
-- `md5` — module
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
 - `privateDecrypt` — module
@@ -714,9 +694,7 @@ Total: 2234 entries across 99 modules.
 - `randomInt` — module
 - `randomInt` — module
 - `randomUUID` — module
-- `randomUUIDv7` — module
 - `scryptSync` — module
-- `sha256` — module
 - `sign` — module
 - `timingSafeEqual` — module
 - `verify` — module
@@ -1416,7 +1394,6 @@ Total: 2234 entries across 99 modules.
 
 ### Classes
 
-- `Http2SecureServer`
 - `Http2ServerRequest`
 - `Http2ServerResponse`
 
@@ -1440,11 +1417,8 @@ Total: 2234 entries across 99 modules.
 ### Classes
 
 - `Agent`
-- `ClientRequest`
-- `IncomingMessage`
 - `Server`
 - `Server`
-- `ServerResponse`
 
 ### Methods
 
@@ -1908,33 +1882,18 @@ Total: 2234 entries across 99 modules.
 
 ### Methods
 
-- `clearMarks` — module
-- `clearMeasures` — module
-- `clearResourceTimings` — module
 - `createHistogram` — module
 - `disconnect` — instance *(class: `PerformanceObserver`)*
 - `eventLoopUtilization` — module
-- `getEntries` — module
-- `getEntriesByName` — module
-- `getEntriesByType` — module
-- `mark` — module
-- `markResourceTiming` — module
-- `measure` — module
 - `monitorEventLoopDelay` — module
-- `now` — module
 - `observe` — instance *(class: `PerformanceObserver`)*
-- `setResourceTimingBufferSize` — module
 - `takeRecords` — instance *(class: `PerformanceObserver`)*
 - `timerify` — module
-- `toJSON` — module
 
 ### Properties
 
 - `constants`
-- `nodeTiming`
 - `performance`
-- `supportedEntryTypes`
-- `timeOrigin`
 
 ## `perry/ads`
 
@@ -2332,20 +2291,16 @@ Total: 2234 entries across 99 modules.
 ### Methods
 
 - `abort` — module
-- `addListener` — module
 - `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
 - `chdir` — module
 - `constrainedMemory` — module
 - `cpuUsage` — module
 - `cwd` — module
-- `emit` — module
 - `emitWarning` — module
-- `eventNames` — module
 - `exit` — module
 - `getActiveResourcesInfo` — module
 - `getBuiltinModule` — module
-- `getMaxListeners` — module
 - `getegid` — module
 - `geteuid` — module
 - `getgid` — module
@@ -2355,21 +2310,10 @@ Total: 2234 entries across 99 modules.
 - `hrtime` — module
 - `initgroups` — module
 - `kill` — module
-- `listenerCount` — module
-- `listeners` — module
 - `loadEnvFile` — module
 - `memoryUsage` — module
 - `nextTick` — module
-- `off` — module
-- `on` — module
-- `once` — module
-- `prependListener` — module
-- `prependOnceListener` — module
-- `rawListeners` — module
-- `removeAllListeners` — module
-- `removeListener` — module
 - `resourceUsage` — module
-- `setMaxListeners` — module
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
 - `setUncaughtExceptionCaptureCallback` — module
@@ -2540,8 +2484,6 @@ Total: 2234 entries across 99 modules.
 - `errored` — instance
 - `eventNames` — instance
 - `finished` — module
-- `from` — module
-- `fromWeb` — module
 - `getDefaultHighWaterMark` — module
 - `getMaxListeners` — instance
 - `isDisturbed` — module
@@ -2577,7 +2519,6 @@ Total: 2234 entries across 99 modules.
 - `setDefaultHighWaterMark` — module
 - `setEncoding` — instance
 - `setMaxListeners` — instance
-- `toWeb` — module
 - `uncork` — instance
 - `unpipe` — instance
 - `unshift` — instance
@@ -2595,7 +2536,6 @@ Total: 2234 entries across 99 modules.
 
 - `promises`
 - `promises`
-- `prototype`
 
 ## `stream/consumers`
 
@@ -2640,13 +2580,6 @@ Total: 2234 entries across 99 modules.
 
 - `end` — instance *(class: `StringDecoder`)*
 - `write` — instance *(class: `StringDecoder`)*
-
-### Properties
-
-- `encoding`
-- `lastChar`
-- `lastNeed`
-- `lastTotal`
 
 ## `sys`
 
@@ -2767,7 +2700,6 @@ Total: 2234 entries across 99 modules.
 
 ### Methods
 
-- `createObjectURL` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
 - `fileURLToPath` — module
@@ -2776,7 +2708,6 @@ Total: 2234 entries across 99 modules.
 - `parse` — module
 - `pathToFileURL` — module
 - `resolve` — module
-- `revokeObjectURL` — module
 - `urlToHttpOptions` — module
 
 ## `util`
@@ -2929,7 +2860,6 @@ Total: 2234 entries across 99 modules.
 - `BroadcastChannel` — module
 - `MessageChannel` — module
 - `getEnvironmentData` — module
-- `getWorkerData` — module
 - `isMarkedAsUntransferable` — module
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module
