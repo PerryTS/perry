@@ -35,8 +35,10 @@ pub mod builtins;
 pub mod child_process;
 pub mod closure;
 pub mod collection_iter;
+pub mod collection_iter_object;
 pub mod color_parse;
 pub mod date;
+pub mod dgram;
 pub mod dns;
 pub mod error;
 pub mod event_pump;
@@ -47,6 +49,7 @@ pub mod ffi;
 pub mod frame;
 pub mod fs;
 pub mod gc;
+pub mod iterator_helpers;
 pub mod map;
 pub mod math;
 pub mod native_abi;
@@ -55,6 +58,10 @@ pub mod native_handle;
 pub mod net_validate;
 pub mod node_stream;
 pub mod node_submodules;
+pub mod node_test;
+// #2935: surface the zlib option-level resolver at the crate root so
+// perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
+pub use node_submodules::js_zlib_resolve_level;
 pub mod object;
 pub mod os;
 pub mod path;
@@ -144,9 +151,12 @@ mod ui_harmonyos_stubs;
 /// target-aware branching. UI crates register their handlers here at
 /// startup. See module docs for the ohos-napi gating story.
 pub mod ui_text_registry;
+pub mod util_abort;
+pub mod util_call_sites;
 pub mod util_parse_args;
 pub mod util_parse_env;
 pub mod util_promisify;
+pub mod util_settracesigint;
 pub mod util_style_text;
 pub mod util_syserr;
 pub mod util_usv;

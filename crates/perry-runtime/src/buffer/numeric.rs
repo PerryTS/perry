@@ -89,6 +89,31 @@ pub(super) fn throw_out_of_range() -> ! {
     throw_range_error_code(b"ERR_OUT_OF_RANGE", b"The value is out of range")
 }
 
+/// DataView accessor offset out-of-bounds. Node throws a plain `RangeError`
+/// here (no `code` property), message
+/// `"Offset is outside the bounds of the DataView"` — see #2878.
+pub(super) fn throw_dataview_offset_out_of_bounds() -> ! {
+    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
+    REGISTER_RANGE_ERROR.call_once(|| {
+        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
+    });
+    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
+    let set = |key: &[u8], value: f64| {
+        let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key_ptr, value);
+    };
+    let str_val = |s: &[u8]| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
+    };
+    set(b"name", str_val(b"RangeError"));
+    set(
+        b"message",
+        str_val(b"Offset is outside the bounds of the DataView"),
+    );
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+}
+
 fn throw_buffer_out_of_bounds() -> ! {
     throw_range_error_code(
         b"ERR_BUFFER_OUT_OF_BOUNDS",

@@ -25,9 +25,9 @@
 //! the next write. `hex` / `latin1` / `ascii` are stateless.
 
 use crate::common::handle::{get_handle_mut, register_handle, with_handle};
-use perry_runtime::buffer::{is_registered_buffer, BufferHeader};
+use perry_runtime::buffer::{buffer_data, is_registered_buffer, BufferHeader};
 use perry_runtime::string::js_string_from_wtf8_bytes;
-use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
+use perry_runtime::{js_get_string_pointer_unified, js_string_from_bytes, JSValue, StringHeader};
 
 /// Which textual encoding the StringDecoder was constructed with.
 /// Determines how `write`/`end` interpret the incoming bytes.
@@ -97,10 +97,8 @@ impl StringDecoderHandle {
 }
 
 /// Parse Node's encoding-name normalisation (case-insensitive, hyphens
-/// optional). Returns `Utf8` for unknown/`undefined` to match the previous
-/// default — that mirrors Node's `normalizeEncoding` returning undefined
-/// (then `new StringDecoder` throws), but Perry's existing callers expect
-/// utf-8 as a forgiving default; keep that for now.
+/// optional). Returns `None` for unknown encodings so the constructor can
+/// throw `ERR_UNKNOWN_ENCODING`, matching Node's `normalizeEncoding`.
 fn parse_encoding(name: &str) -> Option<DecodingMode> {
     let lower = name.to_ascii_lowercase();
     Some(match lower.as_str() {
@@ -170,10 +168,42 @@ unsafe fn encoding_name_from_bits(bits: i64) -> Option<String> {
     Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
-fn throw_type_error(message: &str) -> ! {
+fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(msg, code);
     let err = perry_runtime::error::js_typeerror_new(msg);
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+}
+
+fn describe_buf_received(value: f64) -> String {
+    let addr = raw_addr_from_value(value);
+    if addr != 0 {
+        if perry_runtime::buffer::is_data_view(addr) {
+            return "an instance of DataView".to_string();
+        }
+        if perry_runtime::buffer::is_array_buffer(addr) {
+            return "an instance of ArrayBuffer".to_string();
+        }
+        if perry_runtime::buffer::is_shared_array_buffer(addr) {
+            return "an instance of SharedArrayBuffer".to_string();
+        }
+    }
+    perry_runtime::fs::validate::describe_received(value)
+}
+
+fn throw_invalid_buf_arg(value: f64) -> ! {
+    let message = format!(
+        "The \"buf\" argument must be an instance of Buffer, TypedArray, or DataView. Received {}",
+        describe_buf_received(value)
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_unknown_encoding(name: &str) -> ! {
+    throw_type_error_with_code(
+        &format!("Unknown encoding: {}", name),
+        "ERR_UNKNOWN_ENCODING",
+    )
 }
 
 unsafe fn string_from_nanboxed_for_error(bits: i64) -> String {
@@ -184,8 +214,14 @@ unsafe fn string_from_nanboxed_for_error(bits: i64) -> String {
     if u == JSValue::null().bits() {
         return "null".to_string();
     }
-    if let Some(s) = encoding_name_from_bits(bits) {
-        return s;
+    if u < 0x1000 {
+        return format!("{}", bits);
+    }
+    let raw_pointer_like = (0x1000..0x0001_0000_0000_0000).contains(&u);
+    if JSValue::from_bits(u).is_any_string() || raw_pointer_like {
+        if let Some(s) = encoding_name_from_bits(bits) {
+            return s;
+        }
     }
     let f = f64::from_bits(u);
     if f.is_finite() && f.fract() == 0.0 {
@@ -573,40 +609,54 @@ fn write_ascii(_state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
     out
 }
 
-/// Extract bytes from a NaN-boxed f64 that may carry either a BufferHeader
-/// or a StringHeader pointer. Mirrors `bytes_from_ptr` in crypto.rs but
-/// takes the NaN-boxed `f64` directly so dispatch arms can pass `args[0]`
-/// without manual unboxing.
-unsafe fn bytes_from_nanboxed(value: f64) -> Vec<u8> {
+fn raw_addr_from_value(value: f64) -> usize {
     let bits = value.to_bits();
-    // POINTER_TAG / STRING_TAG both keep the address in the low 48 bits.
-    let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if addr < 0x1000 {
-        return Vec::new();
+    let js_value = JSValue::from_bits(bits);
+    if js_value.is_pointer() || js_value.is_string() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+        bits as usize
+    } else {
+        0
     }
-    if is_registered_buffer(addr) {
-        let buf = addr as *const BufferHeader;
-        let len = (*buf).length as usize;
-        let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-        return std::slice::from_raw_parts(data, len).to_vec();
-    }
-    // Fall back to StringHeader layout — calling `dec.write("abc")` with
-    // a literal string is uncommon but valid (Node coerces strings to
-    // Buffers via the encoding); the byte_len slot lines up here.
-    let hdr = addr as *const StringHeader;
-    let len = (*hdr).byte_len as usize;
-    let data = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-    std::slice::from_raw_parts(data, len).to_vec()
 }
 
+/// Extract bytes from a Node-accepted StringDecoder input. Node accepts
+/// strings directly plus Buffer/TypedArray/DataView byte views; ArrayBuffer
+/// itself and arbitrary objects are invalid for `write`/`end`.
 unsafe fn bytes_from_write_arg(value: f64) -> Vec<u8> {
-    let bits = value.to_bits();
-    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
-        throw_type_error(
-            "The \"buf\" argument must be an instance of Buffer, TypedArray, or DataView.",
-        );
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_any_string() {
+        let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
+        if ptr.is_null() {
+            throw_invalid_buf_arg(value);
+        }
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        return std::slice::from_raw_parts(data, len).to_vec();
     }
-    bytes_from_nanboxed(value)
+
+    let addr = raw_addr_from_value(value);
+    if addr >= 0x1000 {
+        if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+            let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
+            if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {
+                return bytes.to_vec();
+            }
+        }
+    }
+    if addr >= 0x1000
+        && is_registered_buffer(addr)
+        && (!perry_runtime::buffer::is_any_array_buffer(addr)
+            || perry_runtime::buffer::is_data_view(addr))
+    {
+        let buf = addr as *const BufferHeader;
+        let len = (*buf).length as usize;
+        let data = buffer_data(buf);
+        return std::slice::from_raw_parts(data, len).to_vec();
+    }
+
+    throw_invalid_buf_arg(value)
 }
 
 /// `new StringDecoder(encoding)` — allocate a real StringDecoderHandle.
@@ -614,10 +664,8 @@ unsafe fn bytes_from_write_arg(value: f64) -> Vec<u8> {
 /// `encoding_bits` arrives as `i64` carrying the raw bits of the NaN-boxed
 /// encoding argument (the codegen unboxed-to-i64 via `unbox_to_i64`).
 /// Supported encodings are `utf8` / `utf-8`, `utf16le` / `ucs2`, `base64`,
-/// `hex`, `latin1` / `binary`, and `ascii`. Anything else defaults to
-/// UTF-8 (Node throws there, but the previous Perry behaviour was a
-/// forgiving fallback — keep that until callers prove a stricter default
-/// is wanted).
+/// `hex`, `latin1` / `binary`, and `ascii`. Unknown encodings throw
+/// `ERR_UNKNOWN_ENCODING`.
 #[no_mangle]
 pub unsafe extern "C" fn js_string_decoder_new(encoding_bits: i64) -> i64 {
     let mode = if encoding_bits == 0
@@ -630,7 +678,7 @@ pub unsafe extern "C" fn js_string_decoder_new(encoding_bits: i64) -> i64 {
         let name = string_from_nanboxed_for_error(encoding_bits);
         match parse_encoding(&name) {
             Some(mode) => mode,
-            None => throw_type_error(&format!("Unknown encoding: {}", name)),
+            None => throw_unknown_encoding(&name),
         }
     };
     register_handle(StringDecoderHandle::with_mode(mode))
@@ -658,7 +706,7 @@ pub unsafe extern "C" fn js_string_decoder_write(handle: i64, buf: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_string_decoder_end(handle: i64, buf: f64) -> f64 {
     let bits = buf.to_bits();
-    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+    if bits == JSValue::undefined().bits() {
         dispatch_string_decoder(handle, "end", &[])
     } else {
         dispatch_string_decoder(handle, "end", &[buf])
@@ -690,9 +738,7 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
     match method {
         "write" => {
             let bytes = if args.is_empty() {
-                throw_type_error(
-                    "The \"buf\" argument must be an instance of Buffer, TypedArray, or DataView.",
-                )
+                throw_invalid_buf_arg(f64::from_bits(JSValue::undefined().bits()))
             } else {
                 bytes_from_write_arg(args[0])
             };
@@ -720,8 +766,9 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
                 None
             } else {
                 let bits = args[0].to_bits();
-                // undefined / null → no buffer, just flush.
-                if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+                // undefined means no buffer, just flush. Null is a provided
+                // value and must be validated through the write path.
+                if bits == JSValue::undefined().bits() {
                     None
                 } else {
                     Some(bytes_from_write_arg(args[0]))

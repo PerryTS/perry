@@ -500,6 +500,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
 
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
+        ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
+        ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
@@ -981,6 +983,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::util_syserr::js_util_get_system_error_message(arg(0))
         }
         ("util", "getSystemErrorMap") => crate::util_syserr::js_util_get_system_error_map(),
+        ("util", "aborted") => crate::util_abort::js_util_aborted(arg(0), arg(1)),
+        ("util", "transferableAbortController") => {
+            crate::util_abort::js_util_transferable_abort_controller()
+        }
+        ("util", "transferableAbortSignal") => {
+            crate::util_abort::js_util_transferable_abort_signal(arg(0))
+        }
+        ("util", "getCallSites") => crate::util_call_sites::js_util_get_call_sites(arg(0), arg(1)),
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
         ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
@@ -994,6 +1004,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "styleText") => crate::util_style_text::js_util_style_text(arg(0), arg(1), arg(2)),
         // #2514: util.toUSVString(value) → string with lone surrogates → U+FFFD.
         ("util", "toUSVString") => crate::util_usv::js_util_to_usv_string(arg(0)),
+        ("util", "setTraceSigInt") => crate::util_settracesigint::js_util_set_trace_sig_int(arg(0)),
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
         ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),

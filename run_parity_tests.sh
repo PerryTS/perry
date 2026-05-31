@@ -265,6 +265,9 @@ for raw in sys.stdin:
         # Node prints extra payload after the duration.
         sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)( .*)$/\1: <timer>\4/g' | \
         sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)$/\1: <timer>/g' | \
+        # Normalize node:test's measured durations in the default reporter.
+        sed -E 's/^([✔✖] .*) \([0-9]+(\.[0-9]+)?ms\)$/\1 (<duration>)/g' | \
+        sed -E 's/^ℹ duration_ms [0-9]+(\.[0-9]+)?$/ℹ duration_ms <duration>/g' | \
         # Normalize console warning delivery: Node emits process warnings on
         # stderr after the script body, while Perry writes the equivalent
         # warning eagerly at the call site.

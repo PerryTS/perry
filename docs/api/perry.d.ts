@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1904 entries across 91 modules
+// Coverage: 1970 entries across 93 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -256,6 +256,10 @@ declare module "buffer" {
   export function copyBytesFrom(...args: any[]): any;
   /** stdlib */
   export function from(...args: any[]): any;
+  /** stdlib */
+  export function fromBase64(...args: any[]): any;
+  /** stdlib */
+  export function fromHex(...args: any[]): any;
   /** stdlib */
   export function isAscii(...args: any[]): any;
   /** stdlib */
@@ -919,6 +923,15 @@ declare module "dayjs" {
 }
 
 declare module "decimal.js" {
+}
+
+declare module "dgram" {
+  /** stdlib */
+  export class Socket { [key: string]: any; }
+  /** stdlib */
+  export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function createSocket(...args: any[]): any;
 }
 
 declare module "dns" {
@@ -2765,6 +2778,8 @@ declare module "sys" {
   /** stdlib */
   export const types: any;
   /** stdlib */
+  export function aborted(...args: any[]): any;
+  /** stdlib */
   export function callbackify(...args: any[]): any;
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
@@ -2774,6 +2789,8 @@ declare module "sys" {
   export function format(...args: any[]): any;
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
+  /** stdlib */
+  export function getCallSites(...args: any[]): any;
   /** stdlib */
   export function getSystemErrorMap(...args: any[]): any;
   /** stdlib */
@@ -2795,11 +2812,46 @@ declare module "sys" {
   /** stdlib */
   export function promisify(...args: any[]): any;
   /** stdlib */
+  export function setTraceSigInt(...args: any[]): any;
+  /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
   /** stdlib */
   export function styleText(...args: any[]): any;
   /** stdlib */
   export function toUSVString(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortController(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortSignal(...args: any[]): any;
+}
+
+declare module "test" {
+  /** stdlib */
+  export const mock: any;
+  /** stdlib */
+  export const snapshot: any;
+  /** stdlib */
+  export function after(...args: any[]): any;
+  /** stdlib */
+  export function afterEach(...args: any[]): any;
+  /** stdlib */
+  export function before(...args: any[]): any;
+  /** stdlib */
+  export function beforeEach(...args: any[]): any;
+  /** stdlib */
+  export function describe(...args: any[]): any;
+  /** stdlib */
+  export function it(...args: any[]): any;
+  /** stdlib */
+  export function only(...args: any[]): any;
+  /** stdlib */
+  export function run(...args: any[]): any;
+  /** stdlib */
+  export function skip(...args: any[]): any;
+  /** stdlib */
+  export function suite(...args: any[]): any;
+  /** stdlib */
+  export function todo(...args: any[]): any;
 }
 
 declare module "tls" {
@@ -2812,6 +2864,10 @@ declare module "tty" {
   export class ReadStream { [key: string]: any; }
   /** stdlib */
   export class WriteStream { [key: string]: any; }
+  /** stdlib */
+  export function ReadStream(...args: any[]): any;
+  /** stdlib */
+  export function WriteStream(...args: any[]): any;
   /** stdlib */
   export function isatty(...args: any[]): any;
 }
@@ -2858,6 +2914,8 @@ declare module "util" {
   /** stdlib */
   export const types: any;
   /** stdlib */
+  export function aborted(...args: any[]): any;
+  /** stdlib */
   export function callbackify(...args: any[]): any;
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
@@ -2867,6 +2925,8 @@ declare module "util" {
   export function format(...args: any[]): any;
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
+  /** stdlib */
+  export function getCallSites(...args: any[]): any;
   /** stdlib */
   export function getSystemErrorMap(...args: any[]): any;
   /** stdlib */
@@ -2888,11 +2948,17 @@ declare module "util" {
   /** stdlib */
   export function promisify(...args: any[]): any;
   /** stdlib */
+  export function setTraceSigInt(...args: any[]): any;
+  /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
   /** stdlib */
   export function styleText(...args: any[]): any;
   /** stdlib */
   export function toUSVString(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortController(...args: any[]): any;
+  /** stdlib */
+  export function transferableAbortSignal(...args: any[]): any;
 }
 
 declare module "util/types" {
@@ -3140,15 +3206,15 @@ declare module "zlib" {
   /** stdlib */
   export function deflateRawSync(p0: string): any;
   /** stdlib */
-  export function deflateSync(p0: string): string;
+  export function deflateSync(p0: any, options?: any): string;
   /** stdlib */
   export function gunzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gunzipSync(p0: string): string;
+  export function gunzipSync(p0: any): string;
   /** stdlib */
   export function gzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gzipSync(p0: string): string;
+  export function gzipSync(p0: any, options?: any): string;
   /** stdlib */
   export function inflate(buffer: any, callback: any): void;
   /** stdlib */
@@ -3156,7 +3222,7 @@ declare module "zlib" {
   /** stdlib */
   export function inflateRawSync(p0: string): any;
   /** stdlib */
-  export function inflateSync(p0: string): string;
+  export function inflateSync(p0: any): string;
   /** stdlib */
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */

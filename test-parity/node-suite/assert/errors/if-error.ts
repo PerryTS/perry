@@ -1,6 +1,31 @@
 import assert from "node:assert";
 
-assert.ifError(null);
-assert.ifError(undefined);
-try { assert.ifError(new Error("nested")); } catch (err) { console.log("if error Error:", (err as Error).name, (err as { code?: string }).code); }
-try { assert.ifError("problem"); } catch (err) { console.log("if error string:", (err as Error).name, (err as { code?: string }).code); }
+function probe(label, value) {
+  try {
+    const result = assert.ifError(value);
+    console.log(label, "OK", result);
+  } catch (err) {
+    console.log(
+      label,
+      "THROW",
+      err.name,
+      err.code,
+      JSON.stringify(String(err.message).split("\n")[0]),
+      "actual===value",
+      err.actual === value,
+      "expected",
+      err.expected,
+      "operator",
+      err.operator,
+      "generated",
+      err.generatedMessage,
+    );
+  }
+}
+
+probe("undefined", undefined);
+probe("null", null);
+probe("zero", 0);
+probe("false", false);
+probe("string", "boom");
+probe("error", new Error("boom"));

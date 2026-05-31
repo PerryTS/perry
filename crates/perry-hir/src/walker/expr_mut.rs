@@ -65,7 +65,6 @@ where
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
         | Expr::CryptoRandomUUID
         | Expr::CryptoRandomUUIDv7
         | Expr::OsPlatform
@@ -159,6 +158,8 @@ where
         | Expr::RegExpLastIndex(v)
         | Expr::JsonParse(v)
         | Expr::JsonStringify(v)
+        | Expr::JsonRawJson(v)
+        | Expr::JsonIsRawJson(v)
         | Expr::JsonParseTyped { text: v, .. }
         | Expr::MathFloor(v)
         | Expr::MathCeil(v)
@@ -194,7 +195,9 @@ where
         | Expr::Atob(v)
         | Expr::Btoa(v)
         | Expr::TextEncoderEncode(v)
-        | Expr::TextDecoderDecode(v)
+        | Expr::TextDecoderEncoding(v)
+        | Expr::TextDecoderFatal(v)
+        | Expr::TextDecoderIgnoreBom(v)
         | Expr::EncodeURI(v)
         | Expr::DecodeURI(v)
         | Expr::EncodeURIComponent(v)
@@ -231,6 +234,7 @@ where
         | Expr::StaticPluginResolve(v)
         | Expr::ArrayIsArray(v)
         | Expr::ArrayFrom(v)
+        | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
         | Expr::ForOfToArray(v)
@@ -534,6 +538,19 @@ where
             f(source);
             f(dest);
         }
+        Expr::TextDecoderNew {
+            label,
+            fatal,
+            ignore_bom,
+        } => {
+            f(label);
+            f(fatal);
+            f(ignore_bom);
+        }
+        Expr::TextDecoderDecode { decoder, input } => {
+            f(decoder);
+            f(input);
+        }
         Expr::PropertySet { object, value, .. } => {
             f(object);
             f(value);
@@ -681,9 +698,16 @@ where
             f(items);
             f(key_fn);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             f(iterable);
             f(map_fn);
+            if let Some(t) = this_arg {
+                f(t);
+            }
         }
 
         // ─── Three-child variants ─────────────────────────────────────────
@@ -1535,9 +1559,16 @@ where
                 f(a);
             }
         }
-        Expr::ReflectGet { target, key }
-        | Expr::ReflectHas { target, key }
-        | Expr::ReflectDelete { target, key } => {
+        Expr::ReflectGet {
+            target,
+            key,
+            receiver,
+        } => {
+            f(target);
+            f(key);
+            f(receiver);
+        }
+        Expr::ReflectHas { target, key } | Expr::ReflectDelete { target, key } => {
             f(target);
             f(key);
         }
@@ -1545,6 +1576,10 @@ where
             f(target);
             f(key);
             f(value);
+        }
+        Expr::ReflectSetPrototypeOf { target, proto } => {
+            f(target);
+            f(proto);
         }
         Expr::ReflectApply {
             func,

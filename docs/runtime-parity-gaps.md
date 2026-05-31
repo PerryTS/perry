@@ -6,11 +6,11 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 19 | 478 | n/a |
-| Partial-module gaps | 29 | 1647 | 370 |
+| Whole-module gaps (zero coverage) | 18 | 472 | n/a |
+| Partial-module gaps | 29 | 1646 | 371 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2407** |  |
+| **Total true gaps** |  | **2400** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -19,7 +19,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:fs` — 139
 - `node:crypto` — 128
 - `node:process (and global `process`)` — 101
-- `node:util` — 97
+- `node:util` — 95
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
 - `node:http` — 89
@@ -307,19 +307,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `stringDecoder.lastChar`
 - `stringDecoder.lastNeed`
 - `stringDecoder.lastTotal`
-
-### node:trace_events
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `trace_events.createTracing(options)`
-- `trace_events.getEnabledCategories()`
-- `tracing.categories`
-- `tracing.enabled`
-- `tracing.enable()`
-- `tracing.disable()`
 
 ### node:wasi
 
@@ -659,23 +646,19 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:util
 
-**Gap APIs: 96** · Already covered: 9
+**Gap APIs: 92** · Already covered: 10
 
 #### Missing from Perry
 
 - `util.debuglog(section[, callback])`
 - `util.debug(section)`
 - `util.formatWithOptions(inspectOptions, format[, ...args])`
-- `util.getCallSites([frameCount][, options])`
 - `util.getSystemErrorName(err)`
 - `util.getSystemErrorMap()`
 - `util.getSystemErrorMessage(err)`
 - `util.parseEnv(content)`
 - `util.stripVTControlCharacters(str)`
 - `util.toUSVString(string)`
-- `util.transferableAbortController()`
-- `util.transferableAbortSignal(signal)`
-- `util.aborted(signal, resource)`
 - `util.diff(actual, expected)`
 - `util.setTraceSigInt(enable)`
 - `MIMEType.prototype.type`
@@ -719,6 +702,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `util.callbackify(original)` | `manifest:util.callbackify` |
 | `util.deprecate(fn, msg[, code[, options]])` | `manifest:util.deprecate` |
 | `util.format(format[, ...args])` | `manifest:util.format` |
+| `util.getCallSites([frameCount][, options])` | `manifest:util.getCallSites` |
 | `util.inherits(constructor, superConstructor)` | `manifest:util.inherits` |
 | `util.inspect(object[, options])` | `manifest:util.inspect` |
 | `util.isDeepStrictEqual(val1, val2[, options])` | `manifest:util.isDeepStrictEqual` |
@@ -1855,34 +1839,34 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:tty
 
-**Gap APIs: 18** · Already covered: 1
+**Gap APIs: 2** · Already covered: 17
 
 #### Missing from Perry
 
-- `new tty.ReadStream(fd[, options])`
-- `readStream.isRaw`
-- `readStream.isTTY`
 - `readStream.fd`
-- `readStream.setRawMode(mode)`
-- `new tty.WriteStream(fd)`
-- `writeStream.isTTY`
 - `writeStream.fd`
-- `writeStream.columns`
-- `writeStream.rows`
-- `writeStream.clearLine(dir[, callback])`
-- `writeStream.clearScreenDown([callback])`
-- `writeStream.cursorTo(x[, y][, callback])`
-- `writeStream.moveCursor(dx, dy[, callback])`
-- `writeStream.getWindowSize()`
-- `writeStream.getColorDepth([env])`
-- `writeStream.hasColors([count][, env])`
-- `'resize'`
 
 #### Covered (sampled)
 
 | API | Coverage source |
 |-----|-----------------|
 | `tty.isatty(fd)` | `manifest:tty.isatty` |
+| `new tty.ReadStream(fd[, options])` | `manifest:tty.ReadStream`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `readStream.isRaw` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `readStream.isTTY` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `readStream.setRawMode(mode)` | `manifest:tty.setRawMode`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `new tty.WriteStream(fd)` | `manifest:tty.WriteStream`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.isTTY` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.columns` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.rows` | `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.clearLine(dir[, callback])` | `manifest:tty.clearLine`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.clearScreenDown([callback])` | `manifest:tty.clearScreenDown`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.cursorTo(x[, y][, callback])` | `manifest:tty.cursorTo`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.moveCursor(dx, dy[, callback])` | `manifest:tty.moveCursor`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.getWindowSize()` | `manifest:tty.getWindowSize`; `test-parity/fixtures/tty-pty-smoke.ts` |
+| `writeStream.getColorDepth([env])` | `manifest:tty.getColorDepth`; `test-parity/node-suite/tty/classes/color-depth-env.ts` |
+| `writeStream.hasColors([count][, env])` | `manifest:tty.hasColors`; `test-parity/node-suite/tty/classes/has-colors-with-count.ts` |
+| `'resize'` | `manifest:tty.on`; `test-parity/fixtures/tty-pty-smoke.ts` |
 
 ### node:https
 

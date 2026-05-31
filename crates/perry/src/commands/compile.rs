@@ -3034,7 +3034,7 @@ pub fn run_with_parse_cache(
                             // code reads them as namespace objects.
                             if matches!(
                                 submod_key.as_str(),
-                                "diagnostics_channel" | "timers" | "sys"
+                                "diagnostics_channel" | "timers" | "sys" | "trace_events"
                             ) {
                                 // Default imports of these modules are module
                                 // objects — route to the namespace so they work

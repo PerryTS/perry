@@ -485,6 +485,10 @@ pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut Ar
 #[no_mangle]
 pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+    if jv.is_null() || jv.is_undefined() {
+        super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     if jv.is_any_string() {
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let len = match crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
@@ -535,6 +539,10 @@ fn for_each_string_char<F: FnMut(u32, f64)>(value: f64, mut emit: F) -> Option<u
 #[no_mangle]
 pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+    if jv.is_null() || jv.is_undefined() {
+        super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     if jv.is_any_string() {
         let arr = crate::array::js_array_alloc(1);
         let mut out = arr;
@@ -560,6 +568,10 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    // #2818: ToObject(null/undefined) throws TypeError, matching Node.
+    if jv.is_null() || jv.is_undefined() {
+        super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     if jv.is_any_string() {
         let outer = crate::array::js_array_alloc(1);
         let mut out = outer;
@@ -1170,6 +1182,27 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // #2846: the receiver may be a Proxy value that arrived through a generic
+    // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
+    // Proxies are encoded as small fake pointers; deref-ing one as an
+    // ObjectHeader would read unmapped memory. Route to the proxy get dispatch,
+    // which forwards to the target (or throws on a revoked proxy) — matching
+    // Node. `js_proxy_is_proxy` validates the value is a *registered* proxy so a
+    // real heap object whose address happens to be small isn't misrouted.
+    {
+        // Proxy ids live in [0x50000, 0x100000); `js_proxy_is_proxy` confirms
+        // it is a *registered* proxy before we route to the proxy getter.
+        let addr = obj as u64;
+        if (0x50000..0x100000).contains(&addr) && !key.is_null() {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                let v = crate::proxy::js_proxy_get(boxed, key_f64);
+                return JSValue::from_bits(v.to_bits());
+            }
+        }
+    }
     // #2128: a plain JS number value (a finite double or canonical NaN —
     // anything `JSValue::is_number` returns true for *minus* the raw-I64
     // pointer convention where top16 == 0) reaches this generic property-get
@@ -2155,8 +2188,20 @@ pub extern "C" fn js_object_get_field_by_name(
                     b"multiline" => {
                         return JSValue::bool((*re).multiline);
                     }
-                    b"sticky" | b"unicode" | b"dotAll" | b"hasIndices" => {
-                        return JSValue::bool(false);
+                    // #2828: route the remaining observable flags to the
+                    // header fields populated by `js_regexp_new` instead of
+                    // unconditionally returning `false`.
+                    b"sticky" => {
+                        return JSValue::bool((*re).sticky);
+                    }
+                    b"unicode" => {
+                        return JSValue::bool((*re).unicode);
+                    }
+                    b"dotAll" => {
+                        return JSValue::bool((*re).dot_all);
+                    }
+                    b"hasIndices" => {
+                        return JSValue::bool((*re).has_indices);
                     }
                     _ => return JSValue::undefined(),
                 }
@@ -2188,6 +2233,34 @@ pub extern "C" fn js_object_get_field_by_name(
                 let result = js_class_method_bind(this_f64, b"toJSON".as_ptr(), 6);
                 return JSValue::from_bits(result.to_bits());
             }
+        }
+
+        // #2856: a property READ (not a call) of `next` on a Map/Set
+        // iterator object must yield a callable (so `typeof it.next ===
+        // "function"` and `const n = it.next; n()` work). The iterators
+        // dispatch via class id and store no `next` field, so bind the
+        // method to the receiver. Also bind the self-iterator methods.
+        if !key.is_null()
+            && ((*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID)
+        {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            let bind_name: Option<&'static [u8]> = match key_bytes {
+                b"next" => Some(b"next"),
+                b"return" => Some(b"return"),
+                b"throw" => Some(b"throw"),
+                b"@@iterator" => Some(b"@@iterator"),
+                _ => None,
+            };
+            if let Some(name) = bind_name {
+                let this_f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
+                return JSValue::from_bits(result.to_bits());
+            }
+            return JSValue::undefined();
         }
 
         // Issue #649: native-module sub-namespace property access.
@@ -2230,6 +2303,16 @@ pub extern "C" fn js_object_get_field_by_name(
                     );
                 }
                 return JSValue::undefined();
+            }
+        }
+
+        if (*obj).class_id == crate::tty::CLASS_ID_TTY_WRITE_STREAM && !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let property_name =
+                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+            if let Some(value) = crate::tty::tty_write_stream_dimension(property_name) {
+                return JSValue::from_bits(value.to_bits());
             }
         }
 
@@ -2294,6 +2377,10 @@ pub extern "C" fn js_object_get_field_by_name(
                 if let Some(v) = resolve_proto_chain_field(class_id, key) {
                     return v;
                 }
+                let key_bytes = std::slice::from_raw_parts(
+                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                    (*key).byte_len as usize,
+                );
                 // Issue #838 followup (b): same keyless-receiver gap for
                 // JS-classic prototype methods. An instance allocated via
                 // `js_new_function_construct` (no constructor-body write
@@ -2304,13 +2391,51 @@ pub extern "C" fn js_object_get_field_by_name(
                 // because the keyless branch skipped the regular
                 // `CLASS_PROTOTYPE_METHODS` walk reached further down
                 // — see the matching arm at line ~4083.
-                let key_bytes = std::slice::from_raw_parts(
-                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                    (*key).byte_len as usize,
-                );
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
                     if let Some(v) = lookup_prototype_method(class_id, name) {
                         return JSValue::from_bits(v.to_bits());
+                    }
+                    // Native class vtable accessors and methods are exposed
+                    // from the class, not from own fields, so keyless
+                    // receivers need the same fallback as shaped receivers.
+                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                        if let Some(ref reg) = *registry {
+                            let mut cid = class_id;
+                            let mut depth = 0usize;
+                            while depth < 32 {
+                                if let Some(vtable) = reg.get(&cid) {
+                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
+                                        let this_f64 = f64::from_bits(
+                                            crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                                        );
+                                        let f: extern "C" fn(f64) -> f64 =
+                                            std::mem::transmute(getter_ptr);
+                                        return JSValue::from_bits(f(this_f64).to_bits());
+                                    }
+                                }
+                                match get_parent_class_id(cid) {
+                                    Some(p) if p != 0 && p != cid => {
+                                        cid = p;
+                                        depth += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        }
+                    }
+                    if lookup_class_method_in_chain(class_id, name).is_some() {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)
+                                    .unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+                            ptr
+                        };
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                        return JSValue::from_bits(result.to_bits());
                     }
                 }
             }
@@ -2336,6 +2461,15 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                 }
             }
+            // #2820: a keyless object (`{}`, `Object.create(...)`) may still
+            // carry an explicit `Object.setPrototypeOf` prototype — walk it so
+            // inherited reads resolve.
+            if !key.is_null() {
+                if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                {
+                    return v;
+                }
+            }
             return JSValue::undefined();
         }
 
@@ -2344,6 +2478,15 @@ pub extern "C" fn js_object_get_field_by_name(
         // 16 may contain garbage. An invalid upper 16-bit value catches this case defensively.
         let keys_ptr = keys as usize;
         if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+            // #2820: an object with no own keys (`{}`) may still have an
+            // explicit `Object.setPrototypeOf` prototype — walk it before
+            // giving up so inherited reads resolve.
+            if !key.is_null() {
+                if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                {
+                    return v;
+                }
+            }
             return JSValue::undefined();
         }
 
@@ -2612,6 +2755,15 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
 
+        // #2820: before giving up, walk an explicit `Object.setPrototypeOf`
+        // prototype chain recorded for this object so inherited property reads
+        // (`obj.x` where `x` is an own property of the set prototype) resolve.
+        if !key.is_null() {
+            if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key) {
+                return v;
+            }
+        }
+
         // Key not found
         JSValue::undefined()
     }
@@ -2724,6 +2876,20 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // dispatch to the per-module accessor instead of silently
     // returning undefined.
     if (obj as usize) > 0 && (obj as usize) < 0x100000 {
+        // #2846: a revocable Proxy is encoded as a small fake pointer in the
+        // proxy-id range (also `< 0x100000`). A generic `proxy.key` read funnels
+        // here via the IC-miss path; route it to the proxy get dispatch (which
+        // forwards to the target, or throws on a revoked proxy) before the
+        // handle-dispatch fallback. `js_proxy_is_proxy` validates the value is a
+        // registered proxy so real small handles aren't misrouted.
+        {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | ((obj as u64) & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                return crate::proxy::js_proxy_get(boxed, key_f64);
+            }
+        }
         // #1213: Timeout/Immediate handle methods (ref/unref/hasRef/refresh/
         // close) read as bound-method function values so `typeof t.ref ===
         // "function"` holds (the call form already works via

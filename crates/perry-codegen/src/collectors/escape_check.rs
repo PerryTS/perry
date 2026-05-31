@@ -355,9 +355,12 @@ pub fn check_escapes_in_expr(
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)
         | Expr::JsonStringify(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
         | Expr::ForOfToArray(operand)
@@ -712,8 +715,18 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(registry, candidates, classes, escaped);
             check_escapes_in_expr(token, candidates, classes, escaped);
         }
-        Expr::ArrayFromMapped { iterable, map_fn }
-        | Expr::ObjectGroupBy {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
+            check_escapes_in_expr(iterable, candidates, classes, escaped);
+            check_escapes_in_expr(map_fn, candidates, classes, escaped);
+            if let Some(t) = this_arg {
+                check_escapes_in_expr(t, candidates, classes, escaped);
+            }
+        }
+        Expr::ObjectGroupBy {
             items: iterable,
             key_fn: map_fn,
         }

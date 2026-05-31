@@ -47,41 +47,63 @@ fn object_url_uuid(n: u64) -> String {
     format!("{group1:08x}-{group2:04x}-{group3:04x}-{group4:04x}-{group5:012x}")
 }
 
-/// Walk a JS value passed as the `parts` argument of
-/// `new Blob([...])` / `new File([...], name)` and append its bytes
-/// to `out`. Supported part shapes:
-///   - String (NaN-boxed STRING_TAG): UTF-8 encode the characters.
-///   - Buffer / Uint8Array (NaN-boxed POINTER_TAG → BufferHeader):
-///     copy the raw bytes.
-///   - Blob handle (NaN-boxed POINTER_TAG → small int id):
-///     fetch the registered body bytes.
-///   - Array (NaN-boxed POINTER_TAG → ArrayHeader): recurse so
-///     `[["a", "b"], "c"]` flattens like Node's behavior.
-/// Anything else is silently dropped; matches Node's relaxed
-/// behavior for stringifying non-recognized inputs to "".
-unsafe fn append_blob_part_bytes(part: f64, out: &mut Vec<u8>) {
-    let bits = part.to_bits();
+/// Walk the `parts` argument of `new Blob([...])` / `new File([...], name)`.
+///
+/// Per the WHATWG Blob spec, `parts` is iterated at the TOP level only.
+/// Each element is then coerced by [`append_one_blob_part`]: BufferSource
+/// (Buffer/Uint8Array/ArrayBuffer) and Blob/File handles contribute their
+/// raw bytes, and EVERY other value — including nested arrays, numbers,
+/// booleans, null, undefined, and objects — is run through `ToString`
+/// (USVString) and UTF-8 encoded. So `new Blob([["a","b"]])` produces
+/// `"a,b"` (array `ToString`), not the recursive-flatten `"ab"`.
+unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
+    let bits = parts.to_bits();
     let top16 = bits >> 48;
-    // STRING_TAG ─ NaN-box a *mut StringHeader.
-    if top16 == 0x7FFF {
-        let str_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-        if let Some(s) = string_from_header(str_ptr) {
-            out.extend_from_slice(s.as_bytes());
-        }
-        return;
-    }
-    // POINTER_TAG ─ either a buffer, an array (recurse), or a small-id Blob.
     if top16 == 0x7FFD {
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        // Small id → registered Blob handle. The Blob FFI carries
-        // ids well below page-size so the cutoff is safe.
+        if addr >= 0x10000 && !perry_runtime::buffer::is_registered_buffer(addr) {
+            let arr_ptr = addr as *const perry_runtime::array::ArrayHeader;
+            if !arr_ptr.is_null() {
+                let gc_header = (arr_ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+                    as *const perry_runtime::gc::GcHeader;
+                let obj_type = (*gc_header).obj_type;
+                if obj_type == perry_runtime::gc::GC_TYPE_ARRAY
+                    || obj_type == perry_runtime::gc::GC_TYPE_LAZY_ARRAY
+                {
+                    let len = perry_runtime::array::js_array_length(arr_ptr);
+                    for i in 0..len {
+                        let elem = perry_runtime::array::js_array_get(arr_ptr, i);
+                        append_one_blob_part(f64::from_bits(elem.bits()), out);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    // Non-array `parts` (or empty/undefined): Node throws TypeError, but
+    // we tolerate by treating the single value as one coerced part.
+    if parts.to_bits() != TAG_UNDEFINED {
+        append_one_blob_part(parts, out);
+    }
+}
+
+/// Coerce ONE Blob part. Recognized binary shapes contribute raw bytes;
+/// anything else is stringified via `ToString` and UTF-8 encoded. Does
+/// NOT recurse into nested arrays (those stringify like any other value).
+unsafe fn append_one_blob_part(part: f64, out: &mut Vec<u8>) {
+    let bits = part.to_bits();
+    let top16 = bits >> 48;
+    // POINTER_TAG ─ either a Blob handle or a Buffer/Uint8Array.
+    if top16 == 0x7FFD {
+        let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        // Small id → registered Blob handle.
         if addr != 0 && addr < 0x10000 {
             if let Some(body) = blob_bytes_clone(addr) {
                 out.extend_from_slice(&body);
                 return;
             }
         }
-        // BufferHeader?
+        // BufferHeader (Buffer / Uint8Array / ArrayBuffer)?
         if addr >= 0x1000 && perry_runtime::buffer::is_registered_buffer(addr) {
             let buf = addr as *const perry_runtime::buffer::BufferHeader;
             let len = (*buf).length as usize;
@@ -89,23 +111,70 @@ unsafe fn append_blob_part_bytes(part: f64, out: &mut Vec<u8>) {
             out.extend_from_slice(std::slice::from_raw_parts(data, len));
             return;
         }
-        // Array? Walk elements and recurse.
-        let arr_ptr = addr as *const perry_runtime::array::ArrayHeader;
-        if !arr_ptr.is_null() && addr >= 0x1000 {
-            let gc_header = (arr_ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
-                as *const perry_runtime::gc::GcHeader;
-            let obj_type = (*gc_header).obj_type;
-            if obj_type == perry_runtime::gc::GC_TYPE_ARRAY
-                || obj_type == perry_runtime::gc::GC_TYPE_LAZY_ARRAY
-            {
-                let len = perry_runtime::array::js_array_length(arr_ptr);
-                for i in 0..len {
-                    let elem = perry_runtime::array::js_array_get(arr_ptr, i);
-                    append_blob_part_bytes(f64::from_bits(elem.bits()), out);
-                }
+    }
+    // Everything else (strings, numbers, booleans, null, undefined, plain
+    // objects, nested arrays): ToString → UTF-8. `js_jsvalue_to_string`
+    // handles array comma-join, object `toString`, number/bool/null
+    // formatting identically to JS `String(x)`.
+    let str_ptr = perry_runtime::value::js_jsvalue_to_string(part) as *const StringHeader;
+    if let Some(s) = string_from_header(str_ptr) {
+        out.extend_from_slice(s.as_bytes());
+    }
+}
+
+/// Normalize a Blob/File `type` per the WHATWG Blob spec: if every
+/// character is in the printable ASCII range U+0020–U+007E it is
+/// lowercased; otherwise the type is treated as the empty string.
+fn normalize_blob_type(raw: &str) -> String {
+    if raw.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        raw.to_ascii_lowercase()
+    } else {
+        String::new()
+    }
+}
+
+/// `ToNumber(value)` for the File `lastModified` option. Numbers and
+/// int32s pass through; strings are parsed per JS `Number(string)`
+/// (trim, empty -> 0, unparsable -> NaN); booleans/null map to 0/1/0;
+/// undefined and other objects -> NaN.
+unsafe fn blob_to_number(value: f64) -> f64 {
+    let bits = value.to_bits();
+    // Heap string?
+    if (bits >> 48) == 0x7FFF {
+        let p = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+        if let Some(s) = string_from_header(p) {
+            let t = s.trim();
+            if t.is_empty() {
+                return 0.0;
             }
+            return t.parse::<f64>().unwrap_or(f64::NAN);
+        }
+        return f64::NAN;
+    }
+    // SSO / non-string: materialize via ToString then parse only if it was
+    // a string-like value; otherwise use the numeric coercion of the value.
+    let jsval = perry_runtime::value::JSValue::from_bits(bits);
+    if jsval.is_short_string() {
+        let str_ptr = perry_runtime::value::js_jsvalue_to_string(value) as *const StringHeader;
+        if let Some(s) = string_from_header(str_ptr) {
+            let t = s.trim();
+            if t.is_empty() {
+                return 0.0;
+            }
+            return t.parse::<f64>().unwrap_or(f64::NAN);
         }
     }
+    jsval.to_number()
+}
+
+/// Coerce a `type`/`name` option that arrives NaN-boxed as f64 into a
+/// Rust `String` via `ToString` (USVString). Undefined becomes "".
+unsafe fn blob_string_option(value: f64) -> String {
+    if value.to_bits() == TAG_UNDEFINED {
+        return String::new();
+    }
+    let str_ptr = perry_runtime::value::js_jsvalue_to_string(value) as *const StringHeader;
+    string_from_header(str_ptr).unwrap_or_default()
 }
 
 /// `new Blob(parts, { type })` — allocate a Blob handle from the
@@ -117,16 +186,8 @@ unsafe fn append_blob_part_bytes(part: f64, out: &mut Vec<u8>) {
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_new(parts: f64, content_type: f64) -> f64 {
     let mut body: Vec<u8> = Vec::new();
-    append_blob_part_bytes(parts, &mut body);
-    let type_str = {
-        let bits = content_type.to_bits();
-        if (bits >> 48) == 0x7FFF {
-            let p = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-            string_from_header(p).unwrap_or_default()
-        } else {
-            String::new()
-        }
-    };
+    append_blob_parts(parts, &mut body);
+    let type_str = normalize_blob_type(&blob_string_option(content_type));
     handle_to_f64(alloc_blob(BlobData::blob(body, type_str)))
 }
 
@@ -144,28 +205,16 @@ pub unsafe extern "C" fn js_file_new(
     last_modified: f64,
 ) -> f64 {
     let mut body: Vec<u8> = Vec::new();
-    append_blob_part_bytes(parts, &mut body);
-    let name_str = {
-        let bits = name.to_bits();
-        if (bits >> 48) == 0x7FFF {
-            let p = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-            string_from_header(p).unwrap_or_default()
-        } else {
-            String::new()
-        }
-    };
-    let type_str = {
-        let bits = content_type.to_bits();
-        if (bits >> 48) == 0x7FFF {
-            let p = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-            string_from_header(p).unwrap_or_default()
-        } else {
-            String::new()
-        }
-    };
-    // `last_modified` is a plain numeric f64 argument (callers pass
-    // NaN to signal "use Date.now()" — match Node's default).
-    let lm = if last_modified.is_nan() {
+    append_blob_parts(parts, &mut body);
+    // `name` is coerced via `ToString` per the WHATWG File spec — a
+    // numeric name like `new File(parts, 123)` becomes `"123"`.
+    let name_str = blob_string_option(name);
+    let type_str = normalize_blob_type(&blob_string_option(content_type));
+    // The codegen passes a bare `f64::NAN` sentinel when the
+    // `lastModified` option is ABSENT (use `Date.now()`). A present
+    // option arrives NaN-boxed (string/number/bool/etc.) and is coerced
+    // via `ToNumber` — distinct bit pattern from the sentinel.
+    let lm = if last_modified.to_bits() == f64::NAN.to_bits() {
         // Cheap stamp: wall clock in ms.  Same source the codegen
         // uses for `Date.now()` so two consecutive `new File()` calls
         // produce a monotonic-ish sequence.
@@ -175,7 +224,7 @@ pub unsafe extern "C" fn js_file_new(
             .map(|d| d.as_millis() as f64)
             .unwrap_or(0.0)
     } else {
-        last_modified
+        blob_to_number(last_modified)
     };
     let data = BlobData {
         body,

@@ -345,6 +345,20 @@ pub(super) fn try_module_static_methods(
                                 )));
                             }
                         }
+                        "rawJSON" => {
+                            // #2900: `JSON.rawJSON(text)` -> raw-JSON wrapper.
+                            if !args.is_empty() {
+                                let text = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonRawJson(Box::new(text))));
+                            }
+                        }
+                        "isRawJSON" => {
+                            // #2900: `JSON.isRawJSON(value)` -> boolean.
+                            if !args.is_empty() {
+                                let value = args.into_iter().next().unwrap();
+                                return Ok(Ok(Expr::JsonIsRawJson(Box::new(value))));
+                            }
+                        }
                         _ => {} // Fall through to generic handling
                     }
                 }
@@ -745,6 +759,27 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // #2877: `ArrayBuffer.isView(x)` — true for TypedArray / DataView
+            // values, false for ArrayBuffer / anything else. Route through the
+            // existing `util.types.isArrayBufferView` runtime predicate (it
+            // already recognizes typed arrays, Uint8Array-from-ctor and
+            // DataView-marked buffers) by re-emitting a `util/types`
+            // NativeMethodCall — no new HIR variant or runtime helper needed.
+            if obj_ident.sym.as_ref() == "ArrayBuffer" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "isView" {
+                        let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "util/types".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: "isArrayBufferView".to_string(),
+                            args: vec![arg],
+                        }));
+                    }
+                }
+            }
+
             // Check for Number.methodName() static calls
             if obj_ident.sym.as_ref() == "Number" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
@@ -1139,6 +1174,25 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         _ => {} // Fall through to generic handling
+                    }
+                }
+            }
+
+            // #2901: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)`
+            // static factories. Perry aliases Uint8Array → Buffer; route these
+            // through the buffer native-module dispatch table (no new HIR
+            // variant) so the runtime decodes into a fresh BufferHeader.
+            if obj_name == "Uint8Array" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if matches!(method_name, "fromBase64" | "fromHex") {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "buffer".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: method_name.to_string(),
+                            args,
+                        }));
                     }
                 }
             }

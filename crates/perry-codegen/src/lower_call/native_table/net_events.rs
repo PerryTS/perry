@@ -1437,7 +1437,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "on",
         class_filter: None,
         runtime: "js_event_emitter_on",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): pass the full NaN-boxed listener so the runtime can
+        // validate it is callable and throw ERR_INVALID_ARG_TYPE otherwise.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1455,7 +1457,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "removeListener",
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable before removal.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1478,7 +1481,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "once",
         class_filter: None,
         runtime: "js_event_emitter_once",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1487,7 +1491,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "addListener",
         class_filter: None,
         runtime: "js_event_emitter_on",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1496,7 +1501,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "prependListener",
         class_filter: None,
         runtime: "js_event_emitter_prepend_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1505,7 +1511,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "prependOnceListener",
         class_filter: None,
         runtime: "js_event_emitter_prepend_once_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -1514,7 +1521,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "off",
         class_filter: None,
         runtime: "js_event_emitter_remove_listener",
-        args: &[NA_STR, NA_PTR],
+        // NA_JSV (#3072): validate the listener is callable.
+        args: &[NA_STR, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {

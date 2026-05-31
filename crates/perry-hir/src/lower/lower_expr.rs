@@ -589,6 +589,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
                         return Ok(Expr::String("function".to_string()));
                     }
+                    // #2874: global `Iterator` (TC39 iterator-helpers) is a
+                    // constructor function in Node 22+.
+                    if id.sym.as_ref() == "Iterator"
+                        && ctx.lookup_local("Iterator").is_none()
+                        && ctx.lookup_func("Iterator").is_none()
+                    {
+                        return Ok(Expr::String("function".to_string()));
+                    }
                     // #1454: global timer builtins (+ fetch) are functions, but
                     // a bare read lowers to an ExternFuncRef whose typeof reads
                     // "boolean". Fold to "function" (gc is excluded — it's
