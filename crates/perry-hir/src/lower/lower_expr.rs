@@ -101,6 +101,13 @@ fn is_known_global_identifier_name(name: &str) -> bool {
     ) || is_builtin_global_value_name(name)
 }
 
+fn is_cjs_style_native_default_import(module_name: &str) -> bool {
+    matches!(
+        module_name,
+        "async_hooks" | "events" | "os" | "path" | "querystring" | "sys" | "url" | "util"
+    )
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -271,6 +278,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     return Ok(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
                         property: method.to_string(),
+                    });
+                }
+                if ctx.lookup_builtin_module_alias(&name).is_none()
+                    && is_cjs_style_native_default_import(module_name)
+                {
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+                        property: "default".to_string(),
                     });
                 }
                 // Native module reference (e.g., mysql from 'mysql2/promise')

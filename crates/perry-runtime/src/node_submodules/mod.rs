@@ -750,9 +750,7 @@ pub(crate) fn emit_sys_deprecation_warning_once() {
         return;
     }
     let pid = std::process::id();
-    eprintln!(
-        "(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use `node:util` instead."
-    );
+    eprintln!("(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use util instead.");
     eprintln!("(Use `node --trace-deprecation ...` to show where the warning was created)");
 }
 
@@ -760,9 +758,20 @@ fn sys_util_namespace_value() -> f64 {
     crate::object::js_create_native_module_namespace(b"util".as_ptr(), "util".len())
 }
 
+fn sys_util_default_value() -> f64 {
+    unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"util".as_ptr(),
+            "util".len(),
+            b"default".as_ptr(),
+            "default".len(),
+        )
+    }
+}
+
 fn sys_util_export_value(name: &str) -> Option<f64> {
     if name == "default" {
-        return Some(sys_util_namespace_value());
+        return Some(sys_util_default_value());
     }
     let value = unsafe {
         crate::object::js_native_module_property_by_name(
@@ -1193,7 +1202,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
     if submod.key == "sys" {
         emit_sys_deprecation_warning_once();
         if name == "default" {
-            return sys_util_namespace_value();
+            return sys_util_default_value();
         }
         return unsafe {
             crate::object::js_native_module_property_by_name(
