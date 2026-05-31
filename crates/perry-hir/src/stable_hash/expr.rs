@@ -543,7 +543,7 @@ impl SH for Expr {
             Expr::ProxyConstruct { proxy, args } => { tag(h, 430); proxy.as_ref().hash(h); args.hash(h); }
             Expr::ProxyRevocable { target, handler } => { tag(h, 431); target.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProxyRevoke(e) => { tag(h, 432); e.as_ref().hash(h); }
-            Expr::ReflectGet { target, key } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); }
+            Expr::ReflectGet { target, key, receiver } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ReflectSet { target, key, value } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ReflectHas { target, key } => { tag(h, 435); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectDelete { target, key } => { tag(h, 436); target.as_ref().hash(h); key.as_ref().hash(h); }
@@ -552,6 +552,7 @@ impl SH for Expr {
             Expr::ReflectConstruct { target, args } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); }
             Expr::ReflectDefineProperty { target, key, descriptor, } => { tag(h, 440); target.as_ref().hash(h); key.as_ref().hash(h); descriptor.as_ref().hash(h); }
             Expr::ReflectGetPrototypeOf(e) => { tag(h, 441); e.as_ref().hash(h); }
+            Expr::ReflectSetPrototypeOf { target, proto } => { tag(h, 12230); target.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::ReflectIsExtensible(e) => { tag(h, 12048); e.as_ref().hash(h); }
             Expr::ReflectPreventExtensions(e) => { tag(h, 12046); e.as_ref().hash(h); }
             Expr::ReflectDefineMetadata { key, value, target, property_key, } => { tag(h, 12023); key.as_ref().hash(h); value.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }

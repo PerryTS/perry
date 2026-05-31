@@ -126,12 +126,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block().call_void("js_proxy_revoke", &[(DOUBLE, &p)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
-        Expr::ReflectGet { target, key } => {
+        Expr::ReflectGet {
+            target,
+            key,
+            receiver,
+        } => {
+            // #2766: pass the optional receiver through; the runtime defaults
+            // an `undefined` receiver to the target and binds it as `this` for
+            // accessor getters.
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_reflect_get", &[(DOUBLE, &t), (DOUBLE, &k)]))
+            let r = lower_expr(ctx, receiver)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_get",
+                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &r)],
+            ))
         }
         Expr::ReflectSet { target, key, value } => {
             let t = lower_expr(ctx, target)?;
@@ -199,6 +209,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 DOUBLE,
                 "js_reflect_define_property",
                 &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &d)],
+            ))
+        }
+        Expr::ReflectSetPrototypeOf { target, proto } => {
+            // #2761: Reflect-specific boolean result (false on rejected change)
+            // + TypeError on bad args, distinct from Object.setPrototypeOf.
+            let t = lower_expr(ctx, target)?;
+            let p = lower_expr(ctx, proto)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_set_prototype_of",
+                &[(DOUBLE, &t), (DOUBLE, &p)],
             ))
         }
         Expr::ReflectGetPrototypeOf(target) => {

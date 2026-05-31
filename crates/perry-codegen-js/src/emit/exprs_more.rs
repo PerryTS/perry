@@ -1524,11 +1524,17 @@ impl JsEmitter {
             Expr::ProxyRevoke(_) => {
                 self.output.push_str("undefined");
             }
-            Expr::ReflectGet { target, key } => {
+            Expr::ReflectGet {
+                target,
+                key,
+                receiver,
+            } => {
                 self.output.push_str("Reflect.get(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(key);
+                self.output.push_str(", ");
+                self.emit_expr(receiver);
                 self.output.push(')');
             }
             Expr::ReflectSet { target, key, value } => {
@@ -1595,6 +1601,13 @@ impl JsEmitter {
             Expr::ReflectGetPrototypeOf(target) => {
                 self.output.push_str("Reflect.getPrototypeOf(");
                 self.emit_expr(target);
+                self.output.push(')');
+            }
+            Expr::ReflectSetPrototypeOf { target, proto } => {
+                self.output.push_str("Reflect.setPrototypeOf(");
+                self.emit_expr(target);
+                self.output.push_str(", ");
+                self.emit_expr(proto);
                 self.output.push(')');
             }
             Expr::ReflectIsExtensible(target) => {
