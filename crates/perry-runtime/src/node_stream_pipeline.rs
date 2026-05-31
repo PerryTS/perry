@@ -250,6 +250,8 @@ pub(super) fn add_pipeline_callback_listeners(
 
 pub(super) fn wire_pipeline_pair(src: f64, dest: f64, end_dest: bool) {
     add_pipe_destination(src, dest);
+    mark_live_pipe_consume_on_emit(src);
+    mark_live_pipe_consume_on_emit(dest);
     if !end_dest {
         add_pipe_no_end_destination(src, dest);
     }
@@ -395,11 +397,7 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
         _ => {}
     }
     if let Some(result) = js_node_stream_collect_chunks_result(value) {
-        let chunks = result?;
-        if pipeline_should_coalesce_chunks(value) {
-            return Ok(pipeline_coalesce_chunks(chunks));
-        }
-        return Ok(chunks);
+        return result;
     }
     let raw = raw_ptr_from_value(value);
     if let Some(chunks) = collection_iterable_chunks(raw) {
@@ -419,43 +417,6 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
         return Ok(pipeline_single_chunk(value));
     }
     Ok(pipeline_empty_chunks())
-}
-
-pub(super) fn pipeline_should_coalesce_chunks(value: f64) -> bool {
-    is_transform_stream(value)
-        && !has_truthy_hidden(value, hidden_key(b"readableObjectMode"))
-        && !has_truthy_hidden(value, hidden_writable_object_mode_key())
-}
-
-pub(super) fn pipeline_value_to_string(value: f64) -> String {
-    let ptr = crate::value::js_jsvalue_to_string(value);
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-    }
-}
-
-pub(super) fn pipeline_coalesce_chunks(chunks: f64) -> f64 {
-    if !is_array_like_value(chunks) {
-        return chunks;
-    }
-    let arr = raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    if len <= 1 {
-        return chunks;
-    }
-    let mut joined = String::new();
-    for i in 0..len {
-        joined.push_str(&pipeline_value_to_string(crate::array::js_array_get_f64(
-            arr, i,
-        )));
-    }
-    let value = string_value(joined.as_bytes());
-    pipeline_single_chunk(value)
 }
 
 pub(super) fn pipeline_chunks_vec(chunks: f64) -> Vec<f64> {
@@ -757,41 +718,14 @@ fn compose_copy_chunks(chunks: f64) -> f64 {
     box_pointer(out as *const u8)
 }
 
-fn compose_is_buffer_chunk(chunk: f64) -> bool {
-    crate::buffer::js_buffer_is_buffer(chunk.to_bits() as i64) == 1
-}
-
-fn compose_coalesce_stage_output(stage: f64, chunks: f64) -> f64 {
-    if !pipeline_should_coalesce_chunks(stage) {
-        return chunks;
-    }
-    let values = pipeline_chunks_vec(chunks);
-    if values.len() <= 1 {
-        return chunks;
-    }
-    if values.iter().all(|chunk| compose_is_buffer_chunk(*chunk)) {
-        let mut arr = crate::array::js_array_alloc(values.len() as u32);
-        for value in values {
-            arr = crate::array::js_array_push_f64(arr, value);
-        }
-        let joined = crate::buffer::js_buffer_concat(arr as *const crate::array::ArrayHeader);
-        return pipeline_single_chunk(box_pointer(joined as *const u8));
-    }
-    if values.iter().any(|chunk| compose_is_buffer_chunk(*chunk)) {
-        return chunks;
-    }
-    pipeline_coalesce_chunks(chunks)
-}
-
 fn compose_take_stage_output(stage: f64) -> Result<f64, f64> {
     drain_compose_stream_stage(stage);
     if let Some(err) = readable_hidden_error(stage) {
         return Err(err);
     }
-    let mut chunks = readable_hidden_chunks(stage)
+    let chunks = readable_hidden_chunks(stage)
         .map(compose_copy_chunks)
         .unwrap_or_else(compose_empty_chunks);
-    chunks = compose_coalesce_stage_output(stage, chunks);
     clear_readable_buffer(stage);
     clear_pending_readable_chunks(stage);
     if let Some(err) = readable_hidden_error(stage) {
