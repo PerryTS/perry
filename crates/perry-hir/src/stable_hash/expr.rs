@@ -508,6 +508,7 @@ impl SH for Expr {
             Expr::ObjectRest { object, exclude_keys, } => { tag(h, 395); object.as_ref().hash(h); exclude_keys.hash(h); }
             Expr::ArrayIsArray(e) => { tag(h, 396); e.as_ref().hash(h); }
             Expr::ArrayFrom(e) => { tag(h, 397); e.as_ref().hash(h); }
+            Expr::IteratorFrom(e) => { tag(h, 12270); e.as_ref().hash(h); }
             Expr::IteratorToArray(e) => { tag(h, 398); e.as_ref().hash(h); }
             Expr::GetIterator(e) => { tag(h, 11238); e.as_ref().hash(h); }
             Expr::ForOfToArray(e) => { tag(h, 11243); e.as_ref().hash(h); }

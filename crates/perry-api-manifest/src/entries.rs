@@ -61,6 +61,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "buffer",
     "assert",
     "assert/strict",
+    "test",
     "child_process",
     "dgram",
     "net",
@@ -155,6 +156,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "buffer",
     "assert",
     "assert/strict",
+    "test",
     "child_process",
     "dgram",
     "stream",
@@ -280,6 +282,12 @@ const ZLIB_STREAM_OPTS: &[ParamSpec] = &[ParamSpec::Named {
     optional: true,
 }];
 const ZLIB_CALLBACK_ARGS: &[ParamSpec] = &[p_any("buffer"), p_any("callback")];
+/// #2935 — optional `{ level, ... }` options object for one-shot codecs.
+const ZLIB_OPTIONS_PARAM: ParamSpec = ParamSpec::Named {
+    name: "options",
+    ty: TypeSpec::Any,
+    optional: true,
+};
 const fn zlib_stream_factory(name: &'static str) -> ApiEntry {
     method_sig("zlib", name, false, None, ZLIB_STREAM_OPTS, TypeSpec::Any)
 }
@@ -1373,12 +1381,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("cheerio", "children", true, None),
     method("cheerio", "parent", true, None),
     method("cheerio", "hasClass", true, None),
+    // #2935: gzipSync/deflateSync accept an optional `{ level }` options
+    // object as the 2nd argument (dispatch is NA_JSV, so the data slot
+    // accepts a string or Buffer alike).
     method_sig(
         "zlib",
         "gzipSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::String,
     ),
     method_sig(
@@ -1386,7 +1397,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "gunzipSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0")],
         TypeSpec::String,
     ),
     method_sig(
@@ -1394,7 +1405,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "deflateSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::String,
     ),
     method_sig(
@@ -1402,7 +1413,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "inflateSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0")],
         TypeSpec::String,
     ),
     method_sig(
@@ -2593,6 +2604,24 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("module", "isBuiltin", false, None),
     class("module", "SourceMap"),
     method("module", "SourceMap", false, None),
+    // node:test — shape-only runner surface. Runtime returns no-op function
+    // values and plain objects for mock/snapshot so feature probes work; Perry
+    // does not execute Node's test runner.
+    method("test", "skip", false, None),
+    method("test", "todo", false, None),
+    method("test", "only", false, None),
+    method("test", "suite", false, None),
+    method("test", "describe", false, None),
+    method("test", "it", false, None),
+    method("test", "before", false, None),
+    method("test", "after", false, None),
+    method("test", "beforeEach", false, None),
+    method("test", "afterEach", false, None),
+    method("test", "run", false, None),
+    property("test", "mock"),
+    method("test", "fn", false, Some("mock")),
+    method("test", "property", false, Some("mock")),
+    property("test", "snapshot"),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "cwd", false, None),

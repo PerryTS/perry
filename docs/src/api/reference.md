@@ -2,12 +2,11 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1883 entries across 91 modules.
+Total: 1891 entries across 91 modules.
 
 ## Modules
 
 - [`@perryts/pdf`](#-perryts-pdf)
-- [`__disposable__`](#--disposable--)
 - [`argon2`](#argon2)
 - [`assert`](#assert)
 - [`assert/strict`](#assert-strict)
@@ -86,6 +85,7 @@ Total: 1883 entries across 91 modules.
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
 - [`sys`](#sys)
+- [`test`](#test)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -109,18 +109,6 @@ Total: 1883 entries across 91 modules.
 - `pdfAddText` — module
 - `pdfNewPage` — module
 - `pdfSave` — module
-
-## `__disposable__`
-
-### Methods
-
-- `adopt` — instance
-- `defer` — instance
-- `dispose` — instance
-- `disposeAsync` — instance
-- `disposed` — instance
-- `move` — instance
-- `use` — instance
 
 ## `argon2`
 
@@ -2324,6 +2312,29 @@ Total: 1883 entries across 91 modules.
 ### Properties
 
 - `types`
+
+## `test`
+
+### Methods
+
+- `after` — module
+- `afterEach` — module
+- `before` — module
+- `beforeEach` — module
+- `describe` — module
+- `fn` — module *(class: `mock`)*
+- `it` — module
+- `only` — module
+- `property` — module *(class: `mock`)*
+- `run` — module
+- `skip` — module
+- `suite` — module
+- `todo` — module
+
+### Properties
+
+- `mock`
+- `snapshot`
 
 ## `tls`
 

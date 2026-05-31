@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1883 entries across 91 modules
+// Coverage: 1891 entries across 91 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -64,9 +64,6 @@ declare module "@perryts/pdf" {
   export function pdfNewPage(...args: any[]): any;
   /** stdlib */
   export function pdfSave(...args: any[]): any;
-}
-
-declare module "__disposable__" {
 }
 
 declare module "argon2" {
@@ -2676,6 +2673,35 @@ declare module "sys" {
   export function transferableAbortSignal(...args: any[]): any;
 }
 
+declare module "test" {
+  /** stdlib */
+  export const mock: any;
+  /** stdlib */
+  export const snapshot: any;
+  /** stdlib */
+  export function after(...args: any[]): any;
+  /** stdlib */
+  export function afterEach(...args: any[]): any;
+  /** stdlib */
+  export function before(...args: any[]): any;
+  /** stdlib */
+  export function beforeEach(...args: any[]): any;
+  /** stdlib */
+  export function describe(...args: any[]): any;
+  /** stdlib */
+  export function it(...args: any[]): any;
+  /** stdlib */
+  export function only(...args: any[]): any;
+  /** stdlib */
+  export function run(...args: any[]): any;
+  /** stdlib */
+  export function skip(...args: any[]): any;
+  /** stdlib */
+  export function suite(...args: any[]): any;
+  /** stdlib */
+  export function todo(...args: any[]): any;
+}
+
 declare module "tls" {
   /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
@@ -3028,15 +3054,15 @@ declare module "zlib" {
   /** stdlib */
   export function deflateRawSync(p0: string): any;
   /** stdlib */
-  export function deflateSync(p0: string): string;
+  export function deflateSync(p0: any, options?: any): string;
   /** stdlib */
   export function gunzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gunzipSync(p0: string): string;
+  export function gunzipSync(p0: any): string;
   /** stdlib */
   export function gzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gzipSync(p0: string): string;
+  export function gzipSync(p0: any, options?: any): string;
   /** stdlib */
   export function inflate(buffer: any, callback: any): void;
   /** stdlib */
@@ -3044,7 +3070,7 @@ declare module "zlib" {
   /** stdlib */
   export function inflateRawSync(p0: string): any;
   /** stdlib */
-  export function inflateSync(p0: string): string;
+  export function inflateSync(p0: any): string;
   /** stdlib */
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */

@@ -121,6 +121,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // number/boolean/symbol -> [], otherwise materializes via js_array_clone.
     // Takes the raw NaN-boxed value so the tag bits survive.
     module.declare_function("js_array_from_value", I64, &[DOUBLE]);
+    // #2874: Iterator.from(x) — wrap any iterable in a lazy iterator-helper
+    // object. Returns an already NaN-boxed pointer (DOUBLE).
+    module.declare_function("js_iterator_from", DOUBLE, &[DOUBLE]);
     // #2773: Array.from(source, mapFn, thisArg?) — nullish-throw + mapFn
     // callability validation + (value,index) mapped call with thisArg binding.
     module.declare_function("js_array_from_mapped", I64, &[DOUBLE, DOUBLE, DOUBLE]);
