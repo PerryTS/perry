@@ -40,7 +40,9 @@ use crate::promise::{
     js_value_is_promise, ClosurePtr, Promise,
 };
 use crate::string::js_string_from_bytes;
-use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_NULL, TAG_UNDEFINED};
+use crate::value::{
+    JSValue, POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+};
 
 const TAG_UNDEFINED_F64: f64 = f64::from_bits(TAG_UNDEFINED);
 const TAG_NULL_F64: f64 = f64::from_bits(TAG_NULL);
@@ -160,6 +162,11 @@ fn register_thunks_once() {
         js_register_closure_rest(callbackify_outer_thunk as *const u8, 0);
         js_register_closure_arity(callbackify_fulfilled_thunk as *const u8, 1);
         js_register_closure_arity(callbackify_rejected_thunk as *const u8, 1);
+        js_register_closure_rest(deprecate_outer_thunk as *const u8, 0);
+        crate::builtins::register_function_name_if_absent(
+            deprecate_outer_thunk as *const () as usize,
+            "deprecated",
+        );
         flag.set(true);
     });
 }
@@ -202,15 +209,62 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
     nanbox_pointer(closure_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
 }
 
-/// Minimal `util.deprecate(fn, msg, code)` shape.
-///
-/// Full warning emission is separate; callers must at least receive a callable
-/// that forwards to the original function, and Node accepts string codes that
-/// contain spaces.
+fn function_length(value: f64) -> u32 {
+    if let Some(arity) = unsafe { crate::object::bound_native_callable_value_arity(value) } {
+        return arity;
+    }
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return 0;
+    }
+    let closure = jv.as_pointer::<ClosureHeader>();
+    if closure.is_null() {
+        return 0;
+    }
+    if let Some(len) = crate::object::builtin_closure_length(closure as usize) {
+        return len;
+    }
+    crate::closure::closure_arity(closure).unwrap_or(0)
+}
+
+/// `util.deprecate(fn, msg, code)` — returns a wrapper named `deprecated` that
+/// emits one `DeprecationWarning` on first invocation, then forwards all calls.
 #[no_mangle]
-pub extern "C" fn js_util_deprecate(fn_value: f64, _msg: f64, _code: f64) -> f64 {
+pub extern "C" fn js_util_deprecate(fn_value: f64, msg: f64, code: f64) -> f64 {
     validate_deprecate_target(fn_value);
-    fn_value
+
+    register_thunks_once();
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+    let msg_handle = scope.root_nanbox_f64(msg);
+    let code_handle = scope.root_nanbox_f64(code);
+    let closure = js_closure_alloc(deprecate_outer_thunk as *const u8, 4);
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        0,
+        fn_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        1,
+        msg_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        closure_handle.get_raw_mut_ptr(),
+        2,
+        code_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(closure_handle.get_raw_mut_ptr(), 3, TAG_UNDEFINED_F64);
+    crate::object::set_builtin_closure_length(
+        closure_handle.get_raw_const_ptr::<ClosureHeader>() as usize,
+        function_length(fn_handle.get_nanbox_f64()),
+    );
+    nanbox_pointer(closure_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8)
 }
 
 /// `util.callbackify(fn)` — returns a wrapper closure as a NaN-boxed f64.
@@ -340,6 +394,54 @@ extern "C" fn inner_callback_thunk(closure: *const ClosureHeader, err: f64, valu
         js_promise_reject(promise_ptr, err);
     }
     TAG_UNDEFINED_F64
+}
+
+/// `util.deprecate()` wrapper body. Receives all user arguments bundled in
+/// `rest_value`, emits one warning per wrapper, then forwards the call.
+extern "C" fn deprecate_outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fn_value = js_closure_get_capture_f64(closure, 0);
+    let msg = js_closure_get_capture_f64(closure, 1);
+    let code = js_closure_get_capture_f64(closure, 2);
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+    let msg_handle = scope.root_nanbox_f64(msg);
+    let code_handle = scope.root_nanbox_f64(code);
+    let rest_handle = scope.root_nanbox_f64(rest_value);
+
+    if js_closure_get_capture_f64(closure, 3).to_bits() != TAG_TRUE {
+        js_closure_set_capture_f64(closure as *mut ClosureHeader, 3, f64::from_bits(TAG_TRUE));
+        let warning_type = js_string_from_bytes(b"DeprecationWarning".as_ptr(), 18);
+        let warning_type_value = f64::from_bits(JSValue::string_ptr(warning_type).bits());
+        let warning_type_handle = scope.root_nanbox_f64(warning_type_value);
+        crate::process::js_process_emit_warning(
+            msg_handle.get_nanbox_f64(),
+            warning_type_handle.get_nanbox_f64(),
+            code_handle.get_nanbox_f64(),
+        );
+    }
+
+    let rest_bits = rest_handle.get_nanbox_f64().to_bits();
+    let rest_arr_ptr = if (rest_bits & TAG_MASK) == POINTER_TAG {
+        (rest_bits & POINTER_MASK) as *const ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+    let rest_len = if rest_arr_ptr.is_null() {
+        0
+    } else {
+        js_array_length(rest_arr_ptr) as usize
+    };
+    let rest_data = if rest_arr_ptr.is_null() {
+        std::ptr::null()
+    } else {
+        unsafe { (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
+    };
+
+    unsafe { crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), rest_data, rest_len) }
 }
 
 /// Outer callbackify body: `(closure, rest_array_value) -> undefined`.
