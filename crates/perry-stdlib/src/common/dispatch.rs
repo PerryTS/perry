@@ -1188,13 +1188,51 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         }
     }
 
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+            fn js_ext_http_agent_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+        }
+
+        if matches!(
+            property_name,
+            "createConnection"
+                | "createSocket"
+                | "keepSocketAlive"
+                | "reuseSocket"
+                | "getName"
+                | "destroy"
+                | "close"
+        ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_agent_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+    }
+
     // Server-side node:http request/response handles whose static
-    // `IncomingMessage` / `ServerResponse` type was lost.
+    // `HttpServer` / `IncomingMessage` / `ServerResponse` type was lost.
     #[cfg(feature = "external-http-server-pump")]
     {
         extern "C" {
+            fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http_server_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
             fn js_ext_http_incoming_message_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
@@ -1205,6 +1243,27 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 property_ptr: *const u8,
                 property_len: usize,
             ) -> f64;
+        }
+
+        if matches!(
+            property_name,
+            "listen"
+                | "close"
+                | "closeAllConnections"
+                | "closeIdleConnections"
+                | "address"
+                | "on"
+                | "addListener"
+                | "setTimeout"
+        ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http_server_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
         }
 
         if matches!(
