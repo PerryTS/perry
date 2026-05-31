@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2234 entries across 99 modules.
+Total: 2277 entries across 99 modules.
 
 ## Modules
 
@@ -1603,6 +1603,8 @@ Total: 2234 entries across 99 modules.
 
 - `builtinModules`
 - `constants`
+- `wrap`
+- `wrapper`
 
 ## `moment`
 
@@ -2764,9 +2766,11 @@ Total: 2234 entries across 99 modules.
 
 - `URL`
 - `URLSearchParams`
+- `Url`
 
 ### Methods
 
+- `Url` — module
 - `createObjectURL` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
@@ -2776,6 +2780,7 @@ Total: 2234 entries across 99 modules.
 - `parse` — module
 - `pathToFileURL` — module
 - `resolve` — module
+- `resolveObject` — module
 - `revokeObjectURL` — module
 - `urlToHttpOptions` — module
 
@@ -2824,13 +2829,16 @@ Total: 2234 entries across 99 modules.
 ### Methods
 
 - `isAnyArrayBuffer` — module
+- `isArgumentsObject` — module
 - `isArrayBuffer` — module
 - `isArrayBufferView` — module
 - `isAsyncFunction` — module
 - `isBigInt64Array` — module
+- `isBigIntObject` — module
 - `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
+- `isCryptoKey` — module
 - `isDataView` — module
 - `isDate` — module
 - `isExternal` — module
@@ -2842,8 +2850,10 @@ Total: 2234 entries across 99 modules.
 - `isInt16Array` — module
 - `isInt32Array` — module
 - `isInt8Array` — module
+- `isKeyObject` — module
 - `isMap` — module
 - `isMapIterator` — module
+- `isModuleNamespaceObject` — module
 - `isNativeError` — module
 - `isNumberObject` — module
 - `isPromise` — module
@@ -2853,6 +2863,7 @@ Total: 2234 entries across 99 modules.
 - `isSetIterator` — module
 - `isSharedArrayBuffer` — module
 - `isStringObject` — module
+- `isSymbolObject` — module
 - `isTypedArray` — module
 - `isUint16Array` — module
 - `isUint32Array` — module
@@ -2874,18 +2885,53 @@ Total: 2234 entries across 99 modules.
 
 ### Classes
 
+- `DefaultDeserializer`
+- `DefaultSerializer`
+- `Deserializer`
 - `GCProfiler`
+- `Serializer`
 
 ### Methods
 
+- `addDeserializeCallback` — instance *(class: `startupSnapshot`)*
+- `addSerializeCallback` — instance *(class: `startupSnapshot`)*
 - `cachedDataVersionTag` — module
+- `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
 - `getHeapCodeStatistics` — module
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
+- `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
+- `onAfter` — instance *(class: `promiseHooks`)*
+- `onBefore` — instance *(class: `promiseHooks`)*
+- `onInit` — instance *(class: `promiseHooks`)*
+- `onSettled` — instance *(class: `promiseHooks`)*
+- `readDouble` — instance *(class: `Deserializer`)*
+- `readHeader` — instance *(class: `Deserializer`)*
+- `readRawBytes` — instance *(class: `Deserializer`)*
+- `readUint32` — instance *(class: `Deserializer`)*
+- `readUint64` — instance *(class: `Deserializer`)*
+- `readValue` — instance *(class: `Deserializer`)*
+- `releaseBuffer` — instance *(class: `Serializer`)*
 - `serialize` — module
+- `setDeserializeMainFunction` — instance *(class: `startupSnapshot`)*
+- `setFlagsFromString` — module
+- `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `stop` — instance *(class: `GCProfiler`)*
+- `stopCoverage` — module
+- `takeCoverage` — module
+- `writeDouble` — instance *(class: `Serializer`)*
+- `writeHeader` — instance *(class: `Serializer`)*
+- `writeRawBytes` — instance *(class: `Serializer`)*
+- `writeUint32` — instance *(class: `Serializer`)*
+- `writeUint64` — instance *(class: `Serializer`)*
+- `writeValue` — instance *(class: `Serializer`)*
+
+### Properties
+
+- `promiseHooks`
+- `startupSnapshot`
 
 ## `validator`
 
