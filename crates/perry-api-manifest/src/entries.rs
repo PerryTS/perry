@@ -565,9 +565,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Void,
     ),
-    // node:dns is currently a runtime-only shape stub: deterministic
-    // inventory helpers, constants, Resolver method shapes, and a local-only
-    // promises lookup for `localhost`. It does not perform external DNS IO.
+    // node:dns is currently runtime-only and deterministic: inventory
+    // helpers, constants, Resolver method shapes, and lookup/lookupService
+    // for localhost/loopback. It does not perform external DNS IO.
     method("dns", "lookup", false, None),
     method("dns", "lookupService", false, None),
     method("dns", "resolve", false, None),

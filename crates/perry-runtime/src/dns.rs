@@ -59,6 +59,18 @@ enum RecordKind {
     Txt,
 }
 
+#[derive(Clone)]
+struct ResolvedAddress {
+    address: String,
+    family: i32,
+}
+
+#[derive(Clone, Copy)]
+struct LookupOptions {
+    family: i32,
+    all: bool,
+}
+
 fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
@@ -146,6 +158,17 @@ fn js_string_to_rust(value: f64) -> Option<String> {
     }
 }
 
+fn numeric_value(value: f64) -> Option<f64> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_int32() {
+        Some(js_value.as_int32() as f64)
+    } else if js_value.is_number() {
+        Some(js_value.as_number())
+    } else {
+        None
+    }
+}
+
 fn closure_ptr_from_value(value: f64) -> Option<*const ClosureHeader> {
     let js_value = JSValue::from_bits(value.to_bits());
     if !js_value.is_pointer() {
@@ -157,6 +180,33 @@ fn closure_ptr_from_value(value: f64) -> Option<*const ClosureHeader> {
 
 fn is_callable_value(value: f64) -> bool {
     closure_ptr_from_value(value).is_some()
+}
+
+fn value_gc_type(value: f64) -> Option<u8> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let ptr = js_value.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < 0x10000 || ((ptr as u64) >> 48) != 0 {
+        return None;
+    }
+    unsafe {
+        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        Some((*gc_header).obj_type)
+    }
+}
+
+fn is_plain_object_value(value: f64) -> bool {
+    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+}
+
+fn option_field(options: f64, name: &str) -> f64 {
+    if !is_plain_object_value(options) {
+        return undefined_value();
+    }
+    let obj = JSValue::from_bits(options.to_bits()).as_pointer::<ObjectHeader>();
+    crate::object::js_object_get_field_by_name_f64(obj, key(name))
 }
 
 fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> {
@@ -361,6 +411,82 @@ fn invalid_arg_value_received(value: f64) -> String {
         return value.to_string();
     }
     "{}".to_string()
+}
+
+fn type_error_value(message: &str, code: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_typeerror_new(msg);
+    boxed_pointer(err as *const u8)
+}
+
+fn range_error_value(message: &str, code: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_rangeerror_new(msg);
+    boxed_pointer(err as *const u8)
+}
+
+fn plain_error_value(message: &str, code: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_error_new_with_message(msg);
+    boxed_pointer(err as *const u8)
+}
+
+fn throw_error_value(value: f64) -> ! {
+    crate::exception::js_throw(value)
+}
+
+fn invalid_callback_error(value: f64) -> f64 {
+    let message = format!(
+        "The \"callback\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn invalid_hostname_error(value: f64) -> f64 {
+    let message = format!(
+        "The \"hostname\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn invalid_address_error(value: f64) -> f64 {
+    let message = format!(
+        "The argument 'address' is invalid. Received {}",
+        invalid_arg_value_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn invalid_family_error(value: f64) -> f64 {
+    let message = format!(
+        "The property 'options.family' must be one of: 0, 4, 6. Received {}",
+        invalid_arg_value_received(value)
+    );
+    type_error_value(&message, "ERR_INVALID_ARG_VALUE")
+}
+
+fn lookup_service_missing_args_error() -> f64 {
+    type_error_value(
+        "The \"address\", \"port\", and \"callback\" arguments must be specified",
+        "ERR_MISSING_ARGS",
+    )
+}
+
+fn bad_port_error(value: f64) -> f64 {
+    let message = format!(
+        "Port should be >= 0 and < 65536. Received {}.",
+        crate::fs::validate::describe_received(value)
+    );
+    range_error_value(&message, "ERR_SOCKET_BAD_PORT")
+}
+
+fn dns_not_found_error(hostname: &str) -> f64 {
+    plain_error_value(&format!("getaddrinfo ENOTFOUND {hostname}"), "ENOTFOUND")
 }
 
 fn throw_invalid_dns_order(value: f64) -> ! {
@@ -599,6 +725,177 @@ fn reverse_records(name: &str) -> f64 {
     }
 }
 
+fn validate_family(value: f64) -> Result<i32, f64> {
+    let Some(n) = numeric_value(value) else {
+        return Err(invalid_family_error(value));
+    };
+    if !n.is_finite() || n.fract() != 0.0 {
+        return Err(invalid_family_error(value));
+    }
+    let family = n as i32;
+    if matches!(family, 0 | 4 | 6) {
+        Ok(family)
+    } else {
+        Err(invalid_family_error(value))
+    }
+}
+
+fn parse_lookup_options(value: f64) -> Result<LookupOptions, f64> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_undefined() || js_value.is_null() {
+        return Ok(LookupOptions {
+            family: 0,
+            all: false,
+        });
+    }
+    if numeric_value(value).is_some() {
+        return Ok(LookupOptions {
+            family: validate_family(value)?,
+            all: false,
+        });
+    }
+    if is_plain_object_value(value) && !is_callable_value(value) {
+        let family_value = option_field(value, "family");
+        let all_value = option_field(value, "all");
+        let family = if JSValue::from_bits(family_value.to_bits()).is_undefined() {
+            0
+        } else {
+            validate_family(family_value)?
+        };
+        return Ok(LookupOptions {
+            family,
+            all: JSValue::from_bits(all_value.to_bits()).to_bool(),
+        });
+    }
+    Err(type_error_value(
+        &format!(
+            "The \"options\" argument must be of type object or number. Received {}",
+            crate::fs::validate::describe_received(value)
+        ),
+        "ERR_INVALID_ARG_TYPE",
+    ))
+}
+
+fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>, f64> {
+    if localhost_name(hostname) {
+        return Ok(match family {
+            4 => vec![ResolvedAddress {
+                address: "127.0.0.1".to_string(),
+                family: 4,
+            }],
+            6 => vec![ResolvedAddress {
+                address: "::1".to_string(),
+                family: 6,
+            }],
+            _ => vec![
+                ResolvedAddress {
+                    address: "127.0.0.1".to_string(),
+                    family: 4,
+                },
+                ResolvedAddress {
+                    address: "::1".to_string(),
+                    family: 6,
+                },
+            ],
+        });
+    }
+    if let Ok(addr) = hostname.parse::<IpAddr>() {
+        let resolved_family = if addr.is_ipv4() { 4 } else { 6 };
+        if family == 0 || family == resolved_family {
+            return Ok(vec![ResolvedAddress {
+                address: hostname.to_string(),
+                family: resolved_family,
+            }]);
+        }
+    }
+    Err(dns_not_found_error(hostname))
+}
+
+fn lookup_result(address: &ResolvedAddress) -> f64 {
+    object_value(&[
+        ("address", str_value(&address.address)),
+        ("family", address.family as f64),
+    ])
+}
+
+fn lookup_all_result(addresses: &[ResolvedAddress]) -> f64 {
+    let values: Vec<f64> = addresses.iter().map(lookup_result).collect();
+    array_value_from_values(&values)
+}
+
+fn queue_callback(callback_value: f64, args: &[f64]) {
+    let callback = closure_ptr_from_value(callback_value)
+        .unwrap_or_else(|| throw_error_value(invalid_callback_error(callback_value)));
+    unsafe {
+        crate::builtins::js_queue_next_tick_args(callback as i64, args.as_ptr(), args.len() as i32);
+    }
+}
+
+fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, f64> {
+    let addresses = lookup_addresses(hostname, options.family)?;
+    if options.all {
+        Ok(lookup_all_result(&addresses))
+    } else {
+        Ok(lookup_result(&addresses[0]))
+    }
+}
+
+fn lookup_callback_values(hostname: &str, options: LookupOptions) -> Result<Vec<f64>, f64> {
+    let addresses = lookup_addresses(hostname, options.family)?;
+    if options.all {
+        Ok(vec![null_value(), lookup_all_result(&addresses)])
+    } else {
+        let first = &addresses[0];
+        Ok(vec![
+            null_value(),
+            str_value(&first.address),
+            first.family as f64,
+        ])
+    }
+}
+
+fn parse_lookup_service_port(value: f64) -> Result<u16, f64> {
+    let n = if let Some(n) = numeric_value(value) {
+        n
+    } else if let Some(s) = js_string_to_rust(value) {
+        match s.parse::<f64>() {
+            Ok(n) => n,
+            Err(_) => return Err(bad_port_error(value)),
+        }
+    } else {
+        return Err(bad_port_error(value));
+    };
+    if !n.is_finite() || n.fract() != 0.0 || !(0.0..65536.0).contains(&n) {
+        return Err(bad_port_error(value));
+    }
+    Ok(n as u16)
+}
+
+fn service_for_port(port: u16) -> String {
+    match port {
+        22 => "ssh".to_string(),
+        53 => "domain".to_string(),
+        80 => "http".to_string(),
+        443 => "https".to_string(),
+        _ => port.to_string(),
+    }
+}
+
+fn lookup_service_result(address: &str, port: u16) -> Result<(String, String), f64> {
+    match address.parse::<IpAddr>() {
+        Ok(addr) if addr.is_loopback() => Ok(("localhost".to_string(), service_for_port(port))),
+        Ok(_) => Ok((address.to_string(), service_for_port(port))),
+        Err(_) => Err(invalid_address_error(str_value(address))),
+    }
+}
+
+fn lookup_service_object(hostname: &str, service: &str) -> f64 {
+    object_value(&[
+        ("hostname", str_value(hostname)),
+        ("service", str_value(service)),
+    ])
+}
+
 fn callback_record_args(args: i64, default_kind: Option<RecordKind>) -> (String, RecordKind, f64) {
     let name_value = arg(args, 0);
     let Some(name) = js_string_to_rust(name_value) else {
@@ -693,6 +990,11 @@ fn promise_value(value: f64) -> f64 {
     js_nanbox_pointer(promise as i64)
 }
 
+fn promise_rejected_value(reason: f64) -> f64 {
+    let promise = crate::promise::js_promise_rejected(reason);
+    js_nanbox_pointer(promise as i64)
+}
+
 fn dns_promise_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
     let (name, kind) = promise_record_args(args, default_kind);
     promise_value(resolve_records(kind, &name))
@@ -760,15 +1062,67 @@ fn resolver_object(initial_servers: Vec<String>) -> *mut ObjectHeader {
     obj
 }
 
-fn localhost_lookup_result() -> f64 {
-    let obj = js_object_alloc(0, 2);
-    js_object_set_field_by_name(obj, key("address"), str_value("127.0.0.1"));
-    js_object_set_field_by_name(obj, key("family"), 4.0);
-    boxed_pointer(obj as *const u8)
+#[no_mangle]
+pub extern "C" fn js_dns_noop(_args: i64) -> f64 {
+    undefined_value()
 }
 
 #[no_mangle]
-pub extern "C" fn js_dns_noop(_args: i64) -> f64 {
+pub extern "C" fn js_dns_lookup(args: i64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let hostname_value = arg(args, 0);
+    let hostname = match js_string_to_rust(hostname_value) {
+        Some(hostname) => hostname,
+        None => throw_error_value(invalid_hostname_error(hostname_value)),
+    };
+
+    let second = arg(args, 1);
+    let (options_value, callback_value) = if is_callable_value(second) {
+        (undefined_value(), second)
+    } else {
+        (second, arg(args, 2))
+    };
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+    if !is_callable_value(callback_value) {
+        throw_error_value(invalid_callback_error(callback_value));
+    }
+
+    let options = match parse_lookup_options(options_value) {
+        Ok(options) => options,
+        Err(error) => throw_error_value(error),
+    };
+    let callback_args = match lookup_callback_values(&hostname, options) {
+        Ok(values) => values,
+        Err(error) => vec![error],
+    };
+    queue_callback(callback_handle.get_nanbox_f64(), &callback_args);
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_lookup_service(args: i64) -> f64 {
+    if args_len(args) < 3 || JSValue::from_bits(arg(args, 2).to_bits()).is_undefined() {
+        throw_error_value(lookup_service_missing_args_error());
+    }
+
+    let address_value = arg(args, 0);
+    let address = match js_string_to_rust(address_value) {
+        Some(address) => address,
+        None => throw_error_value(invalid_address_error(address_value)),
+    };
+    let port = match parse_lookup_service_port(arg(args, 1)) {
+        Ok(port) => port,
+        Err(error) => throw_error_value(error),
+    };
+    let callback_value = arg(args, 2);
+    if !is_callable_value(callback_value) {
+        throw_error_value(invalid_callback_error(callback_value));
+    }
+    let callback_args = match lookup_service_result(&address, port) {
+        Ok((hostname, service)) => vec![null_value(), str_value(&hostname), str_value(&service)],
+        Err(error) => vec![error],
+    };
+    queue_callback(callback_value, &callback_args);
     undefined_value()
 }
 
@@ -1141,7 +1495,38 @@ pub extern "C" fn js_dns_promises_resolver_reverse(_handle: i64, args: i64) -> f
 }
 
 #[no_mangle]
-pub extern "C" fn js_dns_promises_lookup(_args: i64) -> f64 {
-    let promise = crate::promise::js_promise_resolved(localhost_lookup_result());
-    js_nanbox_pointer(promise as i64)
+pub extern "C" fn js_dns_promises_lookup(args: i64) -> f64 {
+    let hostname_value = arg(args, 0);
+    let hostname = match js_string_to_rust(hostname_value) {
+        Some(hostname) => hostname,
+        None => return promise_rejected_value(invalid_hostname_error(hostname_value)),
+    };
+    let options = match parse_lookup_options(arg(args, 1)) {
+        Ok(options) => options,
+        Err(error) => return promise_rejected_value(error),
+    };
+    match lookup_value(&hostname, options) {
+        Ok(value) => promise_value(value),
+        Err(error) => promise_rejected_value(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_lookup_service(args: i64) -> f64 {
+    if args_len(args) < 2 {
+        return promise_rejected_value(lookup_service_missing_args_error());
+    }
+    let address_value = arg(args, 0);
+    let address = match js_string_to_rust(address_value) {
+        Some(address) => address,
+        None => return promise_rejected_value(invalid_address_error(address_value)),
+    };
+    let port = match parse_lookup_service_port(arg(args, 1)) {
+        Ok(port) => port,
+        Err(error) => return promise_rejected_value(error),
+    };
+    match lookup_service_result(&address, port) {
+        Ok((hostname, service)) => promise_value(lookup_service_object(&hostname, &service)),
+        Err(error) => promise_rejected_value(error),
+    }
 }

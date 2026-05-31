@@ -9,9 +9,9 @@ import * as dns from "node:dns";
 
 
 // ── Functions ──
-// Non-deterministic resolution APIs — only probe types/presence, never call externally.
+// Non-deterministic resolution APIs — only probe types/presence unless the
+// target is loopback/localhost below.
 console.log("typeof dnsPromises.lookup:", typeof dns_promises.lookup);
-// PERRY-SKIP: dnsPromises.lookupService — requires live reverse lookup.
 console.log("typeof dnsPromises.lookupService:", typeof dns_promises.lookupService);
 console.log("typeof dnsPromises.resolve:", typeof dns_promises.resolve);
 console.log("typeof dnsPromises.resolve4:", typeof dns_promises.resolve4);
@@ -121,6 +121,16 @@ function thrownShape(label: string, fn: () => void): void {
   }
 }
 
+async function rejectedShape(label: string, fn: () => Promise<unknown>): Promise<void> {
+  try {
+    const promise = fn();
+    await promise;
+    console.log(label + ":", "resolved");
+  } catch (e: any) {
+    console.log(label + ":", e.name, e.code);
+  }
+}
+
 async function probeRecords() {
   const resolveDefault = await dns_promises.resolve("localhost");
   console.log("dnsPromises.resolve default loopback:", resolveDefault[0] === "127.0.0.1");
@@ -153,16 +163,35 @@ async function probeRecords() {
 await probeRecords();
 
 // ── localhost lookup (deterministic) ──
+function isLoopback(address: unknown): boolean {
+  return address === "127.0.0.1" || address === "::1";
+}
+
 async function probeLocalhost() {
   try {
     const r = await dns_promises.lookup("localhost");
     console.log("loopback:", r.address === "127.0.0.1" || r.address === "::1");
     console.log("loopback family typeof:", typeof r.family);
+
+    const all = await dns_promises.lookup("localhost", { all: true });
+    console.log("loopback all isArray:", Array.isArray(all));
+    console.log("loopback all first shape:", typeof all[0]?.address, typeof all[0]?.family);
+    console.log("loopback all loopback:", all.every((entry: any) => isLoopback(entry.address)));
+
+    const f4 = await dns_promises.lookup("localhost", { family: 4 });
+    console.log("loopback family4 address:", f4.address === "127.0.0.1");
+    console.log("loopback family4 family:", f4.family);
+
+    const service = await dns_promises.lookupService("127.0.0.1", 80);
+    console.log("lookupService hostname type:", typeof service.hostname);
+    console.log("lookupService service:", service.service);
   } catch (e) {
     console.log("loopback error:", (e as Error).message);
   }
 }
 await probeLocalhost();
+await rejectedShape("lookup invalid family", () => dns_promises.lookup("localhost", { family: 5 } as any));
+await rejectedShape("lookupService bad port", () => dns_promises.lookupService("127.0.0.1", -1));
 
 // ── Classes ──
 console.log("class dnsPromises.Resolver typeof:", typeof dns_promises.Resolver);

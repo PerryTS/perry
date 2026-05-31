@@ -8,9 +8,9 @@ import * as dns from "node:dns";
 
 
 // ── Functions (Callback API) ──
-// Non-deterministic resolution APIs — only probe types/presence, never call.
+// Non-deterministic resolution APIs — only probe types/presence unless the
+// target is loopback/localhost below.
 console.log("typeof dns.lookup:", typeof dns.lookup);
-// PERRY-SKIP: dns.lookupService — requires live reverse lookup.
 console.log("typeof dns.lookupService:", typeof dns.lookupService);
 console.log("typeof dns.resolve:", typeof dns.resolve);
 console.log("typeof dns.resolve4:", typeof dns.resolve4);
@@ -98,6 +98,54 @@ function thrownShape(label: string, fn: () => void): void {
     console.log(label + ":", e.name, e.code);
   }
 }
+
+// ── deterministic loopback lookup / lookupService ──
+function isLoopback(address: unknown): boolean {
+  return address === "127.0.0.1" || address === "::1";
+}
+
+function lookupCb(hostname: string, options?: unknown): Promise<any> {
+  return new Promise((resolve) => {
+    const cb = (err: any, addressOrAddresses: any, family?: any) => {
+      resolve({ err, addressOrAddresses, family });
+    };
+    if (options === undefined) dns.lookup(hostname, cb);
+    else dns.lookup(hostname, options as any, cb);
+  });
+}
+
+function lookupServiceCb(address: string, port: number): Promise<any> {
+  return new Promise((resolve) => {
+    dns.lookupService(address, port, (err: any, hostname: any, service: any) => {
+      resolve({ err, hostname, service });
+    });
+  });
+}
+
+const lookupOne = await lookupCb("localhost");
+console.log("dns.lookup localhost err null:", lookupOne.err === null);
+console.log("dns.lookup localhost loopback:", isLoopback(lookupOne.addressOrAddresses));
+console.log("dns.lookup localhost family:", lookupOne.family === 4 || lookupOne.family === 6);
+
+const lookupAll = await lookupCb("localhost", { all: true });
+console.log("dns.lookup all err null:", lookupAll.err === null);
+console.log("dns.lookup all isArray:", Array.isArray(lookupAll.addressOrAddresses));
+console.log("dns.lookup all first shape:", typeof lookupAll.addressOrAddresses[0]?.address, typeof lookupAll.addressOrAddresses[0]?.family);
+console.log("dns.lookup all loopback:", lookupAll.addressOrAddresses.every((entry: any) => isLoopback(entry.address)));
+
+const lookup4 = await lookupCb("localhost", { family: 4 });
+console.log("dns.lookup family4 err null:", lookup4.err === null);
+console.log("dns.lookup family4 address:", lookup4.addressOrAddresses === "127.0.0.1");
+console.log("dns.lookup family4 family:", lookup4.family);
+
+const service = await lookupServiceCb("127.0.0.1", 80);
+console.log("dns.lookupService err null:", service.err === null);
+console.log("dns.lookupService hostname type:", typeof service.hostname);
+console.log("dns.lookupService service:", service.service);
+
+thrownShape("dns.lookup missing callback", () => dns.lookup("localhost" as any));
+thrownShape("dns.lookup invalid family", () => dns.lookup("localhost", { family: 5 } as any, () => {}));
+thrownShape("dns.lookupService bad port", () => dns.lookupService("127.0.0.1", -1, () => {}));
 
 const resolveDefault = await recordCb((cb) => dns.resolve("localhost", cb));
 console.log("dns.resolve default err null:", resolveDefault.err === null);
