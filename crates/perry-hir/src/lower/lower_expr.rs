@@ -78,6 +78,7 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "Uint16Array"
             | "Int32Array"
             | "Uint32Array"
+            | "Float16Array"
             | "Float32Array"
             | "Float64Array"
             | "TextEncoder"

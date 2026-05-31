@@ -97,26 +97,6 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
     }
 }
 
-fn lower_args(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Vec<Expr>> {
-    new_expr
-        .args
-        .as_ref()
-        .map(|args| {
-            args.iter()
-                .map(|a| lower_expr(ctx, &a.expr))
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()
-        .map(|args| args.unwrap_or_default())
-}
-
-fn is_v8_serializer_class(name: &str) -> bool {
-    matches!(
-        name,
-        "Serializer" | "Deserializer" | "DefaultSerializer" | "DefaultDeserializer"
-    )
-}
-
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
 
@@ -256,20 +236,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
             let module_alias = obj_ident.sym.as_ref();
-            let member_class_name = prop_ident.sym.as_ref();
-            let member_module = ctx
-                .lookup_native_module(module_alias)
-                .map(|(module_name, _)| module_name)
-                .or_else(|| ctx.lookup_builtin_module_alias(module_alias));
-            if member_module == Some("v8") && is_v8_serializer_class(member_class_name) {
-                return Ok(Expr::NativeMethodCall {
-                    module: "v8".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: member_class_name.to_string(),
-                    args: lower_args(ctx, new_expr)?,
-                });
-            }
             let is_worker_threads_module = module_alias == "worker_threads"
                 || ctx.lookup_builtin_module_alias(module_alias) == Some("worker_threads")
                 || match ctx.lookup_native_module(module_alias) {
@@ -428,17 +394,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     match callee_expr {
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
-            if let Some(("v8", Some(imported))) = ctx.lookup_native_module(&class_name) {
-                if is_v8_serializer_class(imported) {
-                    return Ok(Expr::NativeMethodCall {
-                        module: "v8".to_string(),
-                        class_name: None,
-                        object: None,
-                        method: imported.to_string(),
-                        args: lower_args(ctx, new_expr)?,
-                    });
-                }
-            }
 
             // #1677 `new Function(...)` handling, when `Function` is not
             // shadowed. Phase 1 (#1679) first: when every argument is a

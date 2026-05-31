@@ -187,16 +187,9 @@ pub fn lower_fn_body_block_stmt(
 
     // Phase 2: lower the body. The inner FnDecl arm in `lower_body_stmt`
     // calls `lookup_local(name)` and reuses our pre-defined id.
-    let body = match lower_block_stmt(ctx, block) {
-        Ok(body) => body,
-        Err(err) => {
-            ctx.strict_mode = parent_strict;
-            return Err(err);
-        }
-    };
+    let body = lower_block_stmt(ctx, block)?;
 
     if hoisted_id_set.is_empty() {
-        ctx.strict_mode = parent_strict;
         return Ok(body);
     }
 
@@ -229,7 +222,6 @@ pub fn lower_fn_body_block_stmt(
     }
     result.extend(hoisted_lets);
     result.extend(other);
-    ctx.strict_mode = parent_strict;
     Ok(result)
 }
 

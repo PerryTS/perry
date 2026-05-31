@@ -419,11 +419,11 @@ pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i6
     }
 }
 
-/// `decoder.decode(input)` — decode an optional BufferSource value.
+/// `decoder.decode(buf)` — UTF-8 decode a NaN-boxed `BufferHeader` value.
 ///
 /// Returns a `*const StringHeader` as i64 — the codegen NaN-boxes with
-/// `STRING_TAG`. Typed-array views route through their byte accessor so
-/// byte offsets and element widths are preserved.
+/// `STRING_TAG`. Both TextEncoder output and `new Uint8Array([...])` share
+/// the same packed-u8 BufferHeader layout, so a single read path covers both.
 #[no_mangle]
 pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
     // Pull the decoder state (encoding / fatal). Unknown handle → utf-8,

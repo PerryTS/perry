@@ -1301,6 +1301,7 @@ pub fn try_lower_property_get_method_call(
                 | "Uint16Array"
                 | "Int32Array"
                 | "Uint32Array"
+                | "Float16Array"
                 | "Float32Array"
                 | "Float64Array"
                 | "BigInt64Array"

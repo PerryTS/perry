@@ -5,34 +5,6 @@ use super::intern::{
 };
 use super::*;
 
-/// Coerce the *non-string* operand of a `string + value` / `value + string`
-/// `+` expression to a string pointer, applying the spec's ToPrimitive with
-/// the "default" hint FIRST (valueOf→toString) — not the "string" hint that
-/// bare `js_jsvalue_to_string` uses. This makes `({valueOf(){return 5}}) + "x"`
-/// produce `"5x"` (default hint → valueOf → 5 → "5x"), matching Node, rather
-/// than `"[object Object]x"`. A `Symbol` operand throws TypeError, since
-/// `String(symbol)` is illegal in a `+` context (#3562/#3563/#3564).
-///
-/// For primitive `value`s (numbers, booleans, null, undefined, strings) the
-/// `to_primitive_for_add` step is a cheap tag check that returns the value
-/// unchanged, so the hot `"item_" + i` path is unaffected (it also never
-/// reaches here — numbers take the inline fast path above).
-#[inline]
-unsafe fn add_value_to_string(value: f64) -> *mut StringHeader {
-    let prim = crate::value::to_primitive_for_add(value);
-    let jsval = crate::value::JSValue::from_bits(prim.to_bits());
-    if jsval.is_pointer() {
-        let ptr = (prim.to_bits() & crate::value::POINTER_MASK) as usize;
-        if ptr >= 0x1000 && crate::symbol::is_registered_symbol(ptr) {
-            let msg = b"Cannot convert a Symbol value to a string";
-            let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_typeerror_new(s);
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
-        }
-    }
-    crate::value::js_jsvalue_to_string(prim)
-}
-
 /// SSO-aware string concatenation: takes both operands as NaN-boxed f64
 /// values, returns the result as an SSO `f64` when total ≤
 /// `SHORT_STRING_MAX_LEN` (zero heap alloc), or as a heap `STRING_TAG`-
@@ -311,10 +283,8 @@ pub extern "C" fn js_string_concat_value(
         return ptr;
     }
 
-    // Slow path: non-number value. Apply ToPrimitive(default-hint) first so
-    // `prefix + obj` uses valueOf→toString (and throws on a Symbol operand),
-    // matching the `+` operator's coercion order (#3562/#3563/#3564).
-    let value_str = unsafe { add_value_to_string(value) };
+    // Slow path: non-number value — fall back to js_jsvalue_to_string + js_string_concat
+    let value_str = crate::value::js_jsvalue_to_string(value);
     js_string_concat(prefix, value_str)
 }
 
@@ -619,8 +589,7 @@ pub extern "C" fn js_value_concat_string(
         return ptr;
     }
 
-    // Slow path: see js_string_concat_value — ToPrimitive(default-hint) first.
-    let value_str = unsafe { add_value_to_string(value) };
+    let value_str = crate::value::js_jsvalue_to_string(value);
     js_string_concat(value_str, suffix)
 }
 
