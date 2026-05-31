@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2388 entries across 104 modules.
+Total: 2392 entries across 104 modules.
 
 ## Modules
 
@@ -1185,6 +1185,7 @@ Total: 2388 entries across 104 modules.
 
 ### Methods
 
+- `_toUnixTimestamp` — module
 - `access` — module
 - `accessSync` — module
 - `appendFile` — module
@@ -1955,10 +1956,13 @@ Total: 2388 entries across 104 modules.
 
 ### Classes
 
+- `Performance`
 - `PerformanceEntry`
 - `PerformanceMark`
 - `PerformanceMeasure`
 - `PerformanceObserver`
+- `PerformanceObserverEntryList`
+- `PerformanceResourceTiming`
 
 ### Methods
 
