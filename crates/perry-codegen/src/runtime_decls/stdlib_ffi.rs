@@ -511,14 +511,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     //     (*mut ObjectHeader)                                  -> f64 (NaN-boxed string)
     //   js_url_search_params_new(*mut StringHeader)            -> *mut ObjectHeader
     //   js_url_search_params_new_empty()                       -> *mut ObjectHeader
-    //   js_url_search_params_get(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_get(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> *mut StringHeader (null if missing)
-    //   js_url_search_params_has(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_has(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (0.0 or 1.0)
-    //   js_url_search_params_set/append(*mut ObjectHeader, *mut ..., *mut ...) -> void
-    //   js_url_search_params_delete(*mut ObjectHeader, *mut StringHeader)      -> void
+    //   js_url_search_params_set/append(*mut ObjectHeader, name, value) -> void
+    //   js_url_search_params_delete(*mut ObjectHeader, name)            -> void
     //   js_url_search_params_to_string(*mut ObjectHeader)     -> *mut StringHeader
-    //   js_url_search_params_get_all(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_get_all(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (NaN-boxed array)
     module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE]);
@@ -540,28 +540,28 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_parse", I64, &[I64]);
     module.declare_function("js_url_parse_with_base", I64, &[I64, I64]);
     // Issue #650: URL setters — mutate field + re-derive href.
-    module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_search", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_hash", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_protocol", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_hostname", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_port", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_username", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_password", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_href", VOID, &[I64, I64]);
-    module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_delete", VOID, &[I64, I64]);
-    module.declare_function("js_url_search_params_get", I64, &[I64, I64]);
-    module.declare_function("js_url_search_params_get_all", DOUBLE, &[I64, I64]);
-    module.declare_function("js_url_search_params_has", DOUBLE, &[I64, I64]);
+    module.declare_function("js_url_set_pathname", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_search", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_hash", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_protocol", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_hostname", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_port", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_username", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_password", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_href", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_delete2", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_append", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_delete", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_get", I64, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_get_all", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_has", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_url_search_params_new", I64, &[I64]);
     // Generic init that handles string / record / URLSearchParams / null /
     // undefined — see `js_url_search_params_new_any` rustdoc. Refs #575.
     module.declare_function("js_url_search_params_new_any", I64, &[DOUBLE]);
     module.declare_function("js_url_search_params_new_empty", I64, &[]);
-    module.declare_function("js_url_search_params_set", VOID, &[I64, I64, I64]);
+    module.declare_function("js_url_search_params_set", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_to_string", I64, &[I64]);
     // Issue #650: URLSearchParams.size getter — returns entries count.
     module.declare_function("js_url_search_params_size", I32, &[I64]);

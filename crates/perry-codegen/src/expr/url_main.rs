@@ -134,20 +134,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let url_v = lower_expr(ctx, url)?;
             let url_handle = unbox_to_i64(ctx.block(), &url_v);
             let val_v = lower_expr(ctx, value)?;
-            // #3056: the hostname setter Web-IDL-stringifies its RHS
-            // (`String(value)`, Symbols throw) so `u.hostname = 123` becomes
-            // the host string `"123"` (then canonicalized to `"0.0.0.123"` in
-            // the runtime). Other setters keep the existing string-pointer
-            // extraction to avoid behavioural drift.
-            let val_str_ptr = if matches!(expr, Expr::UrlSetHostname { .. }) {
-                ctx.block()
-                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &val_v)])
-            } else {
-                ctx.block()
-                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)])
-            };
             ctx.block()
-                .call_void(runtime_fn, &[(I64, &url_handle), (I64, &val_str_ptr)]);
+                .call_void(runtime_fn, &[(I64, &url_handle), (DOUBLE, &val_v)]);
             // Assignment expression evaluates to the value on the RHS.
             Ok(val_v)
         }
@@ -267,13 +255,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             let str_ptr = ctx.block().call(
                 I64,
                 "js_url_search_params_get",
-                &[(I64, &p_ptr), (I64, &n_ptr)],
+                &[(I64, &p_ptr), (DOUBLE, &n_v)],
             );
             // Runtime returns a null pointer when the key is absent;
             // JS expects `null` in that case, not an empty string.
@@ -295,27 +280,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             // Runtime returns 0.0 / 1.0 as a plain f64 — not NaN-boxed.
             // Translate to TAG_TRUE / TAG_FALSE so `typeof` and strict-eq
             // behave correctly.
             let raw = if let Some(v_expr) = value {
                 let v_v = lower_expr(ctx, v_expr)?;
-                let v_ptr = ctx
-                    .block()
-                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &v_v)]);
                 ctx.block().call(
                     DOUBLE,
                     "js_url_search_params_has2",
-                    &[(I64, &p_ptr), (I64, &n_ptr), (I64, &v_ptr)],
+                    &[(I64, &p_ptr), (DOUBLE, &n_v), (DOUBLE, &v_v)],
                 )
             } else {
                 ctx.block().call(
                     DOUBLE,
                     "js_url_search_params_has",
-                    &[(I64, &p_ptr), (I64, &n_ptr)],
+                    &[(I64, &p_ptr), (DOUBLE, &n_v)],
                 )
             };
             let blk = ctx.block();
@@ -338,16 +317,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             let val_v = lower_expr(ctx, value)?;
-            let val_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &val_v)]);
             ctx.block().call_void(
                 "js_url_search_params_set",
-                &[(I64, &p_ptr), (I64, &n_ptr), (I64, &val_ptr)],
+                &[(I64, &p_ptr), (DOUBLE, &n_v), (DOUBLE, &val_v)],
             );
             Ok(ctx
                 .block()
@@ -362,16 +335,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             let val_v = lower_expr(ctx, value)?;
-            let val_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &val_v)]);
             ctx.block().call_void(
                 "js_url_search_params_append",
-                &[(I64, &p_ptr), (I64, &n_ptr), (I64, &val_ptr)],
+                &[(I64, &p_ptr), (DOUBLE, &n_v), (DOUBLE, &val_v)],
             );
             Ok(ctx
                 .block()
@@ -386,22 +353,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             if let Some(v_expr) = value {
                 let v_v = lower_expr(ctx, v_expr)?;
-                let v_ptr = ctx
-                    .block()
-                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &v_v)]);
                 ctx.block().call_void(
                     "js_url_search_params_delete2",
-                    &[(I64, &p_ptr), (I64, &n_ptr), (I64, &v_ptr)],
+                    &[(I64, &p_ptr), (DOUBLE, &n_v), (DOUBLE, &v_v)],
                 );
             } else {
                 ctx.block().call_void(
                     "js_url_search_params_delete",
-                    &[(I64, &p_ptr), (I64, &n_ptr)],
+                    &[(I64, &p_ptr), (DOUBLE, &n_v)],
                 );
             }
             Ok(ctx
@@ -482,15 +443,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx
-                .block()
-                .call(I64, "js_url_coerce_string", &[(DOUBLE, &n_v)]);
             // Returns f64 with the raw array pointer bit-cast in; the runtime
             // does not NaN-box it, so tag it here with POINTER_TAG.
             let raw_f64 = ctx.block().call(
                 DOUBLE,
                 "js_url_search_params_get_all",
-                &[(I64, &p_ptr), (I64, &n_ptr)],
+                &[(I64, &p_ptr), (DOUBLE, &n_v)],
             );
             let bits = ctx.block().bitcast_double_to_i64(&raw_f64);
             Ok(nanbox_pointer_inline(ctx.block(), &bits))
