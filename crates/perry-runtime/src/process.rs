@@ -557,7 +557,7 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
             )
         };
     }
-    crate::object::js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
+    crate::object::native_module_get_builtin_module_value(module_name)
 }
 
 /// Thread-local cell holding the process title set via `process.title = X`

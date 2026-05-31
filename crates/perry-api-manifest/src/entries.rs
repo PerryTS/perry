@@ -3681,7 +3681,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("dns", "LOADIPHLPAPI"),
     property("dns", "ADDRGETNETWORKPARAMS"),
     property("dns", "CANCELLED"),
+    property("dns", "default"),
     property("dns", "promises"),
+    property("dns/promises", "default"),
     property("dns/promises", "NODATA"),
     property("dns/promises", "FORMERR"),
     property("dns/promises", "SERVFAIL"),
@@ -3876,6 +3878,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("child_process", "spawn", false, None),
     method("child_process", "spawnSync", false, None),
     method("child_process", "fork", false, None),
+    property("child_process", "default"),
     // #1856: `ChildProcess` is the streaming-subprocess constructor; reading
     // it as a value yields `[Function: ChildProcess]`. `Stream` is not a real
     // `child_process` export (Node returns `undefined`) — registered so the

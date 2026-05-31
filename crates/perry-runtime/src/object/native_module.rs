@@ -658,6 +658,235 @@ const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"triggerAsyncId",
 ];
 
+const DNS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"lookup",
+    b"lookupService",
+    b"Resolver",
+    b"getDefaultResultOrder",
+    b"setDefaultResultOrder",
+    b"setServers",
+    b"ADDRCONFIG",
+    b"ALL",
+    b"V4MAPPED",
+    b"NODATA",
+    b"FORMERR",
+    b"SERVFAIL",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"REFUSED",
+    b"BADQUERY",
+    b"BADNAME",
+    b"BADFAMILY",
+    b"BADRESP",
+    b"CONNREFUSED",
+    b"TIMEOUT",
+    b"EOF",
+    b"FILE",
+    b"NOMEM",
+    b"DESTRUCTION",
+    b"BADSTR",
+    b"BADFLAGS",
+    b"NONAME",
+    b"BADHINTS",
+    b"NOTINITIALIZED",
+    b"LOADIPHLPAPI",
+    b"ADDRGETNETWORKPARAMS",
+    b"CANCELLED",
+    b"getServers",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"promises",
+];
+
+const DNS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ADDRCONFIG",
+    b"ADDRGETNETWORKPARAMS",
+    b"ALL",
+    b"BADFAMILY",
+    b"BADFLAGS",
+    b"BADHINTS",
+    b"BADNAME",
+    b"BADQUERY",
+    b"BADRESP",
+    b"BADSTR",
+    b"CANCELLED",
+    b"CONNREFUSED",
+    b"DESTRUCTION",
+    b"EOF",
+    b"FILE",
+    b"FORMERR",
+    b"LOADIPHLPAPI",
+    b"NODATA",
+    b"NOMEM",
+    b"NONAME",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"NOTINITIALIZED",
+    b"REFUSED",
+    b"Resolver",
+    b"SERVFAIL",
+    b"TIMEOUT",
+    b"V4MAPPED",
+    b"default",
+    b"getDefaultResultOrder",
+    b"getServers",
+    b"lookup",
+    b"lookupService",
+    b"promises",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"setDefaultResultOrder",
+    b"setServers",
+];
+
+const DNS_PROMISES_DEFAULT_KEYS: &[&[u8]] = &[
+    b"lookup",
+    b"lookupService",
+    b"Resolver",
+    b"getDefaultResultOrder",
+    b"setDefaultResultOrder",
+    b"setServers",
+    b"NODATA",
+    b"FORMERR",
+    b"SERVFAIL",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"REFUSED",
+    b"BADQUERY",
+    b"BADNAME",
+    b"BADFAMILY",
+    b"BADRESP",
+    b"CONNREFUSED",
+    b"TIMEOUT",
+    b"EOF",
+    b"FILE",
+    b"NOMEM",
+    b"DESTRUCTION",
+    b"BADSTR",
+    b"BADFLAGS",
+    b"NONAME",
+    b"BADHINTS",
+    b"NOTINITIALIZED",
+    b"LOADIPHLPAPI",
+    b"ADDRGETNETWORKPARAMS",
+    b"CANCELLED",
+    b"getServers",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+];
+
+const DNS_PROMISES_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ADDRGETNETWORKPARAMS",
+    b"BADFAMILY",
+    b"BADFLAGS",
+    b"BADHINTS",
+    b"BADNAME",
+    b"BADQUERY",
+    b"BADRESP",
+    b"BADSTR",
+    b"CANCELLED",
+    b"CONNREFUSED",
+    b"DESTRUCTION",
+    b"EOF",
+    b"FILE",
+    b"FORMERR",
+    b"LOADIPHLPAPI",
+    b"NODATA",
+    b"NOMEM",
+    b"NONAME",
+    b"NOTFOUND",
+    b"NOTIMP",
+    b"NOTINITIALIZED",
+    b"REFUSED",
+    b"Resolver",
+    b"SERVFAIL",
+    b"TIMEOUT",
+    b"default",
+    b"getDefaultResultOrder",
+    b"getServers",
+    b"lookup",
+    b"lookupService",
+    b"resolve",
+    b"resolve4",
+    b"resolve6",
+    b"resolveAny",
+    b"resolveCaa",
+    b"resolveCname",
+    b"resolveMx",
+    b"resolveNaptr",
+    b"resolveNs",
+    b"resolvePtr",
+    b"resolveSoa",
+    b"resolveSrv",
+    b"resolveTlsa",
+    b"resolveTxt",
+    b"reverse",
+    b"setDefaultResultOrder",
+    b"setServers",
+];
+
+const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"ChildProcess",
+    b"exec",
+    b"execFile",
+    b"execFileSync",
+    b"execSync",
+    b"fork",
+    b"spawn",
+    b"spawnSync",
+];
+
+const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"ChildProcess",
+    b"default",
+    b"exec",
+    b"execFile",
+    b"execFileSync",
+    b"execSync",
+    b"fork",
+    b"spawn",
+    b"spawnSync",
+];
+
 const BUFFER_NAMESPACE_KEYS: &[&[u8]] = &[
     b"Buffer",
     b"transcode",
@@ -1103,6 +1332,20 @@ fn deprecated_constants_keys() -> &'static [&'static [u8]] {
     DEPRECATED_CONSTANTS_KEYS
 }
 
+fn deprecated_constants_namespace_keys() -> &'static [&'static [u8]] {
+    use std::sync::OnceLock;
+    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+    MERGED
+        .get_or_init(|| {
+            let keys = deprecated_constants_keys();
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(keys.len() + 1);
+            v.extend_from_slice(keys);
+            v.push(b"default");
+            v
+        })
+        .as_slice()
+}
+
 #[cfg(test)]
 mod tests {
     use super::deprecated_constants_keys;
@@ -1321,7 +1564,14 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "path.default" => Some(PATH_DEFAULT_KEYS),
         "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "fs" => Some(FS_NAMESPACE_KEYS),
-        "constants" => Some(deprecated_constants_keys()),
+        "constants" => Some(deprecated_constants_namespace_keys()),
+        "constants.default" => Some(deprecated_constants_keys()),
+        "dns" => Some(DNS_NAMESPACE_KEYS),
+        "dns.default" => Some(DNS_DEFAULT_KEYS),
+        "dns/promises" => Some(DNS_PROMISES_NAMESPACE_KEYS),
+        "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
+        "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
+        "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
@@ -1384,6 +1634,10 @@ pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> 
 fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
+        "child_process.default" => Some("child_process"),
+        "constants.default" => Some("constants"),
+        "dns.default" => Some("dns"),
+        "dns/promises.default" => Some("dns/promises"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "punycode.default" => Some("punycode"),
@@ -1397,6 +1651,10 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
 fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
+        "child_process" => Some("child_process.default"),
+        "constants" => Some("constants.default"),
+        "dns" => Some("dns.default"),
+        "dns/promises" => Some("dns/promises.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "punycode" => Some("punycode.default"),
@@ -1415,11 +1673,16 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
-        "async_hooks" | "os" | "path" | "punycode" | "querystring" | "url" | "util" => {
-            create_cjs_default_namespace(module_name)
-        }
+        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
+        | "punycode" | "querystring" | "url" | "util" => create_cjs_default_namespace(module_name),
         _ => None,
     }
+}
+
+pub(crate) fn native_module_get_builtin_module_value(module_name: &str) -> f64 {
+    cjs_default_export_value(module_name).unwrap_or_else(|| {
+        js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
+    })
 }
 
 fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a str) -> &'a str {
@@ -1440,6 +1703,10 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "async_hooks"
             | "async_hooks.default"
             | "constants"
+            | "constants.default"
+            | "dns.default"
+            | "dns/promises.default"
+            | "child_process.default"
             | "events"
             | "fs.constants"
             | "os"
@@ -1545,8 +1812,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     }
     if module_name == "dns" && property_name == "promises" {
         crate::dns::dns_promises_init_servers_from_callback_if_unset();
-        let submodule = "dns/promises";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return cjs_default_export_value("dns/promises").unwrap_or_else(|| {
+            let submodule = "dns/promises";
+            js_create_native_module_namespace(submodule.as_ptr(), submodule.len())
+        });
     }
 
     if module_name == "util" && property_name == "debug" {
@@ -3650,6 +3919,12 @@ pub(crate) unsafe fn get_native_module_constant(
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = cjs_default_base.unwrap_or(module_name);
 
+    if property == "default" && !is_cjs_default_object {
+        if let Some(value) = cjs_default_export_value(module_name) {
+            return Some(value);
+        }
+    }
+
     let o_nofollow: f64 = {
         #[cfg(target_os = "macos")]
         {
@@ -4529,7 +4804,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "dns" => match property {
             "promises" => {
                 crate::dns::dns_promises_init_servers_from_callback_if_unset();
-                Some(create_sub_namespace("dns/promises"))
+                cjs_default_export_value("dns/promises")
             }
             _ => dns_lookup_flag_constant(property)
                 .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),

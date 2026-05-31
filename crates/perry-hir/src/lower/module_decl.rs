@@ -18,6 +18,10 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
         "async_hooks"
+            | "child_process"
+            | "constants"
+            | "dns"
+            | "dns/promises"
             | "events"
             | "os"
             | "path"
