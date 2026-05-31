@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2403 entries across 104 modules
+// Coverage: 2409 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -567,11 +567,15 @@ declare module "constants" {
   /** stdlib */
   export const O_CREAT: any;
   /** stdlib */
+  export const O_DIRECT: any;
+  /** stdlib */
   export const O_DIRECTORY: any;
   /** stdlib */
   export const O_DSYNC: any;
   /** stdlib */
   export const O_EXCL: any;
+  /** stdlib */
+  export const O_NOATIME: any;
   /** stdlib */
   export const O_NOCTTY: any;
   /** stdlib */
@@ -625,6 +629,8 @@ declare module "constants" {
   /** stdlib */
   export const RSA_X931_PADDING: any;
   /** stdlib */
+  export const RTLD_DEEPBIND: any;
+  /** stdlib */
   export const RTLD_GLOBAL: any;
   /** stdlib */
   export const RTLD_LAZY: any;
@@ -663,11 +669,17 @@ declare module "constants" {
   /** stdlib */
   export const SIGPIPE: any;
   /** stdlib */
+  export const SIGPOLL: any;
+  /** stdlib */
   export const SIGPROF: any;
+  /** stdlib */
+  export const SIGPWR: any;
   /** stdlib */
   export const SIGQUIT: any;
   /** stdlib */
   export const SIGSEGV: any;
+  /** stdlib */
+  export const SIGSTKFLT: any;
   /** stdlib */
   export const SIGSTOP: any;
   /** stdlib */

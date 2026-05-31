@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2403 entries across 104 modules.
+Total: 2409 entries across 104 modules.
 
 ## Modules
 
@@ -515,9 +515,11 @@ Total: 2403 entries across 104 modules.
 - `OPENSSL_VERSION_NUMBER`
 - `O_APPEND`
 - `O_CREAT`
+- `O_DIRECT`
 - `O_DIRECTORY`
 - `O_DSYNC`
 - `O_EXCL`
+- `O_NOATIME`
 - `O_NOCTTY`
 - `O_NOFOLLOW`
 - `O_NONBLOCK`
@@ -544,6 +546,7 @@ Total: 2403 entries across 104 modules.
 - `RSA_PSS_SALTLEN_DIGEST`
 - `RSA_PSS_SALTLEN_MAX_SIGN`
 - `RSA_X931_PADDING`
+- `RTLD_DEEPBIND`
 - `RTLD_GLOBAL`
 - `RTLD_LAZY`
 - `RTLD_LOCAL`
@@ -563,9 +566,12 @@ Total: 2403 entries across 104 modules.
 - `SIGIOT`
 - `SIGKILL`
 - `SIGPIPE`
+- `SIGPOLL`
 - `SIGPROF`
+- `SIGPWR`
 - `SIGQUIT`
 - `SIGSEGV`
+- `SIGSTKFLT`
 - `SIGSTOP`
 - `SIGSYS`
 - `SIGTERM`
