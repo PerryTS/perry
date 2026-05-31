@@ -654,7 +654,7 @@ pub fn fix_class_field_expr(
 pub fn chained_native_class(module: &str, prior_method: &str) -> Option<&'static str> {
     match (module, prior_method) {
         ("better-sqlite3", "prepare") => Some("Statement"),
-        ("sqlite", "prepare") => Some("Statement"),
+        ("sqlite", "prepare") => Some("StatementSync"),
         ("mongodb", "db") => Some("Database"),
         ("mongodb", "collection") => Some("Collection"),
         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => Some("PoolConnection"),
@@ -1332,7 +1332,7 @@ pub fn detect_native_instance_creation_with_context(
                     Some((module.clone(), "Statement".to_string()))
                 }
                 ("sqlite", "DatabaseSync", "prepare") => {
-                    Some((module.clone(), "Statement".to_string()))
+                    Some((module.clone(), "StatementSync".to_string()))
                 }
                 _ => None,
             }
@@ -1359,7 +1359,7 @@ pub fn detect_native_instance_creation_with_context(
                                 Some((module.clone(), "Statement".to_string()))
                             }
                             ("sqlite", "DatabaseSync", "prepare") => {
-                                Some((module.clone(), "Statement".to_string()))
+                                Some((module.clone(), "StatementSync".to_string()))
                             }
                             _ => None,
                         };
@@ -1380,6 +1380,7 @@ pub fn detect_native_instance_creation_with_context(
             match class_name.as_str() {
                 "Database" => Some(("better-sqlite3".to_string(), "Database".to_string())),
                 "DatabaseSync" => Some(("sqlite".to_string(), "DatabaseSync".to_string())),
+                "StatementSync" => Some(("sqlite".to_string(), "StatementSync".to_string())),
                 _ => None,
             }
         }

@@ -14,6 +14,7 @@ thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
+    static SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_STYLES: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
@@ -29,6 +30,13 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -388,6 +396,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"strict",
         ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        "sqlite" => Some(&[b"DatabaseSync", b"StatementSync", b"backup", b"default"]),
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
         "path" | "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
@@ -638,6 +647,32 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("dns" | "dns/promises", "Resolver") => Some(0),
         _ => None,
     }
+}
+
+extern "C" fn sqlite_statement_sync_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
+}
+
+fn sqlite_statement_sync_constructor_value() -> f64 {
+    SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE.with(|slot| {
+        let cached = slot.get();
+        if cached != 0 {
+            return f64::from_bits(cached);
+        }
+
+        let func_ptr = sqlite_statement_sync_constructor_thunk as *const u8;
+        crate::closure::js_register_closure_arity(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+        if closure.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        set_bound_native_closure_name(closure, "StatementSync");
+        let value = crate::value::js_nanbox_pointer(closure as i64);
+        slot.set(value.to_bits());
+        value
+    })
 }
 
 extern "C" fn buffer_constructor_thunk(
@@ -1077,6 +1112,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("sqlite", "DatabaseSync")
+            | ("sqlite", "StatementSync")
             | ("dgram", "createSocket")
             | ("dgram", "Socket")
             | ("process", "abort")
@@ -2527,6 +2564,10 @@ pub(crate) unsafe fn get_native_module_constant(
             .or_else(|| os_priority_const(property))
             .or_else(|| os_dlopen_const(property))
             .or_else(|| crypto_const(property)),
+        "sqlite" => match property {
+            "StatementSync" => Some(sqlite_statement_sync_constructor_value()),
+            _ => None,
+        },
         "path" => match property {
             "sep" => {
                 if cfg!(windows) {

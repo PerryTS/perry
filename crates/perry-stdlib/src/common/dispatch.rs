@@ -79,6 +79,29 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
+    // node:sqlite StatementSync handle. Keep this before the better-sqlite3
+    // statement fallback because run/get/all overlap but Node's parameter and
+    // result semantics are different.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "run"
+            | "get"
+            | "all"
+            | "iterate"
+            | "columns"
+            | "setReadBigInts"
+            | "setReturnArrays"
+            | "setAllowBareNamedParameters"
+            | "setAllowUnknownNamedParameters"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_statement_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
     // Fastify app: routes for HTTP verbs + lifecycle methods.
     // #1113 adds `"on"` here — `app.server.on(event, cb)` dispatches
     // against the same FastifyApp handle the user code holds (the
@@ -1216,6 +1239,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     {
         if let Some(v) =
             crate::sqlite::dispatch_node_sqlite_database_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_statement_property(handle, property_name)
         {
             return v;
         }

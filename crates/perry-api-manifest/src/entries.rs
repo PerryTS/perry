@@ -493,7 +493,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("better-sqlite3", "columns", true, None),
     method("better-sqlite3", "transaction", true, None),
     class("sqlite", "DatabaseSync"),
+    class("sqlite", "StatementSync"),
     method("sqlite", "DatabaseSync", false, None),
+    method("sqlite", "StatementSync", false, None),
     method("sqlite", "backup", false, None),
     method("sqlite", "open", true, None),
     method("sqlite", "close", true, None),
@@ -510,7 +512,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sqlite", "run", true, None),
     method("sqlite", "get", true, None),
     method("sqlite", "all", true, None),
-    method("sqlite", "raw", true, None),
+    method("sqlite", "iterate", true, None),
+    method("sqlite", "columns", true, None),
+    method("sqlite", "setReadBigInts", true, None),
+    method("sqlite", "setReturnArrays", true, None),
+    method("sqlite", "setAllowBareNamedParameters", true, None),
+    method("sqlite", "setAllowUnknownNamedParameters", true, None),
+    method("sqlite", "sourceSQL", true, None),
+    method("sqlite", "expandedSQL", true, None),
     // tursodb (#424). open / exec / execBatch / close /
     // lastInsertRowid / isAutocommit shipped in v0.5.543; queryAll /
     // queryOne shipped in v0.5.553 (close the row-as-object gap by

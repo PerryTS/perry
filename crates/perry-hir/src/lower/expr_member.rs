@@ -990,6 +990,29 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "sqlite"
+                    && class_name == "StatementSync"
+                    && matches!(
+                        property_name.as_str(),
+                        "run"
+                            | "get"
+                            | "all"
+                            | "iterate"
+                            | "columns"
+                            | "setReadBigInts"
+                            | "setReturnArrays"
+                            | "setAllowBareNamedParameters"
+                            | "setAllowUnknownNamedParameters"
+                    )
+                {
+                    // `node:sqlite` StatementSync methods are callable fields.
+                    // Getter properties such as `sourceSQL` and `expandedSQL`
+                    // keep the native getter path below.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "Headers" && is_headers_method_name(&property_name) {
                     // A bare Fetch Headers method read (`headers.entries`) is a
                     // function value, not a zero-arg native call. The call form

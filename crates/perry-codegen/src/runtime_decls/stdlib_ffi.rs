@@ -674,6 +674,35 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64],
     );
     module.declare_function("js_node_sqlite_database_sync_limits", I64, &[I64]);
+    module.declare_function("js_node_sqlite_statement_sync_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_statement_sync_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_node_sqlite_statement_sync_run", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_get", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_all", I64, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_iterate", DOUBLE, &[I64, I64]);
+    module.declare_function("js_node_sqlite_statement_sync_columns", I64, &[I64]);
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_read_bigints",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_return_arrays",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_allow_bare_named_parameters",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_sqlite_statement_sync_set_allow_unknown_named_parameters",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_sqlite_statement_sync_source_sql", I64, &[I64]);
+    module.declare_function("js_node_sqlite_statement_sync_expanded_sql", I64, &[I64]);
 
     // ========== OS ==========
     module.declare_function("js_os_cpus", I64, &[]);
