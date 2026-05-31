@@ -276,9 +276,23 @@ unsafe fn received_label(v: f64) -> String {
     let p = crate::builtins::js_value_typeof(v) as *const StringHeader;
     match header_to_string(p).as_str() {
         "object" if jv.is_null() => "null".to_string(),
+        // Objects/arrays render as `an instance of <Ctor>` in Node's
+        // ERR_INVALID_ARG_TYPE formatting.
+        "object" => {
+            if crate::array::js_array_is_array(v).to_bits() == crate::value::TAG_TRUE {
+                "an instance of Array".to_string()
+            } else {
+                "an instance of Object".to_string()
+            }
+        }
         "number" | "boolean" => {
             let s = coerce_to_string(v);
             format!("type {} ({s})", header_to_string(p))
+        }
+        "string" => {
+            // Node single-quotes the received string value: `type string ('x')`.
+            let s = coerce_to_string(v);
+            format!("type string ('{s}')")
         }
         ty => format!("type {ty}"),
     }
@@ -290,9 +304,7 @@ unsafe fn received_label(v: f64) -> String {
 /// matters here (the value is `options.entryTypes`).
 unsafe fn format_value_for_error(v: f64) -> String {
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_pointer()
-        && crate::array::js_array_is_array(v).to_bits() == crate::value::TAG_TRUE
-    {
+    if jv.is_pointer() && crate::array::js_array_is_array(v).to_bits() == crate::value::TAG_TRUE {
         let arr = jv.as_pointer::<crate::array::ArrayHeader>();
         let len = crate::array::js_array_length(arr);
         if len == 0 {
@@ -380,9 +392,9 @@ unsafe fn resolve_endpoint_value(v: JSValue) -> f64 {
         // silent-0 fallback.
         match lookup_mark_start(&name) {
             Some(t) => t,
-            None => throw_syntax_error(&format!(
-                "The \"{name}\" performance mark has not been set"
-            )),
+            None => {
+                throw_syntax_error(&format!("The \"{name}\" performance mark has not been set"))
+            }
         }
     } else {
         0.0
@@ -549,10 +561,7 @@ pub extern "C" fn js_perf_measure(name_val: f64, arg2: f64, arg3: f64) -> f64 {
             // #3008: a negative numeric duration is not a valid timestamp.
             if let Some(d) = dur {
                 if d < 0.0 {
-                    throw_type_error(&format!(
-                        "{} is not a valid timestamp",
-                        format_timestamp(d)
-                    ));
+                    throw_type_error(&format!("{} is not a valid timestamp", format_timestamp(d)));
                 }
             }
 
