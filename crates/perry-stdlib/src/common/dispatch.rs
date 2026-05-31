@@ -35,12 +35,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     };
     let arg_handles = scope.root_nanbox_f64_slice(&original_args);
     let args = perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // `_` prefixes silence unused-variable warnings when every dispatch
-    // arm below is compiled out (e.g. minimal-stdlib without http-server
-    // / database-redis).
     let _ = method_name;
     let _ = args;
     let _ = handle;
+
+    if let Some(v) = crate::domain::dispatch_domain_method(handle, method_name, &args) {
+        return v;
+    }
 
     // #1545: Web Streams handles (readable/writable/transform/reader/writer)
     // live in a dedicated high id range, so this never claims another
@@ -1133,6 +1134,10 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     let _ = property_name;
     let _ = handle;
 
+    if let Some(v) = crate::domain::dispatch_domain_property(handle, property_name) {
+        return v;
+    }
+
     // #1670: Web Streams handle property reads. A numeric stream id reaches
     // here via `js_object_get_field_by_name`'s stream probe (inline
     // `res.body.locked`). Route getter properties to their accessors, return
@@ -1927,16 +1932,13 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_event_emitter_handle_probe(event_emitter_probe);
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_on(crate::events::js_event_emitter_on);
-    // #1577: route captured-then-called `crypto.*` methods (which reach the
-    // runtime's native-module dispatch) back to the stdlib crypto impls.
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
-    // Same contract for `zlib.*` methods so `util.promisify(zlib.gzip)` and
-    // `const f = zlib.gzipSync; f(buf)` reach the FFIs.
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,
     );
+    perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext

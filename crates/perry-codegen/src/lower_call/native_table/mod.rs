@@ -23,6 +23,7 @@ mod net_events;
 mod node_core;
 mod node_core_process;
 mod node_dns;
+mod node_domain;
 mod node_misc;
 mod thread_lodash;
 mod tui;
@@ -143,6 +144,7 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(node_core::NODE_CORE_ROWS);
     v.extend_from_slice(node_core_process::NODE_CORE_PROCESS_ROWS);
     v.extend_from_slice(node_dns::NODE_DNS_ROWS);
+    v.extend_from_slice(node_domain::NODE_DOMAIN_ROWS);
     v.extend_from_slice(fastify::FASTIFY_ROWS);
     v.extend_from_slice(databases::DATABASES_ROWS);
     v.extend_from_slice(net_events::NET_EVENTS_ROWS);
