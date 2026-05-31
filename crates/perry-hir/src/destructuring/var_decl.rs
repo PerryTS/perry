@@ -104,6 +104,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ty = Type::Named("TextDecoder".to_string());
                             } else if matches!(
                                 class_name,
+                                "EventTarget" | "Event" | "CustomEvent" | "DOMException"
+                            ) {
+                                ty = Type::Named(class_name.to_string());
+                            } else if matches!(
+                                class_name,
                                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                             ) {
                                 ty = Type::Named(class_name.to_string());

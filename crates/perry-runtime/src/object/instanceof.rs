@@ -144,6 +144,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "URIError" => crate::error::CLASS_ID_URI_ERROR,
             "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
             "Promise" => CLASS_ID_PROMISE,
+            "Event" => crate::event_target::CLASS_ID_EVENT,
+            "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
+            "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
             _ => 0,
         };
         if class_id != 0 {
@@ -615,6 +618,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         if gc_type == crate::gc::GC_TYPE_ERROR {
             let err_ptr = obj_ptr as *const crate::error::ErrorHeader;
             let kind = (*err_ptr).error_kind;
+            if class_id == crate::event_target::CLASS_ID_DOM_EXCEPTION {
+                return if crate::event_target::is_dom_exception_error(err_ptr) {
+                    true_val
+                } else {
+                    false_val
+                };
+            }
             return match class_id {
                 crate::error::CLASS_ID_ERROR => true_val,
                 crate::error::CLASS_ID_TYPE_ERROR => {
@@ -693,6 +703,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
         // Check if the object's class_id matches directly
         let obj_class_id = (*obj_ptr).class_id;
+        if class_id == crate::event_target::CLASS_ID_EVENT
+            && obj_class_id == crate::event_target::CLASS_ID_CUSTOM_EVENT
+        {
+            return true_val;
+        }
         if obj_class_id == class_id {
             return true_val;
         }

@@ -644,6 +644,29 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             return None;
         }
     }
+    // Prefer the per-closure built-in `.name` record. Full-suite Rust tests
+    // temporarily seed GLOBAL_THIS_PTR with GC fixture pointers; relying only
+    // on the singleton walk below makes unrelated tests race with constructor
+    // identity for globals such as TextEncoderStream.
+    let name_value = crate::value::JSValue::from_bits(
+        crate::closure::closure_get_dynamic_prop(ptr as usize, "name").to_bits(),
+    );
+    if name_value.is_string() {
+        let name_ptr = name_value.as_string_ptr();
+        if !name_ptr.is_null() {
+            let name_bytes = unsafe {
+                let data = (name_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                std::slice::from_raw_parts(data, (*name_ptr).byte_len as usize)
+            };
+            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                for builtin in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+                    if builtin == name {
+                        return Some(builtin);
+                    }
+                }
+            }
+        }
+    }
     // Find which builtin name maps to this exact closure header on the
     // singleton. Walk via the existing
     // `js_get_global_this_builtin_value` helper — short loop (≤ ~50
@@ -1113,6 +1136,42 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::js_object_coerce(value);
+            }
+            "Event" => {
+                let event_type = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let event = crate::event_target::js_event_new(event_type, options);
+                return crate::value::js_nanbox_pointer(event as i64);
+            }
+            "CustomEvent" => {
+                let event_type = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let event = crate::event_target::js_custom_event_new(event_type, options);
+                return crate::value::js_nanbox_pointer(event as i64);
+            }
+            "DOMException" => {
+                let message = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let name = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                let exception = crate::event_target::js_dom_exception_new(message, name);
+                return crate::value::js_nanbox_pointer(exception as i64);
             }
             // #2889: `new (rebound Error subclass)(msg)` through a global
             // constructor value. Mirrors the bare `new TypeError(msg)`

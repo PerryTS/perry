@@ -7,9 +7,19 @@
 
 use crate::{
     js_array_alloc, js_array_get, js_array_length, js_array_push_f64, js_nanbox_pointer,
-    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
-    js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
+    js_object_alloc, js_object_get_field_by_name, js_object_get_field_by_name_f64,
+    js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader,
+    StringHeader,
 };
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
+pub const CLASS_ID_EVENT: u32 = 0xFFFF_2403;
+pub const CLASS_ID_CUSTOM_EVENT: u32 = 0xFFFF_2404;
+pub const CLASS_ID_DOM_EXCEPTION: u32 = 0xFFFF_2405;
+
+const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
 fn key(bytes: &[u8]) -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
@@ -26,6 +36,290 @@ fn value_as_ptr<T>(value: f64) -> Option<*mut T> {
     } else {
         None
     }
+}
+
+fn bool_value(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+fn number_value(value: f64) -> f64 {
+    f64::from_bits(JSValue::number(value).bits())
+}
+
+fn undefined_value() -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn null_value() -> f64 {
+    f64::from_bits(TAG_NULL)
+}
+
+fn string_value(bytes: &[u8]) -> f64 {
+    let s = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+fn string_from_value(value: f64) -> *mut StringHeader {
+    crate::builtins::js_string_coerce(value)
+}
+
+fn optional_string_from_value(value: f64, default: &[u8]) -> *mut StringHeader {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return js_string_from_bytes(default.as_ptr(), default.len() as u32);
+    }
+    string_from_value(value)
+}
+
+unsafe fn own_option_value(options: f64, name: &[u8]) -> f64 {
+    let Some(opts) = value_as_ptr::<ObjectHeader>(options) else {
+        return undefined_value();
+    };
+    if opts.is_null() {
+        return undefined_value();
+    }
+    js_object_get_field_by_name_f64(opts, key(name))
+}
+
+unsafe fn option_bool(options: f64, name: &[u8]) -> bool {
+    let value = own_option_value(options, name);
+    !JSValue::from_bits(value.to_bits()).is_undefined() && crate::value::js_is_truthy(value) != 0
+}
+
+unsafe fn option_detail(options: f64) -> f64 {
+    let value = own_option_value(options, b"detail");
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        null_value()
+    } else {
+        value
+    }
+}
+
+fn set_event_field(event: *mut ObjectHeader, name: &[u8], value: f64) {
+    js_object_set_field_by_name(event, key(name), value);
+    crate::object::set_builtin_property_attrs(
+        event as usize,
+        String::from_utf8_lossy(name).into_owned(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+fn event_bool_field(event: *mut ObjectHeader, name: &[u8]) -> bool {
+    if event.is_null() {
+        return false;
+    }
+    let value = js_object_get_field_by_name_f64(event, key(name));
+    crate::value::js_is_truthy(value) != 0
+}
+
+extern "C" fn event_prevent_default_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let this_value = crate::object::js_implicit_this_get();
+    let Some(event) = value_as_ptr::<ObjectHeader>(this_value) else {
+        return undefined_value();
+    };
+    if event_bool_field(event, b"cancelable") {
+        set_event_field(event, b"defaultPrevented", bool_value(true));
+    }
+    undefined_value()
+}
+
+extern "C" fn event_stop_propagation_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let this_value = crate::object::js_implicit_this_get();
+    if let Some(event) = value_as_ptr::<ObjectHeader>(this_value) {
+        set_event_field(event, b"_stopped", bool_value(true));
+    }
+    undefined_value()
+}
+
+extern "C" fn event_stop_immediate_propagation_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this_value = crate::object::js_implicit_this_get();
+    if let Some(event) = value_as_ptr::<ObjectHeader>(this_value) {
+        set_event_field(event, b"_stopped", bool_value(true));
+        set_event_field(event, b"_immediateStopped", bool_value(true));
+    }
+    undefined_value()
+}
+
+fn install_event_method(
+    event: *mut ObjectHeader,
+    name: &str,
+    func: extern "C" fn(*const crate::closure::ClosureHeader) -> f64,
+) {
+    let func_ptr = func as *const u8;
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::closure::closure_set_dynamic_prop(
+        closure as usize,
+        "name",
+        crate::value::js_nanbox_string(name_ptr as i64),
+    );
+    set_event_field(event, name.as_bytes(), boxed_ptr(closure));
+}
+
+fn construct_event(
+    type_value: f64,
+    options: f64,
+    class_id: u32,
+    constructor_name: &[u8],
+    detail: Option<f64>,
+) -> *mut ObjectHeader {
+    let event = js_object_alloc(class_id, 0);
+    if event.is_null() {
+        return std::ptr::null_mut();
+    }
+    let type_ptr = string_from_value(type_value);
+    set_event_field(
+        event,
+        b"type",
+        crate::value::js_nanbox_string(type_ptr as i64),
+    );
+    unsafe {
+        set_event_field(
+            event,
+            b"bubbles",
+            bool_value(option_bool(options, b"bubbles")),
+        );
+        set_event_field(
+            event,
+            b"cancelable",
+            bool_value(option_bool(options, b"cancelable")),
+        );
+        set_event_field(
+            event,
+            b"composed",
+            bool_value(option_bool(options, b"composed")),
+        );
+    }
+    set_event_field(event, b"defaultPrevented", bool_value(false));
+    set_event_field(event, b"target", null_value());
+    set_event_field(event, b"currentTarget", null_value());
+    set_event_field(event, b"eventPhase", number_value(0.0));
+    set_event_field(event, b"isTrusted", bool_value(false));
+    set_event_field(event, b"timeStamp", number_value(0.0));
+    set_event_field(event, b"_stopped", bool_value(false));
+    set_event_field(event, b"_immediateStopped", bool_value(false));
+    if let Some(detail) = detail {
+        set_event_field(event, b"detail", detail);
+    }
+    let ctor = crate::object::js_get_global_this_builtin_value(
+        constructor_name.as_ptr(),
+        constructor_name.len(),
+    );
+    set_event_field(event, b"constructor", ctor);
+    install_event_method(event, "preventDefault", event_prevent_default_thunk);
+    install_event_method(event, "stopPropagation", event_stop_propagation_thunk);
+    install_event_method(
+        event,
+        "stopImmediatePropagation",
+        event_stop_immediate_propagation_thunk,
+    );
+    event
+}
+
+/// `new Event(type, options?)`.
+#[no_mangle]
+pub extern "C" fn js_event_new(type_value: f64, options: f64) -> *mut ObjectHeader {
+    construct_event(type_value, options, CLASS_ID_EVENT, b"Event", None)
+}
+
+/// `new CustomEvent(type, options?)`.
+#[no_mangle]
+pub extern "C" fn js_custom_event_new(type_value: f64, options: f64) -> *mut ObjectHeader {
+    let detail = unsafe { option_detail(options) };
+    construct_event(
+        type_value,
+        options,
+        CLASS_ID_CUSTOM_EVENT,
+        b"CustomEvent",
+        Some(detail),
+    )
+}
+
+fn dom_exception_errors() -> &'static Mutex<HashSet<usize>> {
+    static DOM_EXCEPTION_ERRORS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+    DOM_EXCEPTION_ERRORS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn dom_exception_code(name: &str) -> f64 {
+    let code = match name {
+        "IndexSizeError" => 1,
+        "DOMStringSizeError" => 2,
+        "HierarchyRequestError" => 3,
+        "WrongDocumentError" => 4,
+        "InvalidCharacterError" => 5,
+        "NoDataAllowedError" => 6,
+        "NoModificationAllowedError" => 7,
+        "NotFoundError" => 8,
+        "NotSupportedError" => 9,
+        "InUseAttributeError" => 10,
+        "InvalidStateError" => 11,
+        "SyntaxError" => 12,
+        "InvalidModificationError" => 13,
+        "NamespaceError" => 14,
+        "InvalidAccessError" => 15,
+        "ValidationError" => 16,
+        "TypeMismatchError" => 17,
+        "SecurityError" => 18,
+        "NetworkError" => 19,
+        "AbortError" => 20,
+        "URLMismatchError" => 21,
+        "QuotaExceededError" => 22,
+        "TimeoutError" => 23,
+        "InvalidNodeTypeError" => 24,
+        "DataCloneError" => 25,
+        _ => 0,
+    };
+    number_value(code as f64)
+}
+
+/// `new DOMException(message?, name?)`.
+#[no_mangle]
+pub extern "C" fn js_dom_exception_new(message: f64, name: f64) -> *mut crate::error::ErrorHeader {
+    let message_ptr = optional_string_from_value(message, b"");
+    let name_ptr = optional_string_from_value(name, b"Error");
+    let name_string = unsafe {
+        let len = (*name_ptr).byte_len as usize;
+        let data = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    };
+    let err =
+        crate::error::js_error_new_with_name_message_bytes(name_string.as_bytes(), message_ptr);
+    if !err.is_null() {
+        if let Ok(mut set) = dom_exception_errors().lock() {
+            set.insert(err as usize);
+        }
+        let ctor = crate::object::js_get_global_this_builtin_value(b"DOMException".as_ptr(), 12);
+        crate::node_submodules::set_error_user_prop(err as usize, "constructor", ctor);
+        crate::node_submodules::set_error_user_prop(
+            err as usize,
+            "code",
+            dom_exception_code(&name_string),
+        );
+    }
+    err
+}
+
+/// Runtime predicate for `value instanceof DOMException`.
+pub(crate) fn is_dom_exception_error(err: *const crate::error::ErrorHeader) -> bool {
+    if err.is_null() {
+        return false;
+    }
+    dom_exception_errors()
+        .lock()
+        .is_ok_and(|set| set.contains(&(err as usize)))
+}
+
+pub(crate) fn abort_dom_exception_value() -> f64 {
+    let message = string_value(b"This operation was aborted");
+    let name = string_value(b"AbortError");
+    let err = js_dom_exception_new(message, name);
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
 unsafe fn is_event_target(target: *const ObjectHeader) -> bool {
@@ -148,6 +442,77 @@ pub unsafe extern "C" fn js_event_target_remove_event_listener(
     if changed {
         js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(result));
     }
+}
+
+fn event_type_ptr(event: f64) -> Option<*const StringHeader> {
+    let event_ptr = value_as_ptr::<ObjectHeader>(event)?;
+    let type_value = js_object_get_field_by_name(event_ptr, key(b"type"));
+    let type_box = f64::from_bits(type_value.bits());
+    let ptr = crate::value::js_get_string_pointer_unified(type_box) as *const StringHeader;
+    (!ptr.is_null()).then_some(ptr)
+}
+
+fn closure_value_from_listener(listener: f64) -> Option<f64> {
+    let jv = JSValue::from_bits(listener.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+        if !ptr.is_null() && crate::closure::is_closure_ptr(ptr as usize) {
+            return Some(listener);
+        }
+    }
+    None
+}
+
+/// `target.dispatchEvent(event)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_target_dispatch_event(
+    target: *mut ObjectHeader,
+    event: f64,
+) -> f64 {
+    if !is_event_target(target) {
+        return bool_value(true);
+    }
+    let Some(event_ptr) = value_as_ptr::<ObjectHeader>(event) else {
+        return bool_value(true);
+    };
+    let Some(event_name_ptr) = event_type_ptr(event) else {
+        return bool_value(true);
+    };
+    let target_value = boxed_ptr(target);
+    set_event_field(event_ptr, b"target", target_value);
+    set_event_field(event_ptr, b"currentTarget", target_value);
+    set_event_field(event_ptr, b"eventPhase", number_value(2.0));
+
+    let callbacks = listeners_bag(target)
+        .and_then(|bag| event_array(bag, event_name_ptr, false))
+        .map(|arr| {
+            let len = js_array_length(arr);
+            let mut callbacks = Vec::with_capacity(len as usize);
+            for i in 0..len {
+                callbacks.push(f64::from_bits(js_array_get(arr, i).bits()));
+            }
+            callbacks
+        })
+        .unwrap_or_default();
+
+    let args = [event];
+    for callback in callbacks {
+        let Some(callable) = closure_value_from_listener(callback) else {
+            continue;
+        };
+        let prev_this = crate::object::js_implicit_this_set(target_value);
+        let _ = crate::closure::js_native_call_value(callable, args.as_ptr(), args.len());
+        crate::object::js_implicit_this_set(prev_this);
+        if event_bool_field(event_ptr, b"_immediateStopped") {
+            break;
+        }
+    }
+
+    set_event_field(event_ptr, b"currentTarget", null_value());
+    set_event_field(event_ptr, b"eventPhase", number_value(0.0));
+    let canceled = event_bool_field(event_ptr, b"cancelable")
+        && event_bool_field(event_ptr, b"defaultPrevented");
+    bool_value(!canceled)
 }
 
 /// Runtime predicate used by the Node `events` module helpers.

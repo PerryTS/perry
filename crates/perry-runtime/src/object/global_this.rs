@@ -25,6 +25,9 @@ use super::*;
 pub extern "C" fn js_get_global_this() -> f64 {
     let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
     let ptr = if cached != 0 {
+        while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
         cached
     } else {
         // First access — allocate. Race-tolerant: if two threads race the
@@ -55,9 +58,15 @@ pub extern "C" fn js_get_global_this() -> f64 {
                 // constructors off `globalThis` as values. Refs lodash
                 // `runInContext` blocker after PR #963.
                 populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+                GLOBAL_THIS_READY.store(true, Ordering::Release);
                 new_ptr
             }
-            Err(other) => other,
+            Err(other) => {
+                while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
+                    std::hint::spin_loop();
+                }
+                other
+            }
         }
     };
     crate::value::js_nanbox_pointer(ptr)
@@ -91,14 +100,7 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// JS built-in constructor names exposed on `globalThis`. Pre-populated by
-/// the singleton init in `js_get_global_this` so libraries that read these
-/// off the global (lodash's `var Array = context.Array; var arrayProto =
-/// Array.prototype`, the same `(globalThis as any).X` read shape) see a
-/// non-undefined backing object. Codegen mirrors this list in
-/// `perry-codegen/src/expr.rs::is_global_this_builtin_name` to decide when
-/// `globalThis.<Name>` should route through the singleton instead of the
-/// legacy `0.0` no-value placeholder.
+/// JS built-in constructor names exposed on `globalThis`; mirrored by codegen.
 pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Array",
     "Object",
@@ -152,6 +154,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Crypto",
     "CryptoKey",
     "SubtleCrypto",
+    "Event",
+    "CustomEvent",
+    "DOMException",
     "FormData",
     "Blob",
     "File",
@@ -194,6 +199,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "URLSearchParams"
         | "AbortController"
         | "AbortSignal"
+        | "DOMException"
         | "FormData"
         | "Blob"
         | "Headers"
@@ -221,6 +227,8 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "SharedArrayBuffer"
         | "DataView"
         | "URL"
+        | "Event"
+        | "CustomEvent"
         | "Request"
         | "BroadcastChannel"
         | "FinalizationRegistry"
@@ -965,7 +973,7 @@ pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
 /// pointer instead of undefined, which is what unblocks lodash's
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
-fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
+pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     if singleton.is_null() {
         return;
     }

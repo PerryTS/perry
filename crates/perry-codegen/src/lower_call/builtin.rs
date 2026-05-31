@@ -283,6 +283,72 @@ pub(super) fn lower_builtin_new(
                 &[(DOUBLE, &name)],
             )))
         }
+        "Event" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "CustomEvent" => {
+            let event_type = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_custom_event_new",
+                &[(DOUBLE, &event_type), (DOUBLE, &options)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        "DOMException" => {
+            let message = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let name = if let Some(a) = args.get(1) {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(2) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_dom_exception_new",
+                &[(DOUBLE, &message), (DOUBLE, &name)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         "Console" => {
             let opts = if let Some(a) = args.first() {
                 lower_expr(ctx, a)?
