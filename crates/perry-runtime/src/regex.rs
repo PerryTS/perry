@@ -1382,9 +1382,15 @@ pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
     }
 }
 
-/// string.replace(regex, replacerFn) — replace with a callback function
-/// The callback receives (match, p1, p2, ..., offset, string)
-/// We simplify to (match, ...groups, offset) since the full string is rarely needed.
+/// string.replace(regex, replacerFn) — replace with a callback function.
+///
+/// The callback receives the full ECMAScript argument list (#2867):
+///   `(match, p1, p2, ..., offset, string, groups?)`
+/// i.e. the whole match, then every capture group (undefined for
+/// non-participating groups), then the 0-based offset of the match in the
+/// input, then the whole input string, and finally — only when the pattern
+/// has named capture groups — a `groups` object mapping each name to its
+/// captured substring.
 #[no_mangle]
 pub extern "C" fn js_string_replace_regex_fn(
     s: *const StringHeader,
@@ -1424,47 +1430,81 @@ pub extern "C" fn js_string_replace_regex_fn(
             }
         };
 
+        // Does the pattern declare any named capture groups? If so we pass a
+        // trailing `groups` object to the callback (matching Node). Computed
+        // once outside the match loop.
+        let has_named_groups = regex.capture_names().any(|n| n.is_some());
+
         for caps in &captures_iter {
             let full_match = caps.get(0).unwrap();
             result.push_str(&str_data[last_end..full_match.start()]);
 
-            // Calculate char offset for the offset parameter
+            // Calculate char offset for the offset parameter.
             let char_offset = str_data[..full_match.start()].chars().count();
 
-            // Call the closure with (match, ...groups, offset)
-            // We need to use the appropriate js_closure_callN function
-            let match_str = js_string_from_str(full_match.as_str());
-            let match_nanboxed = js_nanbox_string(match_str as i64);
+            // Build the full ECMAScript callback argument list:
+            //   (match, p1, ..., pN, offset, string, groups?)
+            // Root every NaN-boxed value as we go so a GC triggered by a
+            // subsequent string/object/array allocation (or by the callback
+            // dispatch itself) can't reclaim earlier arguments.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let mut arg_handles: Vec<crate::gc::RuntimeHandle<'_>> = Vec::new();
 
+            let match_nanboxed = js_nanbox_string(js_string_from_str(full_match.as_str()) as i64);
+            arg_handles.push(scope.root_nanbox_f64(match_nanboxed));
+
+            // Capture groups 1..=N (undefined for non-participating groups).
             let num_groups = caps.len() - 1; // exclude full match
-            let ret = if num_groups == 0 {
-                // Call with (match, offset)
-                let offset_f64 = char_offset as f64;
-                crate::closure::js_closure_call2(closure_ptr, match_nanboxed, offset_f64)
-            } else if num_groups == 1 {
-                // Call with (match, p1, offset)
-                let p1 = if let Some(m) = caps.get(1) {
+            for gi in 1..=num_groups {
+                let group_val = if let Some(m) = caps.get(gi) {
                     js_nanbox_string(js_string_from_str(m.as_str()) as i64)
                 } else {
                     f64::from_bits(TAG_UNDEFINED)
                 };
-                let offset_f64 = char_offset as f64;
-                crate::closure::js_closure_call3(closure_ptr, match_nanboxed, p1, offset_f64)
-            } else {
-                // For 2+ groups, call with (match, p1, p2, offset)
-                let p1 = if let Some(m) = caps.get(1) {
-                    js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-                } else {
-                    f64::from_bits(TAG_UNDEFINED)
-                };
-                let p2 = if let Some(m) = caps.get(2) {
-                    js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-                } else {
-                    f64::from_bits(TAG_UNDEFINED)
-                };
-                let offset_f64 = char_offset as f64;
-                crate::closure::js_closure_call4(closure_ptr, match_nanboxed, p1, p2, offset_f64)
-            };
+                arg_handles.push(scope.root_nanbox_f64(group_val));
+            }
+
+            // offset (number) then the whole input string.
+            arg_handles.push(scope.root_nanbox_f64(char_offset as f64));
+            let string_nanboxed = js_nanbox_string(js_string_from_str(str_data) as i64);
+            arg_handles.push(scope.root_nanbox_f64(string_nanboxed));
+
+            // groups object (only when the pattern has named captures).
+            if has_named_groups {
+                let groups_obj = crate::object::js_object_alloc(0, 0);
+                let groups_handle = scope.root_raw_mut_ptr(groups_obj);
+                let group_names: Vec<(&str, Option<regex::Match>)> = regex
+                    .capture_names()
+                    .enumerate()
+                    .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
+                    .collect();
+                for (name, m) in &group_names {
+                    let val = if let Some(m) = m {
+                        js_nanbox_string(js_string_from_str(m.as_str()) as i64)
+                    } else {
+                        f64::from_bits(TAG_UNDEFINED)
+                    };
+                    let key_ptr =
+                        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                    crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
+                }
+                // Re-root the (possibly-moved) groups object as a NaN-boxed
+                // pointer value so it lands in the uniform `arg_handles` list
+                // alongside the other NaN-boxed callback args.
+                let groups_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                let groups_value = crate::value::js_nanbox_pointer(groups_ptr as i64);
+                arg_handles.push(scope.root_nanbox_f64(groups_value));
+            }
+
+            let call_args: Vec<f64> = arg_handles.iter().map(|h| h.get_nanbox_f64()).collect();
+            let callback_value =
+                f64::from_bits(crate::value::JSValue::pointer(closure_ptr as *mut u8).bits());
+            let ret = crate::closure::js_native_call_value(
+                callback_value,
+                call_args.as_ptr(),
+                call_args.len(),
+            );
 
             // Convert the NaN-boxed return value to a string. Issue #833:
             // the previous tag-discriminated decode only handled STRING_TAG

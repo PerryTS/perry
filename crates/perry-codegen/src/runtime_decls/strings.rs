@@ -639,6 +639,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_readline_stdin_on", VOID, &[I64, I64]);
     // tty (#347 Phase 3) — isatty + stdout dimensions + resize handler.
     module.declare_function("js_tty_isatty", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_tty_read_stream_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_tty_write_stream_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_stdin_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stdout_isatty", DOUBLE, &[]);
     module.declare_function("js_process_stderr_isatty", DOUBLE, &[]);

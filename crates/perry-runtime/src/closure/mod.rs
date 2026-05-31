@@ -30,16 +30,17 @@ pub use registry::{
     js_register_closure_async_function, js_register_closure_generator_function,
     js_register_closure_rest, js_register_closure_synthetic_arguments, lookup_closure_arity,
     lookup_closure_rest, lookup_closure_rest_full, real_capture_count, resolve_strategy,
-    DispatchStrategy, BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC,
+    DispatchStrategy, BOUND_FUNCTION_FUNC_PTR, BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG,
+    CLOSURE_MAGIC,
 };
 
 pub use dispatch::{
-    clean_closure_ptr, dispatch_bound_method, get_valid_func_ptr, js_closure_call0,
-    js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12, js_closure_call13,
-    js_closure_call14, js_closure_call15, js_closure_call16, js_closure_call2, js_closure_call3,
-    js_closure_call4, js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8,
-    js_closure_call9, js_closure_call_apply_with_spread, js_closure_call_array,
-    js_native_call_value, throw_not_callable,
+    clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,
+    js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12,
+    js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16, js_closure_call2,
+    js_closure_call3, js_closure_call4, js_closure_call5, js_closure_call6, js_closure_call7,
+    js_closure_call8, js_closure_call9, js_closure_call_apply_with_spread, js_closure_call_array,
+    js_function_bind, js_native_call_value, throw_not_callable,
 };
 pub(crate) use dispatch::{reset_throw_not_callable_counter, resolve_call2_direct};
 

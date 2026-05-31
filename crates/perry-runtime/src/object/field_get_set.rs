@@ -2306,6 +2306,16 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
 
+        if (*obj).class_id == crate::tty::CLASS_ID_TTY_WRITE_STREAM && !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let property_name =
+                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+            if let Some(value) = crate::tty::tty_write_stream_dimension(property_name) {
+                return JSValue::from_bits(value.to_bits());
+            }
+        }
+
         // Refs #420 / #618 followup: `instance.constructor` returns the
         // class ref. Pre-fix this fell through to the keys_array lookup
         // which never finds "constructor" (the class itself isn't stored

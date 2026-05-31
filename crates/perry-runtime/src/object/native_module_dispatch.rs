@@ -500,6 +500,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
 
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
+        ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
+        ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
