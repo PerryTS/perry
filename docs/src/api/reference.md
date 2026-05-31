@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1970 entries across 93 modules.
+Total: 1985 entries across 93 modules.
 
 ## Modules
 
@@ -1489,13 +1489,19 @@ Total: 1970 entries across 93 modules.
 - `addListener` — instance *(class: `Server`)*
 - `address` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Server`)*
+- `autoSelectFamilyAttemptedAddresses` — instance *(class: `Socket`)*
+- `bufferSize` — instance *(class: `Socket`)*
+- `bytesRead` — instance *(class: `Socket`)*
+- `bytesWritten` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
+- `connecting` — instance *(class: `Socket`)*
 - `cork` — instance *(class: `Socket`)*
 - `createConnection` — module
 - `createServer` — module
 - `destroy` — instance *(class: `Socket`)*
+- `destroyed` — instance *(class: `Socket`)*
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Server`)*
@@ -1509,15 +1515,23 @@ Total: 1970 entries across 93 modules.
 - `listenerCount` — instance *(class: `Server`)*
 - `listeners` — instance *(class: `Socket`)*
 - `listeners` — instance *(class: `Server`)*
+- `localAddress` — instance *(class: `Socket`)*
+- `localFamily` — instance *(class: `Socket`)*
+- `localPort` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
 - `pause` — instance *(class: `Socket`)*
+- `pending` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
+- `readyState` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
+- `remoteAddress` — instance *(class: `Socket`)*
+- `remoteFamily` — instance *(class: `Socket`)*
+- `remotePort` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Server`)*
 - `removeListener` — instance *(class: `Socket`)*
@@ -1531,6 +1545,7 @@ Total: 1970 entries across 93 modules.
 - `setKeepAlive` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
+- `timeout` — instance *(class: `Socket`)*
 - `uncork` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
