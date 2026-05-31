@@ -1031,7 +1031,7 @@ pub(super) fn try_module_static_methods(
                             return Ok(Ok(Expr::OsNetworkInterfaces));
                         }
                         "userInfo" => {
-                            return Ok(Ok(user_info_expr_for_call(call)));
+                            return Ok(Ok(user_info_expr_for_call(call, args)));
                         }
                         "getPriority" | "setPriority" => {
                             return Ok(Ok(Expr::NativeMethodCall {

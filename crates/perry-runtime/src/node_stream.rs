@@ -128,6 +128,7 @@ const STREAM_PIPE_NO_END_KEY: &[u8] = b"__perryStreamPipeNoEnd";
 const STREAM_PIPE_END_PENDING_KEY: &[u8] = b"__perryStreamPipeEndPending";
 const STREAM_AUTO_DESTROY_KEY: &[u8] = b"__perryStreamAutoDestroy";
 const STREAM_PIPELINE_CALLBACK_DONE_KEY: &[u8] = b"__perryStreamPipelineCallbackDone";
+const STREAM_COMPOSE_LIVE_PIPE_CONSUME_KEY: &[u8] = b"__perryStreamComposeLivePipeConsume";
 
 use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
@@ -180,7 +181,8 @@ fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHea
     };
     let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
     let event_bits = crate::value::js_nanbox_string(event as i64).to_bits() as i64;
-    unsafe { on(handle, event_bits, listener as i64) };
+    let listener_value = crate::value::js_nanbox_pointer(listener as i64);
+    unsafe { on(handle, event_bits, listener_value.to_bits() as i64) };
 }
 
 extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
@@ -508,6 +510,7 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
         mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) && !should_defer_initial_data_emit(stream) {
+            consume_readable_buffered_front_for_live_pipe(stream, chunk);
             emit_readable_data(stream, chunk);
         } else {
             buffer_pending_readable_chunk(stream, chunk);
@@ -669,6 +672,7 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
         mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) {
+            consume_readable_buffered_front_for_live_pipe(stream, chunk);
             emit_readable_data(stream, chunk);
         } else {
             unshift_pending_readable_chunk(stream, chunk);
@@ -1675,6 +1679,10 @@ pub use pipeline::*;
 #[path = "node_stream_readwrite.rs"]
 mod readwrite;
 pub use readwrite::*;
+
+#[path = "node_stream_compose_live.rs"]
+mod compose_live;
+pub use compose_live::*;
 
 #[path = "node_stream_json.rs"]
 mod json_stream;
