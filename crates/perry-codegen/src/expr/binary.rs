@@ -46,15 +46,6 @@ use super::{
     I18nLowerCtx,
 };
 
-fn is_add_known_primitive_non_string(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_)
-    ) || is_numeric_expr(ctx, expr)
-        || is_bigint_expr(ctx, expr)
-        || is_bool_expr(ctx, expr)
-}
-
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Binary { op, left, right } => {
@@ -105,13 +96,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // step poisoned the result. Dispatch through the runtime
                 // helper that checks NaN-box tags: STRING_TAG / SHORT_STRING_TAG
                 // → string concat, BIGINT → bigint add, otherwise numeric.
-                // Stay on static numeric/bigint lowering only when BOTH sides
-                // are provably primitive non-strings. If either side might be
-                // an object, addition must run ToPrimitive before deciding
-                // between concat and numeric addition.
-                let l_primitive_non_str = is_add_known_primitive_non_string(ctx, left);
-                let r_primitive_non_str = is_add_known_primitive_non_string(ctx, right);
-                if !(l_primitive_non_str && r_primitive_non_str) {
+                // Neither operand is a *definite* string here (the concat
+                // fast paths above already returned). Route to the runtime
+                // ToPrimitive `+` helper UNLESS both operands are provably
+                // numeric — the helper applies ToPrimitive(default-hint) to
+                // each side (valueOf→toString, Date→string, boxed-primitive
+                // unwrap, Symbol/BigInt errors) and then decides string-concat
+                // vs numeric add per spec (#3562/#3563/#3564). This matters
+                // even when one side is a numeric literal: `{} + 1` is the
+                // STRING `"[object Object]1"`, not `NaN`, and
+                // `({valueOf(){return 5}}) + 1` is `6`. The previous inline
+                // `js_number_coerce(obj) + n` path mis-produced `NaN` for any
+                // object/Date/function operand.
+                //
+                // BigInt operands are left to the dedicated `js_dynamic_add`
+                // fast path below (leaner unbox→bigint-op→rebox); a mixed
+                // bigint/number there throws TypeError just like the helper.
+                let l_num = crate::type_analysis::is_numeric_expr(ctx, left);
+                let r_num = crate::type_analysis::is_numeric_expr(ctx, right);
+                let either_bigint = is_bigint_expr(ctx, left) || is_bigint_expr(ctx, right);
+                if !(l_num && r_num) && !either_bigint {
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
                     return Ok(ctx.block().call(

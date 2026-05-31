@@ -82,7 +82,7 @@ pub use formatting::{
 };
 
 pub(crate) use formatting::{
-    boxed_primitive_payload, format_finite_number_js, format_jsvalue, is_negative_zero,
+    boxed_primitive_value, format_finite_number_js, format_jsvalue, is_negative_zero,
     jsvalue_string_content, InspectCompactGuard, InspectCustomInspectGuard, InspectDepthLimitGuard,
     InspectGettersGuard, InspectShowHiddenGuard, InspectSortedGuard,
 };
