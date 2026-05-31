@@ -863,7 +863,7 @@ fn collect_emit_args(args: *const ArrayHeader) -> Vec<f64> {
     values
 }
 
-fn emit_process_event(event: &str, args: &[f64]) -> bool {
+pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
     let listeners = PROCESS_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
         let Some(listeners) = emitter.events.get_mut(event) else {
