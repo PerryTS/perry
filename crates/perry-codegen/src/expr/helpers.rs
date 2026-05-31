@@ -314,6 +314,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "MessageChannel"
             | "MessagePort"
             | "BroadcastChannel"
+            | "WebSocket"
             | "FinalizationRegistry"
             | "Performance"
             | "PerformanceEntry"

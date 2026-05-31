@@ -102,7 +102,7 @@ pub(crate) fn lower_let(
             if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
                 && matches!(
                     property.as_str(),
-                    "TextEncoderStream" | "TextDecoderStream" | "File"
+                    "TextEncoderStream" | "TextDecoderStream" | "File" | "WebSocket"
                 )
             {
                 ctx.local_class_aliases

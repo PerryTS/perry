@@ -1590,10 +1590,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     }
                     Expr::PropertyGet { object, property }
                         if matches!(object.as_ref(), Expr::GlobalGet(_))
-                            && matches!(property.as_str(), "Blob" | "File") =>
+                            && matches!(property.as_str(), "Blob" | "File" | "WebSocket") =>
                     {
                         ctx.register_let_class_alias(name.clone(), property.clone());
-                        ctx.uses_fetch = true;
+                        if matches!(property.as_str(), "Blob" | "File") {
+                            ctx.uses_fetch = true;
+                        }
                     }
                     Expr::PropertyGet { object, property }
                         if matches!(object.as_ref(), Expr::NativeModuleRef(module)

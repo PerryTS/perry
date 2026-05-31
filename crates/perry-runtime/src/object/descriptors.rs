@@ -151,7 +151,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         _ => {
                             let dynv = crate::closure::closure_get_dynamic_prop(ptr, name);
                             if dynv.to_bits() != crate::value::TAG_UNDEFINED {
-                                Some((dynv, true, true))
+                                Some((dynv, writable_default.unwrap_or(true), configurable_default))
                             } else {
                                 None
                             }
@@ -160,8 +160,12 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let Some((value, writable, configurable)) = resolved else {
                         return f64::from_bits(crate::value::TAG_UNDEFINED);
                     };
-                    // `name`/`length` are non-enumerable; user data props are.
-                    let enumerable = !matches!(name, "name" | "length");
+                    // `name`/`length` are non-enumerable by default; registered
+                    // builtin/user descriptors override the default for
+                    // dynamically-stored closure properties.
+                    let enumerable = registered
+                        .map(|a| a.enumerable())
+                        .unwrap_or(!matches!(name, "name" | "length"));
                     let packed = b"value\0writable\0enumerable\0configurable";
                     let desc = js_object_alloc_with_shape(
                         0x0D_E5_C0,

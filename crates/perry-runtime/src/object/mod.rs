@@ -49,6 +49,7 @@ mod polymorphic_index;
 pub(crate) mod prototype_chain;
 mod reflect_support;
 mod util_types;
+mod websocket_global;
 pub use alloc::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;

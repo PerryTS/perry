@@ -1489,7 +1489,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
-                    if !outer_is_prototype_or_proto && property != "crypto" {
+                    let outer_is_websocket_static = property == "WebSocket"
+                        && match &member.prop {
+                            ast::MemberProp::Ident(p) => matches!(
+                                p.sym.as_ref(),
+                                "CONNECTING" | "OPEN" | "CLOSING" | "CLOSED"
+                            ),
+                            ast::MemberProp::Computed(_) => true,
+                            _ => false,
+                        };
+                    if !outer_is_prototype_or_proto
+                        && property != "crypto"
+                        && !outer_is_websocket_static
+                    {
                         object_expr = Expr::GlobalGet(0);
                     }
                 }
