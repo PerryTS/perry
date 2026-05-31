@@ -707,6 +707,103 @@ const QUERYSTRING_NAMESPACE_KEYS: &[&[u8]] = &[
     b"unescapeBuffer",
 ];
 
+const FS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"_toUnixTimestamp",
+    b"access",
+    b"accessSync",
+    b"appendFile",
+    b"appendFileSync",
+    b"chmod",
+    b"chmodSync",
+    b"chown",
+    b"chownSync",
+    b"close",
+    b"closeSync",
+    b"constants",
+    b"copyFile",
+    b"copyFileSync",
+    b"cp",
+    b"cpSync",
+    b"createReadStream",
+    b"createWriteStream",
+    b"exists",
+    b"existsSync",
+    b"fchmod",
+    b"fchmodSync",
+    b"fchown",
+    b"fchownSync",
+    b"fdatasync",
+    b"fdatasyncSync",
+    b"fstat",
+    b"fstatSync",
+    b"fsync",
+    b"fsyncSync",
+    b"ftruncate",
+    b"ftruncateSync",
+    b"futimes",
+    b"futimesSync",
+    b"glob",
+    b"globSync",
+    b"lchmod",
+    b"lchmodSync",
+    b"lchown",
+    b"lchownSync",
+    b"link",
+    b"linkSync",
+    b"lstat",
+    b"lstatSync",
+    b"lutimes",
+    b"lutimesSync",
+    b"mkdir",
+    b"mkdirSync",
+    b"mkdtemp",
+    b"mkdtempSync",
+    b"open",
+    b"openSync",
+    b"opendir",
+    b"opendirSync",
+    b"promises",
+    b"read",
+    b"readFile",
+    b"readFileSync",
+    b"readSync",
+    b"readdir",
+    b"readdirSync",
+    b"readlink",
+    b"readlinkSync",
+    b"readv",
+    b"readvSync",
+    b"realpath",
+    b"realpathSync",
+    b"rename",
+    b"renameSync",
+    b"rm",
+    b"rmSync",
+    b"rmdir",
+    b"rmdirSync",
+    b"stat",
+    b"statSync",
+    b"statfs",
+    b"statfsSync",
+    b"symlink",
+    b"symlinkSync",
+    b"truncate",
+    b"truncateSync",
+    b"unlink",
+    b"unlinkSync",
+    b"unwatchFile",
+    b"utimes",
+    b"utimesSync",
+    b"watch",
+    b"watchFile",
+    b"write",
+    b"writeFile",
+    b"writeFileSync",
+    b"writeSync",
+    b"writev",
+    b"writevSync",
+];
+
 const URL_DEFAULT_KEYS: &[&[u8]] = &[
     b"Url",
     b"parse",
@@ -772,6 +869,9 @@ const UTIL_DEFAULT_KEYS: &[&[u8]] = &[
 ];
 
 const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"_errnoException",
+    b"_exceptionWithHostPort",
+    b"_extend",
     b"aborted",
     b"callbackify",
     b"convertProcessSignalToExitCode",
@@ -797,6 +897,8 @@ const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setTraceSigInt",
     b"types",
     b"parseArgs",
+    b"MIMEParams",
+    b"MIMEType",
     b"TextDecoder",
     b"TextEncoder",
     b"transferableAbortController",
@@ -939,6 +1041,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "path" => Some(PATH_NAMESPACE_KEYS),
         "path.default" => Some(PATH_DEFAULT_KEYS),
         "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
+        "fs" => Some(FS_NAMESPACE_KEYS),
         "constants" => Some(deprecated_constants_keys()),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
@@ -1191,6 +1294,8 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
     let exposed_name = if module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
+    } else if module_name == "fs" && property_name == "_toUnixTimestamp" {
+        "toUnixTimestamp"
     } else {
         property_name
     };
@@ -1327,7 +1432,10 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
             "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback",
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
+        ("fs", "_toUnixTimestamp") => Some(1),
         ("util", "debug" | "debuglog") => Some(2),
+        ("util", "MIMEParams") => Some(0),
+        ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
@@ -1337,6 +1445,13 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("dns" | "dns/promises", "Resolver") => Some(0),
         ("events", "init") => Some(1),
         ("wasi", "WASI") => Some(0),
+        ("perf_hooks", "Performance") => Some(0),
+        ("perf_hooks", "PerformanceEntry") => Some(0),
+        ("perf_hooks", "PerformanceMark") => Some(1),
+        ("perf_hooks", "PerformanceMeasure") => Some(0),
+        ("perf_hooks", "PerformanceObserver") => Some(1),
+        ("perf_hooks", "PerformanceObserverEntryList") => Some(0),
+        ("perf_hooks", "PerformanceResourceTiming") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
         ("module", "enableCompileCache") => Some(1),
@@ -1979,6 +2094,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("os", "getPriority")
             | ("os", "setPriority")
             | ("fs", "accessSync")
+            | ("fs", "_toUnixTimestamp")
             | ("fs", "access")
             | ("fs", "appendFile")
             | ("fs", "appendFileSync")
@@ -2111,10 +2227,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("buffer.Buffer", "isEncoding")
             | ("buffer.Buffer", "byteLength")
             | ("buffer.Buffer", "compare")
+            | ("perf_hooks", "Performance")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")
             | ("perf_hooks", "PerformanceMeasure")
+            | ("perf_hooks", "PerformanceObserverEntryList")
+            | ("perf_hooks", "PerformanceResourceTiming")
             | ("perf_observer", "observe")
             | ("perf_observer", "disconnect")
             | ("perf_observer", "takeRecords")
@@ -2147,6 +2266,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("buffer", "atob")
             | ("buffer", "btoa")
             | ("util", "convertProcessSignalToExitCode")
+            | ("util", "_errnoException")
+            | ("util", "_exceptionWithHostPort")
+            | ("util", "_extend")
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
@@ -2172,6 +2294,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "styleText")
             | ("util", "toUSVString")
             | ("util", "setTraceSigInt")
+            | ("util", "MIMEParams")
+            | ("util", "MIMEType")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")

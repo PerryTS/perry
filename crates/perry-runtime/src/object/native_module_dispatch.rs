@@ -803,6 +803,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("assert", "ifError") | ("assert/strict", "ifError") => js_assert_if_error(arg(0)),
 
         // ── fs module (args are NaN-boxed f64, booleans return as i32→f64) ──
+        ("fs", "_toUnixTimestamp") => crate::fs::js_fs_to_unix_timestamp(arg(0)),
         ("fs", "existsSync") => bool_to_f64(crate::fs::js_fs_exists_sync(arg(0))),
         ("fs", "readFileSync") => crate::fs::js_fs_read_file_dispatch(arg(0), arg(1)),
         ("fs", "writeFileSync") => bool_to_f64(crate::fs::js_fs_write_file_sync_options(
@@ -1104,6 +1105,19 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "debuglog") | ("util", "debug") => {
             crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
         }
+        ("util", "_extend") => crate::util_mime::js_util_extend(arg(0), arg(1)),
+        ("util", "_errnoException") => {
+            crate::util_mime::js_util_errno_exception(arg(0), arg(1), arg(2))
+        }
+        ("util", "_exceptionWithHostPort") => crate::util_mime::js_util_exception_with_host_port(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+        ),
+        ("util", "MIMEType") => crate::util_mime::js_util_mime_type_new(arg(0)),
+        ("util", "MIMEParams") => crate::util_mime::js_util_mime_params_new(),
         ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {

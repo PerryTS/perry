@@ -6,6 +6,12 @@
     // returning TAG_UNDEFINED.
     if (module == "fs" || module == "node:fs") && object.is_none() {
         match method {
+            "_toUnixTimestamp" if !args.is_empty() => {
+                let time = lower_expr(ctx, &args[0])?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_fs_to_unix_timestamp", &[(DOUBLE, &time)]));
+            }
             "readFileSync" if !args.is_empty() => {
                 let path = lower_expr(ctx, &args[0])?;
                 let options = if args.len() >= 2 {

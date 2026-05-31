@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2373 entries across 104 modules
+// Coverage: 2392 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1340,6 +1340,8 @@ declare module "fs" {
   /** stdlib */
   export const promises: any;
   /** stdlib */
+  export function _toUnixTimestamp(...args: any[]): any;
+  /** stdlib */
   export function access(...args: any[]): any;
   /** stdlib */
   export function accessSync(...args: any[]): any;
@@ -2061,6 +2063,8 @@ declare module "path/win32" {
 
 declare module "perf_hooks" {
   /** stdlib */
+  export class Performance { [key: string]: any; }
+  /** stdlib */
   export class PerformanceEntry { [key: string]: any; }
   /** stdlib */
   export class PerformanceMark { [key: string]: any; }
@@ -2068,6 +2072,10 @@ declare module "perf_hooks" {
   export class PerformanceMeasure { [key: string]: any; }
   /** stdlib */
   export class PerformanceObserver { [key: string]: any; }
+  /** stdlib */
+  export class PerformanceObserverEntryList { [key: string]: any; }
+  /** stdlib */
+  export class PerformanceResourceTiming { [key: string]: any; }
   /** stdlib */
   export const constants: any;
   /** stdlib */
@@ -3055,6 +3063,10 @@ declare module "string_decoder" {
 
 declare module "sys" {
   /** stdlib */
+  export class MIMEParams { [key: string]: any; }
+  /** stdlib */
+  export class MIMEType { [key: string]: any; }
+  /** stdlib */
   export class TextDecoder { [key: string]: any; }
   /** stdlib */
   export class TextEncoder { [key: string]: any; }
@@ -3063,6 +3075,16 @@ declare module "sys" {
   export default _default;
   /** stdlib */
   export const types: any;
+  /** stdlib */
+  export function MIMEParams(...args: any[]): any;
+  /** stdlib */
+  export function MIMEType(...args: any[]): any;
+  /** stdlib */
+  export function _errnoException(...args: any[]): any;
+  /** stdlib */
+  export function _exceptionWithHostPort(...args: any[]): any;
+  /** stdlib */
+  export function _extend(...args: any[]): any;
   /** stdlib */
   export function aborted(...args: any[]): any;
   /** stdlib */
@@ -3249,6 +3271,10 @@ declare module "url" {
 
 declare module "util" {
   /** stdlib */
+  export class MIMEParams { [key: string]: any; }
+  /** stdlib */
+  export class MIMEType { [key: string]: any; }
+  /** stdlib */
   export class TextDecoder { [key: string]: any; }
   /** stdlib */
   export class TextEncoder { [key: string]: any; }
@@ -3257,6 +3283,16 @@ declare module "util" {
   export default _default;
   /** stdlib */
   export const types: any;
+  /** stdlib */
+  export function MIMEParams(...args: any[]): any;
+  /** stdlib */
+  export function MIMEType(...args: any[]): any;
+  /** stdlib */
+  export function _errnoException(...args: any[]): any;
+  /** stdlib */
+  export function _exceptionWithHostPort(...args: any[]): any;
+  /** stdlib */
+  export function _extend(...args: any[]): any;
   /** stdlib */
   export function aborted(...args: any[]): any;
   /** stdlib */
