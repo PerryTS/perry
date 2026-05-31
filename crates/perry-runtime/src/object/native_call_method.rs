@@ -1907,6 +1907,46 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
+            // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
+            // `.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`/`.next`).
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                );
+            }
+
+            // #2874: an iterator-helper method (`map`/`filter`/`take`/…) on a
+            // RAW iterator object — a generator, the runtime array/Map/Set
+            // iterators, or any `{ next() }`. Node resolves these on
+            // `Iterator.prototype`; wrap the iterator in an identity helper and
+            // dispatch there. Skipped when the object defines the name as an own
+            // callable field (the user's own method wins). Runs before the
+            // own-field scan so the cheap has-own check below stays in sync.
+            if crate::iterator_helpers::is_iterator_helper_method(method_name) {
+                let has_own = {
+                    let mk = crate::string::js_string_from_bytes(
+                        method_name.as_ptr(),
+                        method_name.len() as u32,
+                    );
+                    let fv = js_object_get_field_by_name(obj as *const _, mk);
+                    let fp =
+                        crate::value::js_nanbox_get_pointer(f64::from_bits(fv.bits())) as usize;
+                    !fv.is_undefined() && crate::closure::is_closure_ptr(fp)
+                };
+                if let Some(result) = crate::iterator_helpers::maybe_dispatch_helper_on_iterator(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                    has_own,
+                ) {
+                    return result;
+                }
+            }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
             let keys = (*obj).keys_array;
@@ -2352,6 +2392,15 @@ pub unsafe extern "C" fn js_native_call_method(
                 return crate::collection_iter_object::dispatch_set_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
+                );
+            }
+            // #2874: lazy iterator-helper objects, same as the NaN-boxed path.
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
                 );
             }
 

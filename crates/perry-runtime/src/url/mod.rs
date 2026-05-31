@@ -19,8 +19,9 @@ pub mod url_class;
 
 pub use self::abort::{
     js_abort_controller_abort, js_abort_controller_abort_reason, js_abort_controller_new,
-    js_abort_controller_signal, js_abort_error_value, js_abort_signal_add_listener,
-    js_abort_signal_is_aborted, js_abort_signal_remove_listener, js_abort_signal_timeout,
+    js_abort_controller_signal, js_abort_error_value, js_abort_signal_abort,
+    js_abort_signal_add_listener, js_abort_signal_any, js_abort_signal_is_aborted,
+    js_abort_signal_remove_listener, js_abort_signal_throw_if_aborted, js_abort_signal_timeout,
 };
 pub use self::node_compat::{
     js_url_domain_to_ascii, js_url_domain_to_unicode, js_url_file_url_to_path,
@@ -136,19 +137,6 @@ pub(crate) fn object_prop_string(obj: *mut ObjectHeader, key: &str) -> String {
 pub(crate) fn object_prop_f64(obj: *mut ObjectHeader, key: &str) -> f64 {
     let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
     crate::object::js_object_get_field_by_name_f64(obj, key_ptr)
-}
-
-/// Read a `*mut StringHeader` (NULL → empty) into a Rust `String`.
-pub(crate) fn string_header_to_string(value: *mut crate::StringHeader) -> String {
-    if value.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let len = (*value).byte_len as usize;
-        let data_ptr = (value as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let slice = std::slice::from_raw_parts(data_ptr, len);
-        String::from_utf8_lossy(slice).into_owned()
-    }
 }
 
 #[cfg(test)]

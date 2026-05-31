@@ -174,6 +174,42 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            let dns_module =
+                if obj_name == "dns" || ctx.lookup_builtin_module_alias(obj_name) == Some("dns") {
+                    Some("dns".to_string())
+                } else if ctx.lookup_builtin_module_alias(obj_name) == Some("dns/promises") {
+                    Some("dns/promises".to_string())
+                } else {
+                    ctx.lookup_native_module(obj_name)
+                        .and_then(|(module_name, method)| {
+                            if method.is_none() && matches!(module_name, "dns" | "dns/promises") {
+                                Some(module_name.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                };
+            if let Some(module_name) = dns_module {
+                if prop_ident.sym.as_ref() == "Resolver" {
+                    let args = new_expr
+                        .args
+                        .as_ref()
+                        .map(|args| {
+                            args.iter()
+                                .map(|a| lower_expr(ctx, &a.expr))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    return Ok(Expr::NativeMethodCall {
+                        module: module_name,
+                        class_name: None,
+                        object: None,
+                        method: "Resolver".to_string(),
+                        args,
+                    });
+                }
+            }
             let is_module_module = obj_name == "module"
                 || ctx.lookup_builtin_module_alias(obj_name) == Some("module")
                 || ctx
