@@ -137,6 +137,9 @@ crates/perry-stdlib/src/common/dispatch.rs
 # sqlite stdlib remains a monolithic binding surface on current main; split
 # statements/sessions/backups/functions in the sqlite cleanup tracked in #1435.
 crates/perry-stdlib/src/sqlite.rs
+# Native node-core call table crossed the gate on current main; split per
+# namespace alongside lower-call native table cleanup tracked in #793.
+crates/perry-codegen/src/lower_call/native_table/node_core.rs
 EOF
 )
 
