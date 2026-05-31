@@ -536,6 +536,7 @@ pub(crate) fn lower_module_decl(
                                                         ("net", "createConnection") => {
                                                             Some("Socket")
                                                         }
+                                                        ("dgram", "createSocket") => Some("Socket"),
                                                         // node-cron's `cron.schedule(expr, cb)` returns a job
                                                         // handle whose `start()`/`stop()`/`isRunning()` etc.
                                                         // dispatch via the ("node-cron", true, METHOD) entries

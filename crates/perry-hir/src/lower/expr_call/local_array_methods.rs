@@ -819,14 +819,16 @@ pub(super) fn try_local_array_methods(
                             .unwrap_or(false);
                         if is_text_decoder {
                             if method_name == "decode" {
-                                if !args.is_empty() {
-                                    return Ok(Ok(Expr::TextDecoderDecode(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
+                                let decoder = lower_expr(ctx, &member.obj)?;
+                                let input = if !args.is_empty() {
+                                    args.into_iter().next().unwrap()
                                 } else {
-                                    // decode() with no args returns empty string
-                                    return Ok(Ok(Expr::String(String::new())));
-                                }
+                                    Expr::Undefined
+                                };
+                                return Ok(Ok(Expr::TextDecoderDecode {
+                                    decoder: Box::new(decoder),
+                                    input: Box::new(input),
+                                }));
                             }
                         }
                     }
