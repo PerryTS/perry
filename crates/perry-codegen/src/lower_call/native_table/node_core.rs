@@ -20,6 +20,25 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // ========== Node test runner shape stubs ==========
+    NativeModSig {
+        module: "test",
+        has_receiver: false,
+        method: "fn",
+        class_filter: Some("mock"),
+        runtime: "js_node_test_mock_fn",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "test",
+        has_receiver: false,
+        method: "property",
+        class_filter: Some("mock"),
+        runtime: "js_node_test_mock_property",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node dgram shape stubs ==========
     NativeModSig {
         module: "dgram",

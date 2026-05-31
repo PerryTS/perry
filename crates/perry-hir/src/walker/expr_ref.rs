@@ -235,6 +235,7 @@ where
         | Expr::StaticPluginResolve(v)
         | Expr::ArrayIsArray(v)
         | Expr::ArrayFrom(v)
+        | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
         | Expr::ForOfToArray(v)

@@ -329,6 +329,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
+        // #2874: `Iterator.from(x)` — wrap any iterable in a lazy
+        // iterator-helper object. `js_iterator_from` returns an already
+        // NaN-boxed pointer (f64), so return it directly.
+        Expr::IteratorFrom(iter) => {
+            let iter_box = lower_expr(ctx, iter)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_iterator_from", &[(DOUBLE, &iter_box)]))
+        }
+
         // Tagged-template strings literal — build cooked array, build raw
         // array, register the (cooked, raw) pair so subsequent `.raw`
         // reads resolve via `js_template_raw`, return the cooked array.

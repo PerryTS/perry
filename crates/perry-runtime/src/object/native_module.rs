@@ -2607,6 +2607,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
             _ => None,
         },
+        "test" => crate::node_test::property(property),
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(unsafe {

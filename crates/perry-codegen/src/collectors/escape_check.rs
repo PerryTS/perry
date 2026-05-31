@@ -355,6 +355,7 @@ pub fn check_escapes_in_expr(
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)
         | Expr::JsonStringify(operand)

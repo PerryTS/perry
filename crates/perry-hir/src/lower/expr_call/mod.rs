@@ -59,7 +59,7 @@ use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
     check_eval_function_call, try_bare_regexp_call, try_builtin_prototype_method_apply_call,
-    try_embed_wasm, try_function_return_this, try_iife_call_rewrite,
+    try_embed_wasm, try_function_return_this, try_iife_call_rewrite, try_iterator_from,
     try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
     try_pod_layout_constants, try_precompile, try_require_literal_bail,
@@ -205,6 +205,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     // runtime-unknown bucket; otherwise logs + falls through.
     check_eval_function_call(ctx, call)?;
     if let Some(expr) = try_bare_regexp_call(ctx, call, has_spread)? {
+        return Ok(expr);
+    }
+    // #2874: `Iterator.from(x)` — wrap an iterable in a lazy iterator-helper.
+    if let Some(expr) = try_iterator_from(ctx, call, has_spread)? {
         return Ok(expr);
     }
 

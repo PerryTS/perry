@@ -1893,6 +1893,13 @@ pub enum Expr {
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
 
+    /// `Iterator.from(iterable)` (#2874) — wrap any iterable/iterator in a lazy
+    /// iterator-helper object exposing `.map`/`.filter`/`.take`/`.drop`/
+    /// `.flatMap`/`.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`.
+    /// The helper methods themselves dispatch at runtime through
+    /// `js_native_call_method` (no dedicated HIR variant).
+    IteratorFrom(Box<Expr>),
+
     /// Tagged-template strings literal — codegen builds the cooked-strings
     /// array AND a parallel raw-strings array, registers the (cooked, raw)
     /// pair via `js_tagged_template_register_raw`, and returns the cooked
