@@ -140,14 +140,13 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "setSourceMapsEnabled" => {
-                            // #1400: process.setSourceMapsEnabled(bool) —
-                            // toggles runtime source-map resolution in Node.
-                            // Perry compiles AOT and has no resolver to
-                            // toggle, so the call is a no-op returning
-                            // undefined. Without this, framework startup
-                            // code that conditionally enables maps crashes
-                            // on "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setSourceMapsEnabled".to_string(),
+                                args,
+                            }));
                         }
                         "getBuiltinModule" => {
                             return Ok(Ok(Expr::NativeMethodCall {
@@ -174,20 +173,24 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "hasUncaughtExceptionCaptureCallback" => {
-                            // #1406: returns a boolean indicating whether
-                            // a capture callback has been installed via
-                            // setUncaughtExceptionCaptureCallback. Perry
-                            // doesn't expose that hook, so the answer is
-                            // always `false`.
-                            return Ok(Ok(Expr::Bool(false)));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "hasUncaughtExceptionCaptureCallback".to_string(),
+                                args,
+                            }));
                         }
-                        "setUncaughtExceptionCaptureCallback" => {
-                            // #1406: installs a single callback that
-                            // intercepts uncaught exceptions before they
-                            // reach the `uncaughtException` event. Perry
-                            // doesn't have the hook to install — the call
-                            // is a no-op returning undefined.
-                            return Ok(Ok(Expr::Undefined));
+                        "setUncaughtExceptionCaptureCallback"
+                        | "addUncaughtExceptionCaptureCallback" => {
+                            let method_name = method_ident.sym.as_ref().to_string();
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
                         }
                         "loadEnvFile" => {
                             // #1399 / #2135: process.loadEnvFile(path?)
@@ -197,12 +200,8 @@ pub(super) fn try_native_module_methods(
                             // didn't persist; #1344 has since wired writes
                             // through `std::env::set_var`, so we lower to a
                             // runtime call that actually reads the file.
-                            // Default the optional path to `.env` (Node's
-                            // default) so the dispatch-table row's single
-                            // NA_STR arg stays satisfied for the no-arg call
-                            // form.
                             let call_args = if args.is_empty() {
-                                vec![Expr::String(".env".to_string())]
+                                vec![Expr::Undefined]
                             } else {
                                 args
                             };

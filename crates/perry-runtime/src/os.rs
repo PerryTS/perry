@@ -734,6 +734,7 @@ fn extract_hrtime_prior(value: f64) -> (i64, i64) {
 #[derive(Clone, Copy)]
 struct ProcessListener {
     callback: *const crate::closure::ClosureHeader,
+    raw_wrapper: *const crate::closure::ClosureHeader,
     once: bool,
 }
 
@@ -847,6 +848,60 @@ fn listener_lookup_ptr(listener_bits: i64) -> *const crate::closure::ClosureHead
     std::ptr::null()
 }
 
+extern "C" fn process_once_raw_wrapper(
+    closure: *const crate::closure::ClosureHeader,
+    rest_args: f64,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let target = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let target_jv = crate::value::JSValue::from_bits(target.to_bits());
+    if !target_jv.is_pointer() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let target_ptr = target_jv.as_pointer::<crate::closure::ClosureHeader>();
+    if target_ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let rest_jv = crate::value::JSValue::from_bits(rest_args.to_bits());
+    if !rest_jv.is_pointer() {
+        return unsafe { crate::closure::js_closure_call_array(target_ptr as i64, std::ptr::null(), 0) };
+    }
+    let arr = rest_jv.as_pointer::<ArrayHeader>();
+    if arr.is_null() {
+        return unsafe { crate::closure::js_closure_call_array(target_ptr as i64, std::ptr::null(), 0) };
+    }
+    let len = crate::array::js_array_length(arr) as usize;
+    let mut args = Vec::with_capacity(len);
+    for i in 0..len {
+        args.push(crate::array::js_array_get_f64(arr, i as u32));
+    }
+    unsafe { crate::closure::js_closure_call_array(target_ptr as i64, args.as_ptr(), args.len() as i64) }
+}
+
+fn create_process_once_raw_wrapper(
+    callback: *const crate::closure::ClosureHeader,
+) -> *const crate::closure::ClosureHeader {
+    crate::closure::js_register_closure_rest(process_once_raw_wrapper as *const u8, 0);
+    let wrapper = crate::closure::js_closure_alloc(process_once_raw_wrapper as *const u8, 1);
+    let callback_value = f64::from_bits(crate::value::JSValue::pointer(callback as *const u8).bits());
+    crate::closure::js_closure_set_capture_f64(wrapper, 0, callback_value);
+    crate::closure::closure_set_dynamic_prop(wrapper as usize, "listener", callback_value);
+    let name = "bound onceWrapper";
+    let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
+    crate::closure::closure_set_dynamic_prop(wrapper as usize, "name", name_value);
+    wrapper
+}
+
+fn process_listener_matches(
+    listener: &ProcessListener,
+    handler: *const crate::closure::ClosureHeader,
+) -> bool {
+    !handler.is_null() && (listener.callback == handler || listener.raw_wrapper == handler)
+}
+
 fn register_process_listener(
     event_bits: i64,
     listener_bits: i64,
@@ -863,7 +918,16 @@ fn register_process_listener(
     PROCESS_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
         emitter.ensure_event_order(&event);
-        let listener = ProcessListener { callback, once };
+        let raw_wrapper = if once {
+            create_process_once_raw_wrapper(callback)
+        } else {
+            std::ptr::null()
+        };
+        let listener = ProcessListener {
+            callback,
+            raw_wrapper,
+            once,
+        };
         let listeners = emitter.events.entry(event).or_default();
         if prepend {
             listeners.insert(0, listener);
@@ -882,7 +946,7 @@ fn boxed_bool(value: bool) -> f64 {
     })
 }
 
-fn listener_array(event_bits: i64, _raw: bool) -> *mut ArrayHeader {
+fn listener_array(event_bits: i64, raw: bool) -> *mut ArrayHeader {
     let Some(event) = coerce_event_name(event_bits) else {
         return crate::array::js_array_alloc(0);
     };
@@ -894,7 +958,13 @@ fn listener_array(event_bits: i64, _raw: bool) -> *mut ArrayHeader {
             .map(|listeners| {
                 listeners
                     .iter()
-                    .map(|listener| listener.callback)
+                    .map(|listener| {
+                        if raw && listener.once && !listener.raw_wrapper.is_null() {
+                            listener.raw_wrapper
+                        } else {
+                            listener.callback
+                        }
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default()
@@ -905,6 +975,59 @@ fn listener_array(event_bits: i64, _raw: bool) -> *mut ArrayHeader {
             crate::array::js_array_push(arr, crate::value::JSValue::pointer(callback as *const u8));
     }
     arr
+}
+
+fn unhandled_error_payload(value: f64) -> String {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jv.is_null() {
+        return "null".to_string();
+    }
+    if jv.is_bool() {
+        return jv.as_bool().to_string();
+    }
+    if jv.is_any_string() {
+        let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+        if ptr.is_null() {
+            return "''".to_string();
+        }
+        let text = unsafe {
+            let len = (*ptr).byte_len as usize;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+        };
+        return format!("'{text}'");
+    }
+    if crate::fs::validate::is_numeric(jv) {
+        let n = if jv.is_int32() {
+            jv.as_int32() as f64
+        } else {
+            jv.as_number()
+        };
+        if n.fract() == 0.0 && n.is_finite() {
+            return (n as i64).to_string();
+        }
+        return n.to_string();
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn throw_unhandled_process_error(args: &[f64]) -> ! {
+    let value = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+    if crate::error::js_error_is_error(value).to_bits() == crate::value::TAG_TRUE {
+        crate::exception::js_throw(value);
+    }
+    let payload = unhandled_error_payload(value);
+    let message = format!("Unhandled error. ({payload})");
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_UNHANDLED_ERROR");
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn collect_emit_args(args: *const ArrayHeader) -> Vec<f64> {
@@ -935,11 +1058,7 @@ pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
 
     if listeners.is_empty() {
         if event == "error" {
-            crate::exception::js_throw(
-                args.first()
-                    .copied()
-                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
-            );
+            throw_unhandled_process_error(args);
         }
         return false;
     }
@@ -1018,7 +1137,7 @@ pub extern "C" fn js_process_remove_listener(event_bits: i64, listener_bits: i64
             if let Some(listeners) = emitter.events.get_mut(&event) {
                 if let Some(pos) = listeners
                     .iter()
-                    .rposition(|listener| listener.callback == handler)
+                    .rposition(|listener| process_listener_matches(listener, handler))
                 {
                     listeners.remove(pos);
                 }
@@ -1076,7 +1195,7 @@ pub extern "C" fn js_process_listener_count(event_bits: i64, listener_bits: i64)
         } else {
             listeners
                 .iter()
-                .filter(|listener| listener.callback == handler)
+                .filter(|listener| process_listener_matches(listener, handler))
                 .count() as f64
         }
     })
@@ -1128,6 +1247,9 @@ pub fn scan_process_event_listener_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         for listeners in emitter.events.values_mut() {
             for listener in listeners {
                 visitor.visit_raw_const_ptr_slot(&mut listener.callback);
+                if !listener.raw_wrapper.is_null() {
+                    visitor.visit_raw_const_ptr_slot(&mut listener.raw_wrapper);
+                }
             }
         }
     });
@@ -1151,6 +1273,7 @@ pub(crate) fn test_seed_process_event_listener_root(
             "__test__".to_string(),
             vec![ProcessListener {
                 callback,
+                raw_wrapper: std::ptr::null(),
                 once: false,
             }],
         );

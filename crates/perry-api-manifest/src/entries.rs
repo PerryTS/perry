@@ -2749,6 +2749,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "loadEnvFile", false, None),
     method("process", "exit", false, None),
     method("process", "umask", false, None),
+    method("process", "setSourceMapsEnabled", false, None),
+    method(
+        "process",
+        "hasUncaughtExceptionCaptureCallback",
+        false,
+        None,
+    ),
+    method(
+        "process",
+        "setUncaughtExceptionCaptureCallback",
+        false,
+        None,
+    ),
+    method(
+        "process",
+        "addUncaughtExceptionCaptureCallback",
+        false,
+        None,
+    ),
     method("process", "threadCpuUsage", false, None),
     method("process", "availableMemory", false, None),
     method("process", "constrainedMemory", false, None),
@@ -2794,6 +2813,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("process", "stdout"),
     property("process", "stderr"),
     property("process", "env"),
+    property("process", "sourceMapsEnabled"),
     // ===========================================================
     // Class exports (constructors `new Foo(...)` from a module).
     // ===========================================================
