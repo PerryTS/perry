@@ -601,6 +601,32 @@ const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"triggerAsyncId",
 ];
 
+const BUFFER_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Buffer",
+    b"transcode",
+    b"isUtf8",
+    b"isAscii",
+    b"kMaxLength",
+    b"kStringMaxLength",
+    b"btoa",
+    b"atob",
+    b"constants",
+    b"INSPECT_MAX_BYTES",
+    b"Blob",
+    b"resolveObjectURL",
+    b"File",
+];
+
+const TIMERS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"setTimeout",
+    b"clearTimeout",
+    b"setImmediate",
+    b"clearImmediate",
+    b"setInterval",
+    b"clearInterval",
+    b"promises",
+];
+
 const OS_DEFAULT_KEYS: &[&[u8]] = &[
     b"arch",
     b"availableParallelism",
@@ -1160,8 +1186,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "fs" => Some(FS_NAMESPACE_KEYS),
         "constants" => Some(deprecated_constants_keys()),
+        "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
+        "timers" => Some(TIMERS_NAMESPACE_KEYS),
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
         "url" => Some(URL_NAMESPACE_KEYS),
@@ -2486,6 +2514,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("cluster", "setupMaster")
             | ("cluster", "Worker")
             | ("buffer.Buffer", "copyBytesFrom")
+            | ("buffer", "isAscii")
+            | ("buffer", "isUtf8")
             | ("buffer", "atob")
             | ("buffer", "btoa")
             | ("util", "convertProcessSignalToExitCode")
@@ -4057,6 +4087,15 @@ pub(crate) unsafe fn get_native_module_constant(
             "kMaxLength" => Some(9_007_199_254_740_991.0),
             "kStringMaxLength" => Some(536870888.0),
             "INSPECT_MAX_BYTES" => Some(50.0),
+            _ => None,
+        },
+        "timers" => match property {
+            "promises" => Some(unsafe {
+                crate::node_submodules::js_node_submodule_namespace(
+                    b"timers_promises".as_ptr(),
+                    "timers_promises".len() as u32,
+                )
+            }),
             _ => None,
         },
         "buffer.constants" => match property {

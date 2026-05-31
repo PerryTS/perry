@@ -549,6 +549,14 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
     let Some(module_name) = supported_builtin_module_name(name) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    if module_name == "timers/promises" {
+        return unsafe {
+            crate::node_submodules::js_node_submodule_namespace(
+                b"timers_promises".as_ptr(),
+                "timers_promises".len() as u32,
+            )
+        };
+    }
     crate::object::js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
 }
 

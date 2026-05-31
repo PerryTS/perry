@@ -415,6 +415,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 0.0
             }
         }
+        ("buffer", "isAscii") => crate::buffer::js_buffer_is_ascii(arg(0)),
+        ("buffer", "isUtf8") => crate::buffer::js_buffer_is_utf8(arg(0)),
 
         // ── process EventEmitter API ──
         ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
