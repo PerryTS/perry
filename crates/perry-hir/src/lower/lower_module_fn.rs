@@ -276,6 +276,8 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
+    ctx.current_strict = module_has_module_declaration(ast_module)
+        || module_starts_with_use_strict_directive(ast_module);
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
     }

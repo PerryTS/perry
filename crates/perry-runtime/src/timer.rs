@@ -1082,7 +1082,11 @@ pub fn active_timeout_resource_count() -> usize {
             .iter()
             .filter(|timer| !timer.cleared && timer.kind == CallbackTimerKind::Timeout)
             .count()
-            + state.intervals.iter().filter(|timer| !timer.cleared).count()
+            + state
+                .intervals
+                .iter()
+                .filter(|timer| !timer.cleared)
+                .count()
     };
     callback_count + interval_count + mock_count
 }

@@ -866,18 +866,24 @@ extern "C" fn process_once_raw_wrapper(
     }
     let rest_jv = crate::value::JSValue::from_bits(rest_args.to_bits());
     if !rest_jv.is_pointer() {
-        return unsafe { crate::closure::js_closure_call_array(target_ptr as i64, std::ptr::null(), 0) };
+        return unsafe {
+            crate::closure::js_closure_call_array(target_ptr as i64, std::ptr::null(), 0)
+        };
     }
     let arr = rest_jv.as_pointer::<ArrayHeader>();
     if arr.is_null() {
-        return unsafe { crate::closure::js_closure_call_array(target_ptr as i64, std::ptr::null(), 0) };
+        return unsafe {
+            crate::closure::js_closure_call_array(target_ptr as i64, std::ptr::null(), 0)
+        };
     }
     let len = crate::array::js_array_length(arr) as usize;
     let mut args = Vec::with_capacity(len);
     for i in 0..len {
         args.push(crate::array::js_array_get_f64(arr, i as u32));
     }
-    unsafe { crate::closure::js_closure_call_array(target_ptr as i64, args.as_ptr(), args.len() as i64) }
+    unsafe {
+        crate::closure::js_closure_call_array(target_ptr as i64, args.as_ptr(), args.len() as i64)
+    }
 }
 
 fn create_process_once_raw_wrapper(
@@ -885,7 +891,8 @@ fn create_process_once_raw_wrapper(
 ) -> *const crate::closure::ClosureHeader {
     crate::closure::js_register_closure_rest(process_once_raw_wrapper as *const u8, 0);
     let wrapper = crate::closure::js_closure_alloc(process_once_raw_wrapper as *const u8, 1);
-    let callback_value = f64::from_bits(crate::value::JSValue::pointer(callback as *const u8).bits());
+    let callback_value =
+        f64::from_bits(crate::value::JSValue::pointer(callback as *const u8).bits());
     crate::closure::js_closure_set_capture_f64(wrapper, 0, callback_value);
     crate::closure::closure_set_dynamic_prop(wrapper as usize, "listener", callback_value);
     let name = "bound onceWrapper";
@@ -977,59 +984,6 @@ fn listener_array(event_bits: i64, raw: bool) -> *mut ArrayHeader {
     arr
 }
 
-fn unhandled_error_payload(value: f64) -> String {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if jv.is_undefined() {
-        return "undefined".to_string();
-    }
-    if jv.is_null() {
-        return "null".to_string();
-    }
-    if jv.is_bool() {
-        return jv.as_bool().to_string();
-    }
-    if jv.is_any_string() {
-        let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
-        if ptr.is_null() {
-            return "''".to_string();
-        }
-        let text = unsafe {
-            let len = (*ptr).byte_len as usize;
-            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-        };
-        return format!("'{text}'");
-    }
-    if crate::fs::validate::is_numeric(jv) {
-        let n = if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            jv.as_number()
-        };
-        if n.fract() == 0.0 && n.is_finite() {
-            return (n as i64).to_string();
-        }
-        return n.to_string();
-    }
-    crate::fs::validate::describe_received(value)
-}
-
-fn throw_unhandled_process_error(args: &[f64]) -> ! {
-    let value = args
-        .first()
-        .copied()
-        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-    if crate::error::js_error_is_error(value).to_bits() == crate::value::TAG_TRUE {
-        crate::exception::js_throw(value);
-    }
-    let payload = unhandled_error_payload(value);
-    let message = format!("Unhandled error. ({payload})");
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg, "ERR_UNHANDLED_ERROR");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
 fn collect_emit_args(args: *const ArrayHeader) -> Vec<f64> {
     if args.is_null() {
         return Vec::new();
@@ -1058,7 +1012,7 @@ pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
 
     if listeners.is_empty() {
         if event == "error" {
-            throw_unhandled_process_error(args);
+            throw_unhandled_error_event(args);
         }
         return false;
     }
@@ -1073,6 +1027,44 @@ pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
         }
     }
     true
+}
+
+/// Emit Node's special unhandled-`error`-event semantics (#3052).
+///
+/// `EventEmitter` (and therefore the `process` global) treats `emit("error", …)`
+/// with no registered `error` listener specially: if the first argument is an
+/// `Error` instance (or a subclass) it is re-thrown *as-is* — the same object,
+/// preserving its `code`, prototype, and identity. Otherwise Node constructs a
+/// fresh `Error` with `code: "ERR_UNHANDLED_ERROR"` and a message of
+/// `Unhandled error. (<util.inspect(arg)>)`, where a missing argument inspects
+/// to `undefined`. This replaces the previous behaviour of throwing the raw
+/// first argument (so `emit("error", "boom")` now throws an `ERR_UNHANDLED_ERROR`
+/// `Error` rather than the bare `"boom"` string).
+fn throw_unhandled_error_event(args: &[f64]) -> ! {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let first = args.first().copied().unwrap_or(undefined);
+
+    // `arg instanceof Error` → rethrow the original value untouched.
+    let is_error =
+        crate::value::js_is_truthy(crate::object::js_util_types_is_native_error(first)) != 0;
+    if is_error {
+        crate::exception::js_throw(first);
+    }
+
+    // Otherwise: `Unhandled error. (<inspected>)` with ERR_UNHANDLED_ERROR.
+    let inspected = unsafe { read_inspected(crate::builtins::js_util_inspect(first, undefined)) };
+    let message = format!("Unhandled error. ({inspected})");
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_UNHANDLED_ERROR");
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+}
+
+/// Read the `util.inspect` result (a NaN-boxed string value) back into a Rust
+/// `String` for embedding in the unhandled-error message.
+unsafe fn read_inspected(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    read_event_name(ptr).unwrap_or_default()
 }
 
 /// process.on(event, listener) — register an event listener.

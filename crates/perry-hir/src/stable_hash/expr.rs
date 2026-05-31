@@ -519,6 +519,7 @@ impl SH for Expr {
             Expr::NumberCoerce(e) => { tag(h, 402); e.as_ref().hash(h); }
             Expr::BigIntCoerce(e) => { tag(h, 403); e.as_ref().hash(h); }
             Expr::StringCoerce(e) => { tag(h, 404); e.as_ref().hash(h); }
+            Expr::ObjectCoerce(e) => { tag(h, 906); e.as_ref().hash(h); }
             Expr::BooleanCoerce(e) => { tag(h, 405); e.as_ref().hash(h); }
             Expr::IsNaN(e) => { tag(h, 406); e.as_ref().hash(h); }
             Expr::IsUndefinedOrBareNan(e) => { tag(h, 407); e.as_ref().hash(h); }

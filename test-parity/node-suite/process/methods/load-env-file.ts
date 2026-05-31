@@ -1,55 +1,75 @@
 // process.loadEnvFile(path?) loads a .env file (Node 20.12+).
-import { Buffer } from "node:buffer";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import * as url from "node:url";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 console.log("is function:", typeof process.loadEnvFile === "function");
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "perry-load-env-file-"));
-const keys = [
-  "PERRY_LOAD_ENV_EXPORT",
-  "PERRY_LOAD_ENV_INLINE",
-  "PERRY_LOAD_ENV_HASH",
-  "PERRY_LOAD_ENV_MULTI",
-  "PERRY_LOAD_ENV_BUFFER",
-  "PERRY_LOAD_ENV_URL",
-];
-for (const key of keys) delete process.env[key];
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "perry-loadenv-"));
+const cwd = process.cwd();
+const file = path.join(tmp, "vars.env");
+const defaultFile = path.join(tmp, ".env");
+const content = [
+  "A=1",
+  "B = two # comment",
+  'C="three # not comment"',
+  "D=unquoted value # comment",
+  "export E=5",
+  'MULTI="line1',
+  'line2"',
+  "EXISTING=file",
+].join("\n");
 
-try {
-  const pathFile = path.join(tmp, "path.env");
-  fs.writeFileSync(
-    pathFile,
-    "export PERRY_LOAD_ENV_EXPORT=works\n" +
-      "PERRY_LOAD_ENV_INLINE=one # comment\n" +
-      "PERRY_LOAD_ENV_HASH=\"two # hash\"\n" +
-      "PERRY_LOAD_ENV_MULTI=\"line1\nline2\"\n",
-  );
-  process.loadEnvFile(pathFile);
-  console.log("export:", process.env.PERRY_LOAD_ENV_EXPORT);
-  console.log("inline:", process.env.PERRY_LOAD_ENV_INLINE);
-  console.log("hash:", process.env.PERRY_LOAD_ENV_HASH);
-  console.log("multi:", JSON.stringify(process.env.PERRY_LOAD_ENV_MULTI));
+fs.writeFileSync(file, content);
+fs.writeFileSync(defaultFile, "DEFAULT=ok\n");
 
-  const bufferFile = path.join(tmp, "buffer.env");
-  fs.writeFileSync(bufferFile, "PERRY_LOAD_ENV_BUFFER=buffer-path\n");
-  process.loadEnvFile(Buffer.from(bufferFile));
-  console.log("buffer:", process.env.PERRY_LOAD_ENV_BUFFER);
+const keys = ["A", "B", "C", "D", "E", "MULTI", "EXISTING", "DEFAULT"];
 
-  const urlFile = path.join(tmp, "url.env");
-  fs.writeFileSync(urlFile, "PERRY_LOAD_ENV_URL=file-url\n");
-  process.loadEnvFile(url.pathToFileURL(urlFile));
-  console.log("url:", process.env.PERRY_LOAD_ENV_URL);
-
-  try {
-    process.loadEnvFile(1 as any);
-    console.log("invalid:", "NO_THROW");
-  } catch (err: any) {
-    console.log("invalid:", err.name, err.code, err.message.split("\n")[0]);
+function clearEnv() {
+  for (const key of keys) {
+    delete process.env[key];
   }
-} finally {
-  fs.rmSync(tmp, { recursive: true, force: true });
-  for (const key of keys) delete process.env[key];
 }
+
+function snapshot() {
+  return keys
+    .map((key) => key + "=" + JSON.stringify(process.env[key] ?? "unset"))
+    .join(";");
+}
+
+function reportLoad(label, value, passArg = true) {
+  clearEnv();
+  process.env.EXISTING = "before";
+  try {
+    const result = passArg ? process.loadEnvFile(value) : process.loadEnvFile();
+    console.log(label, "OK", String(result), snapshot());
+  } catch (err) {
+    const e = err;
+    console.log(
+      label,
+      "THROW",
+      e.name,
+      e.code || "nocode",
+      String(e.message).split("\n")[0],
+    );
+  }
+}
+
+reportLoad("string", file);
+reportLoad("buffer", Buffer.from(file));
+reportLoad("url", pathToFileURL(file));
+
+process.chdir(tmp);
+reportLoad("omitted", undefined, false);
+reportLoad("undefined", undefined);
+reportLoad("null", null);
+process.chdir(cwd);
+
+reportLoad("file-url-encoded-slash", new URL("file:///tmp/a%2Fb.env"));
+reportLoad("number", 123);
+reportLoad("boolean", true);
+reportLoad("object", {});
+reportLoad("array", []);
+reportLoad("symbol", Symbol("x"));
+reportLoad("http-url", new URL("https://example.test/x"));

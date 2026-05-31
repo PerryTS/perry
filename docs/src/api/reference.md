@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2057 entries across 95 modules.
+Total: 2137 entries across 99 modules.
 
 ## Modules
 
@@ -38,6 +38,7 @@ Total: 2057 entries across 95 modules.
 - [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`fs`](#fs)
+- [`fs/promises`](#fs-promises)
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
@@ -80,10 +81,12 @@ Total: 2057 entries across 95 modules.
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
+- [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`stream`](#stream)
+- [`stream/consumers`](#stream-consumers)
 - [`stream/promises`](#stream-promises)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
@@ -98,6 +101,7 @@ Total: 2057 entries across 95 modules.
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
+- [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
 - [`zlib`](#zlib)
@@ -982,6 +986,7 @@ Total: 2057 entries across 95 modules.
 - `getEventListeners` — module
 - `getMaxListeners` — instance
 - `getMaxListeners` — module
+- `init` — module
 - `listenerCount` — instance
 - `listenerCount` — module
 - `listeners` — instance
@@ -1004,6 +1009,7 @@ Total: 2057 entries across 95 modules.
 - `captureRejections`
 - `defaultMaxListeners`
 - `errorMonitor`
+- `usingDomains`
 
 ## `exponential-backoff`
 
@@ -1165,6 +1171,42 @@ Total: 2057 entries across 95 modules.
 - `constants`
 - `promises`
 
+## `fs/promises`
+
+### Methods
+
+- `access` — module
+- `appendFile` — module
+- `chmod` — module
+- `chown` — module
+- `copyFile` — module
+- `cp` — module
+- `glob` — module
+- `lchmod` — module
+- `lchown` — module
+- `link` — module
+- `lstat` — module
+- `lutimes` — module
+- `mkdir` — module
+- `mkdtemp` — module
+- `open` — module
+- `opendir` — module
+- `readFile` — module
+- `readdir` — module
+- `readlink` — module
+- `realpath` — module
+- `rename` — module
+- `rm` — module
+- `rmdir` — module
+- `stat` — module
+- `statfs` — module
+- `symlink` — module
+- `truncate` — module
+- `unlink` — module
+- `utimes` — module
+- `watch` — module
+- `writeFile` — module
+
 ## `http`
 
 ### Classes
@@ -1311,6 +1353,9 @@ Total: 2057 entries across 95 modules.
 - `address` — instance *(class: `Http2SecureServer`)*
 - `close` — instance *(class: `Http2SecureServer`)*
 - `createSecureServer` — module
+- `getDefaultSettings` — module
+- `getPackedSettings` — module
+- `getUnpackedSettings` — module
 - `listen` — instance *(class: `Http2SecureServer`)*
 - `on` — instance *(class: `Http2SecureServer`)*
 
@@ -2190,6 +2235,7 @@ Total: 2057 entries across 95 modules.
 
 - `abort` — module
 - `addListener` — module
+- `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
 - `chdir` — module
 - `constrainedMemory` — module
@@ -2207,6 +2253,7 @@ Total: 2057 entries across 95 modules.
 - `getgid` — module
 - `getgroups` — module
 - `getuid` — module
+- `hasUncaughtExceptionCaptureCallback` — module
 - `hrtime` — module
 - `initgroups` — module
 - `kill` — module
@@ -2225,11 +2272,16 @@ Total: 2057 entries across 95 modules.
 - `removeListener` — module
 - `resourceUsage` — module
 - `setMaxListeners` — module
+- `setSourceMapsEnabled` — module
+- `setSourceMapsEnabled` — module
+- `setUncaughtExceptionCaptureCallback` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
 - `setgroups` — module
 - `setuid` — module
+- `sourceMapsEnabled` — module
+- `sourceMapsEnabled` — module
 - `threadCpuUsage` — module
 - `umask` — module
 - `uptime` — module
@@ -2292,9 +2344,34 @@ Total: 2057 entries across 95 modules.
 
 ### Methods
 
+- `clearLine` — module
+- `clearScreenDown` — module
 - `close` — instance
 - `createInterface` — module
+- `cursorTo` — module
+- `emitKeypressEvents` — module
+- `getCursorPos` — instance
+- `getPrompt` — instance
+- `moveCursor` — module
 - `on` — instance
+- `pause` — instance
+- `prompt` — instance
+- `question` — instance
+- `resume` — instance
+- `setPrompt` — instance
+- `write` — instance
+
+## `readline/promises`
+
+### Classes
+
+- `Interface`
+- `Readline`
+
+### Methods
+
+- `close` — instance
+- `createInterface` — module
 - `question` — instance
 
 ## `redis`
@@ -2420,6 +2497,17 @@ Total: 2057 entries across 95 modules.
 - `promises`
 - `prototype`
 
+## `stream/consumers`
+
+### Methods
+
+- `arrayBuffer` — module
+- `blob` — module
+- `buffer` — module
+- `bytes` — module
+- `json` — module
+- `text` — module
+
 ## `stream/promises`
 
 ### Methods
@@ -2472,6 +2560,7 @@ Total: 2057 entries across 95 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
 - `debuglog` — module
 - `deprecate` — module
 - `diff` — module
@@ -2602,6 +2691,7 @@ Total: 2057 entries across 95 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
 - `debuglog` — module
 - `deprecate` — module
 - `diff` — module
@@ -2641,7 +2731,10 @@ Total: 2057 entries across 95 modules.
 - `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
+- `isDataView` — module
 - `isDate` — module
+- `isExternal` — module
+- `isFloat16Array` — module
 - `isFloat32Array` — module
 - `isFloat64Array` — module
 - `isGeneratorFunction` — module
@@ -2665,6 +2758,8 @@ Total: 2057 entries across 95 modules.
 - `isUint32Array` — module
 - `isUint8Array` — module
 - `isUint8ClampedArray` — module
+- `isWeakMap` — module
+- `isWeakSet` — module
 
 ## `uuid`
 
@@ -2701,6 +2796,24 @@ Total: 2057 entries across 95 modules.
 - `isJSON` — module
 - `isURL` — module
 - `isUUID` — module
+
+## `wasi`
+
+### Classes
+
+- `WASI`
+
+### Methods
+
+- `WASI` — module
+- `finalizeBindings` — instance *(class: `WASI`)*
+- `getImportObject` — instance *(class: `WASI`)*
+- `initialize` — instance *(class: `WASI`)*
+- `start` — instance *(class: `WASI`)*
+
+### Properties
+
+- `wasiImport`
 
 ## `worker_threads`
 

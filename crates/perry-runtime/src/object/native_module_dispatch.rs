@@ -455,9 +455,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "availableMemory") => crate::process::js_process_available_memory(),
         ("process", "constrainedMemory") => crate::process::js_process_constrained_memory(),
         ("process", "resourceUsage") => crate::process::js_process_resource_usage(),
-        ("process", "getActiveResourcesInfo") => {
-            crate::process::js_process_active_resources_info()
-        }
+        ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
         ("process", "getuid") => crate::process::js_process_getuid(),
         ("process", "geteuid") => crate::process::js_process_geteuid(),
         ("process", "getgid") => crate::process::js_process_getgid(),
@@ -491,7 +489,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "loadEnvFile") => {
-            crate::process::js_process_load_env_file_value(arg(0));
+            crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getgroups") => crate::process::js_process_getgroups(),
@@ -553,6 +551,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
+        // ── wasi module ──
+        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
+
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
         ("net", "_createServerHandle") => crate::net_validate::js_net_create_server_handle_stub(
@@ -588,6 +589,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "setResourceTimingBufferSize") => {
             crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
         }
+        ("perf_hooks", "markResourceTiming") => crate::perf_hooks::js_perf_mark_resource_timing(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+            arg(5),
+            arg(6),
+            arg(7),
+        ),
+        ("perf_hooks", "timerify") => crate::perf_hooks::js_perf_timerify(arg(0), arg(1)),
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the
@@ -1043,7 +1055,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "getCallSites") => crate::util_call_sites::js_util_get_call_sites(arg(0), arg(1)),
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
-        ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
+        ("util", "debuglog") | ("util", "debug") => {
+            crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
+        }
         ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
@@ -1201,6 +1215,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util.types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util.types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util.types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util.types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util.types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
 
         // ── node:util/types direct module ──
         ("util/types", "isPromise") => {
@@ -1287,10 +1307,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util/types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util/types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util/types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util/types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util/types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
         // ── url module (module-level functions return NaN-boxed JS values) ──
-        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0)),
-        ("url", "fileURLToPathBuffer") => crate::url::js_url_file_url_to_path_buffer(arg(0)),
-        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0)),
+        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("url", "fileURLToPathBuffer") => {
+            crate::url::js_url_file_url_to_path_buffer(arg(0), arg(1))
+        }
+        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
         ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
         ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
         ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
@@ -1441,6 +1469,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
         }
+        ("cluster", "setupPrimary") | ("cluster", "setupMaster") => {
+            crate::cluster::js_cluster_setup_primary(arg(0))
+        }
+        ("cluster", "fork") => crate::cluster::js_cluster_fork(arg(0)),
+        ("cluster", "disconnect") => crate::cluster::js_cluster_disconnect(arg(0)),
+        ("cluster", "Worker") => f64::from_bits(JSValue::undefined().bits()),
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which

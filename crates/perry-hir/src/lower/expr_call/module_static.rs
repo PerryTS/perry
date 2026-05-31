@@ -1197,6 +1197,44 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // #2902: generic `<TypedArray>.from(src)` / `<TypedArray>.of(...items)`
+            // for the multi-byte numeric kinds (Int16/Uint16/Int32/Uint32/
+            // Float16/Float32/Float64). Uint8Array is handled by the Buffer
+            // path above; with a mapFn we fall through to dynamic dispatch.
+            // `from(src)` and `of(...items)` both reduce to copying a JS array
+            // into a fresh typed array, which `TypedArrayNew` already does
+            // (no mapFn). This intentionally only fires when the receiver name
+            // is a real global typed-array constructor (not shadowed by a
+            // local/import/class binding).
+            if let Some(kind) = crate::ir::typed_array_kind_for_name(&obj_name) {
+                let shadowed = ctx.lookup_local(&obj_name).is_some()
+                    || ctx.lookup_func(&obj_name).is_some()
+                    || ctx.lookup_imported_func(&obj_name).is_some()
+                    || ctx.lookup_class(&obj_name).is_some();
+                if !shadowed && obj_name != "Uint8Array" {
+                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                        let method_name = method_ident.sym.as_ref();
+                        match method_name {
+                            // `from(arrayLike)` with no map function: copy.
+                            "from" if args.len() == 1 => {
+                                return Ok(Ok(Expr::TypedArrayNew {
+                                    kind,
+                                    arg: Some(Box::new(args.into_iter().next().unwrap())),
+                                }));
+                            }
+                            // `of(...items)` is `from([...items])`.
+                            "of" => {
+                                return Ok(Ok(Expr::TypedArrayNew {
+                                    kind,
+                                    arg: Some(Box::new(Expr::Array(args))),
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
             // Check for child_process named imports (execSync, spawnSync, spawn, exec)
             let is_child_process_module =
                 ctx.lookup_builtin_module_alias(obj_name) == Some("child_process");
