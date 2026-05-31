@@ -130,9 +130,7 @@ fn chain_roots_at_iterator_from(expr: &ast::Expr) -> bool {
             ast::Expr::Ident(i) if i.sym.as_ref() == "Iterator"
         ),
         // Lazy helpers preserve the helper — recurse into the receiver.
-        "map" | "filter" | "take" | "drop" | "flatMap" => {
-            chain_roots_at_iterator_from(&m.obj)
-        }
+        "map" | "filter" | "take" | "drop" | "flatMap" => chain_roots_at_iterator_from(&m.obj),
         _ => false,
     }
 }

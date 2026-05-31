@@ -304,6 +304,63 @@ unsafe fn helper_to_array(obj: *mut ObjectHeader) -> f64 {
     js_nanbox_pointer(arr as i64)
 }
 
+/// Is `name` one of the iterator-helper method names?
+pub fn is_iterator_helper_method(name: &str) -> bool {
+    matches!(
+        name,
+        "map"
+            | "filter"
+            | "take"
+            | "drop"
+            | "flatMap"
+            | "toArray"
+            | "forEach"
+            | "reduce"
+            | "some"
+            | "every"
+            | "find"
+    )
+}
+
+/// #2874: when a method call lands on a RAW iterator object (a generator, a
+/// Map/Set/array iterator, or any `{ next() }`) for an iterator-helper method
+/// it doesn't define as an own property, Node resolves it on
+/// `Iterator.prototype`. Wrap the iterator in an identity helper and dispatch
+/// there. Returns `Some(result)` when handled, `None` to fall through.
+///
+/// `has_own` reports whether `obj` defines `method_name` as an own callable
+/// field (in which case the user's own method wins and we must NOT intercept).
+pub unsafe fn maybe_dispatch_helper_on_iterator(
+    obj: *mut ObjectHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+    has_own_field: bool,
+) -> Option<f64> {
+    if has_own_field || !is_iterator_helper_method(method_name) {
+        return None;
+    }
+    // Only intercept genuine iterators: those exposing a callable `.next`.
+    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
+    let next_val = js_object_get_field_by_name(obj, next_key);
+    if next_val.is_undefined() {
+        return None;
+    }
+    let next_ptr = js_nanbox_get_pointer(f64::from_bits(next_val.bits())) as *const ClosureHeader;
+    if next_ptr.is_null() || !is_closure_ptr(next_ptr as usize) {
+        return None;
+    }
+    let self_f64 = js_nanbox_pointer(obj as i64);
+    let wrapped = js_iterator_from(self_f64);
+    let wrapped_ptr = js_nanbox_get_pointer(wrapped) as *mut ObjectHeader;
+    Some(dispatch_iterator_helper_method(
+        wrapped_ptr,
+        method_name,
+        args_ptr,
+        args_len,
+    ))
+}
+
 /// Dispatch a method call on a helper iterator object. `args_ptr`/`args_len`
 /// carry the NaN-boxed call arguments.
 pub unsafe fn dispatch_iterator_helper_method(
@@ -335,12 +392,20 @@ pub unsafe fn dispatch_iterator_helper_method(
         "take" => {
             let n = JSValue::from_bits(arg0.to_bits()).to_number();
             let count = if n.is_nan() { 0.0 } else { n.max(0.0).floor() };
-            alloc_helper(OP_TAKE, self_f64, f64::from_bits(JSValue::number(count).bits()))
+            alloc_helper(
+                OP_TAKE,
+                self_f64,
+                f64::from_bits(JSValue::number(count).bits()),
+            )
         }
         "drop" => {
             let n = JSValue::from_bits(arg0.to_bits()).to_number();
             let count = if n.is_nan() { 0.0 } else { n.max(0.0).floor() };
-            alloc_helper(OP_DROP, self_f64, f64::from_bits(JSValue::number(count).bits()))
+            alloc_helper(
+                OP_DROP,
+                self_f64,
+                f64::from_bits(JSValue::number(count).bits()),
+            )
         }
         // Terminal helpers — drain.
         "toArray" => helper_to_array(obj),
