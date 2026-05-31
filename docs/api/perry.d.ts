@@ -3187,6 +3187,8 @@ declare module "url" {
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
+  export class Url { [key: string]: any; }
+  /** stdlib */
   export function createObjectURL(...args: any[]): any;
   /** stdlib */
   export function domainToASCII(...args: any[]): any;
@@ -3204,6 +3206,8 @@ declare module "url" {
   export function pathToFileURL(...args: any[]): any;
   /** stdlib */
   export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function resolveObject(...args: any[]): any;
   /** stdlib */
   export function revokeObjectURL(...args: any[]): any;
   /** stdlib */

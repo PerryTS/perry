@@ -3701,9 +3701,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("url", "domainToASCII", false, None),
     method("url", "domainToUnicode", false, None),
     method("url", "urlToHttpOptions", false, None),
+    class("url", "Url"),
+    method("url", "Url", false, None),
     method("url", "format", false, None),
     method("url", "parse", false, None),
     method("url", "resolve", false, None),
+    method("url", "resolveObject", false, None),
     // Issue #1211: Blob/File object-URL registry — paired with the
     // `resolveObjectURL` export on `node:buffer`.
     method("url", "createObjectURL", false, None),

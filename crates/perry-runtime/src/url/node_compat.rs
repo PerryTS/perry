@@ -405,6 +405,18 @@ fn json_to_value(json: serde_json::Value) -> f64 {
     unsafe { f64::from_bits(crate::json::js_json_parse(ptr).bits()) }
 }
 
+fn null_f64() -> f64 {
+    f64::from_bits(crate::value::TAG_NULL)
+}
+
+fn bool_f64(value: bool) -> f64 {
+    f64::from_bits(if value {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
 /// `url.urlToHttpOptions(url)` (#2976). Mirrors Node's shape exactly:
 ///
 /// ```js
@@ -624,6 +636,49 @@ pub extern "C" fn js_url_format(value: f64, options: f64) -> f64 {
     create_string_f64(&out)
 }
 
+const LEGACY_URL_KEYS: [&str; 12] = [
+    "protocol", "slashes", "auth", "host", "port", "hostname", "hash", "search", "query",
+    "pathname", "path", "href",
+];
+
+fn string_or_null(value: String) -> f64 {
+    if value.is_empty() {
+        null_f64()
+    } else {
+        create_string_f64(&value)
+    }
+}
+
+fn create_legacy_url_object(values: [f64; 12]) -> *mut ObjectHeader {
+    let obj = js_object_alloc(0, LEGACY_URL_KEYS.len() as u32);
+    let mut keys = js_array_alloc(LEGACY_URL_KEYS.len() as u32);
+    for (index, key) in LEGACY_URL_KEYS.iter().enumerate() {
+        keys = js_array_push_f64(keys, create_string_f64(key));
+        js_object_set_field_f64(obj, index as u32, values[index]);
+    }
+    js_object_set_keys(obj, keys);
+    obj
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_legacy_url_new() -> f64 {
+    let obj = create_legacy_url_object([
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+        null_f64(),
+    ]);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
 #[no_mangle]
 pub extern "C" fn js_url_legacy_parse(
     input: f64,
@@ -657,7 +712,9 @@ pub extern "C" fn js_url_legacy_parse(
         }
     }
 
+    let mut invalid_percent_host = false;
     if let Some(percent_idx) = host.find('%') {
+        invalid_percent_host = true;
         let invalid_tail = format!("{}{}", &host[percent_idx..], pathname);
         host.truncate(percent_idx);
         hostname = host.clone();
@@ -682,34 +739,61 @@ pub extern "C" fn js_url_legacy_parse(
         };
     }
     let parse_qs = crate::value::js_is_truthy(parse_query_string) != 0;
+    let raw_query = search.strip_prefix('?').unwrap_or(&search).to_string();
     let query = if parse_qs {
         let mut map = serde_json::Map::new();
-        let raw = search.strip_prefix('?').unwrap_or(&search);
-        for part in raw.split('&').filter(|p| !p.is_empty()) {
+        for part in raw_query.split('&').filter(|p| !p.is_empty()) {
             let (k, v) = part.split_once('=').unwrap_or((part, ""));
             map.insert(url_decode(k), serde_json::Value::String(url_decode(v)));
         }
-        serde_json::Value::Object(map)
+        json_to_value(serde_json::Value::Object(map))
+    } else if raw_query.is_empty() {
+        null_f64()
     } else {
-        serde_json::Value::String(search.strip_prefix('?').unwrap_or(&search).to_string())
+        create_string_f64(&raw_query)
     };
-    let protocol_value = if protocol_is_null {
-        serde_json::Value::Null
+    let protocol_value = if protocol_is_null || protocol.is_empty() {
+        null_f64()
     } else {
-        serde_json::Value::String(protocol)
+        create_string_f64(&protocol)
     };
-    json_to_value(serde_json::json!({
-        "protocol": protocol_value,
-        "host": host,
-        "hostname": hostname,
-        "port": port,
-        "pathname": pathname,
-        "path": format!("{}{}", pathname, search),
-        "search": search,
-        "query": query,
-        "hash": hash,
-        "auth": auth
-    }))
+    let slashes = if protocol_null_or_slashes(&s, protocol_is_null, &host) {
+        bool_f64(true)
+    } else {
+        null_f64()
+    };
+    let path = format!("{}{}", pathname, search);
+    let path_value = string_or_null(path);
+    let href_value = create_string_f64(&s);
+    let host_value = if invalid_percent_host {
+        create_string_f64(&host)
+    } else {
+        string_or_null(host)
+    };
+    let hostname_value = if invalid_percent_host {
+        create_string_f64(&hostname)
+    } else {
+        string_or_null(hostname)
+    };
+    let obj = create_legacy_url_object([
+        protocol_value,
+        slashes,
+        string_or_null(url_decode(&auth)),
+        host_value,
+        string_or_null(port),
+        hostname_value,
+        string_or_null(hash),
+        string_or_null(search),
+        query,
+        string_or_null(pathname),
+        path_value,
+        href_value,
+    ]);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+fn protocol_null_or_slashes(input: &str, protocol_is_null: bool, host: &str) -> bool {
+    protocol_is_null || input.starts_with("//") || input.contains("://") || !host.is_empty()
 }
 
 #[no_mangle]
@@ -732,4 +816,10 @@ pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
         resolve_url(&to_s, &from_s)
     };
     create_string_f64(&resolved)
+}
+
+#[no_mangle]
+pub extern "C" fn js_url_legacy_resolve_object(from: f64, to: f64) -> f64 {
+    let resolved = js_url_legacy_resolve(from, to);
+    js_url_legacy_parse(resolved, bool_f64(false), bool_f64(false))
 }
