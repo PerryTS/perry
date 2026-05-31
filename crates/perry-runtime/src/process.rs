@@ -9,25 +9,7 @@ use crate::value::JSValue;
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
-    // #2013 — `process.exit('foo')` throws TypeError ERR_INVALID_ARG_TYPE
-    // in Node (the exit code must be a number, null, or undefined). The
-    // numeric default of `1` for NaN/Infinity in the pre-fix code only
-    // matters for the inferred numeric-coerce path; keep that fallback
-    // for the (degenerate) numeric NaN/Infinity case so existing call
-    // sites that pass a parsed-out number aren't surprised.
-    let jv = JSValue::from_bits(code.to_bits());
-    if !jv.is_undefined() && !jv.is_null() && !crate::fs::validate::is_numeric(jv) {
-        let message = format!(
-            "The \"code\" argument must be of type number or null. Received {}",
-            crate::fs::validate::describe_received(code)
-        );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
-    let exit_code = if code.is_nan() || code.is_infinite() {
-        1 // Default to 1 for invalid codes
-    } else {
-        code as i32
-    };
+    let exit_code = validate_process_exit_code(code);
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
     // illegal instructions when exception handler state (jmp_buf), GC roots, or
@@ -47,6 +29,67 @@ pub extern "C" fn js_process_exit(code: f64) {
     }
     #[cfg(not(any(unix, windows)))]
     std::process::exit(exit_code);
+}
+
+fn validate_process_exit_code(code: f64) -> i32 {
+    let jv = JSValue::from_bits(code.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return 0;
+    }
+
+    let number = if crate::fs::validate::is_numeric(jv) {
+        js_number_from_value(jv)
+    } else if jv.is_any_string() {
+        parse_exit_code_string(code).unwrap_or_else(|| {
+            let message = format!(
+                "The \"code\" argument must be of type number. Received {}",
+                crate::fs::validate::describe_received(code)
+            );
+            crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+        })
+    } else {
+        let message = format!(
+            "The \"code\" argument must be of type number. Received {}",
+            crate::fs::validate::describe_received(code)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    };
+
+    if !number.is_finite() || number.trunc() != number {
+        let message = format!(
+            "The value of \"code\" is out of range. It must be an integer. Received {}",
+            format_number_for_node_message(number)
+        );
+        crate::fs::validate::throw_range_error_with_code(&message);
+    }
+
+    number as i32
+}
+
+fn parse_exit_code_string(value: f64) -> Option<f64> {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    let text = unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    };
+    if text.is_empty() {
+        return None;
+    }
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Some(0.0);
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return i64::from_str_radix(hex, 16).ok().map(|n| n as f64);
+    }
+    trimmed.parse::<f64>().ok()
 }
 
 /// process.abort() -> never. Raises SIGABRT (no clean shutdown). Matches
@@ -884,21 +927,8 @@ pub extern "C" fn js_process_active_resources_info() -> f64 {
 /// Non-unix targets return `{ user: 0, system: 0 }`.
 #[no_mangle]
 pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
-    // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
-    // is supplied but isn't an object (e.g. `process.cpuUsage('abc')`).
-    // Undefined / null fall through to the no-prior baseline read.
-    let prior_jv = JSValue::from_bits(prior.to_bits());
-    if !prior_jv.is_undefined() && !prior_jv.is_null() && !prior_jv.is_pointer() {
-        let message = format!(
-            "The \"prevValue\" argument must be of type object. Received {}",
-            crate::fs::validate::describe_received(prior)
-        );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
     let (mut user_us, mut system_us) = read_process_cpu_micros();
-    let undef_bits = crate::value::TAG_UNDEFINED;
-    if prior.to_bits() != undef_bits && !prior_jv.is_null() {
-        let (prev_user, prev_system) = extract_cpu_pair(prior);
+    if let Some((prev_user, prev_system)) = extract_cpu_pair(prior) {
         user_us = (user_us - prev_user).max(0.0);
         system_us = (system_us - prev_system).max(0.0);
     }
@@ -928,28 +958,85 @@ fn read_process_cpu_micros() -> (f64, f64) {
     (0.0, 0.0)
 }
 
-/// Read `.user` and `.system` (numbers, microseconds) from a JS object
-/// — used by `js_process_cpu_usage` to compute diffs. Missing fields
-/// or non-numeric values count as 0.
-fn extract_cpu_pair(value: f64) -> (f64, f64) {
+/// Read and validate `.user` / `.system` previous CPU counters. Node treats
+/// `undefined` and `null` as no prior sample, but any supplied object must
+/// carry finite, non-negative numeric fields.
+fn extract_cpu_pair(value: f64) -> Option<(f64, f64)> {
+    let obj_ptr = validate_cpu_prev_object(value)?;
+    Some((
+        validate_cpu_prev_field(obj_ptr, "user"),
+        validate_cpu_prev_field(obj_ptr, "system"),
+    ))
+}
+
+fn validate_cpu_prev_object(value: f64) -> Option<*mut crate::object::ObjectHeader> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return (0.0, 0.0);
+    if jv.is_undefined() || jv.is_null() {
+        return None;
+    }
+    if !jv.is_pointer() || is_array_nanbox_value(value) {
+        let message = format!(
+            "The \"prevValue\" argument must be of type object. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
     let obj_ptr = jv.as_pointer::<u8>() as *mut crate::object::ObjectHeader;
     if obj_ptr.is_null() {
-        return (0.0, 0.0);
+        let message = "The \"prevValue\" argument must be of type object. Received null";
+        crate::fs::validate::throw_type_error_with_code(message, "ERR_INVALID_ARG_TYPE");
     }
-    let get_num = |name: &str| -> f64 {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key);
-        if v.is_nan() {
-            0.0
+    Some(obj_ptr)
+}
+
+fn validate_cpu_prev_field(obj_ptr: *mut crate::object::ObjectHeader, name: &str) -> f64 {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(obj_ptr, key);
+    let jv = JSValue::from_bits(value.to_bits());
+    if !crate::fs::validate::is_numeric(jv) {
+        let message = format!(
+            "The \"prevValue.{name}\" property must be of type number. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let number = js_number_from_value(jv);
+    if !number.is_finite() || number < 0.0 {
+        let message = format!(
+            "The property 'prevValue.{name}' is invalid. Received {}",
+            format_number_for_node_message(number)
+        );
+        crate::fs::validate::throw_range_error_named(&message, "ERR_INVALID_ARG_VALUE");
+    }
+    number
+}
+
+fn js_number_from_value(value: JSValue) -> f64 {
+    if value.is_int32() {
+        value.as_int32() as f64
+    } else {
+        value.as_number()
+    }
+}
+
+fn is_array_nanbox_value(value: f64) -> bool {
+    crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE
+}
+
+pub(crate) fn format_number_for_node_message(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_negative() {
+            "-Infinity".to_string()
         } else {
-            v
+            "Infinity".to_string()
         }
-    };
-    (get_num("user"), get_num("system"))
+    } else if value.fract() == 0.0 && value.abs() < 1e21 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
 }
 
 /// process.emitWarning(warning[, type, code, ctor]) -> undefined.
@@ -1351,13 +1438,17 @@ pub extern "C" fn js_process_env() -> f64 {
     boxed
 }
 
-/// process.threadCpuUsage() -> object { user, system } in microseconds.
+/// process.threadCpuUsage(previousValue?) -> object { user, system } in microseconds.
 /// CPU time consumed by the current thread. Uses CLOCK_THREAD_CPUTIME_ID
 /// (available on macOS 10.12+ and Linux). Platforms without the clock get
 /// 0.0 for both fields.
 #[no_mangle]
-pub extern "C" fn js_process_thread_cpu_usage() -> f64 {
-    let (user_us, system_us) = read_thread_cpu_micros();
+pub extern "C" fn js_process_thread_cpu_usage(prior: f64) -> f64 {
+    let (mut user_us, mut system_us) = read_thread_cpu_micros();
+    if let Some((prev_user, prev_system)) = extract_cpu_pair(prior) {
+        user_us = (user_us - prev_user).max(0.0);
+        system_us = (system_us - prev_system).max(0.0);
+    }
 
     let obj = crate::object::js_object_alloc(0, 2);
     let set_field = |name: &str, value: f64| {

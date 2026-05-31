@@ -726,7 +726,7 @@ struct ProcessListener {
 struct ProcessEmitter {
     events: HashMap<String, Vec<ProcessListener>>,
     event_order: Vec<String>,
-    max_listeners: i32,
+    max_listeners: f64,
 }
 
 impl ProcessEmitter {
@@ -734,7 +734,7 @@ impl ProcessEmitter {
         Self {
             events: HashMap::new(),
             event_order: Vec::new(),
-            max_listeners: 10,
+            max_listeners: 10.0,
         }
     }
 
@@ -774,6 +774,16 @@ fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
 }
 
 fn process_namespace_value() -> f64 {
+    let global = crate::object::js_get_global_this();
+    let jv = crate::value::JSValue::from_bits(global.to_bits());
+    if jv.is_pointer() {
+        let obj = jv.as_pointer::<ObjectHeader>();
+        let key = js_string_from_bytes(b"process".as_ptr(), "process".len() as u32);
+        let value = crate::object::js_object_get_field_by_name_f64(obj, key);
+        if value.to_bits() != crate::value::TAG_UNDEFINED {
+            return value;
+        }
+    }
     crate::object::js_create_native_module_namespace(b"process".as_ptr(), "process".len())
 }
 
@@ -1041,17 +1051,40 @@ pub extern "C" fn js_process_event_names() -> *mut ArrayHeader {
 
 #[no_mangle]
 pub extern "C" fn js_process_set_max_listeners(value: f64) -> f64 {
-    if value.is_finite() && value >= 0.0 {
-        PROCESS_EMITTER.with(|emitter| {
-            emitter.borrow_mut().max_listeners = value as i32;
-        });
-    }
+    let value = validate_process_max_listeners(value);
+    PROCESS_EMITTER.with(|emitter| {
+        emitter.borrow_mut().max_listeners = value;
+    });
     process_namespace_value()
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_get_max_listeners() -> f64 {
-    PROCESS_EMITTER.with(|emitter| emitter.borrow().max_listeners as f64)
+    PROCESS_EMITTER.with(|emitter| emitter.borrow().max_listeners)
+}
+
+fn validate_process_max_listeners(value: f64) -> f64 {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !crate::fs::validate::is_numeric(jv) {
+        let message = format!(
+            "The \"setMaxListeners\" argument must be of type number. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let number = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if number.is_nan() || number < 0.0 {
+        let message = format!(
+            "The value of \"setMaxListeners\" is out of range. It must be >= 0. Received {}",
+            crate::process::format_number_for_node_message(number)
+        );
+        crate::fs::validate::throw_range_error_with_code(&message);
+    }
+    number
 }
 
 pub fn scan_process_event_listener_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

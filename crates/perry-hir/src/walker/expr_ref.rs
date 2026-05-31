@@ -48,7 +48,6 @@ where
         | Expr::ProcessStdout
         | Expr::ProcessStderr
         | Expr::ProcessAbort
-        | Expr::ProcessThreadCpuUsage
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
@@ -1190,6 +1189,11 @@ where
             }
         }
         Expr::ProcessCpuUsage(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
+        Expr::ProcessThreadCpuUsage(opt) => {
             if let Some(v) = opt {
                 f(v);
             }
