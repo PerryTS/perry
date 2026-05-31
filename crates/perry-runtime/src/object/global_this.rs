@@ -1125,6 +1125,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         js_object_set_field_by_name(singleton, name_key, ctor_value);
+        super::set_builtin_property_attrs(
+            singleton as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
     }
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
@@ -1423,6 +1428,40 @@ extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, res
     crate::value::js_nanbox_pointer(arr as i64)
 }
 
+extern "C" fn url_can_parse_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    base: f64,
+) -> f64 {
+    let input_ptr = crate::url::js_url_coerce_string(input);
+    let ok = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::url::js_url_can_parse(input_ptr)
+    } else {
+        let base_ptr = crate::url::js_url_coerce_string(base);
+        crate::url::js_url_can_parse_with_base(input_ptr, base_ptr)
+    };
+    f64::from_bits(crate::value::JSValue::bool(ok != 0).bits())
+}
+
+extern "C" fn url_parse_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+    base: f64,
+) -> f64 {
+    let input_ptr = crate::url::js_url_coerce_string(input);
+    let url = if base.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::url::js_url_parse(input_ptr)
+    } else {
+        let base_ptr = crate::url::js_url_coerce_string(base);
+        crate::url::js_url_parse_with_base(input_ptr, base_ptr)
+    };
+    if url.is_null() {
+        f64::from_bits(crate::value::TAG_NULL)
+    } else {
+        crate::value::js_nanbox_pointer(url as i64)
+    }
+}
+
 /// Install a single callable static method on a constructor closure as a
 /// `{ writable: true, enumerable: false, configurable: true }` data property
 /// (matching Node's descriptors for built-in statics). `has_rest` registers
@@ -1536,6 +1575,16 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "URL" => {
+            install_constructor_static(
+                ctor,
+                "canParse",
+                url_can_parse_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "parse", url_parse_thunk as *const u8, 1, false);
         }
         _ => {}
     }
