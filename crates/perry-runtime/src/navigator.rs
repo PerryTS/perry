@@ -16,7 +16,7 @@ use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::js_string_from_bytes;
 use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
 
-const NAVIGATOR_CLASS_ID: u32 = 0x7FFF_FF22;
+pub const NAVIGATOR_CLASS_ID: u32 = 0x7FFF_FF22;
 
 /// Major Node version Perry advertises (mirrors `process.version` = v22.x).
 const NODE_MAJOR: &str = "22";
@@ -71,6 +71,9 @@ pub extern "C" fn js_navigator_object() -> f64 {
         packed.as_ptr(),
         packed.len() as u32,
     );
+    unsafe {
+        (*obj).class_id = NAVIGATOR_CLASS_ID;
+    }
 
     // userAgent: "Node.js/<major>"
     let ua = format!("Node.js/{NODE_MAJOR}");
@@ -103,6 +106,12 @@ pub extern "C" fn js_navigator_object() -> f64 {
         5,
         JSValue::from_bits(js_nanbox_pointer(locks as i64).to_bits()),
     );
+
+    // constructor: the singleton should identify as an instance of the
+    // global `Navigator` constructor.
+    let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    let ctor = crate::object::js_get_global_this_builtin_value(b"Navigator".as_ptr(), 9);
+    crate::object::js_object_set_field_by_name(obj, ctor_key, ctor);
 
     js_nanbox_pointer(obj as i64)
 }

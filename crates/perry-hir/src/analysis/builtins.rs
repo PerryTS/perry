@@ -76,6 +76,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "TextDecoder"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "Navigator"
             | "URL"
             | "URLSearchParams"
             | "AbortController"
@@ -144,7 +145,8 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
         "Array" | "Object" | "String" | "Number" | "Boolean" | "Function" | "Error"
         | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
         | "URIError" | "Promise" | "WeakRef" | "BigInt" => 1,
-        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort" => 0,
+        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
+        | "Navigator" | "TextEncoderStream" | "TextDecoderStream" => 0,
         "RegExp" | "Proxy" | "File" => 2,
         "BroadcastChannel" => 1,
         "Date" => 7,

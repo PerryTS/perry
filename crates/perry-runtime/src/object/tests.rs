@@ -78,7 +78,50 @@ fn text_encoding_stream_globals_construct_readable_writable_shape() {
                     "{ctor_name} instance should expose {field}"
                 );
             }
+
+            let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+            let constructor = js_object_get_field_by_name(
+                crate::value::js_nanbox_get_pointer(instance) as *const ObjectHeader,
+                constructor_key,
+            );
+            assert_eq!(
+                constructor.bits(),
+                ctor.bits(),
+                "{ctor_name} instance should point back to its constructor"
+            );
         }
+    }
+}
+
+#[test]
+fn navigator_global_constructor_identity_shape() {
+    unsafe {
+        let global = js_get_global_this();
+        let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
+        assert!(!global_ptr.is_null());
+
+        let nav_key = crate::string::js_string_from_bytes(b"navigator".as_ptr(), 9);
+        let navigator = js_object_get_field_by_name(global_ptr, nav_key);
+        assert!(navigator.is_pointer());
+        let navigator_ptr = navigator.as_pointer::<ObjectHeader>();
+        assert_eq!(
+            js_object_get_class_id(navigator_ptr),
+            crate::navigator::NAVIGATOR_CLASS_ID
+        );
+
+        let ctor_key = crate::string::js_string_from_bytes(b"Navigator".as_ptr(), 9);
+        let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
+        assert!(ctor.is_pointer());
+
+        let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+        let actual = js_object_get_field_by_name(navigator_ptr, constructor_key);
+        assert_eq!(actual.bits(), ctor.bits());
+
+        let instance = crate::object::js_instanceof_dynamic(
+            f64::from_bits(navigator.bits()),
+            f64::from_bits(ctor.bits()),
+        );
+        assert_ne!(crate::value::js_is_truthy(instance), 0);
     }
 }
 

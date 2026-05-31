@@ -972,6 +972,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_text_encoding_stream_new", DOUBLE, &[]);
+    module.declare_function("js_text_encoder_stream_new", DOUBLE, &[]);
+    module.declare_function("js_text_decoder_stream_new", DOUBLE, &[]);
     // #1545: node:stream/web QueuingStrategy constructors — take the options
     // object, return a `{ highWaterMark, size }` object.
     module.declare_function("js_streams_strategy_high_water_mark", DOUBLE, &[DOUBLE]);

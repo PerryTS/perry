@@ -144,6 +144,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "URIError" => crate::error::CLASS_ID_URI_ERROR,
             "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
             "Promise" => CLASS_ID_PROMISE,
+            "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
+            "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
+            "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
             _ => 0,
         };
         if class_id != 0 {

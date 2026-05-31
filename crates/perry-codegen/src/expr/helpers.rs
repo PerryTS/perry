@@ -297,6 +297,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "TextDecoder"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "Navigator"
             | "URL"
             | "URLSearchParams"
             | "AbortController"
