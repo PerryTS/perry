@@ -966,6 +966,17 @@ pub(crate) unsafe fn js_fs_chown_result(
 /// argument shapes. The extra allocation is negligible next to the syscall
 /// cost that follows.
 pub(crate) unsafe fn decode_path_value(path_value: f64) -> Option<String> {
+    decode_path_value_named(path_value, "path")
+}
+
+pub(crate) unsafe fn decode_path_value_named(path_value: f64, arg_name: &str) -> Option<String> {
+    fn reject_null_bytes(path: String, arg_name: &str) -> String {
+        if path.as_bytes().contains(&0) {
+            validate::throw_invalid_path_arg_value(arg_name, &path);
+        }
+        path
+    }
+
     let jsval = crate::value::JSValue::from_bits(path_value.to_bits());
     // #1781: a path <= 5 bytes ("a.ts", "x", ".", "..", "/tmp") is an
     // inline SSO value that `is_string()` (STRING_TAG-only) misses,
@@ -974,7 +985,9 @@ pub(crate) unsafe fn decode_path_value(path_value: f64) -> Option<String> {
     if jsval.is_short_string() {
         let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut buf);
-        return std::str::from_utf8(&buf[..n]).ok().map(|s| s.to_string());
+        return std::str::from_utf8(&buf[..n])
+            .ok()
+            .map(|s| reject_null_bytes(s.to_string(), arg_name));
     }
     if jsval.is_string() {
         let path_ptr = jsval.as_string_ptr();
@@ -984,7 +997,9 @@ pub(crate) unsafe fn decode_path_value(path_value: f64) -> Option<String> {
         let len = (*path_ptr).byte_len as usize;
         let data_ptr = (path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let path_bytes = std::slice::from_raw_parts(data_ptr, len);
-        return std::str::from_utf8(path_bytes).ok().map(|s| s.to_string());
+        return std::str::from_utf8(path_bytes)
+            .ok()
+            .map(|s| reject_null_bytes(s.to_string(), arg_name));
     }
     if crate::buffer::js_buffer_is_buffer(path_value.to_bits() as i64) == 1 {
         let buf = buffer_ptr_from_value(path_value);
@@ -993,7 +1008,9 @@ pub(crate) unsafe fn decode_path_value(path_value: f64) -> Option<String> {
         }
         let bytes =
             std::slice::from_raw_parts(crate::buffer::buffer_data(buf), (*buf).length as usize);
-        return std::str::from_utf8(bytes).ok().map(|s| s.to_string());
+        return std::str::from_utf8(bytes)
+            .ok()
+            .map(|s| reject_null_bytes(s.to_string(), arg_name));
     }
     if jsval.is_pointer() {
         let obj = jsval.as_pointer::<crate::object::ObjectHeader>();
@@ -1007,14 +1024,10 @@ pub(crate) unsafe fn decode_path_value(path_value: f64) -> Option<String> {
         if protocol != "file:" {
             return None;
         }
-        let pathname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-            obj,
-            crate::url::parse::URL_PATHNAME,
+        return Some(reject_null_bytes(
+            crate::url::node_compat::file_url_to_path_string_posix(path_value),
+            arg_name,
         ));
-        if pathname.is_empty() {
-            return None;
-        }
-        return Some(crate::url::search_params::url_decode(&pathname));
     }
     None
 }
@@ -1250,31 +1263,34 @@ fn encoded_string_ptr(bytes: &[u8], encoding: &str) -> *mut StringHeader {
     }
 }
 
-fn realpath_bytes(path_value: f64) -> Vec<u8> {
+fn realpath_bytes_result(path_value: f64, syscall: &'static str) -> Result<Vec<u8>, f64> {
     unsafe {
-        let path_str = match decode_path_value(path_value) {
+        let path_str = match decode_path_value_named(path_value, "path") {
             Some(s) => s,
-            None => return Vec::new(),
+            None => validate::throw_invalid_path_arg("path", path_value),
         };
         match fs::canonicalize(&path_str) {
-            Ok(p) => p.to_string_lossy().as_bytes().to_vec(),
-            Err(_) => path_str.as_bytes().to_vec(),
+            Ok(p) => Ok(p.to_string_lossy().as_bytes().to_vec()),
+            Err(err) => Err(build_fs_error_value(&err, syscall, &path_str)),
         }
     }
 }
 
-fn realpath_value(path_value: f64, options_value: f64) -> f64 {
-    let bytes = realpath_bytes(path_value);
+fn realpath_value_result(
+    path_value: f64,
+    options_value: f64,
+    syscall: &'static str,
+) -> Result<f64, f64> {
+    let bytes = realpath_bytes_result(path_value, syscall)?;
     if fs_encoding_option(options_value).as_deref() == Some("buffer") {
-        return buffer_value_from_bytes(&bytes);
+        return Ok(buffer_value_from_bytes(&bytes));
     }
     let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
     let s = encoded_string_ptr(&bytes, &enc);
-    f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
+    Ok(f64::from_bits(crate::value::JSValue::string_ptr(s).bits()))
 }
 
 /// `fs.realpathSync(path)` — returns raw *mut StringHeader i64.
-/// Falls back to the input path on error (Node would throw).
 #[no_mangle]
 pub extern "C" fn js_fs_realpath_sync(path_value: f64) -> i64 {
     js_fs_realpath_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
@@ -1284,7 +1300,10 @@ pub extern "C" fn js_fs_realpath_sync(path_value: f64) -> i64 {
 pub extern "C" fn js_fs_realpath_sync_options(path_value: f64, options_value: f64) -> i64 {
     validate::validate_path("path", path_value);
     validate::validate_string_or_object_options("options", options_value);
-    let bytes = realpath_bytes(path_value);
+    let bytes = match realpath_bytes_result(path_value, "lstat") {
+        Ok(bytes) => bytes,
+        Err(err) => crate::exception::js_throw(err),
+    };
     let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
     encoded_string_ptr(&bytes, &enc) as i64
 }
@@ -1293,7 +1312,30 @@ pub extern "C" fn js_fs_realpath_sync_options(path_value: f64, options_value: f6
 pub extern "C" fn js_fs_realpath_dispatch(path_value: f64, options_value: f64) -> f64 {
     validate::validate_path("path", path_value);
     validate::validate_string_or_object_options("options", options_value);
-    realpath_value(path_value, options_value)
+    match realpath_value_result(path_value, options_value, "lstat") {
+        Ok(value) => value,
+        Err(err) => crate::exception::js_throw(err),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_realpath_promises_dispatch(path_value: f64, options_value: f64) -> f64 {
+    validate::validate_path("path", path_value);
+    validate::validate_string_or_object_options("options", options_value);
+    match realpath_value_result(path_value, options_value, "realpath") {
+        Ok(value) => value,
+        Err(err) => crate::exception::js_throw(err),
+    }
+}
+
+pub(crate) fn js_fs_realpath_value_result(
+    path_value: f64,
+    options_value: f64,
+    syscall: &'static str,
+) -> Result<f64, f64> {
+    validate::validate_path("path", path_value);
+    validate::validate_string_or_object_options("options", options_value);
+    realpath_value_result(path_value, options_value, syscall)
 }
 
 /// `fs.mkdtempSync(prefix)` — creates a unique temp directory whose
@@ -1309,7 +1351,7 @@ pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     unsafe {
-        let prefix_str = match decode_path_value(prefix_value) {
+        let prefix_str = match decode_path_value_named(prefix_value, "prefix") {
             Some(s) => s,
             None => validate::throw_invalid_path_arg("prefix", prefix_value),
         };
@@ -1338,6 +1380,128 @@ pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
         let err = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "file already exists");
         Err(build_fs_error_value(&err, "mkdtemp", &candidate))
     }
+}
+
+fn mkdtemp_disposable_buffer_encoding_error() -> ! {
+    validate::throw_type_error_with_code(
+        "The \"paths[1]\" argument must be of type string. Received an instance of Buffer",
+        "ERR_INVALID_ARG_TYPE",
+    )
+}
+
+fn remove_temp_dir_result(path_value: f64) -> Result<(), f64> {
+    unsafe {
+        let path = match decode_path_value_named(path_value, "path") {
+            Some(path) => path,
+            None => return Ok(()),
+        };
+        match fs::remove_dir_all(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(build_fs_error_value(&err, "rm", &path)),
+        }
+    }
+}
+
+fn resolved_promise(value: f64) -> f64 {
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_resolve(promise, value);
+    f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
+}
+
+fn rejected_promise(reason: f64) -> f64 {
+    let promise = crate::promise::js_promise_rejected(reason);
+    f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
+}
+
+extern "C" fn mkdtemp_disposable_remove_impl(closure: *const ClosureHeader) -> f64 {
+    let path_value = crate::closure::js_closure_get_capture_f64(closure, 0);
+    match remove_temp_dir_result(path_value) {
+        Ok(()) => f64::from_bits(crate::value::TAG_UNDEFINED),
+        Err(err) => crate::exception::js_throw(err),
+    }
+}
+
+extern "C" fn mkdtemp_disposable_async_remove_impl(closure: *const ClosureHeader) -> f64 {
+    let path_value = crate::closure::js_closure_get_capture_f64(closure, 0);
+    match remove_temp_dir_result(path_value) {
+        Ok(()) => resolved_promise(f64::from_bits(crate::value::TAG_UNDEFINED)),
+        Err(err) => rejected_promise(err),
+    }
+}
+
+fn mkdtemp_disposable_method(
+    path_value: f64,
+    func: extern "C" fn(*const ClosureHeader) -> f64,
+) -> f64 {
+    crate::closure::js_register_closure_arity(func as *const u8, 0);
+    let closure = crate::closure::js_closure_alloc(func as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(closure, 0, path_value);
+    f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
+}
+
+fn set_object_field(obj: *mut crate::object::ObjectHeader, name: &'static [u8], value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+fn build_mkdtemp_disposable_object(
+    actual_path_bytes: Vec<u8>,
+    options_value: f64,
+    async_remove: bool,
+) -> f64 {
+    let actual_path = encoded_string_ptr(&actual_path_bytes, "utf8");
+    let actual_path_value = f64::from_bits(crate::value::JSValue::string_ptr(actual_path).bits());
+    let display_encoding = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
+    let display_path = encoded_string_ptr(&actual_path_bytes, &display_encoding);
+    let display_path_value = f64::from_bits(crate::value::JSValue::string_ptr(display_path).bits());
+    let remove_func = if async_remove {
+        mkdtemp_disposable_async_remove_impl as extern "C" fn(*const ClosureHeader) -> f64
+    } else {
+        mkdtemp_disposable_remove_impl as extern "C" fn(*const ClosureHeader) -> f64
+    };
+    let remove_method = mkdtemp_disposable_method(actual_path_value, remove_func);
+    let symbol_method = mkdtemp_disposable_method(actual_path_value, remove_func);
+    let obj = crate::object::js_object_alloc(0, 3);
+    set_object_field(obj, b"path", display_path_value);
+    set_object_field(obj, b"remove", remove_method);
+    let obj_value = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+    let symbol_name = if async_remove {
+        "asyncDispose"
+    } else {
+        "dispose"
+    };
+    let symbol = crate::symbol::well_known_symbol(symbol_name);
+    if !symbol.is_null() {
+        let symbol_value =
+            f64::from_bits(crate::value::JSValue::pointer(symbol as *const u8).bits());
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(obj_value, symbol_value, symbol_method);
+        }
+    }
+    obj_value
+}
+
+pub(crate) fn js_fs_mkdtemp_disposable_object(
+    prefix_value: f64,
+    options_value: f64,
+    async_remove: bool,
+) -> f64 {
+    validate::validate_path("prefix", prefix_value);
+    validate::validate_string_or_object_options("options", options_value);
+    if fs_encoding_option(options_value).as_deref() == Some("buffer") {
+        mkdtemp_disposable_buffer_encoding_error();
+    }
+    let bytes = match mkdtemp_bytes_result(prefix_value) {
+        Ok(bytes) => bytes,
+        Err(err) => crate::exception::js_throw(err),
+    };
+    build_mkdtemp_disposable_object(bytes, options_value, async_remove)
+}
+
+#[no_mangle]
+pub extern "C" fn js_fs_mkdtemp_disposable_sync(prefix_value: f64, options_value: f64) -> f64 {
+    js_fs_mkdtemp_disposable_object(prefix_value, options_value, false)
 }
 
 #[no_mangle]

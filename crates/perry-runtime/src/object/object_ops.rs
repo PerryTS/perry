@@ -626,11 +626,13 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         };
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             if let Some(module_name) = read_native_module_name(obj) {
-                return f64::from_bits(if native_module_has_enumerable_key(&module_name, key_name) {
-                    TAG_TRUE
-                } else {
-                    TAG_FALSE
-                });
+                return f64::from_bits(
+                    if native_module_has_enumerable_key(&module_name, key_name) {
+                        TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    },
+                );
             }
         }
         if !own_key_present(obj, key_str) {

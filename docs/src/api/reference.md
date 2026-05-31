@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2374 entries across 104 modules.
+Total: 2384 entries across 104 modules.
 
 ## Modules
 
@@ -1244,6 +1244,7 @@ Total: 2374 entries across 104 modules.
 - `mkdir` — module
 - `mkdirSync` — module
 - `mkdtemp` — module
+- `mkdtempDisposableSync` — module
 - `mkdtempSync` — module
 - `open` — module
 - `openSync` — module
@@ -1312,6 +1313,7 @@ Total: 2374 entries across 104 modules.
 - `lutimes` — module
 - `mkdir` — module
 - `mkdtemp` — module
+- `mkdtempDisposable` — module
 - `open` — module
 - `opendir` — module
 - `readFile` — module
@@ -2732,6 +2734,7 @@ Total: 2374 entries across 104 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
 - `debuglog` — module
 - `deprecate` — module
 - `diff` — module
@@ -2902,6 +2905,7 @@ Total: 2374 entries across 104 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
+- `debug` — module
 - `debuglog` — module
 - `deprecate` — module
 - `diff` — module

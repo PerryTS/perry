@@ -373,7 +373,7 @@ pub(crate) extern "C" fn thunk_fs_promises_realpath(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_value(|| crate::fs::js_fs_realpath_dispatch(path, options))
+    promise_from_sync_value(|| crate::fs::js_fs_realpath_promises_dispatch(path, options))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_mkdtemp(
@@ -382,6 +382,14 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdtemp(
     options: f64,
 ) -> f64 {
     promise_from_sync_value(|| crate::fs::js_fs_mkdtemp_dispatch(prefix, options))
+}
+
+pub(crate) extern "C" fn thunk_fs_promises_mkdtempDisposable(
+    _closure: *const ClosureHeader,
+    prefix: f64,
+    options: f64,
+) -> f64 {
+    promise_from_sync_value(|| crate::fs::js_fs_mkdtemp_disposable_object(prefix, options, true))
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_opendir(

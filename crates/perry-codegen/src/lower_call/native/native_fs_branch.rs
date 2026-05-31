@@ -597,6 +597,19 @@
                     &[(DOUBLE, &p), (DOUBLE, &options)],
                 ));
             }
+            "mkdtempDisposableSync" if !args.is_empty() => {
+                let p = lower_expr(ctx, &args[0])?;
+                let options = if args.len() >= 2 {
+                    lower_expr(ctx, &args[1])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_fs_mkdtemp_disposable_sync",
+                    &[(DOUBLE, &p), (DOUBLE, &options)],
+                ));
+            }
             "openSync" if !args.is_empty() => {
                 let p = lower_expr(ctx, &args[0])?;
                 let flags = if args.len() >= 2 {

@@ -1004,8 +1004,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         while i < queue.len() {
             if queue[i].cleared {
                 queue.remove(i);
-            } else if queue[i].deadline <= now
-                && (timer_has_ref_state(queue[i].id) || allow_unref)
+            } else if queue[i].deadline <= now && (timer_has_ref_state(queue[i].id) || allow_unref)
             {
                 expired.push(queue.remove(i));
             } else {

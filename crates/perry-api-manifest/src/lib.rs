@@ -625,7 +625,7 @@ mod tests {
             "node:fs/promises::constants should be an object-valued property"
         );
 
-        for not_implemented in ["mkdtempDisposable", "FileHandle", "Dir", "Dirent"] {
+        for not_implemented in ["FileHandle", "Dir", "Dirent"] {
             assert!(
                 module_has_symbol("node:fs/promises", not_implemented).is_none(),
                 "node:fs/promises::{not_implemented} should stay out of the manifest until runtime-backed"

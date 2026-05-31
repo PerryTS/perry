@@ -137,13 +137,13 @@ use fs_promises::{
     thunk_fs_promises_cp, thunk_fs_promises_glob, thunk_fs_promises_lchmod,
     thunk_fs_promises_lchown, thunk_fs_promises_link, thunk_fs_promises_lstat,
     thunk_fs_promises_lutimes, thunk_fs_promises_mkdir, thunk_fs_promises_mkdtemp,
-    thunk_fs_promises_open, thunk_fs_promises_opendir, thunk_fs_promises_readFile,
-    thunk_fs_promises_readdir, thunk_fs_promises_readlink, thunk_fs_promises_realpath,
-    thunk_fs_promises_rename, thunk_fs_promises_rm, thunk_fs_promises_rmdir,
-    thunk_fs_promises_stat, thunk_fs_promises_statfs, thunk_fs_promises_symlink,
-    thunk_fs_promises_truncate, thunk_fs_promises_unlink, thunk_fs_promises_utimes,
-    thunk_fs_promises_watch, thunk_fs_promises_writeFile, thunk_readline_Interface,
-    thunk_readline_Readline, thunk_readline_createInterface,
+    thunk_fs_promises_mkdtempDisposable, thunk_fs_promises_open, thunk_fs_promises_opendir,
+    thunk_fs_promises_readFile, thunk_fs_promises_readdir, thunk_fs_promises_readlink,
+    thunk_fs_promises_realpath, thunk_fs_promises_rename, thunk_fs_promises_rm,
+    thunk_fs_promises_rmdir, thunk_fs_promises_stat, thunk_fs_promises_statfs,
+    thunk_fs_promises_symlink, thunk_fs_promises_truncate, thunk_fs_promises_unlink,
+    thunk_fs_promises_utimes, thunk_fs_promises_watch, thunk_fs_promises_writeFile,
+    thunk_readline_Interface, thunk_readline_Readline, thunk_readline_createInterface,
 };
 use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
 use test::{
@@ -349,6 +349,10 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "mkdtemp",
                 thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtemp),
+            },
+            ExportSpec {
+                name: "mkdtempDisposable",
+                thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtempDisposable),
             },
             ExportSpec {
                 name: "opendir",
@@ -1320,6 +1324,7 @@ mod tests {
         "lutimes",
         "mkdir",
         "mkdtemp",
+        "mkdtempDisposable",
         "open",
         "opendir",
         "readFile",
@@ -1480,7 +1485,7 @@ mod tests {
             "direct fs_promises constants export should match namespace property"
         );
 
-        for not_implemented in ["mkdtempDisposable", "FileHandle", "Dir", "Dirent"] {
+        for not_implemented in ["FileHandle", "Dir", "Dirent"] {
             assert!(
                 get_object_property(ns_value, not_implemented.as_bytes()).is_none(),
                 "fs_promises namespace should not expose unimplemented `{not_implemented}`"

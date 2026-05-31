@@ -425,6 +425,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_mkdtemp_sync", I64, &[DOUBLE]);
     module.declare_function("js_fs_mkdtemp_sync_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_mkdtemp_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_mkdtemp_disposable_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.rmdirSync(path) — returns i32 status.
     module.declare_function("js_fs_rmdir_sync", I32, &[DOUBLE]);
     module.declare_function("js_fs_rmdir_sync_options", I32, &[DOUBLE, DOUBLE]);

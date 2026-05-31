@@ -614,13 +614,13 @@ pub extern "C" fn js_fs_realpath_callback(path_value: f64, arg1: f64, arg2: f64)
         f64::from_bits(TAG_UNDEFINED)
     };
     let cb = callback_or_arg2(arg1, arg2);
-    unsafe {
-        if let Some(err_val) = fs_callback_read_error(path_value, "realpath") {
-            call_cb_err2(cb, err_val);
+    let value = match crate::fs::js_fs_realpath_value_result(path_value, options, "lstat") {
+        Ok(value) => value,
+        Err(err_val) => {
+            unsafe { call_cb_err2(cb, err_val) };
             return f64::from_bits(TAG_UNDEFINED);
         }
-    }
-    let value = js_fs_realpath_dispatch(path_value, options);
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), value);
     }

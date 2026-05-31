@@ -211,6 +211,16 @@ pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
     crate::exception::js_throw(build_type_error_with_code_value(message, code))
 }
 
+/// Throw Node's null-byte path error. Node uses `ERR_INVALID_ARG_VALUE`
+/// rather than an fs errno when a decoded PathLike contains `\0`.
+pub(crate) fn throw_invalid_path_arg_value(arg_name: &str, received: &str) -> ! {
+    let display = received.replace('\0', "\\x00");
+    let message = format!(
+        "The argument '{arg_name}' must be a string, Uint8Array, or URL without null bytes. Received '{display}'"
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
 /// Validate a `node:events` listener argument (#3072).
 ///
 /// `listener_bits` is the *raw NaN-box bit pattern* of the JS value passed

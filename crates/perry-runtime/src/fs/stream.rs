@@ -2131,13 +2131,16 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
     let (destroyed, min_length, opening_or_writing) = UTF8_STREAM_REGISTRY.with(|registry| {
-        registry.borrow().get(&id).map_or((true, 0, false), |state| {
-            (
-                state.destroyed,
-                state.min_length,
-                state.opening || state.writing,
-            )
-        })
+        registry
+            .borrow()
+            .get(&id)
+            .map_or((true, 0, false), |state| {
+                (
+                    state.destroyed,
+                    state.min_length,
+                    state.opening || state.writing,
+                )
+            })
     });
     if destroyed {
         let err = crate::fs::validate::build_type_error_with_code_value(
@@ -2661,10 +2664,8 @@ fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
             "The \"fd\" argument must be of type number. Received {}",
             crate::fs::validate::describe_received(fd_value)
         );
-        let err = crate::fs::validate::build_type_error_with_code_value(
-            &message,
-            "ERR_INVALID_ARG_TYPE",
-        );
+        let err =
+            crate::fs::validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE");
         utf8_async_open_error(id, err);
         return undefined_value();
     };
@@ -2675,7 +2676,13 @@ fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
                 return (true, false, false, None, undefined_value());
             };
             if state.destroyed {
-                return (true, false, false, state.reopen_old_fd.take(), state.custom_fs);
+                return (
+                    true,
+                    false,
+                    false,
+                    state.reopen_old_fd.take(),
+                    state.custom_fs,
+                );
             }
             state.fd = fd;
             state.file = state.pending_file.take();
@@ -2789,7 +2796,11 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
     js_closure_set_capture_ptr(cb, 0, id as i64);
     let cb_value = crate::value::js_nanbox_pointer(cb as i64);
     let parent_value = string_value_str(parent_str);
-    let _ = utf8_call_custom_method(custom_fs, b"mkdir", &[parent_value, options_value, cb_value]);
+    let _ = utf8_call_custom_method(
+        custom_fs,
+        b"mkdir",
+        &[parent_value, options_value, cb_value],
+    );
     true
 }
 
@@ -2807,7 +2818,10 @@ fn utf8_needs_native_mkdir_before_custom_open(id: usize) -> bool {
 }
 
 fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
-    let closure = js_closure_alloc(utf8_async_native_mkdir_then_custom_open_impl as *const u8, 1);
+    let closure = js_closure_alloc(
+        utf8_async_native_mkdir_then_custom_open_impl as *const u8,
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
@@ -2832,9 +2846,7 @@ fn utf8_start_async_open(id: usize) {
     utf8_schedule_native_open(id);
 }
 
-extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(
-    closure: *const ClosureHeader,
-) -> f64 {
+extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(closure: *const ClosureHeader) -> f64 {
     let id = stream_id_of(closure);
     let Some(file) = UTF8_STREAM_REGISTRY.with(|registry| {
         registry
