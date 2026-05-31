@@ -51,6 +51,18 @@ nullProto.key = "value";
 console.log("hasOwn null proto:", Object.hasOwn(nullProto, "key")); // true
 console.log("hasOwn null proto missing:", Object.hasOwn(nullProto, "other")); // false
 
+// #3527: Object.hasOwn as a first-class VALUE (not a direct call). The
+// feature-detect idiom in iconv-lite's merge-exports stores it in a var via a
+// ternary, which defeats the const-alias call-fold, so the value itself must be
+// a real callable. typeof must agree, and the bound value must compute hasOwn.
+console.log("hasOwn typeof value:", typeof Object.hasOwn); // function
+const hasOwnVal = typeof Object.hasOwn === "undefined" ? null : Object.hasOwn;
+console.log("hasOwn via var:", hasOwnVal!(hasOwnObj, "name"), hasOwnVal!(hasOwnObj, "missing")); // true false
+const hasOwnArr: Array<(o: object, k: string) => boolean> = [Object.hasOwn];
+console.log("hasOwn via array:", hasOwnArr[0](hasOwnObj, "version")); // true
+const ReboundO: any = Object;
+console.log("hasOwn rebound:", ReboundO.hasOwn(hasOwnObj, "name")); // true
+
 // --- Object.defineProperty ---
 const defObj: Record<string, unknown> = {};
 Object.defineProperty(defObj, "readOnly", {
