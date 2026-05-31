@@ -14,6 +14,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
+    module.declare_function("js_http_client_request_method", I64, &[I64]);
+    module.declare_function("js_http_client_request_protocol", I64, &[I64]);
+    module.declare_function("js_http_client_request_host", I64, &[I64]);
+    module.declare_function("js_http_client_request_path", I64, &[I64]);
+    module.declare_function("js_http_client_request_listener_count", DOUBLE, &[I64, I64]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
     // #3226/#3227/#3228 — overload-normalizing client factories take a
     // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a
@@ -70,6 +75,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_agent_keep_alive_msecs", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_keep_alive", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_protocol", I64, &[I64]);
+    module.declare_function("js_http_agent_default_port", DOUBLE, &[I64]);
     module.declare_function("js_http_agent_set_protocol", VOID, &[I64, I64]);
     // #2154
     module.declare_function("js_http_agent_destroy", I64, &[I64]);
@@ -152,8 +158,55 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_https_create_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_https_server_listen", I64, &[I64, I64]);
     module.declare_function("js_node_https_server_close", VOID, &[I64, I64]);
+    module.declare_function("js_node_https_server_close_all_connections", VOID, &[I64]);
+    module.declare_function("js_node_https_server_close_idle_connections", VOID, &[I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_node_https_server_headers_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_headers_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_keep_alive_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_keep_alive_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_request_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_request_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_idle_timeout", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_idle_timeout",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_node_https_server_max_headers_count", DOUBLE, &[I64]);
+    module.declare_function(
+        "js_node_https_server_set_max_headers_count",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_max_requests_per_socket",
+        DOUBLE,
+        &[I64],
+    );
+    module.declare_function(
+        "js_node_https_server_set_max_requests_per_socket",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_node_https_server_set_timeout_method",
+        I64,
+        &[I64, DOUBLE, I64],
+    );
     // node:http2 secure server (HTTP/2 with ALPN):
     module.declare_function("js_node_http2_create_secure_server", I64, &[DOUBLE, I64]);
     module.declare_function("js_node_http2_server_listen", I64, &[I64, I64]);

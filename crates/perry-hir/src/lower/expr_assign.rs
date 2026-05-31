@@ -543,7 +543,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                     .lookup_native_instance(&obj_name)
                     .map(|(m, c)| (m.to_string(), c.to_string()));
                 if let Some((module_name, class_name)) = native_instance {
-                    if module_name == "http" {
+                    if matches!(module_name.as_str(), "http" | "https") {
                         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                             let prop = prop_ident.sym.to_string();
                             let setter_method = match (class_name.as_str(), prop.as_str()) {
@@ -560,6 +560,16 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 ("HttpServer", "timeout") => Some("__set_timeout"),
                                 ("HttpServer", "maxHeadersCount") => Some("__set_maxHeadersCount"),
                                 ("HttpServer", "maxRequestsPerSocket") => {
+                                    Some("__set_maxRequestsPerSocket")
+                                }
+                                ("HttpsServer", "headersTimeout") => Some("__set_headersTimeout"),
+                                ("HttpsServer", "keepAliveTimeout") => {
+                                    Some("__set_keepAliveTimeout")
+                                }
+                                ("HttpsServer", "requestTimeout") => Some("__set_requestTimeout"),
+                                ("HttpsServer", "timeout") => Some("__set_timeout"),
+                                ("HttpsServer", "maxHeadersCount") => Some("__set_maxHeadersCount"),
+                                ("HttpsServer", "maxRequestsPerSocket") => {
                                     Some("__set_maxRequestsPerSocket")
                                 }
                                 // #2154 — `http.Agent` / `https.Agent` tunable
