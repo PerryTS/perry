@@ -225,6 +225,7 @@ pub(super) fn try_desugar_reactive_animate(
             enclosing_class: None,
             is_async: false,
             is_generator: false,
+            is_strict: ctx.current_strict,
         };
 
         outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
@@ -263,6 +264,7 @@ pub(super) fn try_desugar_reactive_animate(
         enclosing_class: None,
         is_async: false,
         is_generator: false,
+        is_strict: ctx.current_strict,
     };
 
     Ok(Some(Expr::Call {

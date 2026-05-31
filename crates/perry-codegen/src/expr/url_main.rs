@@ -50,9 +50,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::FileURLToPath(url) => {
             let v = lower_expr(ctx, url)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_url_file_url_to_path", &[(DOUBLE, &v)]))
+            // 1-arg fast path: pass `undefined` for the options arg (#2975).
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_url_file_url_to_path",
+                &[(DOUBLE, &v), (DOUBLE, &undef)],
+            ))
         }
 
         Expr::UrlNew { url, base } => {
@@ -249,6 +253,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block().call(I64, "js_url_search_params_new_empty", &[])
             };
             Ok(nanbox_pointer_inline(ctx.block(), &params_obj))
+        }
+
+        Expr::UrlSearchParamsMissingArgs {
+            params,
+            args,
+            name_and_value,
+        } => {
+            let _ = lower_expr(ctx, params)?;
+            for arg in args {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let kind = if *name_and_value { "2" } else { "1" };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_url_search_params_throw_missing_args",
+                &[(I32, kind)],
+            ))
         }
 
         Expr::UrlSearchParamsGet { params, name } => {

@@ -133,19 +133,33 @@ unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
     js_nanbox_get_pointer(nanboxed)
 }
 
+/// #3148: materialize a TypedArray receiver to a plain Array (element-typed
+/// reads) before building the iterator object, so `int32arr.values()` /
+/// `.keys()` / `.entries()` yield the numeric elements rather than the raw
+/// byte buffer reinterpreted as f64.
+#[inline]
+fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        crate::typedarray::typed_array_to_array(arr as *const crate::typedarray::TypedArrayHeader)
+            as *const ArrayHeader
+    } else {
+        arr
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
-    unsafe { array_iter_obj_raw(arr, KIND_VALUES) }
+    unsafe { array_iter_obj_raw(typed_array_iter_arr(arr), KIND_VALUES) }
 }
 
 #[no_mangle]
 pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
-    unsafe { array_iter_obj_raw(arr, KIND_KEYS) }
+    unsafe { array_iter_obj_raw(typed_array_iter_arr(arr), KIND_KEYS) }
 }
 
 #[no_mangle]
 pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
-    unsafe { array_iter_obj_raw(arr, KIND_ENTRIES) }
+    unsafe { array_iter_obj_raw(typed_array_iter_arr(arr), KIND_ENTRIES) }
 }
 
 /// Build the `{ value, done }` iterator-result object. `value` arrives as

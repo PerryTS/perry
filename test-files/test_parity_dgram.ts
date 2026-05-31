@@ -19,10 +19,18 @@ try {
   console.log("socket.bind typeof:", typeof s4.bind);
   console.log("socket.close typeof:", typeof s4.close);
   console.log("socket.address typeof:", typeof s4.address);
+  console.log("socket.remoteAddress typeof:", typeof s4.remoteAddress);
   console.log("socket.connect typeof:", typeof s4.connect);
   console.log("socket.disconnect typeof:", typeof s4.disconnect);
+  console.log("socket.on typeof:", typeof s4.on);
+  console.log("socket.once typeof:", typeof s4.once);
+  console.log("socket.addListener typeof:", typeof s4.addListener);
+  console.log("socket.removeListener typeof:", typeof s4.removeListener);
+  console.log("socket.listenerCount typeof:", typeof s4.listenerCount);
   console.log("socket.addMembership typeof:", typeof s4.addMembership);
   console.log("socket.dropMembership typeof:", typeof s4.dropMembership);
+  console.log("socket.addSourceSpecificMembership typeof:", typeof (s4 as any).addSourceSpecificMembership);
+  console.log("socket.dropSourceSpecificMembership typeof:", typeof (s4 as any).dropSourceSpecificMembership);
   console.log("socket.setBroadcast typeof:", typeof s4.setBroadcast);
   console.log("socket.setMulticastTTL typeof:", typeof s4.setMulticastTTL);
   console.log("socket.setMulticastLoopback typeof:", typeof s4.setMulticastLoopback);
@@ -32,8 +40,15 @@ try {
   console.log("socket.setSendBufferSize typeof:", typeof s4.setSendBufferSize);
   console.log("socket.getRecvBufferSize typeof:", typeof s4.getRecvBufferSize);
   console.log("socket.getSendBufferSize typeof:", typeof s4.getSendBufferSize);
+  console.log("socket.getSendQueueSize typeof:", typeof (s4 as any).getSendQueueSize);
+  console.log("socket.getSendQueueCount typeof:", typeof (s4 as any).getSendQueueCount);
   console.log("socket.ref typeof:", typeof s4.ref);
   console.log("socket.unref typeof:", typeof s4.unref);
+  try {
+    s4.address();
+  } catch (e) {
+    console.log("socket.address before bind code:", (e as any).code);
+  }
   s4.close();
   console.log("socket.close: ok");
 } catch (e) {

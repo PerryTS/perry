@@ -104,9 +104,10 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
-    // Node util.types predicate calls lower to the canonical receiver-less
-    // NativeMethodCall { module: "util/types", class_name: None, ... }.
-    if module == "util/types" && class_name.is_none() && object.is_none() {
+    // Node util.types predicate calls lower to a receiver-less
+    // NativeMethodCall with either the direct `util/types` key or the
+    // object-valued `util.types` namespace key.
+    if matches!(module, "util/types" | "util.types") && class_name.is_none() && object.is_none() {
         if method == "isAsyncFunction" {
             if let Some(is_async) = args
                 .first()
@@ -126,11 +127,14 @@ pub(crate) fn lower_native_method_call(
             ));
         }
         let runtime = match method {
+            "isArgumentsObject" => Some("js_util_types_is_arguments_object"),
             "isPromise" => Some("js_util_types_is_promise"),
+            "isBigIntObject" => Some("js_util_types_is_big_int_object"),
             "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
             "isSharedArrayBuffer" => Some("js_util_types_is_shared_array_buffer"),
             "isAnyArrayBuffer" => Some("js_util_types_is_any_array_buffer"),
             "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
+            "isDataView" => Some("js_util_types_is_data_view"),
             "isTypedArray" => Some("js_util_types_is_typed_array"),
             "isUint8Array" => Some("js_util_types_is_uint8_array"),
             "isInt8Array" => Some("js_util_types_is_int8_array"),
@@ -138,6 +142,7 @@ pub(crate) fn lower_native_method_call(
             "isUint16Array" => Some("js_util_types_is_uint16_array"),
             "isInt32Array" => Some("js_util_types_is_int32_array"),
             "isUint32Array" => Some("js_util_types_is_uint32_array"),
+            "isFloat16Array" => Some("js_util_types_is_float16_array"),
             "isFloat32Array" => Some("js_util_types_is_float32_array"),
             "isFloat64Array" => Some("js_util_types_is_float64_array"),
             "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
@@ -146,14 +151,25 @@ pub(crate) fn lower_native_method_call(
             "isMap" => Some("js_util_types_is_map"),
             "isMapIterator" => Some("js_util_types_is_map_iterator"),
             "isProxy" => Some("js_util_types_is_proxy"),
+            "isExternal" => Some("js_util_types_is_external"),
+            "isModuleNamespaceObject" => Some("js_util_types_is_module_namespace_object"),
             "isSet" => Some("js_util_types_is_set"),
             "isSetIterator" => Some("js_util_types_is_set_iterator"),
+            "isWeakMap" => Some("js_util_types_is_weak_map"),
+            "isWeakSet" => Some("js_util_types_is_weak_set"),
             "isDate" => Some("js_util_types_is_date"),
             "isRegExp" => Some("js_util_types_is_reg_exp"),
             "isAsyncFunction" => Some("js_util_types_is_async_function"),
             "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
             "isGeneratorObject" => Some("js_util_types_is_generator_object"),
             "isNativeError" => Some("js_util_types_is_native_error"),
+            "isKeyObject" => Some("js_util_types_is_key_object"),
+            "isCryptoKey" => Some("js_util_types_is_crypto_key"),
+            "isNumberObject" => Some("js_util_types_is_number_object"),
+            "isStringObject" => Some("js_util_types_is_string_object"),
+            "isBooleanObject" => Some("js_util_types_is_boolean_object"),
+            "isSymbolObject" => Some("js_util_types_is_symbol_object"),
+            "isBoxedPrimitive" => Some("js_util_types_is_boxed_primitive"),
             _ => None,
         };
         if let Some(runtime) = runtime {
@@ -176,6 +192,70 @@ pub(crate) fn lower_native_method_call(
     // node:perf_hooks → native/perf_hooks.rs (performance.* + PerformanceObserver).
     if let Some(v) = perf_hooks::lower_perf_hooks_method(ctx, module, method, object, args)? {
         return Ok(v);
+    }
+
+    // node:v8 (#3137/#3138). serialize/deserialize + heap-stat helpers route to
+    // the `js_v8_*` runtime entry points. All are receiver-less statics.
+    if module == "v8" && object.is_none() {
+        let runtime = match method {
+            "serialize" => Some(("js_v8_serialize", true)),
+            "deserialize" => Some(("js_v8_deserialize", true)),
+            "getHeapStatistics" => Some(("js_v8_get_heap_statistics", false)),
+            "getHeapCodeStatistics" => Some(("js_v8_get_heap_code_statistics", false)),
+            "getHeapSpaceStatistics" => Some(("js_v8_get_heap_space_statistics", false)),
+            "cachedDataVersionTag" => Some(("js_v8_cached_data_version_tag", false)),
+            // #3679: diagnostic-control / coverage helpers — Node-shaped no-op
+            // callables returning `undefined` (Perry has no V8 engine to drive
+            // real flag mutation or coverage capture). Args are evaluated for
+            // side effects then ignored.
+            "setFlagsFromString"
+            | "takeCoverage"
+            | "stopCoverage"
+            | "setHeapSnapshotNearHeapLimit" => Some(("js_v8_noop_undefined", false)),
+            _ => None,
+        };
+        if let Some((fname, takes_arg)) = runtime {
+            if takes_arg {
+                let arg = if let Some(first) = args.first() {
+                    lower_expr(ctx, first)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                // Lower remaining args for side effects (Node ignores them).
+                for extra in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, extra)?;
+                }
+                return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]));
+            }
+            for extra in args {
+                let _ = lower_expr(ctx, extra)?;
+            }
+            return Ok(ctx.block().call(DOUBLE, fname, &[]));
+        }
+    }
+
+    // #3679: chained sub-namespace calls fold to a NativeMethodCall with a
+    // `class_name` (`v8.startupSnapshot.isBuildingSnapshot()`,
+    // `v8.promiseHooks.onInit(fn)`). Dispatch them statically.
+    if module == "v8" {
+        let v8_sub = match (class_name, method) {
+            (Some("startupSnapshot"), "isBuildingSnapshot") => Some("js_v8_is_building_snapshot"),
+            (
+                Some("startupSnapshot"),
+                "addSerializeCallback" | "addDeserializeCallback" | "setDeserializeMainFunction",
+            ) => Some("js_v8_throw_not_building_snapshot"),
+            (
+                Some("promiseHooks"),
+                "onInit" | "onBefore" | "onAfter" | "onSettled" | "createHook",
+            ) => Some("js_v8_promise_hook_register"),
+            _ => None,
+        };
+        if let Some(fname) = v8_sub {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            return Ok(ctx.block().call(DOUBLE, fname, &[]));
+        }
     }
 
     if module == "crypto"

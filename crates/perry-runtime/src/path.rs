@@ -443,6 +443,10 @@ fn win32_resolve_inner(path_str: &str) -> String {
     normalize_win32_str(&path)
 }
 
+pub(crate) fn resolve_win32_str(path_str: &str) -> String {
+    win32_resolve_inner(path_str)
+}
+
 /// Get directory name from path. Per Node spec, the root's dirname is the
 /// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
 /// returns `None` there, which we treat as "stay at root".

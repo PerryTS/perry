@@ -250,6 +250,13 @@ fn invalid_chunk_error(value: f64) -> f64 {
     boxed_pointer(err as *const u8)
 }
 
+fn invalid_stream_error() -> f64 {
+    let msg = b"stream is not async iterable";
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_ptr);
+    boxed_pointer(err as *const u8)
+}
+
 fn append_string_value_bytes(value: f64, out: &mut Vec<u8>) {
     let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
     append_string_ptr_bytes(ptr, out);
@@ -552,8 +559,7 @@ fn consume_stream(kind: ConsumerKind, stream: f64) -> f64 {
     if let Some(promise) = async_consumer_promise(kind, stream) {
         return promise;
     }
-    let empty = crate::array::js_array_alloc(0);
-    promise_from_consumer_chunks(kind, Ok(boxed_pointer(empty as *const u8)))
+    promise_rejected(invalid_stream_error())
 }
 
 extern "C" fn consumer_collect_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {

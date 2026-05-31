@@ -26,7 +26,8 @@ pub use self::abort::{
 pub use self::node_compat::{
     js_url_domain_to_ascii, js_url_domain_to_unicode, js_url_file_url_to_path,
     js_url_file_url_to_path_buffer, js_url_format, js_url_legacy_parse, js_url_legacy_resolve,
-    js_url_path_to_file_url, js_url_to_http_options,
+    js_url_legacy_resolve_object, js_url_legacy_url_new, js_url_path_to_file_url,
+    js_url_to_http_options,
 };
 pub use self::search_params::{
     js_url_search_params_append, js_url_search_params_delete, js_url_search_params_delete2,
@@ -34,7 +35,8 @@ pub use self::search_params::{
     js_url_search_params_get_all, js_url_search_params_has, js_url_search_params_has2,
     js_url_search_params_keys_arr, js_url_search_params_new, js_url_search_params_new_any,
     js_url_search_params_new_empty, js_url_search_params_set, js_url_search_params_size,
-    js_url_search_params_sort, js_url_search_params_to_string, js_url_search_params_values_arr,
+    js_url_search_params_sort, js_url_search_params_throw_missing_args,
+    js_url_search_params_to_string, js_url_search_params_values_arr,
 };
 // #1668: crate-internal detector so `Object.fromEntries`/spread can recognise
 // a URLSearchParams (a plain class_id-0 ObjectHeader) and pull its entries.

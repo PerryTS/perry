@@ -159,6 +159,13 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
         return 0;
     }
 
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(a) {
+        return js_jsvalue_loose_equals(payload, b);
+    }
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(b) {
+        return js_jsvalue_loose_equals(a, payload);
+    }
+
     #[inline(always)]
     fn is_plain_number(bits: u64) -> bool {
         let tag = bits >> 48;
