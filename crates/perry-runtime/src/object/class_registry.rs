@@ -981,6 +981,21 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
+    // trap (or forwards to the target). Reached when the compiler can't prove
+    // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
+    // for a plain `new` is the constructor being invoked — the proxy itself.
+    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+        let arr = crate::array::js_array_alloc(0);
+        let mut a = arr;
+        if !args_ptr.is_null() {
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, *args_ptr.add(i));
+            }
+        }
+        let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
+        return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
+    }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
         if module == "sqlite"
             && matches!(
