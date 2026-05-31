@@ -169,6 +169,42 @@ fn object_field(obj_value: f64, name: &[u8]) -> f64 {
     f64::from_bits(js_object_get_field_by_name(obj, key_handle.get_raw_const_ptr()).bits())
 }
 
+/// #3089 — `createHook(options)` destructures `options` immediately, so a
+/// nullish top-level value throws a plain `TypeError` (no error code) with
+/// Node's "Cannot destructure property 'init' of …" message *before* any
+/// callback is read. Non-nullish primitives (e.g. `0`) are accepted because
+/// destructuring them simply yields no callback fields.
+fn validate_create_hook_options(options: f64) {
+    let jv = JSValue::from_bits(options.to_bits());
+    let received = if jv.is_undefined() {
+        "'undefined' as it is undefined"
+    } else if jv.is_null() {
+        "'object null' as it is null"
+    } else {
+        return;
+    };
+    let message = format!("Cannot destructure property 'init' of {}.", received);
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
+/// #3089 — a *present* (non-`undefined`) hook member must be callable, matching
+/// Node's `validateFunction(value, 'hook.<name>')` which throws
+/// `TypeError [ERR_ASYNC_CALLBACK]` "hook.<name> must be a function". A missing
+/// or `undefined` member is allowed (left as a null callback).
+fn validate_hook_member(value: f64, member: &str) -> *const ClosureHeader {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return ptr::null();
+    }
+    if is_callable_value(value) {
+        return closure_from_value(value);
+    }
+    let message = format!("hook.{} must be a function", member);
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_ASYNC_CALLBACK")
+}
+
 fn callbacks_from_options(options: f64) -> HookCallbacks {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options_handle = scope.root_nanbox_f64(options);
@@ -181,16 +217,18 @@ fn callbacks_from_options(options: f64) -> HookCallbacks {
         options_handle.get_nanbox_f64(),
         b"promiseResolve",
     ));
-    callbacks.init = closure_from_value(init.get_nanbox_f64());
-    callbacks.before = closure_from_value(before.get_nanbox_f64());
-    callbacks.after = closure_from_value(after.get_nanbox_f64());
-    callbacks.destroy = closure_from_value(destroy.get_nanbox_f64());
-    callbacks.promise_resolve = closure_from_value(promise_resolve.get_nanbox_f64());
+    callbacks.init = validate_hook_member(init.get_nanbox_f64(), "init");
+    callbacks.before = validate_hook_member(before.get_nanbox_f64(), "before");
+    callbacks.after = validate_hook_member(after.get_nanbox_f64(), "after");
+    callbacks.destroy = validate_hook_member(destroy.get_nanbox_f64(), "destroy");
+    callbacks.promise_resolve =
+        validate_hook_member(promise_resolve.get_nanbox_f64(), "promiseResolve");
     callbacks
 }
 
 #[no_mangle]
 pub extern "C" fn js_async_hooks_create_hook(options: f64) -> i64 {
+    validate_create_hook_options(options);
     let callbacks = callbacks_from_options(options);
     let mut hooks = HOOKS.lock().unwrap();
     let index = hooks.len();

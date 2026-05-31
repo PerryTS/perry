@@ -629,6 +629,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
+        ("dns" | "dns/promises", "Resolver") => Some(0),
         _ => None,
     }
 }
@@ -1020,6 +1021,35 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
     {
         return true;
     }
+    if matches!(module, "dns" | "dns/promises")
+        && matches!(
+            prop,
+            "lookup"
+                | "lookupService"
+                | "resolve"
+                | "resolve4"
+                | "resolve6"
+                | "resolveAny"
+                | "resolveCaa"
+                | "resolveCname"
+                | "resolveMx"
+                | "resolveNaptr"
+                | "resolveNs"
+                | "resolvePtr"
+                | "resolveSoa"
+                | "resolveSrv"
+                | "resolveTlsa"
+                | "resolveTxt"
+                | "reverse"
+                | "getServers"
+                | "setServers"
+                | "setDefaultResultOrder"
+                | "getDefaultResultOrder"
+                | "Resolver"
+        )
+    {
+        return true;
+    }
 
     matches!(
         (module, prop),
@@ -1041,6 +1071,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("dgram", "createSocket")
+            | ("dgram", "Socket")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
@@ -2416,6 +2448,39 @@ pub(crate) unsafe fn get_native_module_constant(
         })
     };
 
+    let dns_const = |prop: &str| -> Option<f64> {
+        Some(match prop {
+            "ADDRCONFIG" => 1024.0,
+            "V4MAPPED" => 2048.0,
+            "ALL" => 256.0,
+            "NODATA" => str_val("ENODATA"),
+            "FORMERR" => str_val("EFORMERR"),
+            "SERVFAIL" => str_val("ESERVFAIL"),
+            "NOTFOUND" => str_val("ENOTFOUND"),
+            "NOTIMP" => str_val("ENOTIMP"),
+            "REFUSED" => str_val("EREFUSED"),
+            "BADQUERY" => str_val("EBADQUERY"),
+            "BADNAME" => str_val("EBADNAME"),
+            "BADFAMILY" => str_val("EBADFAMILY"),
+            "BADRESP" => str_val("EBADRESP"),
+            "CONNREFUSED" => str_val("ECONNREFUSED"),
+            "TIMEOUT" => str_val("ETIMEOUT"),
+            "EOF" => str_val("EOF"),
+            "FILE" => str_val("EFILE"),
+            "NOMEM" => str_val("ENOMEM"),
+            "DESTRUCTION" => str_val("EDESTRUCTION"),
+            "BADSTR" => str_val("EBADSTR"),
+            "BADFLAGS" => str_val("EBADFLAGS"),
+            "NONAME" => str_val("ENONAME"),
+            "BADHINTS" => str_val("EBADHINTS"),
+            "NOTINITIALIZED" => str_val("ENOTINITIALIZED"),
+            "LOADIPHLPAPI" => str_val("ELOADIPHLPAPI"),
+            "ADDRGETNETWORKPARAMS" => str_val("EADDRGETNETWORKPARAMS"),
+            "CANCELLED" => str_val("ECANCELLED"),
+            _ => return None,
+        })
+    };
+
     match module_name {
         // node:punycode (deprecated, #2513) — the bundled punycode.js version
         // and the `ucs2` code-point helper sub-namespace (#2607).
@@ -2605,6 +2670,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
             _ => None,
         },
+        "test" => crate::node_test::property(property),
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(unsafe {
@@ -2694,6 +2760,7 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "http2.constants" => http2_const(property),
+        "dns" => dns_const(property),
         // node:cluster — all property reads are static constants on the
         // primary process. The test fixture only exercises shape, never
         // forks a worker; the `fork` / `disconnect` / `setupPrimary` /

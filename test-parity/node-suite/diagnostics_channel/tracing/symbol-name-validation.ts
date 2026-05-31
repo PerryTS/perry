@@ -1,16 +1,13 @@
-import * as dc from "node:diagnostics_channel";
+import { channel, tracingChannel } from "node:diagnostics_channel";
 
-function probe(label: string, value: symbol): void {
+function result(label: string, fn: () => unknown) {
   try {
-    dc.tracingChannel(value as any);
-    console.log(`${label}: no throw`);
+    console.log(`${label}:`, fn());
   } catch (err: any) {
-    console.log(`${label}:`, err.name, err.code, err.message.split("\n")[0]);
+    console.log(`${label}:`, err?.name, err?.code || "no-code");
   }
 }
 
-probe("symbol", Symbol("s"));
-probe("symbolFor", Symbol.for("shared"));
-
-const plain = dc.channel(Symbol("plain"));
-console.log("plain symbol channel:", typeof plain, plain.hasSubscribers);
+result("plain channel symbol", () => typeof channel(Symbol("plain")));
+result("trace local symbol", () => typeof tracingChannel(Symbol("s") as any));
+result("trace registry symbol", () => typeof tracingChannel(Symbol.for("shared") as any));

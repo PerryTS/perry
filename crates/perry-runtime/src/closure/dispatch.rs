@@ -579,11 +579,21 @@ fn dispatch_registered_call(
     if func_ptr == BOUND_FUNCTION_FUNC_PTR {
         return Some(unsafe { dispatch_bound_function(closure, args) });
     }
+    None
+}
+
+#[inline]
+fn dispatch_rest_or_declared_arity(
+    closure: *const ClosureHeader,
+    func_ptr: *const u8,
+    args: &[f64],
+    provided: u32,
+) -> Option<f64> {
     if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
         return Some(unsafe { dispatch_rest_bundled(closure, func_ptr, args, fixed_arity, synth) });
     }
     if let Some(declared) = lookup_closure_arity(func_ptr) {
-        if declared as usize > args.len() {
+        if declared > provided {
             return Some(unsafe { dispatch_with_arity(closure, func_ptr, args, declared) });
         }
     }
@@ -608,6 +618,10 @@ pub extern "C" fn js_closure_call7(
     }
     let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 7) {
         return result;
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
@@ -636,6 +650,10 @@ pub extern "C" fn js_closure_call8(
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
         return result;
     }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 8) {
+        return result;
+    }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
@@ -661,6 +679,10 @@ pub extern "C" fn js_closure_call9(
     }
     let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 9) {
         return result;
     }
     let func: extern "C" fn(
@@ -701,6 +723,10 @@ pub extern "C" fn js_closure_call10(
     }
     let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 10) {
         return result;
     }
     let func: extern "C" fn(
@@ -747,6 +773,12 @@ pub extern "C" fn js_closure_call11(
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
         return result;
     }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 11) {
+        return result;
+    }
     let func: extern "C" fn(
         *const ClosureHeader,
         f64,
@@ -791,6 +823,12 @@ pub extern "C" fn js_closure_call12(
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
     ];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 12) {
         return result;
     }
     let func: extern "C" fn(
@@ -841,6 +879,12 @@ pub extern "C" fn js_closure_call13(
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
         return result;
     }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 13) {
+        return result;
+    }
     let func: extern "C" fn(
         *const ClosureHeader,
         f64,
@@ -889,6 +933,12 @@ pub extern "C" fn js_closure_call14(
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
     ];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 14) {
         return result;
     }
     let func: extern "C" fn(
@@ -945,6 +995,13 @@ pub extern "C" fn js_closure_call15(
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
         return result;
     }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+        arg14,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 15) {
+        return result;
+    }
     let func: extern "C" fn(
         *const ClosureHeader,
         f64,
@@ -999,6 +1056,13 @@ pub extern "C" fn js_closure_call16(
         arg14, arg15,
     ];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+        arg14, arg15,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 16) {
         return result;
     }
     let func: extern "C" fn(

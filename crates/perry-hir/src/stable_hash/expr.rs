@@ -227,8 +227,11 @@ impl SH for Expr {
             Expr::TextEncoderNew => tag(h, 179),
             Expr::TextEncoderEncode(e) => { tag(h, 180); e.as_ref().hash(h); }
             Expr::TextEncoderEncodeInto { source, dest } => { tag(h, 12040); source.as_ref().hash(h); dest.as_ref().hash(h); }
-            Expr::TextDecoderNew => tag(h, 181),
-            Expr::TextDecoderDecode(e) => { tag(h, 182); e.as_ref().hash(h); }
+            Expr::TextDecoderNew { label, fatal, ignore_bom } => { tag(h, 12250); label.as_ref().hash(h); fatal.as_ref().hash(h); ignore_bom.as_ref().hash(h); }
+            Expr::TextDecoderDecode { decoder, input } => { tag(h, 12251); decoder.as_ref().hash(h); input.as_ref().hash(h); }
+            Expr::TextDecoderEncoding(e) => { tag(h, 12252); e.as_ref().hash(h); }
+            Expr::TextDecoderFatal(e) => { tag(h, 12253); e.as_ref().hash(h); }
+            Expr::TextDecoderIgnoreBom(e) => { tag(h, 12254); e.as_ref().hash(h); }
             Expr::EncodeURI(e) => { tag(h, 183); e.as_ref().hash(h); }
             Expr::DecodeURI(e) => { tag(h, 184); e.as_ref().hash(h); }
             Expr::EncodeURIComponent(e) => { tag(h, 185); e.as_ref().hash(h); }
@@ -505,6 +508,7 @@ impl SH for Expr {
             Expr::ObjectRest { object, exclude_keys, } => { tag(h, 395); object.as_ref().hash(h); exclude_keys.hash(h); }
             Expr::ArrayIsArray(e) => { tag(h, 396); e.as_ref().hash(h); }
             Expr::ArrayFrom(e) => { tag(h, 397); e.as_ref().hash(h); }
+            Expr::IteratorFrom(e) => { tag(h, 12270); e.as_ref().hash(h); }
             Expr::IteratorToArray(e) => { tag(h, 398); e.as_ref().hash(h); }
             Expr::GetIterator(e) => { tag(h, 11238); e.as_ref().hash(h); }
             Expr::ForOfToArray(e) => { tag(h, 11243); e.as_ref().hash(h); }

@@ -1,32 +1,35 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
+import { AsyncLocalStorage } from "node:async_hooks";
 
-const uncaught: string[] = [];
+const sync: string[] = [];
+
+function describe(value: unknown) {
+  return value === undefined ? "undefined" : JSON.stringify(value);
+}
+
 process.on("uncaughtException", (err: any) => {
-  uncaught.push(`${err.name}:${err.code || "no-code"}:${err.message}`);
+  console.log("uncaught:", err?.name, err?.code || "no-code", err?.message);
 });
 
-function run(label: string, hasTransform: boolean, transform?: any): void {
+function run(label: string, transform: unknown, bindWithArg = true) {
   const ch = channel(`dc-noncallable-transform-${label}`);
   const store = new AsyncLocalStorage();
-  if (hasTransform) {
-    ch.bindStore(store, transform);
+  if (bindWithArg) {
+    ch.bindStore(store, transform as any);
   } else {
     ch.bindStore(store);
   }
   const ret = ch.runStores({ value: label }, () => {
-    console.log(`${label} store:`, JSON.stringify(store.getStore()));
-    return `ret-${label}`;
+    sync.push(`${label} store:${describe(store.getStore())}`);
+    return `${label}-ret`;
   });
-  console.log(`${label} ret:`, ret);
+  sync.push(`${label} ret:${ret}`);
 }
 
-run("null", true, null);
-run("number", true, 1);
-run("undefined", true, undefined);
-run("omitted", false);
+run("null", null);
+run("number", 1);
+run("undefined", undefined);
+run("omitted", undefined, false);
 
-setImmediate(() => {
-  console.log("uncaught:", uncaught.join("|"));
-  console.log("after immediate");
-});
+console.log("sync:", sync.join("|"));
+setTimeout(() => console.log("done"), 0);

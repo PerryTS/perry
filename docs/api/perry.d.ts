@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1854 entries across 89 modules
+// Coverage: 1992 entries across 94 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -64,6 +64,9 @@ declare module "@perryts/pdf" {
   export function pdfNewPage(...args: any[]): any;
   /** stdlib */
   export function pdfSave(...args: any[]): any;
+}
+
+declare module "__disposable__" {
 }
 
 declare module "argon2" {
@@ -923,6 +926,167 @@ declare module "dayjs" {
 }
 
 declare module "decimal.js" {
+}
+
+declare module "dgram" {
+  /** stdlib */
+  export class Socket { [key: string]: any; }
+  /** stdlib */
+  export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function createSocket(...args: any[]): any;
+}
+
+declare module "dns" {
+  /** stdlib */
+  export class Resolver { [key: string]: any; }
+  /** stdlib */
+  export const ADDRCONFIG: any;
+  /** stdlib */
+  export const ADDRGETNETWORKPARAMS: any;
+  /** stdlib */
+  export const ALL: any;
+  /** stdlib */
+  export const BADFAMILY: any;
+  /** stdlib */
+  export const BADFLAGS: any;
+  /** stdlib */
+  export const BADHINTS: any;
+  /** stdlib */
+  export const BADNAME: any;
+  /** stdlib */
+  export const BADQUERY: any;
+  /** stdlib */
+  export const BADRESP: any;
+  /** stdlib */
+  export const BADSTR: any;
+  /** stdlib */
+  export const CANCELLED: any;
+  /** stdlib */
+  export const CONNREFUSED: any;
+  /** stdlib */
+  export const DESTRUCTION: any;
+  /** stdlib */
+  export const EOF: any;
+  /** stdlib */
+  export const FILE: any;
+  /** stdlib */
+  export const FORMERR: any;
+  /** stdlib */
+  export const LOADIPHLPAPI: any;
+  /** stdlib */
+  export const NODATA: any;
+  /** stdlib */
+  export const NOMEM: any;
+  /** stdlib */
+  export const NONAME: any;
+  /** stdlib */
+  export const NOTFOUND: any;
+  /** stdlib */
+  export const NOTIMP: any;
+  /** stdlib */
+  export const NOTINITIALIZED: any;
+  /** stdlib */
+  export const REFUSED: any;
+  /** stdlib */
+  export const SERVFAIL: any;
+  /** stdlib */
+  export const TIMEOUT: any;
+  /** stdlib */
+  export const V4MAPPED: any;
+  /** stdlib */
+  export function Resolver(...args: any[]): any;
+  /** stdlib */
+  export function getDefaultResultOrder(...args: any[]): any;
+  /** stdlib */
+  export function getServers(...args: any[]): any;
+  /** stdlib */
+  export function lookup(...args: any[]): any;
+  /** stdlib */
+  export function lookupService(...args: any[]): any;
+  /** stdlib */
+  export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function resolve4(...args: any[]): any;
+  /** stdlib */
+  export function resolve6(...args: any[]): any;
+  /** stdlib */
+  export function resolveAny(...args: any[]): any;
+  /** stdlib */
+  export function resolveCaa(...args: any[]): any;
+  /** stdlib */
+  export function resolveCname(...args: any[]): any;
+  /** stdlib */
+  export function resolveMx(...args: any[]): any;
+  /** stdlib */
+  export function resolveNaptr(...args: any[]): any;
+  /** stdlib */
+  export function resolveNs(...args: any[]): any;
+  /** stdlib */
+  export function resolvePtr(...args: any[]): any;
+  /** stdlib */
+  export function resolveSoa(...args: any[]): any;
+  /** stdlib */
+  export function resolveSrv(...args: any[]): any;
+  /** stdlib */
+  export function resolveTlsa(...args: any[]): any;
+  /** stdlib */
+  export function resolveTxt(...args: any[]): any;
+  /** stdlib */
+  export function reverse(...args: any[]): any;
+  /** stdlib */
+  export function setDefaultResultOrder(...args: any[]): any;
+  /** stdlib */
+  export function setServers(...args: any[]): any;
+}
+
+declare module "dns/promises" {
+  /** stdlib */
+  export class Resolver { [key: string]: any; }
+  /** stdlib */
+  export function Resolver(...args: any[]): any;
+  /** stdlib */
+  export function getDefaultResultOrder(...args: any[]): any;
+  /** stdlib */
+  export function getServers(...args: any[]): any;
+  /** stdlib */
+  export function lookup(...args: any[]): any;
+  /** stdlib */
+  export function lookupService(...args: any[]): any;
+  /** stdlib */
+  export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function resolve4(...args: any[]): any;
+  /** stdlib */
+  export function resolve6(...args: any[]): any;
+  /** stdlib */
+  export function resolveAny(...args: any[]): any;
+  /** stdlib */
+  export function resolveCaa(...args: any[]): any;
+  /** stdlib */
+  export function resolveCname(...args: any[]): any;
+  /** stdlib */
+  export function resolveMx(...args: any[]): any;
+  /** stdlib */
+  export function resolveNaptr(...args: any[]): any;
+  /** stdlib */
+  export function resolveNs(...args: any[]): any;
+  /** stdlib */
+  export function resolvePtr(...args: any[]): any;
+  /** stdlib */
+  export function resolveSoa(...args: any[]): any;
+  /** stdlib */
+  export function resolveSrv(...args: any[]): any;
+  /** stdlib */
+  export function resolveTlsa(...args: any[]): any;
+  /** stdlib */
+  export function resolveTxt(...args: any[]): any;
+  /** stdlib */
+  export function reverse(...args: any[]): any;
+  /** stdlib */
+  export function setDefaultResultOrder(...args: any[]): any;
+  /** stdlib */
+  export function setServers(...args: any[]): any;
 }
 
 declare module "dotenv" {
@@ -2664,6 +2828,35 @@ declare module "sys" {
   export function transferableAbortSignal(...args: any[]): any;
 }
 
+declare module "test" {
+  /** stdlib */
+  export const mock: any;
+  /** stdlib */
+  export const snapshot: any;
+  /** stdlib */
+  export function after(...args: any[]): any;
+  /** stdlib */
+  export function afterEach(...args: any[]): any;
+  /** stdlib */
+  export function before(...args: any[]): any;
+  /** stdlib */
+  export function beforeEach(...args: any[]): any;
+  /** stdlib */
+  export function describe(...args: any[]): any;
+  /** stdlib */
+  export function it(...args: any[]): any;
+  /** stdlib */
+  export function only(...args: any[]): any;
+  /** stdlib */
+  export function run(...args: any[]): any;
+  /** stdlib */
+  export function skip(...args: any[]): any;
+  /** stdlib */
+  export function suite(...args: any[]): any;
+  /** stdlib */
+  export function todo(...args: any[]): any;
+}
+
 declare module "tls" {
   /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
@@ -3016,15 +3209,15 @@ declare module "zlib" {
   /** stdlib */
   export function deflateRawSync(p0: string): any;
   /** stdlib */
-  export function deflateSync(p0: string): string;
+  export function deflateSync(p0: any, options?: any): string;
   /** stdlib */
   export function gunzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gunzipSync(p0: string): string;
+  export function gunzipSync(p0: any): string;
   /** stdlib */
   export function gzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gzipSync(p0: string): string;
+  export function gzipSync(p0: any, options?: any): string;
   /** stdlib */
   export function inflate(buffer: any, callback: any): void;
   /** stdlib */
@@ -3032,7 +3225,7 @@ declare module "zlib" {
   /** stdlib */
   export function inflateRawSync(p0: string): any;
   /** stdlib */
-  export function inflateSync(p0: string): string;
+  export function inflateSync(p0: any): string;
   /** stdlib */
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */
