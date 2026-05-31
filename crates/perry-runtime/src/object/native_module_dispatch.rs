@@ -451,7 +451,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
+        ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
+        ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
+        ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
+        ("module", "getSourceMapsSupport") => crate::process::js_module_get_source_maps_support(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
+        ("module", "setSourceMapsSupport") => {
+            crate::process::js_module_set_source_maps_support(arg(0), arg(1))
+        }
+        ("module", "stripTypeScriptTypes") => {
+            crate::process::js_module_strip_typescript_types(arg(0), arg(1))
+        }
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
@@ -1447,6 +1457,21 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("stream", "Duplex") => crate::node_stream::js_node_stream_duplex_new(arg(0)),
         ("stream", "Transform") => crate::node_stream::js_node_stream_transform_new(arg(0)),
         ("stream", "PassThrough") => crate::node_stream::js_node_stream_passthrough_new(arg(0)),
+        ("readline", "clearLine") => {
+            crate::readline_helpers::js_readline_clear_line_args(pack_args())
+        }
+        ("readline", "clearScreenDown") => {
+            crate::readline_helpers::js_readline_clear_screen_down_args(pack_args())
+        }
+        ("readline", "cursorTo") => {
+            crate::readline_helpers::js_readline_cursor_to_args(pack_args())
+        }
+        ("readline", "moveCursor") => {
+            crate::readline_helpers::js_readline_move_cursor_args(pack_args())
+        }
+        ("readline", "emitKeypressEvents") => {
+            crate::readline_helpers::js_readline_emit_keypress_events_args(pack_args())
+        }
 
         // ── node:dns / node:dns/promises configuration ──
         ("dns", "getServers") => crate::dns::dns_get_servers_value(),

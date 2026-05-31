@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2242 entries across 99 modules
+// Coverage: 2246 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1764,6 +1764,10 @@ declare module "module" {
   export const builtinModules: any;
   /** stdlib */
   export const constants: any;
+  /** stdlib */
+  export const wrap: any;
+  /** stdlib */
+  export const wrapper: any;
   /** stdlib */
   export function SourceMap(...args: any[]): any;
   /** stdlib */

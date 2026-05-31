@@ -2179,6 +2179,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("readline", "getPrompt", true, None),
     method("readline", "write", true, None),
     method("readline", "getCursorPos", true, None),
+    method("readline", "line", true, None),
+    method("readline", "terminal", true, None),
     method_sig(
         "readline/promises",
         "createInterface",
@@ -2805,6 +2807,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // node:module - shape stubs plus runtime-backed builtin detection.
     property("module", "builtinModules"),
     property("module", "constants"),
+    property("module", "wrap"),
+    property("module", "wrapper"),
     method("module", "createRequire", false, None),
     method("module", "findPackageJSON", false, None),
     method("module", "findSourceMap", false, None),

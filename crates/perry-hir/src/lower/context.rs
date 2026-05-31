@@ -274,6 +274,7 @@ impl LoweringContext {
                     enclosing_class: None,
                     is_async: false,
                     is_generator: false,
+                    is_strict: self.current_strict,
                 };
             }
         }
@@ -759,6 +760,7 @@ impl LoweringContext {
             body: ctor_body,
             is_async: false,
             is_generator: false,
+            is_strict: true,
             was_plain_async: false,
             was_unrolled: false,
             is_exported: false,
