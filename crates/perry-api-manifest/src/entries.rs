@@ -144,9 +144,11 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
 pub const NODE_SUBMODULES: &[&str] = &[
+    "diagnostics_channel",
     "fs/promises",
     "stream/promises",
     "stream/consumers",
+    "stream/web",
     "readline/promises",
     "punycode.ucs2",
     "sys",
@@ -925,6 +927,21 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_str("p0"), p_any("p1"), p_str("p2"), p_any("p3")],
         TypeSpec::Any,
     ),
+    method("tls", "getCiphers", false, None),
+    method("tls", "getCACertificates", false, None),
+    method("tls", "setDefaultCACertificates", false, None),
+    method("tls", "checkServerIdentity", false, None),
+    method("tls", "createSecureContext", false, None),
+    class("tls", "SecureContext"),
+    method("tls", "SecureContext", false, None),
+    property("tls", "DEFAULT_ECDH_CURVE"),
+    property("tls", "DEFAULT_MAX_VERSION"),
+    property("tls", "DEFAULT_MIN_VERSION"),
+    property("tls", "DEFAULT_CIPHERS"),
+    property("tls", "rootCertificates"),
+    property("tls", "CLIENT_RENEG_LIMIT"),
+    property("tls", "CLIENT_RENEG_WINDOW"),
+    property("events", "default"),
     method_sig("events", "EventEmitter", false, None, &[], TypeSpec::Any),
     method("events", "on", true, None),
     method("events", "emit", true, None),
@@ -983,6 +1000,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("commander", "action", true, None),
     method("commander", "parse", true, None),
     method("commander", "opts", true, None),
+    property("async_hooks", "default"),
     method("async_hooks", "createHook", false, None),
     method("async_hooks", "executionAsyncId", false, None),
     method("async_hooks", "triggerAsyncId", false, None),
@@ -2495,6 +2513,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // an import-style binding don't silently return undefined.
     property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
+    property("os", "default"),
     method("os", "platform", false, None),
     method("os", "availableParallelism", false, None),
     method("os", "arch", false, None),
@@ -2785,6 +2804,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "POINT_CONVERSION_UNCOMPRESSED"),
     property("constants", "POINT_CONVERSION_HYBRID"),
     // path — methods mapped to Expr::Path* in expr_call.rs.
+    property("path", "default"),
     method("path", "join", false, None),
     method("path", "dirname", false, None),
     method("path", "basename", false, None),
@@ -2805,6 +2825,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Direct Node path submodules. Runtime aliases `path/posix` and
     // `path/win32` to the existing `path.posix` / `path.win32`
     // native-module namespaces.
+    property("path/posix", "default"),
     method("path/posix", "join", false, None),
     method("path/posix", "dirname", false, None),
     method("path/posix", "basename", false, None),
@@ -2822,6 +2843,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("path/posix", "delimiter"),
     property("path/posix", "posix"),
     property("path/posix", "win32"),
+    property("path/win32", "default"),
     method("path/win32", "join", false, None),
     method("path/win32", "dirname", false, None),
     method("path/win32", "basename", false, None),
@@ -2878,6 +2900,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("test", "fn", false, Some("mock")),
     method("test", "property", false, Some("mock")),
     property("test", "snapshot"),
+    // node:test/reporters — reporter constructors exposed by the runtime
+    // submodule. Formatting behavior remains covered by the node:test suite.
+    property("test/reporters", "default"),
+    method("test/reporters", "spec", false, None),
+    method("test/reporters", "tap", false, None),
+    method("test/reporters", "dot", false, None),
+    method("test/reporters", "junit", false, None),
+    method("test/reporters", "lcov", false, None),
     // process — properties mapped to Expr::Process* / Expr::Os* in expr_member.rs.
     method("process", "abort", false, None),
     method("process", "cwd", false, None),
@@ -3016,6 +3046,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("string_decoder", "encoding"),
     // node:querystring — legacy URL-encoded form parser. Greenfield
     // (deprecated since Node 11 but still imported by many npm pkgs).
+    property("querystring", "default"),
     method("querystring", "escape", false, None),
     method("querystring", "unescape", false, None),
     method("querystring", "unescapeBuffer", false, None),
@@ -3160,12 +3191,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "watch", false, None),
     property("fs", "promises"),
     property("fs", "constants"),
+    // --- node:diagnostics_channel direct submodule.
+    property("diagnostics_channel", "default"),
+    class("diagnostics_channel", "Channel"),
+    method("diagnostics_channel", "channel", false, None),
+    method("diagnostics_channel", "hasSubscribers", false, None),
+    method("diagnostics_channel", "subscribe", false, None),
+    method("diagnostics_channel", "tracingChannel", false, None),
+    method("diagnostics_channel", "unsubscribe", false, None),
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
     // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
     // intentionally omitted — they are tracked separately (#2133). The parent
     // `fs.promises` namespace above still resolves to the same surface.
+    property("fs/promises", "default"),
+    property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
     method("fs/promises", "appendFile", false, None),
     method("fs/promises", "chmod", false, None),
@@ -3224,6 +3265,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- util (a small surface — Perry implements util.inspect /
     //     util.format / util.promisify shapes through builtins.rs;
     //     the rest are documented stubs) ---
+    property("util", "default"),
     method("util", "inspect", false, None),
     method("util", "format", false, None),
     method("util", "convertProcessSignalToExitCode", false, None),
@@ -3320,6 +3362,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- sys: deprecated alias for node:util. Keep this module-level
     // surface aligned with the public `util` manifest rows above; the
     // runtime routes `node:sys` through the util namespace.
+    property("sys", "default"),
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
     method("sys", "convertProcessSignalToExitCode", false, None),
@@ -3471,12 +3514,34 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("stream/promises", "pipeline", false, None),
     method("stream/promises", "finished", false, None),
     // Direct `node:stream/consumers` submodule exports.
+    property("stream/consumers", "default"),
     method("stream/consumers", "arrayBuffer", false, None),
     method("stream/consumers", "blob", false, None),
     method("stream/consumers", "buffer", false, None),
     method("stream/consumers", "bytes", false, None),
     method("stream/consumers", "json", false, None),
     method("stream/consumers", "text", false, None),
+    // Direct `node:stream/web` submodule exports. The constructors are backed
+    // by Perry's Web Streams runtime; remaining semantic gaps stay tracked by
+    // the stream/web parity issues.
+    property("stream/web", "default"),
+    class("stream/web", "ReadableStream"),
+    class("stream/web", "ReadableStreamDefaultReader"),
+    class("stream/web", "ReadableStreamBYOBReader"),
+    class("stream/web", "ReadableStreamBYOBRequest"),
+    class("stream/web", "ReadableByteStreamController"),
+    class("stream/web", "ReadableStreamDefaultController"),
+    class("stream/web", "TransformStream"),
+    class("stream/web", "TransformStreamDefaultController"),
+    class("stream/web", "WritableStream"),
+    class("stream/web", "WritableStreamDefaultWriter"),
+    class("stream/web", "WritableStreamDefaultController"),
+    class("stream/web", "ByteLengthQueuingStrategy"),
+    class("stream/web", "CountQueuingStrategy"),
+    class("stream/web", "TextEncoderStream"),
+    class("stream/web", "TextDecoderStream"),
+    class("stream/web", "CompressionStream"),
+    class("stream/web", "DecompressionStream"),
     // `require('stream')` returns the legacy `Stream` constructor itself,
     // which has its own `.prototype` (it extends EventEmitter). The
     // `node_modules/send` package (express's static-file backend) does
@@ -3781,6 +3846,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("buffer", "kMaxLength"),
     property("buffer", "kStringMaxLength"),
     // --- url (additional helpers) ---
+    property("url", "default"),
     method("url", "fileURLToPath", false, None),
     method("url", "fileURLToPathBuffer", false, None),
     method("url", "pathToFileURL", false, None),

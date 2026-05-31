@@ -573,6 +573,256 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"defaultCoreCipherList",
 ];
 
+const ASYNC_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"AsyncLocalStorage",
+    b"createHook",
+    b"executionAsyncId",
+    b"triggerAsyncId",
+    b"executionAsyncResource",
+    b"asyncWrapProviders",
+    b"AsyncResource",
+];
+
+const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"AsyncLocalStorage",
+    b"AsyncResource",
+    b"asyncWrapProviders",
+    b"createHook",
+    b"default",
+    b"executionAsyncId",
+    b"executionAsyncResource",
+    b"triggerAsyncId",
+];
+
+const OS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"arch",
+    b"availableParallelism",
+    b"cpus",
+    b"endianness",
+    b"freemem",
+    b"getPriority",
+    b"homedir",
+    b"hostname",
+    b"loadavg",
+    b"networkInterfaces",
+    b"platform",
+    b"release",
+    b"setPriority",
+    b"tmpdir",
+    b"totalmem",
+    b"type",
+    b"userInfo",
+    b"uptime",
+    b"version",
+    b"machine",
+    b"constants",
+    b"EOL",
+    b"devNull",
+];
+
+const OS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"EOL",
+    b"arch",
+    b"availableParallelism",
+    b"constants",
+    b"cpus",
+    b"default",
+    b"devNull",
+    b"endianness",
+    b"freemem",
+    b"getPriority",
+    b"homedir",
+    b"hostname",
+    b"loadavg",
+    b"machine",
+    b"networkInterfaces",
+    b"platform",
+    b"release",
+    b"setPriority",
+    b"tmpdir",
+    b"totalmem",
+    b"type",
+    b"uptime",
+    b"userInfo",
+    b"version",
+];
+
+const PATH_DEFAULT_KEYS: &[&[u8]] = &[
+    b"resolve",
+    b"normalize",
+    b"isAbsolute",
+    b"join",
+    b"relative",
+    b"toNamespacedPath",
+    b"dirname",
+    b"basename",
+    b"extname",
+    b"format",
+    b"parse",
+    b"matchesGlob",
+    b"sep",
+    b"delimiter",
+    b"win32",
+    b"posix",
+    b"_makeLong",
+];
+
+const PATH_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"_makeLong",
+    b"basename",
+    b"default",
+    b"delimiter",
+    b"dirname",
+    b"extname",
+    b"format",
+    b"isAbsolute",
+    b"join",
+    b"matchesGlob",
+    b"normalize",
+    b"parse",
+    b"posix",
+    b"relative",
+    b"resolve",
+    b"sep",
+    b"toNamespacedPath",
+    b"win32",
+];
+
+const QUERYSTRING_DEFAULT_KEYS: &[&[u8]] = &[
+    b"unescapeBuffer",
+    b"unescape",
+    b"escape",
+    b"stringify",
+    b"encode",
+    b"parse",
+    b"decode",
+];
+
+const QUERYSTRING_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"decode",
+    b"default",
+    b"encode",
+    b"escape",
+    b"parse",
+    b"stringify",
+    b"unescape",
+    b"unescapeBuffer",
+];
+
+const URL_DEFAULT_KEYS: &[&[u8]] = &[
+    b"Url",
+    b"parse",
+    b"resolve",
+    b"resolveObject",
+    b"format",
+    b"URL",
+    b"URLSearchParams",
+    b"domainToASCII",
+    b"domainToUnicode",
+    b"pathToFileURL",
+    b"fileURLToPath",
+    b"fileURLToPathBuffer",
+    b"urlToHttpOptions",
+];
+
+const URL_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"URL",
+    b"URLSearchParams",
+    b"Url",
+    b"default",
+    b"domainToASCII",
+    b"domainToUnicode",
+    b"fileURLToPath",
+    b"fileURLToPathBuffer",
+    b"format",
+    b"parse",
+    b"pathToFileURL",
+    b"resolve",
+    b"resolveObject",
+    b"urlToHttpOptions",
+];
+
+const UTIL_DEFAULT_KEYS: &[&[u8]] = &[
+    b"aborted",
+    b"callbackify",
+    b"convertProcessSignalToExitCode",
+    b"debug",
+    b"debuglog",
+    b"deprecate",
+    b"diff",
+    b"format",
+    b"formatWithOptions",
+    b"getCallSites",
+    b"getSystemErrorMap",
+    b"getSystemErrorName",
+    b"getSystemErrorMessage",
+    b"inherits",
+    b"inspect",
+    b"isArray",
+    b"isDeepStrictEqual",
+    b"promisify",
+    b"stripVTControlCharacters",
+    b"styleText",
+    b"toUSVString",
+    b"setTraceSigInt",
+    b"types",
+    b"parseArgs",
+    b"TextDecoder",
+    b"TextEncoder",
+    b"transferableAbortController",
+    b"transferableAbortSignal",
+];
+
+const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"aborted",
+    b"callbackify",
+    b"convertProcessSignalToExitCode",
+    b"debug",
+    b"debuglog",
+    b"default",
+    b"deprecate",
+    b"diff",
+    b"format",
+    b"formatWithOptions",
+    b"getCallSites",
+    b"getSystemErrorMap",
+    b"getSystemErrorName",
+    b"getSystemErrorMessage",
+    b"inherits",
+    b"inspect",
+    b"isArray",
+    b"isDeepStrictEqual",
+    b"promisify",
+    b"stripVTControlCharacters",
+    b"styleText",
+    b"toUSVString",
+    b"setTraceSigInt",
+    b"types",
+    b"parseArgs",
+    b"TextDecoder",
+    b"TextEncoder",
+    b"transferableAbortController",
+    b"transferableAbortSignal",
+];
+
+const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"EventEmitter",
+    b"default",
+    b"defaultMaxListeners",
+    b"usingDomains",
+    b"captureRejections",
+    b"captureRejectionSymbol",
+    b"errorMonitor",
+    b"init",
+    b"listenerCount",
+    b"on",
+    b"once",
+    b"addAbortListener",
+    b"getEventListeners",
+    b"getMaxListeners",
+    b"setMaxListeners",
+];
+
 // Linux-only open() flags: Node only enumerates these on platforms whose libc
 // defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
 // enumerable-key tail by target so `Object.keys(constants)` matches Node here.
@@ -604,6 +854,8 @@ fn deprecated_constants_keys() -> &'static [&'static [u8]] {
 
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
+        "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
+        "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
             b"AssertionError",
             b"ok",
@@ -631,62 +883,18 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
-        "path" | "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
+        "path" => Some(PATH_NAMESPACE_KEYS),
+        "path.default" => Some(PATH_DEFAULT_KEYS),
+        "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "constants" => Some(deprecated_constants_keys()),
-        "querystring" => Some(&[
-            b"unescapeBuffer",
-            b"unescape",
-            b"escape",
-            b"stringify",
-            b"encode",
-            b"parse",
-            b"decode",
-        ]),
-        "url" => Some(&[
-            b"Url",
-            b"parse",
-            b"resolve",
-            b"resolveObject",
-            b"format",
-            b"URL",
-            b"URLSearchParams",
-            b"domainToASCII",
-            b"domainToUnicode",
-            b"pathToFileURL",
-            b"fileURLToPath",
-            b"fileURLToPathBuffer",
-            b"urlToHttpOptions",
-        ]),
-        "util" => Some(&[
-            b"aborted",
-            b"callbackify",
-            b"convertProcessSignalToExitCode",
-            b"debug",
-            b"debuglog",
-            b"deprecate",
-            b"diff",
-            b"format",
-            b"formatWithOptions",
-            b"getCallSites",
-            b"getSystemErrorMap",
-            b"getSystemErrorName",
-            b"getSystemErrorMessage",
-            b"inherits",
-            b"inspect",
-            b"isArray",
-            b"isDeepStrictEqual",
-            b"promisify",
-            b"stripVTControlCharacters",
-            b"styleText",
-            b"toUSVString",
-            b"setTraceSigInt",
-            b"types",
-            b"parseArgs",
-            b"TextDecoder",
-            b"TextEncoder",
-            b"transferableAbortController",
-            b"transferableAbortSignal",
-        ]),
+        "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
+        "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
+        "os" => Some(OS_NAMESPACE_KEYS),
+        "os.default" => Some(OS_DEFAULT_KEYS),
+        "url" => Some(URL_NAMESPACE_KEYS),
+        "url.default" => Some(URL_DEFAULT_KEYS),
+        "util" => Some(UTIL_NAMESPACE_KEYS),
+        "util.default" => Some(UTIL_DEFAULT_KEYS),
         "net" => Some(&[
             b"_createServerHandle",
             b"_normalizeArgs",
@@ -711,23 +919,56 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"request",
             b"globalAgent",
         ]),
-        "events" => Some(&[
-            b"EventEmitter",
-            b"defaultMaxListeners",
-            b"usingDomains",
-            b"captureRejections",
-            b"captureRejectionSymbol",
-            b"errorMonitor",
-            b"init",
-            b"listenerCount",
-            b"on",
-            b"once",
-            b"addAbortListener",
-            b"getEventListeners",
-            b"getMaxListeners",
-            b"setMaxListeners",
-        ]),
+        "events" => Some(EVENTS_NAMESPACE_KEYS),
         _ => None,
+    }
+}
+
+fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "async_hooks.default" => Some("async_hooks"),
+        "os.default" => Some("os"),
+        "path.default" => Some("path"),
+        "querystring.default" => Some("querystring"),
+        "url.default" => Some("url"),
+        "util.default" => Some("util"),
+        _ => None,
+    }
+}
+
+fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "async_hooks" => Some("async_hooks.default"),
+        "os" => Some("os.default"),
+        "path" => Some("path.default"),
+        "querystring" => Some("querystring.default"),
+        "url" => Some("url.default"),
+        "util" => Some("util.default"),
+        _ => None,
+    }
+}
+
+fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
+    let name = cjs_default_namespace_name(module_name)?;
+    Some(js_create_native_module_namespace(name.as_ptr(), name.len()))
+}
+
+fn cjs_default_export_value(module_name: &str) -> Option<f64> {
+    match module_name {
+        "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        "async_hooks" | "os" | "path" | "querystring" | "url" | "util" => {
+            create_cjs_default_namespace(module_name)
+        }
+        _ => None,
+    }
+}
+
+fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a str) -> &'a str {
+    match (module_name, property_name) {
+        ("path" | "path.posix" | "path.win32", "_makeLong") => "toNamespacedPath",
+        ("querystring", "decode") => "parse",
+        ("querystring", "encode") => "stringify",
+        _ => property_name,
     }
 }
 
@@ -735,9 +976,22 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
         "assert/strict"
+            | "async_hooks"
+            | "async_hooks.default"
             | "constants"
+            | "events"
+            | "fs.constants"
+            | "os"
+            | "os.default"
+            | "path"
+            | "path.default"
+            | "querystring"
+            | "querystring.default"
             | "process"
+            | "url"
+            | "url.default"
             | "util"
+            | "util.default"
             | "util.types"
             | "path.posix"
             | "path.win32"
@@ -861,6 +1115,8 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 }
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+    let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
+    let property_name = canonical_native_callable_property(module_name, property_name);
     let callable_module_name = if module_name == "util.types" {
         "util/types"
     } else {
@@ -892,6 +1148,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
+    if module_name == "tls" && property_name == "SecureContext" {
+        attach_tls_secure_context_prototype(value);
+    }
     if module_name == "wasi" && property_name == "WASI" {
         crate::wasi::attach_wasi_constructor_prototype(value);
     }
@@ -917,12 +1176,40 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     }
 
     if module_name == "events" && property_name == "EventEmitter" {
+        for method in [
+            "addAbortListener",
+            "once",
+            "on",
+            "getEventListeners",
+            "getMaxListeners",
+            "listenerCount",
+            "setMaxListeners",
+        ] {
+            let method_value = bound_native_callable_export_value("events", method);
+            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
+        }
+        crate::closure::closure_set_dynamic_prop(closure_addr, "EventEmitter", value);
         crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "usingDomains",
             f64::from_bits(JSValue::bool(false).bits()),
         );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "captureRejections",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
+        crate::closure::closure_set_dynamic_prop(closure_addr, "captureRejectionSymbol", {
+            let name = "nodejs.rejection";
+            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
+        });
+        crate::closure::closure_set_dynamic_prop(closure_addr, "errorMonitor", {
+            let name = "events.errorMonitor";
+            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
+        });
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "init",
@@ -961,6 +1248,24 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("events", "EventEmitter") => Some(1),
+        ("events", "addAbortListener") => Some(2),
+        ("events", "once") => Some(2),
+        ("events", "on") => Some(2),
+        ("events", "getEventListeners") => Some(2),
+        ("events", "getMaxListeners") => Some(1),
+        ("events", "listenerCount") => Some(2),
+        ("events", "setMaxListeners") => Some(0),
+        ("querystring", "unescapeBuffer" | "unescape") => Some(2),
+        ("querystring", "escape") => Some(1),
+        ("querystring", "stringify" | "parse") => Some(4),
+        ("url", "URL") => Some(1),
+        ("tls", "getCiphers") => Some(0),
+        ("tls", "getCACertificates" | "setDefaultCACertificates" | "createSecureContext") => {
+            Some(1)
+        }
+        ("tls", "checkServerIdentity") => Some(2),
+        ("tls", "SecureContext") => Some(1),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
         ("process", "setSourceMapsEnabled") => Some(1),
@@ -976,7 +1281,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("net", "_createServerHandle") => Some(5),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
-        ("events", "init") => Some(0),
+        ("events", "init") => Some(1),
         ("wasi", "WASI") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
@@ -1246,6 +1551,10 @@ fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
     crate::tty::attach_tty_constructor_prototype(constructor_value, name);
 }
 
+fn attach_tls_secure_context_prototype(constructor_value: f64) {
+    crate::tls::attach_secure_context_constructor_prototype(constructor_value);
+}
+
 pub(crate) unsafe fn bound_native_callable_module_and_method(
     value: f64,
 ) -> Option<(String, String)> {
@@ -1342,10 +1651,12 @@ pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
 /// builtin path at lower_call/builtin.rs that allocates a real
 /// `EventEmitterHandle`, so dispatch coherence is preserved.
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
+    let module = cjs_default_base_module(module).unwrap_or(module);
+    let prop = canonical_native_callable_property(module, prop);
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
     }
-    if matches!(module, "path.posix" | "path.win32")
+    if matches!(module, "path" | "path.posix" | "path.win32")
         && matches!(
             prop,
             "join"
@@ -1401,12 +1712,26 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream/promises", "finished")
             | (
                 "readline",
-                "clearLine"
+                // #3698: `createInterface` is a callable export too (the
+                // named import must be function-valued, matching Node).
+                "createInterface"
+                    | "clearLine"
                     | "clearScreenDown"
                     | "cursorTo"
                     | "moveCursor"
                     | "emitKeypressEvents",
             )
+            // #3212: node:readline/promises callable exports.
+            | (
+                "readline/promises",
+                "createInterface" | "Interface" | "Readline",
+            )
+            // #3698: node:tls.connect import-surface fix — the manifest-claimed
+            // named/namespace import must be function-valued (typeof ===
+            // "function"). Deeper TLS behavior is tracked separately
+            // (#3196-#3200); only `connect` is in the api-manifest today, so
+            // it's the only tls symbol exposed here.
+            | ("tls", "connect")
             | ("module", "createRequire")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
@@ -1487,6 +1812,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tty", "isatty")
             | ("tty", "ReadStream")
             | ("tty", "WriteStream")
+            | ("tls", "getCiphers")
+            | ("tls", "getCACertificates")
+            | ("tls", "setDefaultCACertificates")
+            | ("tls", "checkServerIdentity")
+            | ("tls", "createSecureContext")
+            | ("tls", "SecureContext")
             | ("wasi", "WASI")
             | ("net", "createServer")
             | ("net", "Server")
@@ -1511,7 +1842,19 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "fork")
             | ("events", "EventEmitter")
             | ("events", "on")
+            | ("events", "once")
+            | ("events", "addAbortListener")
+            | ("events", "getEventListeners")
+            | ("events", "getMaxListeners")
+            | ("events", "listenerCount")
+            | ("events", "setMaxListeners")
             | ("events", "init")
+            | ("async_hooks", "AsyncLocalStorage")
+            | ("async_hooks", "AsyncResource")
+            | ("async_hooks", "createHook")
+            | ("async_hooks", "executionAsyncId")
+            | ("async_hooks", "triggerAsyncId")
+            | ("async_hooks", "executionAsyncResource")
             | ("stream", "compose")
             | ("stream", "duplexPair")
             | ("stream", "pipeline")
@@ -1897,7 +2240,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("punycode", "encode")
             | ("punycode", "toASCII")
             | ("punycode", "toUnicode")
-            | ("querystring", "unescapeBuffer")
+            | (
+                "querystring",
+                "unescapeBuffer" | "unescape" | "escape" | "stringify" | "parse"
+            )
             | ("console", "Console")
             | ("console", "log")
             | ("console", "info")
@@ -2106,20 +2452,7 @@ pub extern "C" fn js_native_module_bind_method(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
-    let heap_name = unsafe {
-        let layout = std::alloc::Layout::from_size_align(property_name_len, 1).unwrap();
-        let ptr = std::alloc::alloc(layout);
-        std::ptr::copy_nonoverlapping(property_name_ptr, ptr, property_name_len);
-        ptr
-    };
-
-    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
-    crate::closure::js_closure_set_capture_f64(closure, 0, namespace_obj);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, property_name_len as i64);
-    set_bound_native_closure_name(closure, property_name);
-
-    crate::value::js_nanbox_pointer(closure as i64)
+    bound_native_callable_export_value(module_name, property_name)
 }
 
 /// Build a "bound method" closure for `obj.method` PropertyGet on a known class
@@ -2384,6 +2717,9 @@ pub(crate) unsafe fn get_native_module_constant(
         let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
         f64::from_bits(JSValue::string_ptr(ptr).bits())
     };
+    let cjs_default_base = cjs_default_base_module(module_name);
+    let is_cjs_default_object = cjs_default_base.is_some();
+    let module_name = cjs_default_base.unwrap_or(module_name);
 
     let o_nofollow: f64 = {
         #[cfg(target_os = "macos")]
@@ -3212,6 +3548,14 @@ pub(crate) unsafe fn get_native_module_constant(
                 .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
         },
         "dns/promises" => dns_error_alias(property).map(|alias| str_val(alias)),
+        "async_hooks" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("async_hooks"),
+            _ => None,
+        },
+        "querystring" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("querystring"),
+            _ => None,
+        },
         "constants" => fs_const(property)
             .or_else(|| fs_const_tail(property))
             .or_else(|| os_signal_const(property))
@@ -3227,6 +3571,7 @@ pub(crate) unsafe fn get_native_module_constant(
                 }
             }),
         "path" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("path"),
             "sep" => {
                 if cfg!(windows) {
                     Some(str_val("\\"))
@@ -3308,6 +3653,7 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "os" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("os"),
             "EOL" => {
                 if cfg!(windows) {
                     Some(str_val("\r\n"))
@@ -3356,7 +3702,7 @@ pub(crate) unsafe fn get_native_module_constant(
         "os.constants.priority" => os_priority_const(property),
         "os.constants.dlopen" => os_dlopen_const(property),
         "util" => match property {
-            "default" => Some(native_namespace_or_create("util", namespace_obj)),
+            "default" if !is_cjs_default_object => cjs_default_export_value("util"),
             "types" => Some(create_sub_namespace("util.types")),
             "TextEncoder" => Some(crate::object::js_get_global_this_builtin_value(
                 b"TextEncoder".as_ptr(),
@@ -3377,6 +3723,16 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "test" => crate::node_test::property(property),
+        "tls" => match property {
+            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
+            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
+            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
+            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
+            "CLIENT_RENEG_LIMIT" => Some(3.0),
+            "CLIENT_RENEG_WINDOW" => Some(600.0),
+            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
+            _ => None,
+        },
         "wasi" => match property {
             "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
             _ => None,
@@ -3389,6 +3745,10 @@ pub(crate) unsafe fn get_native_module_constant(
                     "stream_promises".len() as u32,
                 )
             }),
+            _ => None,
+        },
+        "url" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("url"),
             _ => None,
         },
         "crypto" => match property {
@@ -3407,6 +3767,7 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "crypto.constants" => crypto_const(property),
         "events" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("events"),
             "defaultMaxListeners" => Some(10.0),
             "usingDomains" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),

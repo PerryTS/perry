@@ -566,6 +566,16 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
         ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
+        // ── tls module helpers ──
+        ("tls", "getCiphers") => crate::tls::js_tls_get_ciphers(),
+        ("tls", "getCACertificates") => crate::tls::js_tls_get_ca_certificates(arg(0)),
+        ("tls", "setDefaultCACertificates") => {
+            crate::tls::js_tls_set_default_ca_certificates(arg(0))
+        }
+        ("tls", "checkServerIdentity") => crate::tls::js_tls_check_server_identity(arg(0), arg(1)),
+        ("tls", "createSecureContext") => crate::tls::js_tls_create_secure_context(arg(0)),
+        ("tls", "SecureContext") => crate::tls::js_tls_secure_context_new(arg(0)),
+
         // ── wasi module ──
         ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 
@@ -967,13 +977,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("path", "dirname") => str_to_f64(crate::path::js_path_dirname(require_path_str_ptr(0))),
         ("path", "basename") => path_basename_value(false),
         ("path", "extname") => str_to_f64(crate::path::js_path_extname(require_path_str_ptr(0))),
+        ("path", "normalize") => {
+            str_to_f64(crate::path::js_path_normalize(require_path_str_ptr(0)))
+        }
         ("path", "resolve") => path_resolve_value(false),
         ("path", "join") => path_join_value(false),
+        ("path", "relative") => str_to_f64(crate::path::js_path_relative(
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
+        )),
         ("path", "isAbsolute") => {
             bool_to_f64(crate::path::js_path_is_absolute(require_path_str_ptr(0)))
         }
         ("path", "toNamespacedPath") => crate::path::js_path_to_namespaced_path_value(arg(0)),
         ("path", "_makeLong") => crate::path::js_path_to_namespaced_path_value(arg(0)),
+        ("path", "matchesGlob") => bool_to_f64(crate::path::js_path_matches_glob(
+            require_path_str_ptr(0),
+            require_path_str_ptr(1),
+        )),
+        ("path", "parse") => f64::from_bits(
+            JSValue::pointer(crate::path::js_path_parse(require_path_str_ptr(0)) as *const u8)
+                .bits(),
+        ),
+        ("path", "format") => str_to_f64(crate::path::js_path_format(arg(0))),
 
         // #1740: dynamic sub-namespace method dispatch — `path[k].method(...)`
         // where `k` resolves to "win32"/"posix" at runtime. `path[k].sep`
@@ -1513,7 +1539,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
             }
         }
-        ("querystring", "unescapeBuffer") => {
+        (
+            "querystring",
+            "unescapeBuffer" | "unescape" | "escape" | "stringify" | "encode" | "parse" | "decode",
+        ) => {
             let ptr = crate::value::JS_NATIVE_QUERYSTRING_DISPATCH
                 .load(std::sync::atomic::Ordering::SeqCst);
             if ptr.is_null() {
