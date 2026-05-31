@@ -1995,6 +1995,19 @@ pub extern "C" fn js_object_get_field_by_name(
                         }
                         return JSValue::undefined();
                     }
+                    b"dest" => {
+                        // Node attaches `dest` to two-path fs errors
+                        // (rename/copyFile/link/symlink). Mirrors `.path`.
+                        let msg = crate::error::js_error_get_message(err_ptr);
+                        if let Some(dest) = crate::node_submodules::error_dest_for_message(msg) {
+                            let s = crate::string::js_string_from_bytes(
+                                dest.as_ptr(),
+                                dest.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                        }
+                        return JSValue::undefined();
+                    }
                     _ => return JSValue::undefined(),
                 }
             }
