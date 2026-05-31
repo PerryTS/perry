@@ -2801,6 +2801,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // node:module - shape stubs plus runtime-backed builtin detection.
     property("module", "builtinModules"),
     property("module", "constants"),
+    property("module", "wrap"),
+    property("module", "wrapper"),
     method("module", "createRequire", false, None),
     method("module", "findPackageJSON", false, None),
     method("module", "findSourceMap", false, None),

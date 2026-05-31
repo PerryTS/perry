@@ -937,6 +937,12 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("wasi", "WASI") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
+        ("module", "enableCompileCache") => Some(1),
+        ("module", "flushCompileCache") => Some(0),
+        ("module", "getCompileCacheDir") => Some(0),
+        ("module", "getSourceMapsSupport") => Some(0),
+        ("module", "setSourceMapsSupport") => Some(1),
+        ("module", "stripTypeScriptTypes") => Some(1),
         ("module", "syncBuiltinESMExports") => Some(0),
         ("module", "runMain") => Some(0),
         _ => None,
