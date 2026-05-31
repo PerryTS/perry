@@ -148,6 +148,7 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "URLSearchParams",
     "AbortController",
     "AbortSignal",
+    "EventTarget",
     "Crypto",
     "CryptoKey",
     "SubtleCrypto",
