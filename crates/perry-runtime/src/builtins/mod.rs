@@ -75,16 +75,16 @@ pub(crate) use console::{
 };
 
 pub use formatting::{
-    function_name_for_ptr, js_array_print, js_register_function_name, js_util_format,
-    js_util_format_with_options, js_util_inspect, js_util_is_deep_strict_equal,
-    js_util_strip_vt_control_characters, register_function_name_if_absent,
-    scan_boxed_primitive_payload_roots_mut,
+    function_name_for_ptr, js_array_print, js_boxed_boolean_new, js_boxed_number_new,
+    js_boxed_string_new, js_register_function_name, js_util_format, js_util_format_with_options,
+    js_util_inspect, js_util_is_deep_strict_equal, js_util_strip_vt_control_characters,
+    register_function_name_if_absent, scan_boxed_primitive_payload_roots_mut,
 };
 
 pub(crate) use formatting::{
-    format_finite_number_js, format_jsvalue, is_negative_zero, jsvalue_string_content,
-    InspectCompactGuard, InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard,
-    InspectShowHiddenGuard, InspectSortedGuard,
+    boxed_primitive_payload, format_finite_number_js, format_jsvalue, is_negative_zero,
+    jsvalue_string_content, InspectCompactGuard, InspectCustomInspectGuard, InspectDepthLimitGuard,
+    InspectGettersGuard, InspectShowHiddenGuard, InspectSortedGuard,
 };
 
 pub use globals::{

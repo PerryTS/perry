@@ -12,7 +12,11 @@ use super::*;
 mod array_buffer;
 mod boxed_primitives;
 mod collection_equality;
-pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
+pub(crate) use boxed_primitives::boxed_primitive_payload;
+pub use boxed_primitives::{
+    js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
+    scan_boxed_primitive_payload_roots_mut,
+};
 mod collections;
 mod identity_equality;
 mod prototype_equality;

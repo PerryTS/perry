@@ -441,6 +441,7 @@ fn rewrite_async_closures_in_expr(
             mutable_captures,
             captures_this,
             enclosing_class,
+            is_strict,
             is_async,
             ..
         } = expr
@@ -477,6 +478,7 @@ fn rewrite_async_closures_in_expr(
                     &owned_mutable_captures,
                     owned_captures_this,
                     owned_enclosing_class,
+                    *is_strict,
                     next_local_id,
                     next_func_id,
                 );

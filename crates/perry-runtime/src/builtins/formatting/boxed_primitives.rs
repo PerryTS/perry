@@ -87,7 +87,7 @@ pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRo
 }
 
 #[inline]
-pub(super) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
+pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return None;

@@ -365,12 +365,16 @@ pub extern "C" fn js_module_builtin_modules() -> f64 {
 }
 
 /// Minimal `module.constants` shape. The compile-cache status values are not
-/// implemented yet; an object at the documented location is enough for feature
-/// detection and parity shape probes.
+/// backed by an actual bytecode cache in Perry, but Node exposes the enum as
+/// stable process state for feature detection.
 #[no_mangle]
 pub extern "C" fn js_module_constants() -> f64 {
     let constants = crate::object::js_object_alloc(0, 1);
-    let compile_cache_status = crate::object::js_object_alloc(0, 0);
+    let compile_cache_status = crate::object::js_object_alloc(0, 4);
+    module_set_field(compile_cache_status, "FAILED", 0.0);
+    module_set_field(compile_cache_status, "ENABLED", 1.0);
+    module_set_field(compile_cache_status, "ALREADY_ENABLED", 2.0);
+    module_set_field(compile_cache_status, "DISABLED", 3.0);
     module_set_field(
         constants,
         "compileCacheStatus",
@@ -1405,6 +1409,25 @@ static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
 #[used]
 static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
     js_module_find_package_json;
+// node:module helper-state APIs are codegen-emitted from generated `.o`, so pin
+// retained reference edges for the auto-optimize whole-program build.
+#[used]
+static KEEP_JS_MODULE_ENABLE_COMPILE_CACHE: extern "C" fn(f64) -> f64 =
+    js_module_enable_compile_cache;
+#[used]
+static KEEP_JS_MODULE_FLUSH_COMPILE_CACHE: extern "C" fn() -> f64 = js_module_flush_compile_cache;
+#[used]
+static KEEP_JS_MODULE_GET_COMPILE_CACHE_DIR: extern "C" fn() -> f64 =
+    js_module_get_compile_cache_dir;
+#[used]
+static KEEP_JS_MODULE_GET_SOURCE_MAPS_SUPPORT: extern "C" fn() -> f64 =
+    js_module_get_source_maps_support;
+#[used]
+static KEEP_JS_MODULE_SET_SOURCE_MAPS_SUPPORT: extern "C" fn(f64, f64) -> f64 =
+    js_module_set_source_maps_support;
+#[used]
+static KEEP_JS_MODULE_STRIP_TYPESCRIPT_TYPES: extern "C" fn(f64, f64) -> f64 =
+    js_module_strip_typescript_types;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
@@ -1783,6 +1806,101 @@ pub(crate) fn is_array_value(jv: JSValue) -> bool {
 // behave identically. The flag starts `false`, matching a fresh Node process
 // launched without `--enable-source-maps`.
 static SOURCE_MAPS_ENABLED: AtomicBool = AtomicBool::new(false);
+static SOURCE_MAPS_NODE_MODULES: AtomicBool = AtomicBool::new(false);
+static SOURCE_MAPS_GENERATED_CODE: AtomicBool = AtomicBool::new(false);
+static MODULE_COMPILE_CACHE_DIR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn module_bool_value(value: bool) -> f64 {
+    f64::from_bits(if value {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+fn module_undefined() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_value_to_string(value: f64) -> Option<String> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        return None;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    if ptr.is_null() {
+        return Some(String::new());
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
+    }
+}
+
+fn module_object_ptr(value: f64) -> Option<*const crate::object::ObjectHeader> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    if gc_header.obj_type == crate::gc::GC_TYPE_OBJECT {
+        Some(ptr as *const crate::object::ObjectHeader)
+    } else {
+        None
+    }
+}
+
+fn module_required_options_object(
+    value: f64,
+    name: &str,
+) -> Option<*const crate::object::ObjectHeader> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return None;
+    }
+    if let Some(obj) = module_object_ptr(value) {
+        return Some(obj);
+    }
+    let message = format!(
+        "The \"{}\" argument must be of type object. Received {}",
+        name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn module_get_named_field(obj: *const crate::object::ObjectHeader, name: &str) -> f64 {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_get_field_by_name_f64(obj, key)
+}
+
+fn module_throw_syntax_error_with_code(message: &str, code: &'static str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_syntaxerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn module_validate_bool_property(value: f64, name: &str) -> Option<bool> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return None;
+    }
+    if jv.is_bool() {
+        return Some(jv.as_bool());
+    }
+    let message = format!(
+        "The \"options.{}\" property must be of type boolean. Received {}",
+        name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
 
 /// `process.sourceMapsEnabled` getter — returns the current toggle as a
 /// NaN-boxed boolean.
@@ -1812,6 +1930,386 @@ pub extern "C" fn js_process_set_source_maps_enabled(value: f64) -> f64 {
     }
     SOURCE_MAPS_ENABLED.store(jv.as_bool(), Ordering::Relaxed);
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `module.getSourceMapsSupport()` mirrors Node's state object. Perry does not
+/// consume source maps during AOT execution, but the helper state is observable
+/// through `node:module` and shares the enabled flag with `process`.
+#[no_mangle]
+pub extern "C" fn js_module_get_source_maps_support() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(
+        obj,
+        "enabled",
+        module_bool_value(SOURCE_MAPS_ENABLED.load(Ordering::Relaxed)),
+    );
+    module_set_field(
+        obj,
+        "nodeModules",
+        module_bool_value(SOURCE_MAPS_NODE_MODULES.load(Ordering::Relaxed)),
+    );
+    module_set_field(
+        obj,
+        "generatedCode",
+        module_bool_value(SOURCE_MAPS_GENERATED_CODE.load(Ordering::Relaxed)),
+    );
+    module_object_value(obj)
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_set_source_maps_support(enabled: f64, options: f64) -> f64 {
+    let enabled_value = JSValue::from_bits(enabled.to_bits());
+    if !enabled_value.is_bool() {
+        let message = format!(
+            "The \"enabled\" argument must be of type boolean. Received {}",
+            crate::fs::validate::describe_received(enabled)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let mut node_modules = false;
+    let mut generated_code = false;
+    if enabled_value.as_bool() {
+        if let Some(options_obj) = module_required_options_object(options, "options") {
+            if let Some(value) = module_validate_bool_property(
+                module_get_named_field(options_obj, "nodeModules"),
+                "nodeModules",
+            ) {
+                node_modules = value;
+            }
+            if let Some(value) = module_validate_bool_property(
+                module_get_named_field(options_obj, "generatedCode"),
+                "generatedCode",
+            ) {
+                generated_code = value;
+            }
+        }
+    } else if !JSValue::from_bits(options.to_bits()).is_undefined() {
+        module_required_options_object(options, "options");
+    }
+
+    SOURCE_MAPS_ENABLED.store(enabled_value.as_bool(), Ordering::Relaxed);
+    SOURCE_MAPS_NODE_MODULES.store(node_modules, Ordering::Relaxed);
+    SOURCE_MAPS_GENERATED_CODE.store(generated_code, Ordering::Relaxed);
+    module_undefined()
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_get_compile_cache_dir() -> f64 {
+    let guard = MODULE_COMPILE_CACHE_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match guard.as_deref() {
+        Some(dir) => module_string_value(dir),
+        None => module_undefined(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_enable_compile_cache(cache_dir: f64) -> f64 {
+    let requested_dir = {
+        let value = JSValue::from_bits(cache_dir.to_bits());
+        if value.is_undefined() {
+            std::env::temp_dir()
+                .join("node-compile-cache")
+                .to_string_lossy()
+                .into_owned()
+        } else if let Some(dir) = module_value_to_string(cache_dir) {
+            dir
+        } else {
+            crate::fs::validate::throw_type_error_with_code(
+                "cacheDir should be a string",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        }
+    };
+
+    let mut guard = MODULE_COMPILE_CACHE_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let status = if guard.is_some() {
+        2.0
+    } else {
+        *guard = Some(requested_dir);
+        1.0
+    };
+    let directory = guard.as_deref().unwrap_or("");
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    module_set_field(obj, "status", status);
+    module_set_field(obj, "directory", module_string_value(directory));
+    module_object_value(obj)
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_flush_compile_cache() -> f64 {
+    module_undefined()
+}
+
+fn module_word_at(bytes: &[u8], index: usize, word: &[u8]) -> bool {
+    if index + word.len() > bytes.len() || &bytes[index..index + word.len()] != word {
+        return false;
+    }
+    let before = index.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+    let after = bytes.get(index + word.len()).copied();
+    !before.is_some_and(module_is_ident_byte) && !after.is_some_and(module_is_ident_byte)
+}
+
+fn module_is_ident_byte(byte: u8) -> bool {
+    byte == b'_' || byte == b'$' || byte.is_ascii_alphanumeric()
+}
+
+fn module_skip_ws(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn module_space_span(bytes: &mut [u8], start: usize, end: usize) {
+    for byte in &mut bytes[start..end] {
+        if *byte != b'\n' && *byte != b'\r' {
+            *byte = b' ';
+        }
+    }
+}
+
+fn module_strip_interfaces(bytes: &mut [u8]) {
+    let mut index = 0;
+    while index < bytes.len() {
+        if !module_word_at(bytes, index, b"interface") {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index + "interface".len();
+        cursor = module_skip_ws(bytes, cursor);
+        while cursor < bytes.len() && module_is_ident_byte(bytes[cursor]) {
+            cursor += 1;
+        }
+        cursor = module_skip_ws(bytes, cursor);
+        if cursor >= bytes.len() || bytes[cursor] != b'{' {
+            index += 1;
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut end = cursor;
+        while end < bytes.len() {
+            match bytes[end] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end += 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            end += 1;
+        }
+        module_space_span(bytes, index, end.min(bytes.len()));
+        index = end;
+    }
+}
+
+fn module_strip_type_annotations(bytes: &mut [u8]) {
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b':' {
+            index += 1;
+            continue;
+        }
+
+        let mut before = index;
+        while before > 0 && bytes[before - 1].is_ascii_whitespace() {
+            before -= 1;
+        }
+        if before == 0 || !module_is_ident_byte(bytes[before - 1]) {
+            index += 1;
+            continue;
+        }
+
+        let after = module_skip_ws(bytes, index + 1);
+        if after >= bytes.len()
+            || matches!(
+                bytes[after],
+                b'\'' | b'"' | b'`' | b'0'..=b'9' | b'{' | b'[' | b':' | b',' | b')' | b';'
+            )
+        {
+            index += 1;
+            continue;
+        }
+
+        let mut end = after;
+        while end < bytes.len()
+            && !matches!(bytes[end], b'=' | b',' | b')' | b';' | b'{' | b'\n' | b'\r')
+        {
+            end += 1;
+        }
+        module_space_span(bytes, index, end);
+        index = end;
+    }
+}
+
+fn module_strip_type_syntax(source: &str) -> String {
+    let mut bytes = source.as_bytes().to_vec();
+    module_strip_interfaces(&mut bytes);
+    module_strip_type_annotations(&mut bytes);
+    String::from_utf8(bytes).unwrap_or_else(|_| source.to_string())
+}
+
+fn module_contains_enum(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    (0..bytes.len()).any(|index| module_word_at(bytes, index, b"enum"))
+}
+
+fn module_transform_enums(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if !module_word_at(bytes, index, b"enum") {
+            out.push(bytes[index] as char);
+            index += 1;
+            continue;
+        }
+
+        let enum_start = index;
+        let mut cursor = module_skip_ws(bytes, index + "enum".len());
+        let name_start = cursor;
+        while cursor < bytes.len() && module_is_ident_byte(bytes[cursor]) {
+            cursor += 1;
+        }
+        if name_start == cursor {
+            out.push(bytes[index] as char);
+            index += 1;
+            continue;
+        }
+        let name = &source[name_start..cursor];
+        cursor = module_skip_ws(bytes, cursor);
+        if cursor >= bytes.len() || bytes[cursor] != b'{' {
+            out.push_str(&source[enum_start..cursor.min(source.len())]);
+            index = cursor;
+            continue;
+        }
+        let body_start = cursor + 1;
+        let mut depth = 1usize;
+        cursor += 1;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            out.push_str(&source[enum_start..]);
+            break;
+        }
+        let body = &source[body_start..cursor];
+        let mut next_value = 0i32;
+        out.push_str("var ");
+        out.push_str(name);
+        out.push_str(";\n(function (");
+        out.push_str(name);
+        out.push_str(") {\n");
+        for raw_member in body.split(',') {
+            let member = raw_member.trim();
+            if member.is_empty() {
+                continue;
+            }
+            let (member_name, value) = if let Some((left, right)) = member.split_once('=') {
+                let parsed = right.trim().parse::<i32>().unwrap_or(next_value);
+                (left.trim(), parsed)
+            } else {
+                (member, next_value)
+            };
+            if member_name.is_empty() {
+                continue;
+            }
+            out.push_str("  ");
+            out.push_str(name);
+            out.push('[');
+            out.push_str(name);
+            out.push_str("[\"");
+            out.push_str(member_name);
+            out.push_str("\"] = ");
+            out.push_str(&value.to_string());
+            out.push_str("] = \"");
+            out.push_str(member_name);
+            out.push_str("\";\n");
+            next_value = value.saturating_add(1);
+        }
+        out.push_str("})(");
+        out.push_str(name);
+        out.push_str(" || (");
+        out.push_str(name);
+        out.push_str(" = {}));");
+        index = cursor + 1;
+    }
+    out
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_strip_typescript_types(code: f64, options: f64) -> f64 {
+    let Some(source) = module_value_to_string(code) else {
+        let message = format!(
+            "The \"code\" argument must be of type string. Received {}",
+            crate::fs::validate::describe_received(code)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    };
+
+    let mut mode = "strip".to_string();
+    let mut source_map = false;
+    if let Some(options_obj) = module_required_options_object(options, "options") {
+        let mode_value = module_get_named_field(options_obj, "mode");
+        if !JSValue::from_bits(mode_value.to_bits()).is_undefined() {
+            let Some(mode_string) = module_value_to_string(mode_value) else {
+                let message = format!(
+                    "The property 'options.mode' must be one of: 'strip', 'transform'. Received {}",
+                    crate::fs::validate::describe_received(mode_value)
+                );
+                crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+            };
+            if mode_string != "strip" && mode_string != "transform" {
+                let message = format!(
+                    "The property 'options.mode' must be one of: 'strip', 'transform'. Received '{}'",
+                    mode_string
+                );
+                crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+            }
+            mode = mode_string;
+        }
+
+        let source_map_value = module_get_named_field(options_obj, "sourceMap");
+        if let Some(value) = module_validate_bool_property(source_map_value, "sourceMap") {
+            source_map = value;
+        }
+    }
+
+    if mode == "strip" && module_contains_enum(&source) {
+        module_throw_syntax_error_with_code(
+            "TypeScript enum is not supported in strip-only mode",
+            "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX",
+        );
+    }
+
+    let mut output = if mode == "transform" {
+        module_strip_type_syntax(&module_transform_enums(&source))
+    } else {
+        module_strip_type_syntax(&source)
+    };
+    if mode == "transform" && source_map {
+        output.push_str("\n//# sourceMappingURL=data:application/json;base64,e30=");
+    }
+    module_string_value(&output)
 }
 
 // Codegen emits these two entry points only from generated `.o` (see the
