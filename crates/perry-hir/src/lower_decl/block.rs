@@ -160,8 +160,9 @@ pub fn lower_fn_body_block_stmt(
 ) -> Result<Vec<Stmt>> {
     use std::collections::HashSet;
 
-    let parent_strict = ctx.strict_mode;
-    ctx.strict_mode = parent_strict || crate::lower::block_has_use_strict_directive(&block.stmts);
+    let parent_strict = ctx.current_strict;
+    ctx.current_strict =
+        parent_strict || crate::lower::stmt_list_starts_with_use_strict_directive(&block.stmts);
     predefine_var_bindings_in_function_body(ctx, block);
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
@@ -187,9 +188,16 @@ pub fn lower_fn_body_block_stmt(
 
     // Phase 2: lower the body. The inner FnDecl arm in `lower_body_stmt`
     // calls `lookup_local(name)` and reuses our pre-defined id.
-    let body = lower_block_stmt(ctx, block)?;
+    let body = match lower_block_stmt(ctx, block) {
+        Ok(body) => body,
+        Err(err) => {
+            ctx.current_strict = parent_strict;
+            return Err(err);
+        }
+    };
 
     if hoisted_id_set.is_empty() {
+        ctx.current_strict = parent_strict;
         return Ok(body);
     }
 
@@ -222,6 +230,7 @@ pub fn lower_fn_body_block_stmt(
     }
     result.extend(hoisted_lets);
     result.extend(other);
+    ctx.current_strict = parent_strict;
     Ok(result)
 }
 

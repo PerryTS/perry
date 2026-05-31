@@ -121,7 +121,7 @@ pub(crate) fn lower_expr_assignment(
                 // the RHS for side effects. Refs #420.
                 Ok(*value)
             } else {
-                if ctx.strict_mode {
+                if ctx.current_strict {
                     return Ok(Expr::Sequence(vec![
                         *value,
                         throw_reference_error_expr(

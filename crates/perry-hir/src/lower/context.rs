@@ -48,6 +48,7 @@ impl LoweringContext {
             enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
+            immutable_locals: HashSet::new(),
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
             imported_functions: Vec::new(),
@@ -57,6 +58,7 @@ impl LoweringContext {
             type_param_scopes: Vec::new(),
             type_param_constraints: Vec::new(),
             native_instances: Vec::new(),
+            current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
             extern_func_types: Vec::new(),
@@ -218,6 +220,14 @@ impl LoweringContext {
         let id = self.next_local_id;
         self.next_local_id += 1;
         id
+    }
+
+    pub(crate) fn mark_local_immutable(&mut self, id: LocalId) {
+        self.immutable_locals.insert(id);
+    }
+
+    pub(crate) fn is_local_immutable(&self, id: LocalId) -> bool {
+        self.immutable_locals.contains(&id)
     }
 
     pub(crate) fn fresh_func(&mut self) -> FuncId {

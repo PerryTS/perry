@@ -31,6 +31,9 @@ pub struct LoweringContext {
     pub(crate) next_type_alias_id: TypeAliasId,
     /// Current scope's local variables: name -> (id, type)
     pub(crate) locals: Vec<(String, LocalId, Type)>,
+    /// LocalIds that represent immutable bindings (`const`, imports, and
+    /// other lexical bindings that must throw when assigned).
+    pub(crate) immutable_locals: HashSet<LocalId>,
     /// Global variables: name -> (id, type)
     // #854: initialized in `new` but currently unread (globals tracked
     // elsewhere). Retained alongside `next_global_id` for the global table.
@@ -144,6 +147,8 @@ pub struct LoweringContext {
     /// Native class instances: local_name -> (module_name, class_name)
     /// Tracks variables that hold instances of native module classes (e.g., EventEmitter)
     pub(crate) native_instances: Vec<(String, String, String)>,
+    /// True while lowering code governed by ECMAScript strict mode.
+    pub(crate) current_strict: bool,
     /// #1483: type-only perry/ui widget import aliases — local_name ->
     /// canonical widget name. `import { type Canvas as CanvasType }` records
     /// `CanvasType -> Canvas` so a `canvas: CanvasType` parameter can be
