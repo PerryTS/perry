@@ -6,9 +6,8 @@
 //! runtime dispatch by checking the handle type in the registry.
 
 use super::handle::*;
-use perry_runtime::StringHeader;
 
-type EventEmitterOn = unsafe extern "C" fn(i64, *const StringHeader, i64) -> i64;
+type EventEmitterOn = unsafe extern "C" fn(i64, i64, i64) -> i64;
 
 /// Dispatch a method call on a handle-based object.
 /// Called from perry-runtime's js_native_call_method when it detects a handle

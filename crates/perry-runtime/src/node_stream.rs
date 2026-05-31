@@ -179,7 +179,8 @@ fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHea
         return;
     };
     let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
-    unsafe { on(handle, event, listener as i64) };
+    let event_bits = crate::value::js_nanbox_string(event as i64).to_bits() as i64;
+    unsafe { on(handle, event_bits, listener as i64) };
 }
 
 extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
