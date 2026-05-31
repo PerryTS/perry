@@ -65,6 +65,13 @@ use helpers::{
 use crate::boxed_vars::{collect_boxed_vars, collect_let_types_in_stmts};
 use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_ids_in_stmts};
 
+pub(super) fn spec_function_length(params: &[perry_hir::Param]) -> usize {
+    params
+        .iter()
+        .take_while(|p| !p.is_rest && p.default.is_none())
+        .count()
+}
+
 /// Compile a Perry HIR module to an object file via LLVM IR.
 ///
 /// CRITICAL (#686): `hir` MUST be `&HirModule` (shared reference), never
@@ -1972,8 +1979,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .collect();
 
     // Refs #421: declared param count for every non-rest closure. Used by
-    // `emit_string_pool` to register each closure's arity so the runtime can
-    // pad missing args with TAG_UNDEFINED in the dynamic-dispatch path.
+    // `emit_string_pool` to register each closure's ABI arity so the runtime
+    // can pad missing args with TAG_UNDEFINED in the dynamic-dispatch path.
     let closure_arities: HashMap<u32, u32> = closures
         .iter()
         .filter_map(|(fid, expr)| {
@@ -1982,6 +1989,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     return None;
                 }
                 Some((*fid, params.len() as u32))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let closure_lengths: HashMap<u32, u32> = closures
+        .iter()
+        .filter_map(|(fid, expr)| {
+            if let perry_hir::Expr::Closure { params, .. } = expr {
+                Some((*fid, spec_function_length(params) as u32))
             } else {
                 None
             }
@@ -2189,6 +2206,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         closure_rest_params: &closure_rest_params,
         closure_synthetic_arguments: &closure_synthetic_arguments,
         closure_arities: &closure_arities,
+        closure_lengths: &closure_lengths,
         closures: &closures,
         class_keys_init_data: &class_keys_init_data,
         imported_class_stubs: &imported_class_stubs,

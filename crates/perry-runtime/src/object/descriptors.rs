@@ -106,7 +106,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                                 // proto methods (shared func_ptr can't carry it).
                                 len
                             } else {
-                                crate::closure::closure_arity(
+                                crate::closure::closure_length(
                                     ptr as *const crate::closure::ClosureHeader,
                                 )
                                 .unwrap_or(0)
