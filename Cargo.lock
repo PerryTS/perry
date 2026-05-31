@@ -5253,6 +5253,7 @@ version = "0.5.1054"
 dependencies = [
  "lazy_static",
  "perry-ffi",
+ "perry-runtime",
  "reqwest",
  "serde_json",
  "tokio",

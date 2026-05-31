@@ -35,6 +35,7 @@ mod delete_rest;
 mod descriptors;
 mod field_get_set;
 mod field_set_by_name;
+mod global_fetch;
 mod global_this;
 mod groupby;
 pub(crate) mod has_own_helpers;

@@ -2002,10 +2002,21 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         );
         fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
         fn js_register_event_emitter_on(f: EventEmitterOn);
+        #[cfg(feature = "http-client")]
+        fn js_register_global_fetch_with_options(
+            f: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+            ) -> *mut perry_runtime::Promise,
+        );
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
     js_register_handle_property_dispatch(js_handle_property_dispatch);
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
+    #[cfg(feature = "http-client")]
+    js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
         crate::events::is_event_emitter_handle(handle)

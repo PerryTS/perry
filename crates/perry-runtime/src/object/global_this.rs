@@ -327,73 +327,6 @@ extern "C" fn global_this_structured_clone_thunk(
     crate::builtins::js_structured_clone(value)
 }
 
-fn global_this_fetch_option(init: f64, name: &[u8]) -> f64 {
-    let raw = crate::value::js_nanbox_get_pointer(init);
-    if raw < 0x10000 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
-}
-
-fn global_this_fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::StringHeader {
-    let value = global_this_fetch_option(init, name);
-    if matches!(
-        value.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return std::ptr::null();
-    }
-    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
-}
-
-fn global_this_fetch_headers_json_ptr(init: f64) -> *const crate::StringHeader {
-    let headers = global_this_fetch_option(init, b"headers");
-    if matches!(
-        headers.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
-    }
-    let json = unsafe { crate::json::js_json_stringify(headers, 0) };
-    if json.is_null() {
-        crate::string::js_string_from_bytes(b"{}".as_ptr(), 2)
-    } else {
-        json
-    }
-}
-
-extern "C" fn global_this_fetch_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    input: f64,
-    rest: f64,
-) -> f64 {
-    unsafe extern "C" {
-        fn js_fetch_with_options(
-            url_ptr: *const crate::StringHeader,
-            method_ptr: *const crate::StringHeader,
-            body_ptr: *const crate::StringHeader,
-            headers_json_ptr: *const crate::StringHeader,
-        ) -> *mut crate::promise::Promise;
-    }
-
-    let init = global_this_rest_array_values(rest)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-    let url_ptr = crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
-    let method_ptr = global_this_fetch_option_string_ptr(init, b"method");
-    let body_ptr = global_this_fetch_option_string_ptr(init, b"body");
-    let headers_json_ptr = global_this_fetch_headers_json_ptr(init);
-
-    let promise = unsafe { js_fetch_with_options(url_ptr, method_ptr, body_ptr, headers_json_ptr) };
-    if promise.is_null() {
-        f64::from_bits(crate::value::TAG_NULL)
-    } else {
-        crate::value::js_nanbox_pointer(promise as i64)
-    }
-}
-
 extern "C" fn global_this_atob_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -546,7 +479,7 @@ extern "C" fn global_this_error_prepare_stack_trace_thunk(
     crate::value::js_nanbox_string(empty as i64)
 }
 
-fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
+pub(super) fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
     let value = crate::value::JSValue::from_bits(rest.to_bits());
     if !value.is_pointer() {
         return Vec::new();
@@ -1198,7 +1131,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
         let (func_ptr, arity, has_rest) = match name {
-            "fetch" => (global_this_fetch_thunk as *const u8, 1, true),
+            "fetch" => (
+                super::global_fetch::global_this_fetch_thunk as *const u8,
+                1,
+                true,
+            ),
             "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2, false),
             "atob" => (global_this_atob_thunk as *const u8, 1, false),
             "btoa" => (global_this_btoa_thunk as *const u8, 1, false),

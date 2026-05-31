@@ -26,6 +26,7 @@ const READLINE_REASON: &str =
     "readline symbol from perry-stdlib not linked into this binary (runtime-only build)";
 const STDLIB_DISPATCH_REASON: &str =
     "stdlib dispatch symbol from perry-stdlib not linked into this binary (runtime-only build)";
+#[cfg(not(feature = "external-fetch-symbols"))]
 const FETCH_REASON: &str =
     "fetch symbol from perry-stdlib not linked into this binary (runtime-only build)";
 
@@ -138,6 +139,7 @@ pub extern "C" fn js_stdlib_init_dispatch() {
     perry_stub_warn("js_stdlib_init_dispatch", STDLIB_DISPATCH_REASON, None);
 }
 
+#[cfg(not(feature = "external-fetch-symbols"))]
 #[no_mangle]
 pub extern "C" fn js_fetch_with_options(
     _url_ptr: *const crate::string::StringHeader,
