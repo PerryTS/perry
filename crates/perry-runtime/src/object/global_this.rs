@@ -1074,16 +1074,10 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 "prototype".to_string(),
                 super::PropertyAttrs::new(false, false, false),
             );
-            if matches!(
-                name,
-                "Navigator" | "TextEncoderStream" | "TextDecoderStream"
-            ) {
-                let constructor_key = crate::string::js_string_from_bytes(
-                    b"constructor".as_ptr(),
-                    b"constructor".len() as u32,
-                );
-                let constructor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
-                js_object_set_field_by_name(proto_obj, constructor_key, constructor_value);
+            if name == "Navigator" || name == "TextEncoderStream" || name == "TextDecoderStream" {
+                let constructor_key =
+                    crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                js_object_set_field_by_name(proto_obj, constructor_key, ctor_value);
             }
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
