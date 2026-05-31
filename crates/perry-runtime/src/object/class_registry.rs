@@ -681,7 +681,7 @@ fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
 pub(crate) const CLASS_ID_TEXT_ENCODER_STREAM: u32 = 0x7FFF_FF30;
 pub(crate) const CLASS_ID_TEXT_DECODER_STREAM: u32 = 0x7FFF_FF31;
 
-unsafe fn text_encoding_stream_new(constructor_name: &[u8], class_id: u32) -> f64 {
+unsafe fn text_encoding_stream_new_with_constructor(constructor: f64, class_id: u32) -> f64 {
     let stream = js_object_alloc(class_id, 0);
     if stream.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -699,10 +699,22 @@ unsafe fn text_encoding_stream_new(constructor_name: &[u8], class_id: u32) -> f6
     }
 
     let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    let ctor = js_get_global_this_builtin_value(constructor_name.as_ptr(), constructor_name.len());
-    js_object_set_field_by_name(stream, ctor_key, ctor);
+    js_object_set_field_by_name(stream, ctor_key, constructor);
 
     crate::value::js_nanbox_pointer(stream as i64)
+}
+
+unsafe fn text_encoding_stream_new(constructor_name: &[u8], class_id: u32) -> f64 {
+    let ctor = js_get_global_this_builtin_value(constructor_name.as_ptr(), constructor_name.len());
+    text_encoding_stream_new_with_constructor(ctor, class_id)
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_text_encoding_stream_new_with_constructor(
+    constructor: f64,
+    class_id: u32,
+) -> f64 {
+    text_encoding_stream_new_with_constructor(constructor, class_id)
 }
 
 #[no_mangle]
@@ -1209,10 +1221,16 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return crate::value::js_nanbox_pointer(ta as i64);
             }
             "TextEncoderStream" => {
-                return js_text_encoder_stream_new();
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_ENCODER_STREAM,
+                );
             }
             "TextDecoderStream" => {
-                return js_text_decoder_stream_new();
+                return text_encoding_stream_new_with_constructor(
+                    func_value,
+                    CLASS_ID_TEXT_DECODER_STREAM,
+                );
             }
             "MessageChannel" => {
                 return crate::messaging::js_message_channel_new();
