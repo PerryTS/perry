@@ -522,9 +522,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let h = blk.call(I64, "js_text_encoder_new", &[]);
             Ok(nanbox_pointer_inline(blk, &h))
         }
-        Expr::TextDecoderNew => {
+        Expr::TextDecoderNew {
+            label,
+            fatal,
+            ignore_bom,
+        } => {
+            // new TextDecoder(label?, { fatal?, ignoreBOM? }) — the runtime
+            // validates the label, stores per-instance state, and returns a
+            // small-int handle. NaN-box with POINTER_TAG so the handle reads
+            // back through `decoder_handle_id` for decode/property access.
+            let label = lower_expr(ctx, label)?;
+            let fatal = lower_expr(ctx, fatal)?;
+            let ignore_bom = lower_expr(ctx, ignore_bom)?;
             let blk = ctx.block();
-            let h = blk.call(I64, "js_text_decoder_new", &[]);
+            let h = blk.call(
+                I64,
+                "js_text_decoder_new",
+                &[(DOUBLE, &label), (DOUBLE, &fatal), (DOUBLE, &ignore_bom)],
+            );
             Ok(nanbox_pointer_inline(blk, &h))
         }
         Expr::TextEncoderEncode(o) => {
@@ -550,15 +565,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &obj_ptr))
         }
-        Expr::TextDecoderDecode(o) => {
-            // decoder.decode(bufOrArr) — runtime returns an i64 string
-            // pointer. Handles both ArrayHeader-backed values from
-            // `encoder.encode(...)` and BufferHeader values from
-            // `new Uint8Array([...])`. NaN-box with STRING_TAG.
-            let v = lower_expr(ctx, o)?;
+        Expr::TextDecoderDecode { decoder, input } => {
+            // decoder.decode(bufOrArr) — runtime reads the decoder handle's
+            // encoding/fatal state and decodes `input` (BufferHeader-backed
+            // value from `encoder.encode(...)` or `new Uint8Array([...])`).
+            // NaN-box the result with STRING_TAG.
+            let dec = lower_expr(ctx, decoder)?;
+            let v = lower_expr(ctx, input)?;
             let blk = ctx.block();
-            let str_ptr = blk.call(I64, "js_text_decoder_decode_llvm", &[(DOUBLE, &v)]);
+            let str_ptr = blk.call(
+                I64,
+                "js_text_decoder_decode_llvm",
+                &[(DOUBLE, &dec), (DOUBLE, &v)],
+            );
             Ok(nanbox_string_inline(blk, &str_ptr))
+        }
+        Expr::TextDecoderEncoding(d) => {
+            let dec = lower_expr(ctx, d)?;
+            let blk = ctx.block();
+            let str_ptr = blk.call(I64, "js_text_decoder_encoding", &[(DOUBLE, &dec)]);
+            Ok(nanbox_string_inline(blk, &str_ptr))
+        }
+        Expr::TextDecoderFatal(d) => {
+            let dec = lower_expr(ctx, d)?;
+            let blk = ctx.block();
+            // Runtime returns a NaN-boxed boolean (DOUBLE) directly.
+            Ok(blk.call(DOUBLE, "js_text_decoder_fatal", &[(DOUBLE, &dec)]))
+        }
+        Expr::TextDecoderIgnoreBom(d) => {
+            let dec = lower_expr(ctx, d)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_text_decoder_ignore_bom", &[(DOUBLE, &dec)]))
         }
         Expr::OsArch => {
             let blk = ctx.block();

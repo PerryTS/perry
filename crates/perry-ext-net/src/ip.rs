@@ -1,10 +1,15 @@
 //! `net.isIP` / `isIPv4` / `isIPv6` (issue #811) + the Happy-Eyeballs
 //! auto-select-family default accessors. Pure string/global-flag helpers
 //! with no socket state. Split out of `lib.rs` (#1852) to keep that file
-//! under the 2000-line gate; the logic is unchanged.
+//! under the 2000-line gate.
 
 use crate::string_from_header_i64;
 use perry_ffi::JsValue;
+
+extern "C" {
+    fn js_net_validate_default_auto_select_family(value: f64) -> i32;
+    fn js_net_validate_default_auto_select_family_attempt_timeout(value: f64) -> i32;
+}
 
 /// Issue #811 — `net.isIP(s)` returns 0/4/6 (number).
 fn classify_ip(s: &str) -> i32 {
@@ -22,12 +27,24 @@ fn is_ipv4_str(s: &str) -> bool {
 }
 
 fn is_ipv6_str(s: &str) -> bool {
-    // Node's `net.isIPv6` rejects brackets and zone-id (`%`) suffixes —
-    // those forms aren't bare addresses.
-    if s.contains('[') || s.contains(']') || s.contains('%') {
+    if s.contains('[') || s.contains(']') {
         return false;
     }
-    s.parse::<std::net::Ipv6Addr>().is_ok()
+    let address = match s.split_once('%') {
+        Some((address, zone)) => {
+            if zone.is_empty()
+                || zone.contains('%')
+                || !zone
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b':'))
+            {
+                return false;
+            }
+            address
+        }
+        None => s,
+    };
+    address.parse::<std::net::Ipv6Addr>().is_ok()
 }
 
 #[no_mangle]
@@ -73,7 +90,7 @@ pub unsafe extern "C" fn js_net_get_default_auto_select_family() -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_net_set_default_auto_select_family(val_f64: f64) -> f64 {
-    let val = JsValue(val_f64.to_bits()).to_bool();
+    let val = unsafe { js_net_validate_default_auto_select_family(val_f64) } != 0;
     AUTO_SELECT_FAMILY.store(val, std::sync::atomic::Ordering::Relaxed);
     f64::from_bits(JsValue::UNDEFINED.0)
 }
@@ -86,12 +103,7 @@ pub unsafe extern "C" fn js_net_get_default_auto_select_family_attempt_timeout()
 
 #[no_mangle]
 pub unsafe extern "C" fn js_net_set_default_auto_select_family_attempt_timeout(ms_f64: f64) -> f64 {
-    let n = JsValue(ms_f64.to_bits()).to_number();
-    let ms = if n.is_finite() && n >= 0.0 {
-        n as i32
-    } else {
-        0
-    };
+    let ms = unsafe { js_net_validate_default_auto_select_family_attempt_timeout(ms_f64) };
     AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
     f64::from_bits(JsValue::UNDEFINED.0)
 }

@@ -28,7 +28,13 @@ unsafe fn read_input(ptr: *const StringHeader) -> Option<Vec<u8>> {
 }
 
 fn gzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut encoder = GzEncoder::new(data, Compression::default());
+    gzip_bytes_with(data, Compression::default())
+}
+
+// #2935: honor the `{ level }` option. `level` selects the zlib compression
+// level (0 = none .. 9 = best), which changes the compressed output size.
+fn gzip_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(data, level);
     let mut compressed = Vec::new();
     encoder.read_to_end(&mut compressed)?;
     Ok(compressed)
@@ -48,7 +54,12 @@ fn gunzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 // (which also use the zlib format), so a stream's output round-trips through
 // `inflateSync` (#1843).
 fn deflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut encoder = ZlibEncoder::new(data, Compression::default());
+    deflate_bytes_with(data, Compression::default())
+}
+
+// #2935: honor the `{ level }` option (see `gzip_bytes_with`).
+fn deflate_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8>> {
+    let mut encoder = ZlibEncoder::new(data, level);
     let mut compressed = Vec::new();
     encoder.read_to_end(&mut compressed)?;
     Ok(compressed)
@@ -63,14 +74,18 @@ fn inflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 
 // ── sync variants ─────────────────────────────────────────────
 
-/// `zlib.gzipSync(data)`.
+/// `zlib.gzipSync(data, options?)`.
 ///
 /// # Safety
 ///
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` is the raw NaN-box bit pattern of the data argument (a string or
+/// Buffer/TypedArray); the pointer is recovered via `js_get_string_pointer_unified`.
+/// `opts` is the raw NaN-boxed options value (or `undefined`); an out-of-range
+/// `{ level }` throws `RangeError` before any compression runs (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gzip_sync(data_ptr: *const StringHeader) -> *mut StringHeader {
-    match read_input(data_ptr).map(|d| gzip_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut StringHeader {
+    let level = stream::compression_from_opts(opts);
+    match stream::read_input_from_bits(data_bits).map(|d| gzip_bytes_with(&d, level)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),
     }
@@ -80,23 +95,26 @@ pub unsafe extern "C" fn js_zlib_gzip_sync(data_ptr: *const StringHeader) -> *mu
 ///
 /// # Safety
 ///
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gunzip_sync(data_ptr: *const StringHeader) -> *mut StringHeader {
-    match read_input(data_ptr).map(|d| gunzip_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut StringHeader {
+    match stream::read_input_from_bits(data_bits).map(|d| gunzip_bytes(&d)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),
     }
 }
 
-/// `zlib.deflateSync(data)`.
+/// `zlib.deflateSync(data, options?)`.
 ///
 /// # Safety
 ///
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` is the raw NaN-box bit pattern of the data argument; `opts` is
+/// the raw NaN-boxed options value. An out-of-range `{ level }` throws
+/// `RangeError` before any compression runs (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate_sync(data_ptr: *const StringHeader) -> *mut StringHeader {
-    match read_input(data_ptr).map(|d| deflate_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut StringHeader {
+    let level = stream::compression_from_opts(opts);
+    match stream::read_input_from_bits(data_bits).map(|d| deflate_bytes_with(&d, level)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),
     }
@@ -106,10 +124,10 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_ptr: *const StringHeader) -> 
 ///
 /// # Safety
 ///
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_sync(data_ptr: *const StringHeader) -> *mut StringHeader {
-    match read_input(data_ptr).map(|d| inflate_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut StringHeader {
+    match stream::read_input_from_bits(data_bits).map(|d| inflate_bytes(&d)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),
     }

@@ -1035,11 +1035,19 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
                 self.output.push_str("Array.from(");
                 self.emit_expr(iterable);
                 self.output.push_str(", ");
                 self.emit_expr(map_fn);
+                if let Some(t) = this_arg {
+                    self.output.push_str(", ");
+                    self.emit_expr(t);
+                }
                 self.output.push(')');
             }
 
@@ -1070,6 +1078,11 @@ impl JsEmitter {
             }
             Expr::StringCoerce(val) => {
                 self.output.push_str("String(");
+                self.emit_expr(val);
+                self.output.push(')');
+            }
+            Expr::ObjectCoerce(val) => {
+                self.output.push_str("Object(");
                 self.emit_expr(val);
                 self.output.push(')');
             }
@@ -1127,18 +1140,45 @@ impl JsEmitter {
             Expr::TextEncoderNew => {
                 self.output.push_str("new TextEncoder()");
             }
-            Expr::TextDecoderNew => {
-                self.output.push_str("new TextDecoder()");
+            Expr::TextDecoderNew {
+                label,
+                fatal,
+                ignore_bom,
+            } => {
+                self.output.push_str("new TextDecoder(");
+                self.emit_expr(label);
+                self.output.push_str(", { fatal: ");
+                self.emit_expr(fatal);
+                self.output.push_str(", ignoreBOM: ");
+                self.emit_expr(ignore_bom);
+                self.output.push_str(" })");
             }
             Expr::TextEncoderEncode(inner) => {
                 self.output.push_str("new TextEncoder().encode(");
                 self.emit_expr(inner);
                 self.output.push(')');
             }
-            Expr::TextDecoderDecode(inner) => {
-                self.output.push_str("new TextDecoder().decode(");
-                self.emit_expr(inner);
+            Expr::TextDecoderDecode { decoder, input } => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").decode(");
+                self.emit_expr(input);
                 self.output.push(')');
+            }
+            Expr::TextDecoderEncoding(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").encoding");
+            }
+            Expr::TextDecoderFatal(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").fatal");
+            }
+            Expr::TextDecoderIgnoreBom(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").ignoreBOM");
             }
             Expr::EncodeURI(inner) => {
                 self.output.push_str("encodeURI(");
@@ -1516,11 +1556,17 @@ impl JsEmitter {
             Expr::ProxyRevoke(_) => {
                 self.output.push_str("undefined");
             }
-            Expr::ReflectGet { target, key } => {
+            Expr::ReflectGet {
+                target,
+                key,
+                receiver,
+            } => {
                 self.output.push_str("Reflect.get(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(key);
+                self.output.push_str(", ");
+                self.emit_expr(receiver);
                 self.output.push(')');
             }
             Expr::ReflectSet { target, key, value } => {
@@ -1587,6 +1633,13 @@ impl JsEmitter {
             Expr::ReflectGetPrototypeOf(target) => {
                 self.output.push_str("Reflect.getPrototypeOf(");
                 self.emit_expr(target);
+                self.output.push(')');
+            }
+            Expr::ReflectSetPrototypeOf { target, proto } => {
+                self.output.push_str("Reflect.setPrototypeOf(");
+                self.emit_expr(target);
+                self.output.push_str(", ");
+                self.emit_expr(proto);
                 self.output.push(')');
             }
             Expr::ReflectIsExtensible(target) => {

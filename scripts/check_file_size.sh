@@ -121,6 +121,13 @@ crates/perry-codegen/tests/native_proof_regressions.rs
 # `process_allowed_node_flags_literal`. Splitting the per-namespace literal
 # builders into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/expr_member.rs
+# node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
+# wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
+# argument-validation batch landed on main without a split (#3493 setuid/setgid/
+# umask, #3516 exit/chdir/hrtime/cpuUsage, #3518 warning events, #3496 CPU-
+# snapshot/listener-limit validation). Splitting per concern (env/timing/
+# signals/emitter) is tracked under #1435.
+crates/perry-runtime/src/process.rs
 EOF
 )
 

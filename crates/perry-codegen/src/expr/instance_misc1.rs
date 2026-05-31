@@ -110,6 +110,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // in that same registry so `encoded instanceof Uint8Array`
                 // returns true.
                 "Uint8Array" | "Buffer" => 0xFFFF0004u32,
+                // Other %TypedArray% kinds (#3148). The runtime resolves the
+                // actual kind via TYPED_ARRAY_REGISTRY + class_id_for_kind in
+                // instanceof.rs; these reserved ids must match the
+                // CLASS_ID_* constants in perry-runtime/src/typedarray.rs.
+                "Int8Array" => 0xFFFF0030u32,
+                "Int16Array" => 0xFFFF0032u32,
+                "Uint16Array" => 0xFFFF0033u32,
+                "Int32Array" => 0xFFFF0034u32,
+                "Uint32Array" => 0xFFFF0035u32,
+                "Float32Array" => 0xFFFF0036u32,
+                "Float64Array" => 0xFFFF0037u32,
+                "Uint8ClampedArray" => 0xFFFF0038u32,
+                "BigInt64Array" => 0xFFFF0039u32,
+                "BigUint64Array" => 0xFFFF003Au32,
                 // Built-in JS types: Date, RegExp, Map, Set. The runtime
                 // detects these via per-type registries (or, for Date,
                 // by checking that the value is a finite f64 timestamp).
@@ -125,6 +139,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
+                // `Promise` — runtime detects via GC_TYPE_PROMISE because
+                // Promise values are raw promise allocations, not ObjectHeader
+                // instances with a class_id field.
+                "Promise" => 0xFFFF0027u32,
                 // #1545: Web Streams. Handles are numeric ids; the runtime
                 // resolves these via the stdlib stream-kind probe rather than
                 // the class chain (`ts.readable instanceof ReadableStream`,
@@ -138,6 +156,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "PerformanceMark" => 0xFFFF0081u32,
                 "PerformanceMeasure" => 0xFFFF0082u32,
                 "Console" => 0xFFFF0083u32,
+                "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
+                "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 // `Object` — every non-primitive matches per ECMAScript;
                 // reserved id mapped in the runtime. Pre-#585 this fell
                 // into the `cid = 0` fallback and matched accidentally
@@ -313,10 +333,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Array.from(iterable) — clone via js_array_clone which
         // handles arrays, Sets (→ js_set_to_array), Maps (→ entries).
         Expr::ArrayFrom(iter) => {
+            // #2773: `js_array_from_value` throws TypeError for null/undefined
+            // sources (and keeps number/boolean/symbol -> []) before delegating
+            // to the existing `js_array_clone` materialization. Pass the raw
+            // NaN-boxed value (NOT unboxed) so the tag bits survive.
             let iter_box = lower_expr(ctx, iter)?;
             let blk = ctx.block();
-            let iter_handle = unbox_to_i64(blk, &iter_box);
-            let result = blk.call(I64, "js_array_clone", &[(I64, &iter_handle)]);
+            let result = blk.call(I64, "js_array_from_value", &[(DOUBLE, &iter_box)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
@@ -368,17 +391,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
+            // #2773: `js_array_from_mapped` throws for nullish sources, validates
+            // mapFn callability, calls mapFn(value, index) and binds the optional
+            // thisArg. All three args are passed raw NaN-boxed (DOUBLE).
             let iter_box = lower_expr(ctx, iterable)?;
             let cb_box = lower_expr(ctx, map_fn)?;
+            let this_box = match this_arg {
+                Some(t) => lower_expr(ctx, t)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
             let blk = ctx.block();
-            let iter_handle = unbox_to_i64(blk, &iter_box);
-            let arr = blk.call(I64, "js_array_clone", &[(I64, &iter_handle)]);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
-            let mapped = blk.call(I64, "js_array_map", &[(I64, &arr), (I64, &cb_handle)]);
+            let mapped = blk.call(
+                I64,
+                "js_array_from_mapped",
+                &[(DOUBLE, &iter_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+            );
             Ok(nanbox_pointer_inline(blk, &mapped))
         }
-        Expr::Uint8ArrayFrom(iter) => lower_expr(ctx, iter),
+        Expr::Uint8ArrayFrom(iter) => {
+            // #2774: materialize the source into a real Uint8Array (kind 1) so
+            // `Uint8Array.from(...)` / `Uint8Array.of(...)` produce typed arrays
+            // (with Uint8 truncation), not plain Arrays. Source nullish-throwing
+            // + materialization is reused from `js_array_from_value`.
+            let iter_box = lower_expr(ctx, iter)?;
+            let blk = ctx.block();
+            let arr = blk.call(I64, "js_array_from_value", &[(DOUBLE, &iter_box)]);
+            let ta = blk.call(
+                I64,
+                "js_typed_array_new_from_array",
+                &[(I32, "1"), (I64, &arr)],
+            );
+            Ok(nanbox_pointer_inline(blk, &ta))
+        }
 
         // -------- Object.values / Object.entries --------
         Expr::ObjectValues(obj) => {
@@ -465,12 +514,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let result = blk.call(I64, fn_name, &[(I64, &h)]);
                     Ok(nanbox_string_inline(blk, &result))
                 }
-                PathWin32Method::BasenameExt
-                | PathWin32Method::Relative
-                | PathWin32Method::ResolveJoin => {
+                PathWin32Method::Relative => {
+                    // #2995: validate both operands are strings (throwing
+                    // ERR_INVALID_ARG_TYPE on a non-string) before computing
+                    // the relative path. Pass the NaN-boxed doubles so the
+                    // runtime can inspect their type.
+                    let blk = ctx.block();
+                    let result = blk.call(
+                        I64,
+                        "js_path_win32_relative_checked",
+                        &[(DOUBLE, &lowered[0]), (DOUBLE, &lowered[1])],
+                    );
+                    Ok(nanbox_string_inline(blk, &result))
+                }
+                PathWin32Method::BasenameExt | PathWin32Method::ResolveJoin => {
                     let fn_name = match method {
                         PathWin32Method::BasenameExt => "js_path_win32_basename_ext",
-                        PathWin32Method::Relative => "js_path_win32_relative",
                         PathWin32Method::ResolveJoin => "js_path_win32_resolve_join",
                         _ => unreachable!(),
                     };
@@ -532,7 +591,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             if args.is_empty() {
                 let blk = ctx.block();
-                let cb_handle = unbox_to_i64(blk, &cb_box);
+                // #3046: validate the callback (non-callable → Node's
+                // `ERR_INVALID_ARG_TYPE` "callback" message) before queueing.
+                // `js_timer_validate_callback` always reports the "callback"
+                // argument name and returns the closure handle; idx 3 selects
+                // its generic-callback wording branch.
+                let cb_handle = blk.call(
+                    I64,
+                    "js_timer_validate_callback",
+                    &[(DOUBLE, &cb_box), (I32, "3")],
+                );
                 blk.call_void("js_queue_next_tick", &[(I64, &cb_handle)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
@@ -550,7 +618,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ptr_reg, n, buf
             ));
             let blk = ctx.block();
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #3046: same callback validation on the trailing-args path.
+            let cb_handle = blk.call(
+                I64,
+                "js_timer_validate_callback",
+                &[(DOUBLE, &cb_box), (I32, "3")],
+            );
             blk.call_void(
                 "js_queue_next_tick_args",
                 &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
@@ -619,15 +692,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::PathRelative(from, to) => {
+            // #2995: validate both operands are strings before computing the
+            // relative path. The checked entry point inspects the NaN-boxed
+            // doubles and throws ERR_INVALID_ARG_TYPE for non-strings.
             let f_box = lower_expr(ctx, from)?;
             let t_box = lower_expr(ctx, to)?;
             let blk = ctx.block();
-            let f_handle = unbox_to_i64(blk, &f_box);
-            let t_handle = unbox_to_i64(blk, &t_box);
             let result = blk.call(
                 I64,
-                "js_path_relative",
-                &[(I64, &f_handle), (I64, &t_handle)],
+                "js_path_relative_checked",
+                &[(DOUBLE, &f_box), (DOUBLE, &t_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -978,6 +1052,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let s_handle = unbox_to_i64(blk, &s_box);
             let result_i64 = blk.call(I64, "js_json_parse", &[(I64, &s_handle)]);
             Ok(blk.bitcast_i64_to_double(&result_i64))
+        }
+        // -------- JSON.rawJSON / JSON.isRawJSON (#2900) --------
+        // Both runtime helpers take and return a NaN-boxed f64, so the text /
+        // value operand passes straight through.
+        Expr::JsonRawJson(text) => {
+            let s_box = lower_expr(ctx, text)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_json_raw_json", &[(DOUBLE, &s_box)]))
+        }
+        Expr::JsonIsRawJson(value) => {
+            let v_box = lower_expr(ctx, value)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_json_is_raw_json", &[(DOUBLE, &v_box)]))
         }
         // Issue #179 typed-parse, Step 1b: when `<T>` is
         // `Array<Object{fields}>`, emit a packed-keys rodata constant

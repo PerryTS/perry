@@ -764,9 +764,16 @@ impl WasmModuleEmitter {
             Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
                 self.collect_strings_in_expr(array);
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
                 self.collect_strings_in_expr(iterable);
                 self.collect_strings_in_expr(map_fn);
+                if let Some(t) = this_arg {
+                    self.collect_strings_in_expr(t);
+                }
             }
             Expr::MapSet { map, key, value } => {
                 self.collect_strings_in_expr(map);

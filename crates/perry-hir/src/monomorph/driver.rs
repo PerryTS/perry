@@ -515,7 +515,10 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(set, ctx, module, idx);
         }
         // JSON operations
-        Expr::JsonParse(expr) | Expr::JsonStringify(expr) => {
+        Expr::JsonParse(expr)
+        | Expr::JsonStringify(expr)
+        | Expr::JsonRawJson(expr)
+        | Expr::JsonIsRawJson(expr) => {
             collect_instantiations_in_expr(expr, ctx, module, idx);
         }
         // Math operations

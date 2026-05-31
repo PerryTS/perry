@@ -17,14 +17,24 @@ pub(super) fn build_url_search_params_method_call(
     args: Vec<Expr>,
 ) -> std::result::Result<Expr, Vec<Expr>> {
     match method {
-        "get" if !args.is_empty() => {
+        "get" if args.is_empty() => Ok(Expr::UrlSearchParamsMissingArgs {
+            params: Box::new(recv),
+            args,
+            name_and_value: false,
+        }),
+        "get" => {
             let name = args.into_iter().next().unwrap();
             Ok(Expr::UrlSearchParamsGet {
                 params: Box::new(recv),
                 name: Box::new(name),
             })
         }
-        "has" if !args.is_empty() => {
+        "has" if args.is_empty() => Ok(Expr::UrlSearchParamsMissingArgs {
+            params: Box::new(recv),
+            args,
+            name_and_value: false,
+        }),
+        "has" => {
             let mut iter = args.into_iter();
             let name = iter.next().unwrap();
             let value = iter.next().map(Box::new);
@@ -34,7 +44,12 @@ pub(super) fn build_url_search_params_method_call(
                 value,
             })
         }
-        "set" if args.len() >= 2 => {
+        "set" if args.len() < 2 => Ok(Expr::UrlSearchParamsMissingArgs {
+            params: Box::new(recv),
+            args,
+            name_and_value: true,
+        }),
+        "set" => {
             let mut iter = args.into_iter();
             let name = iter.next().unwrap();
             let value = iter.next().unwrap();
@@ -44,7 +59,12 @@ pub(super) fn build_url_search_params_method_call(
                 value: Box::new(value),
             })
         }
-        "append" if args.len() >= 2 => {
+        "append" if args.len() < 2 => Ok(Expr::UrlSearchParamsMissingArgs {
+            params: Box::new(recv),
+            args,
+            name_and_value: true,
+        }),
+        "append" => {
             let mut iter = args.into_iter();
             let name = iter.next().unwrap();
             let value = iter.next().unwrap();
@@ -54,7 +74,12 @@ pub(super) fn build_url_search_params_method_call(
                 value: Box::new(value),
             })
         }
-        "delete" if !args.is_empty() => {
+        "delete" if args.is_empty() => Ok(Expr::UrlSearchParamsMissingArgs {
+            params: Box::new(recv),
+            args,
+            name_and_value: false,
+        }),
+        "delete" => {
             let mut iter = args.into_iter();
             let name = iter.next().unwrap();
             let value = iter.next().map(Box::new);
@@ -79,7 +104,12 @@ pub(super) fn build_url_search_params_method_call(
                 this_arg,
             })
         }
-        "getAll" if !args.is_empty() => {
+        "getAll" if args.is_empty() => Ok(Expr::UrlSearchParamsMissingArgs {
+            params: Box::new(recv),
+            args,
+            name_and_value: false,
+        }),
+        "getAll" => {
             let name = args.into_iter().next().unwrap();
             Ok(Expr::UrlSearchParamsGetAll {
                 params: Box::new(recv),
