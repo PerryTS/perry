@@ -1,5 +1,8 @@
 //! Process module - provides access to environment and process information
 
+use crate::closure::{
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
+};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 
@@ -1096,49 +1099,196 @@ fn extract_cpu_pair(value: f64) -> (f64, f64) {
     (user, system)
 }
 
+fn string_value(s: &str) -> f64 {
+    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn warning_value_to_string(v: f64) -> String {
+    if JSValue::from_bits(v.to_bits()).is_undefined() {
+        return String::new();
+    }
+    let ptr = crate::value::js_jsvalue_to_string(v);
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let header = &*ptr;
+        let len = header.byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn object_from_value(value: f64) -> Option<*mut crate::object::ObjectHeader> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>() as *mut u8;
+    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr as *const u8) {
+        return None;
+    }
+    Some(ptr as *mut crate::object::ObjectHeader)
+}
+
+fn object_string_field(obj_handle: &crate::gc::RuntimeHandle<'_>, name: &str) -> Option<String> {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        key,
+    );
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(warning_value_to_string(value))
+    }
+}
+
+fn set_error_string_prop(error: *mut crate::error::ErrorHeader, name: &str, value: &str) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error_handle = scope.root_raw_mut_ptr(error);
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(string_value(value));
+    crate::object::js_object_set_field_by_name(
+        error_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        key_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader,
+        value_handle.get_nanbox_f64(),
+    );
+}
+
+extern "C" fn process_warning_callback(closure: *const ClosureHeader) -> f64 {
+    use std::io::Write;
+
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let warning_handle = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
+    let line = warning_value_to_string(js_closure_get_capture_f64(closure, 1));
+    let detail = warning_value_to_string(js_closure_get_capture_f64(closure, 2));
+    let hint = warning_value_to_string(js_closure_get_capture_f64(closure, 3));
+
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{line}");
+    if !detail.is_empty() {
+        let _ = writeln!(stderr, "{detail}");
+    }
+    if !hint.is_empty() {
+        let _ = writeln!(stderr, "{hint}");
+    }
+
+    crate::os::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &str) {
+    let pid = std::process::id();
+    let line = if code.is_empty() {
+        format!("(node:{pid}) {label}: {msg}")
+    } else {
+        format!("(node:{pid}) [{code}] {label}: {msg}")
+    };
+    let hint_flag = if label == "DeprecationWarning" {
+        "--trace-deprecation"
+    } else {
+        "--trace-warnings"
+    };
+    let hint = format!("(Use `node {hint_flag} ...` to show where the warning was created)");
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let warning_handle = scope.root_nanbox_f64(warning);
+    let line_handle = scope.root_nanbox_f64(string_value(&line));
+    let detail_handle = scope.root_nanbox_f64(string_value(detail));
+    let hint_handle = scope.root_nanbox_f64(string_value(&hint));
+
+    let callback = js_closure_alloc(process_warning_callback as *const u8, 4);
+    if callback.is_null() {
+        return;
+    }
+    let callback_handle = scope.root_raw_mut_ptr(callback);
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        0,
+        warning_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        1,
+        line_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        2,
+        detail_handle.get_nanbox_f64(),
+    );
+    js_closure_set_capture_f64(
+        callback_handle.get_raw_mut_ptr(),
+        3,
+        hint_handle.get_nanbox_f64(),
+    );
+    crate::builtins::js_queue_next_tick(callback_handle.get_raw_const_ptr::<ClosureHeader>() as i64);
+}
+
 /// process.emitWarning(warning[, type, code, ctor]) -> undefined.
-/// Writes a formatted warning to stderr matching Node's shape:
-/// `(node:<pid>) <Type> [CODE]: <message>`. Anything that can't be
-/// coerced to a string is rendered via `js_jsvalue_to_string`. The 4th
-/// `ctor` arg (Node's trace anchor) is accepted but ignored — Perry
-/// doesn't capture stack traces here.
+///
+/// The direct-call lowering still passes the first three JS values here. The
+/// runtime parses the modern options-object overload, creates an Error-like
+/// warning object, and queues the warning job so stderr/event delivery happens
+/// after the current synchronous frame.
 #[no_mangle]
 pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
-    use std::io::Write;
-    let undef_bits = crate::value::TAG_UNDEFINED;
-    let value_to_string = |v: f64| -> String {
-        if v.to_bits() == undef_bits {
-            return String::new();
-        }
-        let ptr = crate::value::js_jsvalue_to_string(v);
-        if ptr.is_null() {
-            return String::new();
-        }
-        unsafe {
-            let header = &*ptr;
-            let len = header.byte_len as usize;
-            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-        }
-    };
+    let msg = warning_value_to_string(warning);
 
-    let msg = value_to_string(warning);
-    let raw_type = value_to_string(type_name);
-    let raw_code = value_to_string(code);
+    let (raw_type, raw_code, detail) = if let Some(options) = object_from_value(type_name) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let options_handle = scope.root_raw_mut_ptr(options);
+        (
+            object_string_field(&options_handle, "type").unwrap_or_default(),
+            object_string_field(&options_handle, "code").unwrap_or_default(),
+            object_string_field(&options_handle, "detail").unwrap_or_default(),
+        )
+    } else {
+        (
+            warning_value_to_string(type_name),
+            warning_value_to_string(code),
+            String::new(),
+        )
+    };
     let label = if raw_type.is_empty() {
         "Warning".to_string()
     } else {
         raw_type
     };
-    let code_part = if raw_code.is_empty() {
-        String::new()
-    } else {
-        format!(" [{}]", raw_code)
-    };
-    let pid = std::process::id();
-    let line = format!("(node:{}) {}{}: {}\n", pid, label, code_part, msg);
-    let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(line.as_bytes());
+
+    let message_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let warning_error = crate::error::js_error_new_with_message(message_ptr);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let warning_handle = scope.root_raw_mut_ptr(warning_error);
+    set_error_string_prop(
+        warning_handle.get_raw_mut_ptr::<crate::error::ErrorHeader>(),
+        "name",
+        &label,
+    );
+    if !raw_code.is_empty() {
+        set_error_string_prop(
+            warning_handle.get_raw_mut_ptr::<crate::error::ErrorHeader>(),
+            "code",
+            &raw_code,
+        );
+    }
+    if !detail.is_empty() {
+        set_error_string_prop(
+            warning_handle.get_raw_mut_ptr::<crate::error::ErrorHeader>(),
+            "detail",
+            &detail,
+        );
+    }
+    let warning_value = crate::value::js_nanbox_pointer(
+        warning_handle.get_raw_const_ptr::<crate::error::ErrorHeader>() as i64,
+    );
+    schedule_warning(warning_value, &label, &raw_code, &msg, &detail);
 }
 
 /// process.availableMemory() -> number. Free system memory available to
