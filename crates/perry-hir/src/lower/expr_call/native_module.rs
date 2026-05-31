@@ -140,14 +140,21 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::Undefined));
                         }
                         "setSourceMapsEnabled" => {
-                            // #1400: process.setSourceMapsEnabled(bool) —
-                            // toggles runtime source-map resolution in Node.
-                            // Perry compiles AOT and has no resolver to
-                            // toggle, so the call is a no-op returning
-                            // undefined. Without this, framework startup
-                            // code that conditionally enables maps crashes
-                            // on "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            // #1400 / #3108: process.setSourceMapsEnabled(bool)
+                            // toggles the live source-map flag. Perry compiles
+                            // AOT and has no resolver, so the flag drives
+                            // nothing observable — but it round-trips through
+                            // process.sourceMapsEnabled and validates that the
+                            // argument is a boolean (else ERR_INVALID_ARG_TYPE),
+                            // matching Node. Lower to the runtime setter,
+                            // passing the original argument for validation.
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setSourceMapsEnabled".to_string(),
+                                args,
+                            }));
                         }
                         "getBuiltinModule" => {
                             return Ok(Ok(Expr::NativeMethodCall {
