@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1996 entries across 94 modules
+// Coverage: 1994 entries across 94 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2787,8 +2787,6 @@ declare module "sys" {
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
   /** stdlib */
-  export function debug(...args: any[]): any;
-  /** stdlib */
   export function debuglog(...args: any[]): any;
   /** stdlib */
   export function deprecate(...args: any[]): any;
@@ -2926,8 +2924,6 @@ declare module "util" {
   export function callbackify(...args: any[]): any;
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
-  /** stdlib */
-  export function debug(...args: any[]): any;
   /** stdlib */
   export function debuglog(...args: any[]): any;
   /** stdlib */
