@@ -45,6 +45,7 @@ pub(super) fn lower_builtin_new(
         ("Client", Some(src)) => src != "pg",
         ("Pool", Some(src)) => src != "pg",
         ("Database", Some(src)) => src != "better-sqlite3",
+        ("DatabaseSync", Some(src)) => src != "sqlite",
         ("Redis", Some(src)) => src != "ioredis" && src != "redis",
         ("MongoClient", Some(src)) => src != "mongodb",
         ("Decimal", Some(src)) => src != "decimal.js",
@@ -390,7 +391,14 @@ pub(super) fn lower_builtin_new(
         // then unboxes that bogus pointer; `get_handle::<SqliteDbHandle>`
         // returns None; prepare returns -1; every chained `.run()`/`.get()`/
         // `.all()` dispatches against junk and silently produces undefined.
-        "Database" => {
+        // node:sqlite `DatabaseSync` (#3183) shares better-sqlite3's
+        // `Database` lowering: `new DatabaseSync(path)` opens the same
+        // rusqlite connection via `js_sqlite_open`, so all subsequent
+        // `exec`/`prepare`/`close` + `StatementSync` dispatch reuses the
+        // existing handle registry. The `arm_mismatches_source` guard
+        // above keeps this from firing for unrelated `DatabaseSync`
+        // imports.
+        "Database" | "DatabaseSync" => {
             let path_ptr = if let Some(arg) = args.first() {
                 get_raw_string_ptr(ctx, arg)?
             } else {

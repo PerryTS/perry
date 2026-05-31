@@ -873,6 +873,15 @@ pub(super) const HTTP_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "setEncoding",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_incoming_message_set_encoding",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
     // ServerResponse instance methods
     NativeModSig {
         module: "http",

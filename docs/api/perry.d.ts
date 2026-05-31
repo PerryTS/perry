@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2368 entries across 103 modules
+// Coverage: 2391 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -567,15 +567,11 @@ declare module "constants" {
   /** stdlib */
   export const O_CREAT: any;
   /** stdlib */
-  export const O_DIRECT: any;
-  /** stdlib */
   export const O_DIRECTORY: any;
   /** stdlib */
   export const O_DSYNC: any;
   /** stdlib */
   export const O_EXCL: any;
-  /** stdlib */
-  export const O_NOATIME: any;
   /** stdlib */
   export const O_NOCTTY: any;
   /** stdlib */
@@ -586,6 +582,8 @@ declare module "constants" {
   export const O_RDONLY: any;
   /** stdlib */
   export const O_RDWR: any;
+  /** stdlib */
+  export const O_SYMLINK: any;
   /** stdlib */
   export const O_SYNC: any;
   /** stdlib */
@@ -627,8 +625,6 @@ declare module "constants" {
   /** stdlib */
   export const RSA_X931_PADDING: any;
   /** stdlib */
-  export const RTLD_DEEPBIND: any;
-  /** stdlib */
   export const RTLD_GLOBAL: any;
   /** stdlib */
   export const RTLD_LAZY: any;
@@ -654,6 +650,8 @@ declare module "constants" {
   export const SIGHUP: any;
   /** stdlib */
   export const SIGILL: any;
+  /** stdlib */
+  export const SIGINFO: any;
   /** stdlib */
   export const SIGINT: any;
   /** stdlib */
@@ -2924,6 +2922,11 @@ declare module "slugify" {
   export function slugify(p0: string, p1: string, p2: string): string;
 }
 
+declare module "sqlite" {
+  /** stdlib */
+  export function DatabaseSync(p0: string): any;
+}
+
 declare module "stream" {
   /** stdlib */
   export class Duplex { [key: string]: any; }
@@ -3058,6 +3061,10 @@ declare module "string_decoder" {
 
 declare module "sys" {
   /** stdlib */
+  export class MIMEParams { [key: string]: any; }
+  /** stdlib */
+  export class MIMEType { [key: string]: any; }
+  /** stdlib */
   export class TextDecoder { [key: string]: any; }
   /** stdlib */
   export class TextEncoder { [key: string]: any; }
@@ -3066,6 +3073,16 @@ declare module "sys" {
   export default _default;
   /** stdlib */
   export const types: any;
+  /** stdlib */
+  export function MIMEParams(...args: any[]): any;
+  /** stdlib */
+  export function MIMEType(...args: any[]): any;
+  /** stdlib */
+  export function _errnoException(...args: any[]): any;
+  /** stdlib */
+  export function _exceptionWithHostPort(...args: any[]): any;
+  /** stdlib */
+  export function _extend(...args: any[]): any;
   /** stdlib */
   export function aborted(...args: any[]): any;
   /** stdlib */
@@ -3252,6 +3269,10 @@ declare module "url" {
 
 declare module "util" {
   /** stdlib */
+  export class MIMEParams { [key: string]: any; }
+  /** stdlib */
+  export class MIMEType { [key: string]: any; }
+  /** stdlib */
   export class TextDecoder { [key: string]: any; }
   /** stdlib */
   export class TextEncoder { [key: string]: any; }
@@ -3260,6 +3281,16 @@ declare module "util" {
   export default _default;
   /** stdlib */
   export const types: any;
+  /** stdlib */
+  export function MIMEParams(...args: any[]): any;
+  /** stdlib */
+  export function MIMEType(...args: any[]): any;
+  /** stdlib */
+  export function _errnoException(...args: any[]): any;
+  /** stdlib */
+  export function _exceptionWithHostPort(...args: any[]): any;
+  /** stdlib */
+  export function _extend(...args: any[]): any;
   /** stdlib */
   export function aborted(...args: any[]): any;
   /** stdlib */

@@ -2,9 +2,7 @@ import constantsDefault from "node:constants";
 import * as constantsNs from "node:constants";
 import {
   O_DIRECTORY,
-  O_DIRECT,
   O_DSYNC,
-  O_NOATIME,
   O_NOCTTY,
   O_NONBLOCK,
   O_SYNC,
@@ -36,6 +34,7 @@ import {
   defaultCoreCipherList,
 } from "node:constants";
 import fs from "node:fs";
+import process from "node:process";
 
 const numericNames = [
   "UV_DIRENT_UNKNOWN",
@@ -64,13 +63,20 @@ const numericNames = [
   "S_IRWXG",
   "S_IRWXO",
   "O_DIRECTORY",
-  "O_DIRECT",
   "O_NOCTTY",
-  "O_NOATIME",
   "O_NONBLOCK",
   "O_SYNC",
   "O_DSYNC",
 ];
+
+const platformNumericNames =
+  process.platform === "linux"
+    ? ["O_DIRECT", "O_NOATIME"]
+    : process.platform === "darwin"
+      ? ["O_SYMLINK"]
+      : [];
+
+numericNames.push(...platformNumericNames);
 
 const namedValues = [
   UV_DIRENT_UNKNOWN,
@@ -99,9 +105,7 @@ const namedValues = [
   S_IRWXG,
   S_IRWXO,
   O_DIRECTORY,
-  O_DIRECT,
   O_NOCTTY,
-  O_NOATIME,
   O_NONBLOCK,
   O_SYNC,
   O_DSYNC,

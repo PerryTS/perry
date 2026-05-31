@@ -246,7 +246,7 @@ fn throw_err_out_of_range(n: f64) -> ! {
 }
 
 /// Validate a JS value as the negative safe-integer libuv code Node accepts.
-fn code_of(value: f64) -> i64 {
+pub(crate) fn validate_system_error_code(value: f64) -> i64 {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_int32() {
         let n = jsval.as_int32() as f64;
@@ -281,16 +281,20 @@ fn lookup(code: i64) -> Option<(&'static str, &'static str)> {
     None
 }
 
-fn system_error_name(value: f64) -> String {
-    let code = code_of(value);
+pub(crate) fn system_error_name_for_code(code: i64) -> String {
     match lookup(code) {
         Some((name, _)) => name.to_string(),
         None => format!("Unknown system error {code}"),
     }
 }
 
+fn system_error_name(value: f64) -> String {
+    let code = validate_system_error_code(value);
+    system_error_name_for_code(code)
+}
+
 fn system_error_message(value: f64) -> String {
-    let code = code_of(value);
+    let code = validate_system_error_code(value);
     match lookup(code) {
         Some((_, msg)) => msg.to_string(),
         None => format!("Unknown system error {code}"),

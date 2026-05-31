@@ -483,7 +483,6 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"RTLD_NOW",
     b"RTLD_GLOBAL",
     b"RTLD_LOCAL",
-    b"RTLD_DEEPBIND",
     b"OPENSSL_VERSION_NUMBER",
     b"SSL_OP_ALL",
     b"SSL_OP_ALLOW_NO_DHE_KEX",
@@ -569,7 +568,6 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"O_NONBLOCK",
     b"O_SYNC",
     b"O_DSYNC",
-    b"O_SYMLINK",
     b"defaultCoreCipherList",
 ];
 
@@ -774,6 +772,9 @@ const UTIL_DEFAULT_KEYS: &[&[u8]] = &[
 ];
 
 const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"_errnoException",
+    b"_exceptionWithHostPort",
+    b"_extend",
     b"aborted",
     b"callbackify",
     b"convertProcessSignalToExitCode",
@@ -799,6 +800,8 @@ const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setTraceSigInt",
     b"types",
     b"parseArgs",
+    b"MIMEParams",
+    b"MIMEType",
     b"TextDecoder",
     b"TextEncoder",
     b"transferableAbortController",
@@ -832,10 +835,25 @@ fn deprecated_constants_keys() -> &'static [&'static [u8]] {
     static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
     MERGED
         .get_or_init(|| {
-            // Insert the Linux-only flags just before the trailing
-            // `defaultCoreCipherList` metadata entry, matching Node's order.
-            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 2);
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 6);
             for &k in DEPRECATED_CONSTANTS_KEYS {
+                if k == b"SIGCHLD" {
+                    v.push(k);
+                    v.push(b"SIGSTKFLT");
+                    continue;
+                }
+                if k == b"SIGIO" {
+                    v.push(k);
+                    v.push(b"SIGPOLL");
+                    v.push(b"SIGPWR");
+                    continue;
+                }
+                if k == b"RTLD_LOCAL" {
+                    v.push(k);
+                    #[cfg(target_env = "gnu")]
+                    v.push(b"RTLD_DEEPBIND");
+                    continue;
+                }
                 if k == b"defaultCoreCipherList" {
                     v.push(b"O_DIRECT");
                     v.push(b"O_NOATIME");
@@ -847,9 +865,48 @@ fn deprecated_constants_keys() -> &'static [&'static [u8]] {
         .as_slice()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn deprecated_constants_keys() -> &'static [&'static [u8]] {
+    use std::sync::OnceLock;
+    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+    MERGED
+        .get_or_init(|| {
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 2);
+            for &k in DEPRECATED_CONSTANTS_KEYS {
+                if k == b"SIGSYS" {
+                    v.push(k);
+                    v.push(b"SIGINFO");
+                    continue;
+                }
+                if k == b"defaultCoreCipherList" {
+                    v.push(b"O_SYMLINK");
+                }
+                v.push(k);
+            }
+            v
+        })
+        .as_slice()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn deprecated_constants_keys() -> &'static [&'static [u8]] {
     DEPRECATED_CONSTANTS_KEYS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deprecated_constants_keys;
+
+    #[test]
+    fn rtld_deepbind_key_is_platform_gated() {
+        let has_rtld_deepbind = deprecated_constants_keys()
+            .iter()
+            .any(|key| *key == b"RTLD_DEEPBIND");
+        assert_eq!(
+            has_rtld_deepbind,
+            cfg!(all(target_os = "linux", target_env = "gnu"))
+        );
+    }
 }
 
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
@@ -1276,6 +1333,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("util", "debug" | "debuglog") => Some(2),
+        ("util", "MIMEParams") => Some(0),
+        ("util", "MIMEType") => Some(1),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
@@ -2105,6 +2164,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("buffer", "atob")
             | ("buffer", "btoa")
             | ("util", "convertProcessSignalToExitCode")
+            | ("util", "_errnoException")
+            | ("util", "_exceptionWithHostPort")
+            | ("util", "_extend")
             | ("util", "format")
             | ("util", "formatWithOptions")
             | ("util", "inspect")
@@ -2130,6 +2192,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "styleText")
             | ("util", "toUSVString")
             | ("util", "setTraceSigInt")
+            | ("util", "MIMEParams")
+            | ("util", "MIMEType")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")
@@ -2955,6 +3019,8 @@ pub(crate) unsafe fn get_native_module_constant(
                 "SIGALRM" => Some(libc::SIGALRM),
                 "SIGTERM" => Some(libc::SIGTERM),
                 "SIGCHLD" => Some(libc::SIGCHLD),
+                #[cfg(target_os = "linux")]
+                "SIGSTKFLT" => Some(libc::SIGSTKFLT),
                 "SIGCONT" => Some(libc::SIGCONT),
                 "SIGSTOP" => Some(libc::SIGSTOP),
                 "SIGTSTP" => Some(libc::SIGTSTP),
@@ -2967,6 +3033,10 @@ pub(crate) unsafe fn get_native_module_constant(
                 "SIGPROF" => Some(libc::SIGPROF),
                 "SIGWINCH" => Some(libc::SIGWINCH),
                 "SIGIO" => Some(libc::SIGIO),
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                "SIGPOLL" => Some(libc::SIGPOLL),
+                #[cfg(target_os = "linux")]
+                "SIGPWR" => Some(libc::SIGPWR),
                 "SIGSYS" => Some(libc::SIGSYS),
                 #[cfg(target_os = "macos")]
                 "SIGINFO" => Some(29i32),
