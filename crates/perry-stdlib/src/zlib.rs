@@ -143,12 +143,16 @@ unsafe fn crc32_bytes(value: f64) -> Vec<u8> {
 }
 
 /// Gzip compress data synchronously
-/// zlib.gzipSync(data) -> Buffer
+/// zlib.gzipSync(data, options?) -> Buffer
+///
+/// #2935: `options.level` selects the compression level (validated `-1..=9`;
+/// out-of-range throws `RangeError [ERR_OUT_OF_RANGE]` before compression).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gzip_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
+    let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
 
-    let mut encoder = GzEncoder::new(&data[..], Compression::default());
+    let mut encoder = GzEncoder::new(&data[..], level);
     let mut compressed = Vec::new();
 
     match encoder.read_to_end(&mut compressed) {
@@ -160,8 +164,8 @@ pub unsafe extern "C" fn js_zlib_gzip_sync(data_value: f64) -> *mut BufferHeader
 /// Gunzip decompress data synchronously
 /// zlib.gunzipSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gunzip_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut BufferHeader {
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
 
     // `MultiGzDecoder` walks every concatenated gzip member, matching Node's
     // semantics where `gunzipSync(concat(gzip(a), gzip(b)))` returns `a + b`
@@ -176,16 +180,19 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_value: f64) -> *mut BufferHead
 }
 
 /// Deflate compress data synchronously
-/// zlib.deflateSync(data) -> Buffer
+/// zlib.deflateSync(data, options?) -> Buffer
+///
+/// #2935: honor `options.level` (see `js_zlib_gzip_sync`).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
+    let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
 
     // Node's `deflateSync` produces the zlib format (RFC 1950), not raw
     // deflate — `deflateRawSync` is the raw form. Use ZlibEncoder so the
     // output is Node-byte-compatible and round-trips through `inflateSync`
     // (and matches `createDeflate`) (#1843).
-    let mut encoder = ZlibEncoder::new(&data[..], Compression::default());
+    let mut encoder = ZlibEncoder::new(&data[..], level);
     let mut compressed = Vec::new();
 
     match encoder.read_to_end(&mut compressed) {
@@ -197,8 +204,8 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_value: f64) -> *mut BufferHea
 /// Inflate decompress data synchronously
 /// zlib.inflateSync(data) -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut BufferHeader {
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
 
     let mut decoder = ZlibDecoder::new(&data[..]);
     let mut decompressed = Vec::new();
@@ -1205,10 +1212,12 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
     };
     match name {
         // Sync codecs — all take 1 string/buffer-like JS value, return Buffer pointer.
-        "gzipSync" => ptr_to_f64(js_zlib_gzip_sync(arg(0)) as *const u8),
-        "gunzipSync" => ptr_to_f64(js_zlib_gunzip_sync(arg(0)) as *const u8),
-        "deflateSync" => ptr_to_f64(js_zlib_deflate_sync(arg(0)) as *const u8),
-        "inflateSync" => ptr_to_f64(js_zlib_inflate_sync(arg(0)) as *const u8),
+        "gzipSync" => ptr_to_f64(js_zlib_gzip_sync(arg(0).to_bits() as i64, arg(1)) as *const u8),
+        "gunzipSync" => ptr_to_f64(js_zlib_gunzip_sync(arg(0).to_bits() as i64) as *const u8),
+        "deflateSync" => {
+            ptr_to_f64(js_zlib_deflate_sync(arg(0).to_bits() as i64, arg(1)) as *const u8)
+        }
+        "inflateSync" => ptr_to_f64(js_zlib_inflate_sync(arg(0).to_bits() as i64) as *const u8),
         "deflateRawSync" => ptr_to_f64(js_zlib_deflate_raw_sync(arg(0)) as *const u8),
         "inflateRawSync" => ptr_to_f64(js_zlib_inflate_raw_sync(arg(0)) as *const u8),
         "unzipSync" => ptr_to_f64(js_zlib_unzip_sync(arg(0)) as *const u8),

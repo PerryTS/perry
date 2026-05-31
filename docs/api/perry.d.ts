@@ -3025,15 +3025,15 @@ declare module "zlib" {
   /** stdlib */
   export function deflateRawSync(p0: string): any;
   /** stdlib */
-  export function deflateSync(p0: string): string;
+  export function deflateSync(p0: any, options?: any): string;
   /** stdlib */
   export function gunzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gunzipSync(p0: string): string;
+  export function gunzipSync(p0: any): string;
   /** stdlib */
   export function gzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gzipSync(p0: string): string;
+  export function gzipSync(p0: any, options?: any): string;
   /** stdlib */
   export function inflate(buffer: any, callback: any): void;
   /** stdlib */
@@ -3041,7 +3041,7 @@ declare module "zlib" {
   /** stdlib */
   export function inflateRawSync(p0: string): any;
   /** stdlib */
-  export function inflateSync(p0: string): string;
+  export function inflateSync(p0: any): string;
   /** stdlib */
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */

@@ -1135,18 +1135,45 @@ impl JsEmitter {
             Expr::TextEncoderNew => {
                 self.output.push_str("new TextEncoder()");
             }
-            Expr::TextDecoderNew => {
-                self.output.push_str("new TextDecoder()");
+            Expr::TextDecoderNew {
+                label,
+                fatal,
+                ignore_bom,
+            } => {
+                self.output.push_str("new TextDecoder(");
+                self.emit_expr(label);
+                self.output.push_str(", { fatal: ");
+                self.emit_expr(fatal);
+                self.output.push_str(", ignoreBOM: ");
+                self.emit_expr(ignore_bom);
+                self.output.push_str(" })");
             }
             Expr::TextEncoderEncode(inner) => {
                 self.output.push_str("new TextEncoder().encode(");
                 self.emit_expr(inner);
                 self.output.push(')');
             }
-            Expr::TextDecoderDecode(inner) => {
-                self.output.push_str("new TextDecoder().decode(");
-                self.emit_expr(inner);
+            Expr::TextDecoderDecode { decoder, input } => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").decode(");
+                self.emit_expr(input);
                 self.output.push(')');
+            }
+            Expr::TextDecoderEncoding(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").encoding");
+            }
+            Expr::TextDecoderFatal(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").fatal");
+            }
+            Expr::TextDecoderIgnoreBom(decoder) => {
+                self.output.push('(');
+                self.emit_expr(decoder);
+                self.output.push_str(").ignoreBOM");
             }
             Expr::EncodeURI(inner) => {
                 self.output.push_str("encodeURI(");

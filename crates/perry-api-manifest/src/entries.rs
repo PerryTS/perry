@@ -277,6 +277,12 @@ const ZLIB_STREAM_OPTS: &[ParamSpec] = &[ParamSpec::Named {
     optional: true,
 }];
 const ZLIB_CALLBACK_ARGS: &[ParamSpec] = &[p_any("buffer"), p_any("callback")];
+/// #2935 — optional `{ level, ... }` options object for one-shot codecs.
+const ZLIB_OPTIONS_PARAM: ParamSpec = ParamSpec::Named {
+    name: "options",
+    ty: TypeSpec::Any,
+    optional: true,
+};
 const fn zlib_stream_factory(name: &'static str) -> ApiEntry {
     method_sig("zlib", name, false, None, ZLIB_STREAM_OPTS, TypeSpec::Any)
 }
@@ -1359,12 +1365,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("cheerio", "children", true, None),
     method("cheerio", "parent", true, None),
     method("cheerio", "hasClass", true, None),
+    // #2935: gzipSync/deflateSync accept an optional `{ level }` options
+    // object as the 2nd argument (dispatch is NA_JSV, so the data slot
+    // accepts a string or Buffer alike).
     method_sig(
         "zlib",
         "gzipSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::String,
     ),
     method_sig(
@@ -1372,7 +1381,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "gunzipSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0")],
         TypeSpec::String,
     ),
     method_sig(
@@ -1380,7 +1389,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "deflateSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::String,
     ),
     method_sig(
@@ -1388,7 +1397,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "inflateSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0")],
         TypeSpec::String,
     ),
     method_sig(
