@@ -1081,6 +1081,9 @@ pub fn try_lower_property_get_method_call(
                     let blk = ctx.block();
                     current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
                 }
+                current =
+                    ctx.block()
+                        .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
                 let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
                 lowered.push(arguments_box);
             } else if has_rest {

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2133 entries across 98 modules.
+Total: 2256 entries across 99 modules.
 
 ## Modules
 
@@ -86,6 +86,7 @@ Total: 2133 entries across 98 modules.
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`stream`](#stream)
+- [`stream/consumers`](#stream-consumers)
 - [`stream/promises`](#stream-promises)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
@@ -524,10 +525,17 @@ Total: 2133 entries across 98 modules.
 - `OPENSSL_VERSION_NUMBER`
 - `O_APPEND`
 - `O_CREAT`
+- `O_DIRECT`
+- `O_DIRECTORY`
+- `O_DSYNC`
 - `O_EXCL`
+- `O_NOATIME`
+- `O_NOCTTY`
 - `O_NOFOLLOW`
+- `O_NONBLOCK`
 - `O_RDONLY`
 - `O_RDWR`
+- `O_SYNC`
 - `O_TRUNC`
 - `O_WRONLY`
 - `POINT_CONVERSION_COMPRESSED`
@@ -606,9 +614,20 @@ Total: 2133 entries across 98 modules.
 - `SSL_OP_NO_TLSv1_3`
 - `SSL_OP_PRIORITIZE_CHACHA`
 - `SSL_OP_TLS_ROLLBACK_BUG`
+- `S_IFBLK`
+- `S_IFCHR`
+- `S_IFDIR`
+- `S_IFIFO`
+- `S_IFLNK`
+- `S_IFMT`
+- `S_IFREG`
+- `S_IFSOCK`
 - `S_IRGRP`
 - `S_IROTH`
 - `S_IRUSR`
+- `S_IRWXG`
+- `S_IRWXO`
+- `S_IRWXU`
 - `S_IWGRP`
 - `S_IWOTH`
 - `S_IWUSR`
@@ -619,8 +638,23 @@ Total: 2133 entries across 98 modules.
 - `TLS1_2_VERSION`
 - `TLS1_3_VERSION`
 - `TLS1_VERSION`
+- `UV_DIRENT_BLOCK`
+- `UV_DIRENT_CHAR`
+- `UV_DIRENT_DIR`
+- `UV_DIRENT_FIFO`
+- `UV_DIRENT_FILE`
+- `UV_DIRENT_LINK`
+- `UV_DIRENT_SOCKET`
+- `UV_DIRENT_UNKNOWN`
+- `UV_FS_COPYFILE_EXCL`
+- `UV_FS_COPYFILE_FICLONE`
+- `UV_FS_COPYFILE_FICLONE_FORCE`
+- `UV_FS_O_FILEMAP`
+- `UV_FS_SYMLINK_DIR`
+- `UV_FS_SYMLINK_JUNCTION`
 - `W_OK`
 - `X_OK`
+- `defaultCoreCipherList`
 
 ## `cron`
 
@@ -815,20 +849,35 @@ Total: 2133 entries across 98 modules.
 - `lookup` — module
 - `lookupService` — module
 - `resolve` — module
+- `resolve` — instance *(class: `Resolver`)*
 - `resolve4` — module
+- `resolve4` — instance *(class: `Resolver`)*
 - `resolve6` — module
+- `resolve6` — instance *(class: `Resolver`)*
 - `resolveAny` — module
+- `resolveAny` — instance *(class: `Resolver`)*
 - `resolveCaa` — module
+- `resolveCaa` — instance *(class: `Resolver`)*
 - `resolveCname` — module
+- `resolveCname` — instance *(class: `Resolver`)*
 - `resolveMx` — module
+- `resolveMx` — instance *(class: `Resolver`)*
 - `resolveNaptr` — module
+- `resolveNaptr` — instance *(class: `Resolver`)*
 - `resolveNs` — module
+- `resolveNs` — instance *(class: `Resolver`)*
 - `resolvePtr` — module
+- `resolvePtr` — instance *(class: `Resolver`)*
 - `resolveSoa` — module
+- `resolveSoa` — instance *(class: `Resolver`)*
 - `resolveSrv` — module
+- `resolveSrv` — instance *(class: `Resolver`)*
 - `resolveTlsa` — module
+- `resolveTlsa` — instance *(class: `Resolver`)*
 - `resolveTxt` — module
+- `resolveTxt` — instance *(class: `Resolver`)*
 - `reverse` — module
+- `reverse` — instance *(class: `Resolver`)*
 - `setDefaultResultOrder` — module
 - `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module
@@ -908,22 +957,39 @@ Total: 2133 entries across 98 modules.
 - `lookup` — module
 - `lookupService` — module
 - `resolve` — module
+- `resolve` — instance *(class: `Resolver`)*
 - `resolve4` — module
+- `resolve4` — instance *(class: `Resolver`)*
 - `resolve6` — module
+- `resolve6` — instance *(class: `Resolver`)*
 - `resolveAny` — module
+- `resolveAny` — instance *(class: `Resolver`)*
 - `resolveCaa` — module
+- `resolveCaa` — instance *(class: `Resolver`)*
 - `resolveCname` — module
+- `resolveCname` — instance *(class: `Resolver`)*
 - `resolveMx` — module
+- `resolveMx` — instance *(class: `Resolver`)*
 - `resolveNaptr` — module
+- `resolveNaptr` — instance *(class: `Resolver`)*
 - `resolveNs` — module
+- `resolveNs` — instance *(class: `Resolver`)*
 - `resolvePtr` — module
+- `resolvePtr` — instance *(class: `Resolver`)*
 - `resolveSoa` — module
+- `resolveSoa` — instance *(class: `Resolver`)*
 - `resolveSrv` — module
+- `resolveSrv` — instance *(class: `Resolver`)*
 - `resolveTlsa` — module
+- `resolveTlsa` — instance *(class: `Resolver`)*
 - `resolveTxt` — module
+- `resolveTxt` — instance *(class: `Resolver`)*
 - `reverse` — module
+- `reverse` — instance *(class: `Resolver`)*
 - `setDefaultResultOrder` — module
+- `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module
+- `setServers` — instance *(class: `Resolver`)*
 
 ### Properties
 
@@ -985,6 +1051,7 @@ Total: 2133 entries across 98 modules.
 - `getEventListeners` — module
 - `getMaxListeners` — instance
 - `getMaxListeners` — module
+- `init` — module
 - `listenerCount` — instance
 - `listenerCount` — module
 - `listeners` — instance
@@ -1007,6 +1074,7 @@ Total: 2133 entries across 98 modules.
 - `captureRejections`
 - `defaultMaxListeners`
 - `errorMonitor`
+- `usingDomains`
 
 ## `exponential-backoff`
 
@@ -1225,12 +1293,14 @@ Total: 2133 entries across 98 modules.
 - `__get_complete` — instance *(class: `IncomingMessage`)*
 - `__get_createConnection` — instance *(class: `Agent`)*
 - `__get_createSocket` — instance *(class: `Agent`)*
+- `__get_defaultPort` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
 - `__get_freeSockets` — instance *(class: `Agent`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
 - `__get_headersTimeout` — instance *(class: `HttpServer`)*
+- `__get_host` — instance *(class: `ClientRequest`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
 - `__get_keepAlive` — instance *(class: `Agent`)*
 - `__get_keepAliveMsecs` — instance *(class: `Agent`)*
@@ -1240,8 +1310,11 @@ Total: 2133 entries across 98 modules.
 - `__get_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `__get_maxSockets` — instance *(class: `Agent`)*
 - `__get_maxTotalSockets` — instance *(class: `Agent`)*
+- `__get_method` — instance *(class: `ClientRequest`)*
 - `__get_method` — instance *(class: `IncomingMessage`)*
+- `__get_path` — instance *(class: `ClientRequest`)*
 - `__get_protocol` — instance *(class: `Agent`)*
+- `__get_protocol` — instance *(class: `ClientRequest`)*
 - `__get_requestTimeout` — instance *(class: `HttpServer`)*
 - `__get_requests` — instance *(class: `Agent`)*
 - `__get_sockets` — instance *(class: `Agent`)*
@@ -1280,6 +1353,7 @@ Total: 2133 entries across 98 modules.
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
 - `createServer` — module
 - `createServer` — module
+- `defaultPort` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `destroyed` — instance *(class: `Agent`)*
@@ -1299,6 +1373,7 @@ Total: 2133 entries across 98 modules.
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepSocketAlive` — instance *(class: `Agent`)*
 - `listen` — instance *(class: `HttpServer`)*
+- `listenerCount` — instance *(class: `ClientRequest`)*
 - `maxFreeSockets` — instance *(class: `Agent`)*
 - `maxHeadersCount` — instance *(class: `HttpServer`)*
 - `maxRequestsPerSocket` — instance *(class: `HttpServer`)*
@@ -1375,14 +1450,40 @@ Total: 2133 entries across 98 modules.
 
 - `Agent` — module
 - `Server` — module
+- `__get_headersTimeout` — instance *(class: `HttpsServer`)*
+- `__get_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__get_maxHeadersCount` — instance *(class: `HttpsServer`)*
+- `__get_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
+- `__get_requestTimeout` — instance *(class: `HttpsServer`)*
+- `__get_timeout` — instance *(class: `HttpsServer`)*
+- `__set_headersTimeout` — instance *(class: `HttpsServer`)*
+- `__set_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__set_maxHeadersCount` — instance *(class: `HttpsServer`)*
+- `__set_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
+- `__set_requestTimeout` — instance *(class: `HttpsServer`)*
+- `__set_timeout` — instance *(class: `HttpsServer`)*
+- `addListener` — instance *(class: `HttpsServer`)*
 - `address` — instance *(class: `HttpsServer`)*
 - `close` — instance *(class: `HttpsServer`)*
+- `closeAllConnections` — instance *(class: `HttpsServer`)*
+- `closeIdleConnections` — instance *(class: `HttpsServer`)*
 - `createServer` — module
 - `createServer` — module
 - `get` — module
+- `headersTimeout` — instance *(class: `HttpsServer`)*
+- `keepAliveTimeout` — instance *(class: `HttpsServer`)*
 - `listen` — instance *(class: `HttpsServer`)*
+- `maxHeadersCount` — instance *(class: `HttpsServer`)*
+- `maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `on` — instance *(class: `HttpsServer`)*
 - `request` — module
+- `requestTimeout` — instance *(class: `HttpsServer`)*
+- `setTimeout` — instance *(class: `HttpsServer`)*
+- `timeout` — instance *(class: `HttpsServer`)*
+
+### Properties
+
+- `globalAgent`
 
 ## `ioredis`
 
@@ -1502,6 +1603,8 @@ Total: 2133 entries across 98 modules.
 
 - `builtinModules`
 - `constants`
+- `wrap`
+- `wrapper`
 
 ## `moment`
 
@@ -2232,6 +2335,7 @@ Total: 2133 entries across 98 modules.
 
 - `abort` — module
 - `addListener` — module
+- `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
 - `chdir` — module
 - `constrainedMemory` — module
@@ -2249,6 +2353,7 @@ Total: 2133 entries across 98 modules.
 - `getgid` — module
 - `getgroups` — module
 - `getuid` — module
+- `hasUncaughtExceptionCaptureCallback` — module
 - `hrtime` — module
 - `initgroups` — module
 - `kill` — module
@@ -2268,11 +2373,14 @@ Total: 2133 entries across 98 modules.
 - `resourceUsage` — module
 - `setMaxListeners` — module
 - `setSourceMapsEnabled` — module
+- `setSourceMapsEnabled` — module
+- `setUncaughtExceptionCaptureCallback` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
 - `setgroups` — module
 - `setuid` — module
+- `sourceMapsEnabled` — module
 - `sourceMapsEnabled` — module
 - `threadCpuUsage` — module
 - `umask` — module
@@ -2344,6 +2452,7 @@ Total: 2133 entries across 98 modules.
 - `emitKeypressEvents` — module
 - `getCursorPos` — instance
 - `getPrompt` — instance
+- `line` — instance
 - `moveCursor` — module
 - `on` — instance
 - `pause` — instance
@@ -2351,6 +2460,7 @@ Total: 2133 entries across 98 modules.
 - `question` — instance
 - `resume` — instance
 - `setPrompt` — instance
+- `terminal` — instance
 - `write` — instance
 
 ## `readline/promises`
@@ -2488,6 +2598,17 @@ Total: 2133 entries across 98 modules.
 - `promises`
 - `promises`
 - `prototype`
+
+## `stream/consumers`
+
+### Methods
+
+- `arrayBuffer` — module
+- `blob` — module
+- `buffer` — module
+- `bytes` — module
+- `json` — module
+- `text` — module
 
 ## `stream/promises`
 
@@ -2725,14 +2846,20 @@ Total: 2133 entries across 98 modules.
 ### Methods
 
 - `isAnyArrayBuffer` — module
+- `isArgumentsObject` — module
 - `isArrayBuffer` — module
 - `isArrayBufferView` — module
 - `isAsyncFunction` — module
 - `isBigInt64Array` — module
+- `isBigIntObject` — module
 - `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
+- `isCryptoKey` — module
+- `isDataView` — module
 - `isDate` — module
+- `isExternal` — module
+- `isFloat16Array` — module
 - `isFloat32Array` — module
 - `isFloat64Array` — module
 - `isGeneratorFunction` — module
@@ -2740,8 +2867,10 @@ Total: 2133 entries across 98 modules.
 - `isInt16Array` — module
 - `isInt32Array` — module
 - `isInt8Array` — module
+- `isKeyObject` — module
 - `isMap` — module
 - `isMapIterator` — module
+- `isModuleNamespaceObject` — module
 - `isNativeError` — module
 - `isNumberObject` — module
 - `isPromise` — module
@@ -2751,11 +2880,14 @@ Total: 2133 entries across 98 modules.
 - `isSetIterator` — module
 - `isSharedArrayBuffer` — module
 - `isStringObject` — module
+- `isSymbolObject` — module
 - `isTypedArray` — module
 - `isUint16Array` — module
 - `isUint32Array` — module
 - `isUint8Array` — module
 - `isUint8ClampedArray` — module
+- `isWeakMap` — module
+- `isWeakSet` — module
 
 ## `uuid`
 

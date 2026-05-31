@@ -1062,6 +1062,35 @@ pub extern "C" fn js_callback_timer_has_pending() -> i32 {
     }
 }
 
+pub fn active_timeout_resource_count() -> usize {
+    let callback_count = CALLBACK_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|timer| !timer.cleared && timer.kind == CallbackTimerKind::Timeout)
+        .count();
+    let interval_count = INTERVAL_TIMERS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|timer| !timer.cleared)
+        .count();
+    let mock_count = {
+        let state = MOCK_TIMERS.lock().unwrap();
+        state
+            .callbacks
+            .iter()
+            .filter(|timer| !timer.cleared && timer.kind == CallbackTimerKind::Timeout)
+            .count()
+            + state
+                .intervals
+                .iter()
+                .filter(|timer| !timer.cleared)
+                .count()
+    };
+    callback_count + interval_count + mock_count
+}
+
 /// Get the time until the next callback timer fires (in ms), or -1 if
 /// none pending. Mirrors `js_timer_next_deadline` / `js_interval_timer_next_deadline`
 /// — needed so `js_wait_for_event` can size its wait budget correctly

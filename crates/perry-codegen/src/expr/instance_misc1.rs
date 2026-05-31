@@ -317,7 +317,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
-                    Ok(double_literal(1.0))
+                    Ok(ctx
+                        .block()
+                        .bitcast_i64_to_double(crate::nanbox::TAG_TRUE_I64))
                 }
             }
         }
@@ -926,12 +928,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
+                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
                     let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                        _ => blk.fadd(&old, "1.0"),
+                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                        _ => blk.fadd(&old_num, "1.0"),
                     };
                     blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old });
+                    return Ok(if *prefix { new } else { old_num });
                 }
             }
             if let Expr::This = object.as_ref() {
@@ -944,12 +947,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
+                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
                     let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                        _ => blk.fadd(&old, "1.0"),
+                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                        _ => blk.fadd(&old_num, "1.0"),
                     };
                     blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old });
+                    return Ok(if *prefix { new } else { old_num });
                 }
             }
             let obj_box = lower_expr(ctx, object)?;
@@ -966,15 +970,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_get_field_by_name_f64",
                 &[(I64, &obj_handle), (I64, &key_handle)],
             );
+            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
             let new = match op {
-                BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                _ => blk.fadd(&old, "1.0"),
+                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                _ => blk.fadd(&old_num, "1.0"),
             };
             blk.call_void(
                 "js_object_set_field_by_name",
                 &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
             );
-            Ok(if *prefix { new } else { old })
+            Ok(if *prefix { new } else { old_num })
         }
 
         // -------- arr[idx]++ / arr[idx]-- / ++arr[idx] / --arr[idx] --------
@@ -1002,16 +1007,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_dyn_index_get",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
             );
+            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
             let new = match op {
-                BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                _ => blk.fadd(&old, "1.0"),
+                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
+                _ => blk.fadd(&old_num, "1.0"),
             };
             blk.call(
                 DOUBLE,
                 "js_dyn_index_set",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
             );
-            Ok(if *prefix { new } else { old })
+            Ok(if *prefix { new } else { old_num })
         }
 
         // -------- path.basename --------
