@@ -16,18 +16,23 @@ pub extern "C" fn js_object_delete_field(
         return 1;
     }
     unsafe {
-        // #3655: `delete fn.name` / `delete fn.prototype` / `delete fn.userProp`.
-        // Functions/closures aren't `ObjectHeader`s — reading `keys_array` off
-        // one is out of bounds. Built-in slots (`name`/`length`/`prototype`)
-        // are `configurable: true`, so record the deletion in the closure
-        // deleted-key side table (consulted by hasOwnProperty/getOwnProperty*/
-        // value reads); user-attached props are dropped from the dynamic-prop
-        // table outright. Either way delete succeeds (returns 1).
+        // #3655: `delete fn.name` / `delete fn.userProp`. Functions/closures
+        // aren't `ObjectHeader`s — reading `keys_array` off one is out of
+        // bounds. The built-in `name`/`length` slots are `configurable:true`,
+        // so a delete records the key in the closure deleted-key side table
+        // (consulted by hasOwnProperty/getOwnProperty*/value reads);
+        // user-attached props are dropped from the dynamic-prop table outright.
         if crate::closure::is_closure_ptr(obj as usize) {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
-                // Drop any user-attached own prop, and mark the key deleted so
-                // a synthesized built-in slot (`name`/`length`/`prototype`)
-                // stops reporting from the registries on later reads.
+                // A non-configurable slot — e.g. a constructor's `prototype`,
+                // which #3655 registers as `{configurable:false}` — can't be
+                // deleted: leave it intact and report failure (strict mode
+                // throws on the `false` return; sloppy mode no-ops).
+                if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                    if !attrs.configurable() {
+                        return 0;
+                    }
+                }
                 crate::closure::closure_delete_own_dynamic_prop(obj as usize, name);
                 crate::closure::closure_mark_key_deleted(obj as usize, name);
             }

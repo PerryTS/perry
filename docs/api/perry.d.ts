@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2252 entries across 99 modules
+// Coverage: 2255 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3211,8 +3211,12 @@ declare module "url" {
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
+  export class Url { [key: string]: any; }
+  /** stdlib */
   const _default: any;
   export default _default;
+  /** stdlib */
+  export function Url(...args: any[]): any;
   /** stdlib */
   export function createObjectURL(...args: any[]): any;
   /** stdlib */
@@ -3231,6 +3235,8 @@ declare module "url" {
   export function pathToFileURL(...args: any[]): any;
   /** stdlib */
   export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function resolveObject(...args: any[]): any;
   /** stdlib */
   export function revokeObjectURL(...args: any[]): any;
   /** stdlib */
