@@ -31,6 +31,9 @@ pub struct LoweringContext {
     pub(crate) next_type_alias_id: TypeAliasId,
     /// Current scope's local variables: name -> (id, type)
     pub(crate) locals: Vec<(String, LocalId, Type)>,
+    /// LocalIds that represent immutable bindings (`const`, imports, and
+    /// other lexical bindings that must throw when assigned).
+    pub(crate) immutable_locals: HashSet<LocalId>,
     /// Global variables: name -> (id, type)
     // #854: initialized in `new` but currently unread (globals tracked
     // elsewhere). Retained alongside `next_global_id` for the global table.
@@ -146,6 +149,8 @@ pub struct LoweringContext {
     /// Native class instances: local_name -> (module_name, class_name)
     /// Tracks variables that hold instances of native module classes (e.g., EventEmitter)
     pub(crate) native_instances: Vec<(String, String, String)>,
+    /// True while lowering code governed by ECMAScript strict mode.
+    pub(crate) current_strict: bool,
     /// #1483: type-only perry/ui widget import aliases — local_name ->
     /// canonical widget name. `import { type Canvas as CanvasType }` records
     /// `CanvasType -> Canvas` so a `canvas: CanvasType` parameter can be
@@ -199,6 +204,10 @@ pub struct LoweringContext {
     /// Current function/closure nesting depth (`enter_scope` bumps this,
     /// `exit_scope` decrements). 0 == still at module top level.
     pub(crate) scope_depth: usize,
+    /// Stack of local-vector marks for active function/closure/catch scopes.
+    /// Function-body var prebinding uses the top mark to distinguish
+    /// parameters/current-scope locals from outer captures with the same name.
+    pub(crate) scope_local_marks: Vec<usize>,
     /// Block scope nesting counter (for bare `{}`, `if`, loops, try/finally).
     /// A local only counts as module-level when both `scope_depth == 0` and
     /// `inside_block_scope == 0`; `const captured = i` inside a top-level for
@@ -225,6 +234,10 @@ pub struct LoweringContext {
     /// (clears) it on read so a dynamic key *inside the index* (`ns[fs[evil]]`)
     /// is still refused.
     pub(crate) suppress_stdlib_dispatch_guard_once: bool,
+    /// Compatibility escape hatch for legacy member/global lowering. Bare
+    /// unresolvable identifiers throw ReferenceError, but member receivers are
+    /// still allowed to use the existing GlobalGet sentinel path.
+    pub(crate) unresolved_ident_as_global: bool,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,

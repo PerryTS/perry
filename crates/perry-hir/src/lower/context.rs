@@ -48,6 +48,7 @@ impl LoweringContext {
             enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
+            immutable_locals: HashSet::new(),
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
             imported_functions: Vec::new(),
@@ -57,6 +58,7 @@ impl LoweringContext {
             type_param_scopes: Vec::new(),
             type_param_constraints: Vec::new(),
             native_instances: Vec::new(),
+            current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
             extern_func_types: Vec::new(),
@@ -71,6 +73,7 @@ impl LoweringContext {
             pre_registered_module_vars: HashSet::new(),
             module_level_ids: HashSet::new(),
             scope_depth: 0,
+            scope_local_marks: Vec::new(),
             inside_block_scope: 0,
             namespace_vars: Vec::new(),
             current_namespace: None,
@@ -78,6 +81,7 @@ impl LoweringContext {
             uses_fetch: false,
             uses_webassembly: false,
             suppress_stdlib_dispatch_guard_once: false,
+            unresolved_ident_as_global: false,
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
@@ -216,6 +220,14 @@ impl LoweringContext {
         let id = self.next_local_id;
         self.next_local_id += 1;
         id
+    }
+
+    pub(crate) fn mark_local_immutable(&mut self, id: LocalId) {
+        self.immutable_locals.insert(id);
+    }
+
+    pub(crate) fn is_local_immutable(&self, id: LocalId) -> bool {
+        self.immutable_locals.contains(&id)
     }
 
     pub(crate) fn fresh_func(&mut self) -> FuncId {
@@ -1013,9 +1025,11 @@ impl LoweringContext {
 
     pub(crate) fn enter_scope(&mut self) -> (usize, usize, usize) {
         // Function/closure boundary: new locals are no longer module-level.
+        let local_mark = self.locals.len();
         self.scope_depth += 1;
+        self.scope_local_marks.push(local_mark);
         (
-            self.locals.len(),
+            local_mark,
             self.native_instances.len(),
             self.functions.len(),
         )
@@ -1024,6 +1038,7 @@ impl LoweringContext {
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
+        self.scope_local_marks.pop();
         self.locals.truncate(mark.0);
         self.native_instances.truncate(mark.1);
         // Remove index entries for functions being truncated, then restore any
