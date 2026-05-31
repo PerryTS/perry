@@ -478,4 +478,23 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn stream_consumers_manifest_surface_is_registered() {
+        assert!(is_known_module("stream/consumers"));
+        assert!(is_known_module("node:stream/consumers"));
+        assert!(module_has_any_entries("stream/consumers"));
+
+        for name in ["arrayBuffer", "blob", "buffer", "bytes", "json", "text"] {
+            let entry = module_has_symbol("node:stream/consumers", name)
+                .unwrap_or_else(|| panic!("stream/consumers missing {name}"));
+            assert!(matches!(
+                entry.kind,
+                ApiKind::Method {
+                    has_receiver: false,
+                    class_filter: None,
+                }
+            ));
+        }
+    }
 }

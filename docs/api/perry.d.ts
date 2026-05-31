@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2151 entries across 98 modules
+// Coverage: 2157 entries across 99 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2930,6 +2930,21 @@ declare module "stream" {
   export function setDefaultHighWaterMark(...args: any[]): any;
   /** stdlib */
   export function toWeb(...args: any[]): any;
+}
+
+declare module "stream/consumers" {
+  /** stdlib */
+  export function arrayBuffer(...args: any[]): any;
+  /** stdlib */
+  export function blob(...args: any[]): any;
+  /** stdlib */
+  export function buffer(...args: any[]): any;
+  /** stdlib */
+  export function bytes(...args: any[]): any;
+  /** stdlib */
+  export function json(...args: any[]): any;
+  /** stdlib */
+  export function text(...args: any[]): any;
 }
 
 declare module "stream/promises" {
