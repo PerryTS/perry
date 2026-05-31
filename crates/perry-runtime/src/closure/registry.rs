@@ -84,6 +84,9 @@ pub enum DispatchStrategy {
     /// Bound-method receiver pretending to be a closure (BOUND_METHOD_FUNC_PTR
     /// sentinel). Dispatch via `dispatch_bound_method`.
     BoundMethod,
+    /// `Function.prototype.bind` result (BOUND_FUNCTION_FUNC_PTR sentinel).
+    /// Dispatch via `dispatch_bound_function`.
+    BoundFunction,
     /// Closure body has a rest param at the given fixed_arity index.
     /// Dispatch via `dispatch_rest_bundled`. The bool flag is true when
     /// the rest param is the synthesized `arguments` array (HIR-injected
@@ -141,6 +144,12 @@ fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
             c.borrow_mut().insert(key, DispatchStrategy::BoundMethod);
         });
         return DispatchStrategy::BoundMethod;
+    }
+    if func_ptr == BOUND_FUNCTION_FUNC_PTR {
+        DISPATCH_CACHE.with(|c| {
+            c.borrow_mut().insert(key, DispatchStrategy::BoundFunction);
+        });
+        return DispatchStrategy::BoundFunction;
     }
     let strategy = if let Some((fixed_arity, synthetic)) = lookup_closure_rest_full(func_ptr) {
         DispatchStrategy::Rest(fixed_arity, synthetic)
@@ -544,6 +553,19 @@ pub unsafe fn dispatch_with_arity(
 /// When js_closure_callN detects this, it extracts captures and dispatches via js_native_call_method.
 /// Captures layout: [0] = namespace_obj (f64), [1] = method_name_ptr (i64), [2] = method_name_len (i64)
 pub const BOUND_METHOD_FUNC_PTR: *const u8 = 0xBADD_DEAD_u64 as *const u8;
+
+/// Sentinel func_ptr value indicating this closure is a `Function.prototype.bind`
+/// result: a bound function with a fixed `this`, prepended partial args, and an
+/// adjusted `.name` / `.length`. When `js_closure_callN` (or `js_native_call_value`)
+/// detects this sentinel it dispatches via `dispatch_bound_function`, which
+/// prepends the bound args, sets `IMPLICIT_THIS` to the bound receiver, and calls
+/// the target closure.
+///
+/// Captures layout:
+///   [0] = target closure value (f64, NaN-boxed)
+///   [1] = bound `this` value (f64)
+///   [2] = bound-args JS Array pointer (i64; 0 when no partial args)
+pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B12D_u64 as *const u8;
 
 /// Flag stored in the high bit of capture_count to indicate that capture slot 0
 /// holds `this` (i.e., this closure is an object literal method that captures `this`).

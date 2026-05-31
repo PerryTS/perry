@@ -115,16 +115,32 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::ArrayIndexOf { array, value } => {
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".indexOf(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
-            Expr::ArrayIncludes { array, value } => {
+            Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".includes(");
                 self.emit_expr(value);
+                if let Some(fi) = from_index {
+                    self.output.push_str(", ");
+                    self.emit_expr(fi);
+                }
                 self.output.push(')');
             }
             Expr::ArraySlice { array, start, end } => {
@@ -678,6 +694,26 @@ impl JsEmitter {
                 self.emit_expr(cause);
                 self.output.push_str(" })");
             }
+            Expr::ErrorNewWithOptions {
+                kind,
+                message,
+                options,
+            } => {
+                let ctor = match kind {
+                    1 => "TypeError",
+                    2 => "RangeError",
+                    3 => "ReferenceError",
+                    4 => "SyntaxError",
+                    _ => "Error",
+                };
+                self.output.push_str("new ");
+                self.output.push_str(ctor);
+                self.output.push('(');
+                self.emit_expr(message);
+                self.output.push_str(", ");
+                self.emit_expr(options);
+                self.output.push(')');
+            }
             Expr::TypeErrorNew(msg) => {
                 self.output.push_str("new TypeError(");
                 self.emit_expr(msg);
@@ -698,11 +734,19 @@ impl JsEmitter {
                 self.emit_expr(msg);
                 self.output.push(')');
             }
-            Expr::AggregateErrorNew { errors, message } => {
+            Expr::AggregateErrorNew {
+                errors,
+                message,
+                options,
+            } => {
                 self.output.push_str("new AggregateError(");
                 self.emit_expr(errors);
                 self.output.push_str(", ");
                 self.emit_expr(message);
+                if let Some(o) = options {
+                    self.output.push_str(", ");
+                    self.emit_expr(o);
+                }
                 self.output.push(')');
             }
 
@@ -991,11 +1035,19 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
                 self.output.push_str("Array.from(");
                 self.emit_expr(iterable);
                 self.output.push_str(", ");
                 self.emit_expr(map_fn);
+                if let Some(t) = this_arg {
+                    self.output.push_str(", ");
+                    self.emit_expr(t);
+                }
                 self.output.push(')');
             }
 
@@ -1472,11 +1524,17 @@ impl JsEmitter {
             Expr::ProxyRevoke(_) => {
                 self.output.push_str("undefined");
             }
-            Expr::ReflectGet { target, key } => {
+            Expr::ReflectGet {
+                target,
+                key,
+                receiver,
+            } => {
                 self.output.push_str("Reflect.get(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(key);
+                self.output.push_str(", ");
+                self.emit_expr(receiver);
                 self.output.push(')');
             }
             Expr::ReflectSet { target, key, value } => {
@@ -1543,6 +1601,13 @@ impl JsEmitter {
             Expr::ReflectGetPrototypeOf(target) => {
                 self.output.push_str("Reflect.getPrototypeOf(");
                 self.emit_expr(target);
+                self.output.push(')');
+            }
+            Expr::ReflectSetPrototypeOf { target, proto } => {
+                self.output.push_str("Reflect.setPrototypeOf(");
+                self.emit_expr(target);
+                self.output.push_str(", ");
+                self.emit_expr(proto);
                 self.output.push(')');
             }
             Expr::ReflectIsExtensible(target) => {

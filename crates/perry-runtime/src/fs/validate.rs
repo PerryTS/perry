@@ -186,6 +186,61 @@ pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Validate a `node:events` listener argument (#3072).
+///
+/// `listener_bits` is the *raw NaN-box bit pattern* of the JS value passed
+/// for an EventEmitter listener (codegen routes these methods through
+/// `NA_JSV`, so the callee receives the full value rather than a
+/// pre-stripped pointer). Returns the closure pointer as an `i64` when the
+/// value is callable; otherwise throws `TypeError [ERR_INVALID_ARG_TYPE]`
+/// with Node's `The "listener" argument must be of type function. Received …`
+/// message — matching `EventEmitter#on/once/addListener/prependListener/
+/// prependOnceListener/removeListener/off`.
+///
+/// Shared by both EventEmitter implementations (`perry-stdlib::events` and
+/// the out-of-tree `perry-ext-events`) so the validation, error class, code
+/// and message stay byte-identical regardless of which one is linked.
+///
+/// # Safety
+///
+/// `name_ptr`/`name_len` must describe a valid UTF-8 byte range (typically a
+/// `&'static str`). Callers pass `"listener"`.
+#[no_mangle]
+pub unsafe extern "C" fn js_validate_event_listener(
+    listener_bits: i64,
+    name_ptr: *const u8,
+    name_len: u32,
+) -> i64 {
+    let value = f64::from_bits(listener_bits as u64);
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return ptr as i64;
+        }
+    }
+    let name = if name_ptr.is_null() || name_len == 0 {
+        "listener".to_string()
+    } else {
+        let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    let message = format!(
+        "The \"{name}\" argument must be of type function. Received {}",
+        describe_received(value)
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// `#[used]` keepalive so the auto-optimize whole-program-LLVM rebuild does
+/// not dead-strip this codegen-invoked `#[no_mangle]` entry point (see
+/// project_auto_optimize_keepalive_3320). Called only from generated `.o`
+/// via the stdlib/ext events validators, so without an anchor the bitcode
+/// internalizer drops it and the default `perry file.ts -o out` link fails.
+#[used]
+static KEEP_JS_VALIDATE_EVENT_LISTENER: unsafe extern "C" fn(i64, *const u8, u32) -> i64 =
+    js_validate_event_listener;
+
 /// Validate the first argument of a path-only `fs` sync function (one that
 /// does NOT accept a file descriptor — `accessSync`, `statSync`, `mkdirSync`,
 /// `readdirSync`, `unlinkSync`, …). Throws `ERR_INVALID_ARG_TYPE` on any

@@ -268,6 +268,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "ReferenceError"
             | "EvalError"
             | "URIError"
+            | "AggregateError"
             | "Symbol"
             | "Promise"
             | "Map"
@@ -319,6 +320,15 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "setImmediate"
             | "clearImmediate"
             | "queueMicrotask"
+            // #2905: standard global helper functions (typeof === "function").
+            | "parseInt"
+            | "parseFloat"
+            | "isNaN"
+            | "isFinite"
+            | "encodeURI"
+            | "decodeURI"
+            | "encodeURIComponent"
+            | "decodeURIComponent"
             // Namespaces (typeof === "object" in spec).
             | "globalThis"
             | "console"

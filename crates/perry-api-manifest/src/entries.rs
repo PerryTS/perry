@@ -132,7 +132,13 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2", "sys"];
+pub const NODE_SUBMODULES: &[&str] = &[
+    "stream/promises",
+    "punycode.ucs2",
+    "sys",
+    "test",
+    "test/reporters",
+];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -2831,13 +2837,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     //     the rest are documented stubs) ---
     method("util", "inspect", false, None),
     method("util", "format", false, None),
+    method("util", "convertProcessSignalToExitCode", false, None),
     // #2514: libuv-style errno helpers.
     method("util", "getSystemErrorName", false, None),
     method("util", "getSystemErrorMessage", false, None),
     method("util", "getSystemErrorMap", false, None),
+    method("util", "aborted", false, None),
+    method("util", "transferableAbortController", false, None),
+    method("util", "transferableAbortSignal", false, None),
+    method("util", "getCallSites", false, None),
     method("util", "parseEnv", false, None),
     // #2514: util.toUSVString(value) → string with lone surrogates replaced.
     method("util", "toUSVString", false, None),
+    method("util", "setTraceSigInt", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
@@ -2860,6 +2872,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "isDeepStrictEqual", false, None),
     method("util", "parseArgs", false, None),
     method("util", "stripVTControlCharacters", false, None),
+    method("util", "styleText", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
     // util.types — Node's runtime type-introspection namespace. Required
@@ -2909,9 +2922,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // runtime routes `node:sys` through the util namespace.
     method("sys", "inspect", false, None),
     method("sys", "format", false, None),
+    method("sys", "convertProcessSignalToExitCode", false, None),
     method("sys", "getSystemErrorName", false, None),
     method("sys", "getSystemErrorMessage", false, None),
     method("sys", "getSystemErrorMap", false, None),
+    method("sys", "aborted", false, None),
+    method("sys", "transferableAbortController", false, None),
+    method("sys", "transferableAbortSignal", false, None),
+    method("sys", "getCallSites", false, None),
     method("sys", "parseEnv", false, None),
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),
@@ -2929,7 +2947,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "isDeepStrictEqual", false, None),
     method("sys", "parseArgs", false, None),
     method("sys", "stripVTControlCharacters", false, None),
+    method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
+    method("sys", "setTraceSigInt", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),
@@ -3125,11 +3145,31 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // value-read passes the #463 surface gate and resolves to `undefined`.
     class("child_process", "ChildProcess"),
     property("child_process", "Stream"),
-    // --- tty (only `isatty` is implemented; ReadStream / WriteStream
-    //     are wrapped via process.stdin / process.stdout) ---
+    // --- tty ---
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
     class("tty", "WriteStream"),
+    // Constructor-style factory dispatch (`tty.ReadStream(fd)` /
+    // `tty.WriteStream(fd)`) — `has_receiver: false` rows in
+    // NATIVE_MODULE_TABLE need a matching Method entry so the
+    // dispatch->manifest drift guard (manifest_consistency.rs) passes.
+    method("tty", "ReadStream", false, None),
+    method("tty", "WriteStream", false, None),
+    method("tty", "setRawMode", true, Some("ReadStream")),
+    method("tty", "getColorDepth", true, Some("WriteStream")),
+    method("tty", "hasColors", true, Some("WriteStream")),
+    method("tty", "_refreshSize", true, Some("WriteStream")),
+    method("tty", "cursorTo", true, Some("WriteStream")),
+    method("tty", "moveCursor", true, Some("WriteStream")),
+    method("tty", "clearLine", true, Some("WriteStream")),
+    method("tty", "clearScreenDown", true, Some("WriteStream")),
+    method("tty", "getWindowSize", true, Some("WriteStream")),
+    method("tty", "on", true, Some("WriteStream")),
+    method("tty", "addListener", true, Some("WriteStream")),
+    method("tty", "once", true, Some("WriteStream")),
+    method("tty", "removeListener", true, Some("WriteStream")),
+    method("tty", "off", true, Some("WriteStream")),
+    method("tty", "removeAllListeners", true, Some("WriteStream")),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     method("perf_hooks", "now", false, None),
     method("perf_hooks", "mark", false, None),
@@ -3190,6 +3230,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "of", false, None),
     method("buffer", "concat", false, None),
     method("buffer", "copyBytesFrom", false, None),
+    // #2901: TC39 `Uint8Array.fromBase64` / `fromHex` static factories,
+    // routed through the buffer module (Uint8Array ≡ Buffer in Perry).
+    method("buffer", "fromBase64", false, None),
+    method("buffer", "fromHex", false, None),
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),

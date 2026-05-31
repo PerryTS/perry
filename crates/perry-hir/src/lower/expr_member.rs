@@ -944,6 +944,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "Headers" && is_headers_method_name(&property_name) {
+                    // A bare Fetch Headers method read (`headers.entries`) is a
+                    // function value, not a zero-arg native call. The call form
+                    // (`headers.entries()`) is handled by expr_call lowering.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1838,6 +1847,22 @@ fn is_dgram_socket_method_name(prop: &str) -> bool {
             | "getSendBufferSize"
             | "ref"
             | "unref"
+    )
+}
+
+fn is_headers_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
     )
 }
 

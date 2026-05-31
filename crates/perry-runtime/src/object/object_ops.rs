@@ -542,6 +542,67 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     }
 }
 
+/// `Object.prototype.propertyIsEnumerable.call(obj, key)` (#2891) — true iff
+/// `key` is an OWN property of `obj` whose descriptor is enumerable. Inherited
+/// and absent keys return false. Nullish receivers throw `TypeError` per
+/// ToObject. Mirrors the ordinary-method branch in `native_call_method.rs`
+/// (which handles `obj.propertyIsEnumerable(key)`); this entry point is what
+/// the syntactic `.call` shapes lower to.
+#[no_mangle]
+pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    unsafe {
+        let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
+        if obj_jv.is_null() || obj_jv.is_undefined() {
+            super::has_own_helpers::throw_to_object_nullish_type_error();
+        }
+
+        let key_str = crate::builtins::js_string_coerce(key_value);
+        if key_str.is_null() {
+            return f64::from_bits(TAG_FALSE);
+        }
+
+        // String primitives: index keys in range are enumerable own props;
+        // "length" is a non-enumerable own prop; everything else absent.
+        if obj_jv.is_any_string() {
+            let present =
+                super::has_own_helpers::string_primitive_own_key_present(obj_value, key_str);
+            if !present {
+                return f64::from_bits(TAG_FALSE);
+            }
+            let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key_str).byte_len as usize;
+            let is_length = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                .map(|s| s == "length")
+                .unwrap_or(false);
+            return f64::from_bits(if is_length { TAG_FALSE } else { TAG_TRUE });
+        }
+
+        let obj = extract_obj_ptr(obj_value);
+        if obj.is_null() || (obj as usize) < 0x10000 || !is_valid_obj_ptr(obj as *const u8) {
+            return f64::from_bits(TAG_FALSE);
+        }
+        if !own_key_present(obj, key_str) {
+            return f64::from_bits(TAG_FALSE);
+        }
+        let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key_str).byte_len as usize;
+        let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+            Ok(s) => s,
+            Err(_) => return f64::from_bits(TAG_FALSE),
+        };
+        let enumerable = super::get_property_attrs(obj as usize, key_name)
+            .map(|attrs| attrs.enumerable())
+            .unwrap_or(true);
+        f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE })
+    }
+}
+
+#[used]
+static KEEP_PROPERTY_IS_ENUMERABLE: extern "C" fn(f64, f64) -> f64 =
+    js_object_property_is_enumerable;
+
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.
 pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
     let jsval = crate::JSValue::from_bits(value.to_bits());
@@ -1414,6 +1475,15 @@ fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<f64> {
 #[no_mangle]
 pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    // #2820: `Object.getPrototypeOf(null | undefined)` throws TypeError
+    // (`Cannot convert undefined or null to object`). Class refs and heap
+    // objects fall through to the existing resolution below.
+    {
+        let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
+        if jv.is_null() || jv.is_undefined() {
+            throw_object_type_error(b"Cannot convert undefined or null to object");
+        }
+    }
     let bits = obj_value.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFE {
@@ -1446,6 +1516,14 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     if top16 == 0x7FFD {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
         if raw_addr != 0 && raw_addr >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            // #2820: an explicit `Object.setPrototypeOf(obj, proto)` recorded
+            // in the side-table takes precedence — return exactly what was set
+            // (including `null`).
+            if let Some(proto_bits) =
+                super::prototype_chain::object_static_prototype(raw_addr as usize)
+            {
+                return f64::from_bits(proto_bits);
+            }
             unsafe {
                 let obj = raw_addr as *const ObjectHeader;
                 let gc = gc_header_for(obj);
@@ -1492,6 +1570,11 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     }
     if top16 == 0 {
         if bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            // #2820: explicit setPrototypeOf side-table takes precedence.
+            if let Some(proto_bits) = super::prototype_chain::object_static_prototype(bits as usize)
+            {
+                return f64::from_bits(proto_bits);
+            }
             unsafe {
                 let obj = bits as *const ObjectHeader;
                 let gc = gc_header_for(obj);
@@ -1629,6 +1712,45 @@ fn str_from_value(v: f64) -> *const crate::string::StringHeader {
 /// + inherited property dispatch can consult it.
 #[no_mangle]
 pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    let obj_bits = obj_value.to_bits();
+    let proto_bits = proto.to_bits();
+
+    // #2820: `Object.setPrototypeOf(null | undefined, proto)` throws
+    // `TypeError: Object.setPrototypeOf called on null or undefined`.
+    {
+        let jv = crate::value::JSValue::from_bits(obj_bits);
+        if jv.is_null() || jv.is_undefined() {
+            throw_object_type_error(b"Object.setPrototypeOf called on null or undefined");
+        }
+    }
+
+    // #2820: `proto` must be an object or `null`. A primitive / undefined proto
+    // throws `TypeError: Object prototype may only be an Object or null`.
+    let proto_is_null = proto_bits == TAG_NULL;
+    let proto_ok = proto_is_null
+        || unsafe { value_is_object_like(proto) }
+        || super::class_ref_id(proto).is_some();
+    if !proto_ok {
+        throw_object_type_error(b"Object prototype may only be an Object or null");
+    }
+
+    // #2820: setting the prototype of a primitive target is a spec no-op that
+    // returns the (boxed) primitive value. `value_is_object_like` is false for
+    // numbers/strings/booleans, and class refs are handled by the recording
+    // path below — so a non-object, non-closure target just returns unchanged.
+    let obj_ptr_for_record = {
+        let top = obj_bits >> 48;
+        if top == 0x7FFD {
+            (obj_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top == 0 && obj_bits > 0x10000 {
+            obj_bits as usize
+        } else {
+            0
+        }
+    };
+
     // #36 / #321: when the target is a closure (a plain function value) and the
     // proto is an object, record the (closure → proto) link in the closure
     // static-prototype side-table. effect's `Context.Tag(id)` returns a
@@ -1637,9 +1759,6 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // TagProto)`. Recording the link lets later string/symbol property reads on
     // the closure (and on a subclass that `extends TagClass`) walk to the
     // proto's own properties, so the Tag is recognized as a valid Effect.
-    let obj_bits = obj_value.to_bits();
-    let proto_bits = proto.to_bits();
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     if (obj_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
         && (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
     {
@@ -1647,8 +1766,21 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as usize;
         if obj_ptr != 0 && proto_ptr != 0 && crate::closure::is_closure_ptr(obj_ptr) {
             crate::closure::closure_set_static_prototype(obj_ptr, proto_bits);
+            return obj_value;
         }
     }
+
+    // #2820: ordinary heap object — record the observable [[Prototype]] in the
+    // object-prototype side-table so `Object.getPrototypeOf(obj)` and inherited
+    // property reads (`obj.x` where `x` lives on `proto`) reflect it. Records
+    // `TAG_NULL` for `setPrototypeOf(obj, null)`.
+    if obj_ptr_for_record != 0
+        && !crate::closure::is_closure_ptr(obj_ptr_for_record)
+        && is_valid_obj_ptr(obj_ptr_for_record as *const u8)
+    {
+        super::prototype_chain::object_set_static_prototype(obj_ptr_for_record, proto_bits);
+    }
+
     // Spec: `Object.setPrototypeOf(O, proto)` returns O.
     obj_value
 }

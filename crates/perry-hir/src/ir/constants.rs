@@ -386,6 +386,7 @@ pub const NODE_BUILTIN_MODULES: &[&str] = &[
     "string_decoder",
     "sys",
     "test",
+    "test/reporters",
     "timers",
     "timers/promises",
     "tls",

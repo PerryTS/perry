@@ -95,7 +95,7 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "concat" => {
-            // arr.concat(other) — call js_array_concat_new (non-mutating).
+            // #2805: arr.concat(...args) — spec-complete, non-mutating, variadic.
             // Issue #637: pre-fix this called `js_array_concat` (mutating
             // — used internally by spread-into-array desugar) which wrote
             // `other`'s elements into `recv`'s storage. When `recv` was the
@@ -107,18 +107,35 @@ pub(crate) fn lower_array_method(
             // allocated keys_arrays of OTHER objects via GC reuse. The
             // user-visible `.concat()` is spec-non-mutating; route to the
             // dedicated non-mutating helper.
-            // For simplicity we only handle single-argument concat.
-            if args.len() != 1 {
-                return Ok(recv_box);
+            //
+            // Lower every argument into an alloca buffer of raw NaN-boxed
+            // doubles, then call `js_array_concat_variadic(recv, ptr, count)`
+            // which applies Symbol.isConcatSpreadable / array-like spreading
+            // and always returns a fresh array (receiver unchanged). Mirrors
+            // the `unshift` variadic pattern below.
+            let mut item_vals: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                item_vals.push(lower_expr(ctx, a)?);
             }
-            let other_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let other_handle = unbox_to_i64(blk, &other_box);
+            let n = item_vals.len();
+            let (buf_reg, count_str) = if n == 0 {
+                // No args: pass a null buffer + 0 count (concat() returns a copy).
+                ("null".to_string(), "0".to_string())
+            } else {
+                let buf_reg = blk.next_reg();
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                for (i, val) in item_vals.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, val, &slot);
+                }
+                (buf_reg, format!("{}", n))
+            };
             let result = blk.call(
                 I64,
-                "js_array_concat_new",
-                &[(I64, &recv_handle), (I64, &other_handle)],
+                "js_array_concat_variadic",
+                &[(I64, &recv_handle), (PTR, &buf_reg), (I32, &count_str)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
@@ -410,13 +427,20 @@ pub(crate) fn lower_array_method(
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         "includes" => {
-            if args.len() != 1 {
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: Array.includes expects 1 arg, got {}",
+                    "perry-codegen: Array.includes expects 1-2 args, got {}",
                     args.len()
                 );
             }
             let val_box = lower_expr(ctx, &args[0])?;
+            // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
+            // when present; otherwise has_from=0 with a placeholder DOUBLE.
+            let (from_box, has_from) = if args.len() == 2 {
+                (lower_expr(ctx, &args[1])?, "1")
+            } else {
+                (val_box.clone(), "0")
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // Use `js_array_includes_jsvalue` for deep equality so
@@ -427,7 +451,12 @@ pub(crate) fn lower_array_method(
             let i32_v = blk.call(
                 I32,
                 "js_array_includes_jsvalue",
-                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &val_box),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
             );
             // Convert i32 boolean to NaN-boxed true/false
             let bit = blk.icmp_ne(I32, &i32_v, "0");
@@ -441,13 +470,20 @@ pub(crate) fn lower_array_method(
             Ok(blk.bitcast_i64_to_double(&tagged))
         }
         "indexOf" => {
-            if args.len() != 1 {
+            if args.is_empty() || args.len() > 2 {
                 bail!(
-                    "perry-codegen: Array.indexOf expects 1 arg, got {}",
+                    "perry-codegen: Array.indexOf expects 1-2 args, got {}",
                     args.len()
                 );
             }
             let val_box = lower_expr(ctx, &args[0])?;
+            // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
+            // when present; otherwise has_from=0 with a placeholder DOUBLE.
+            let (from_box, has_from) = if args.len() == 2 {
+                (lower_expr(ctx, &args[1])?, "1")
+            } else {
+                (val_box.clone(), "0")
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // Issue #214: route through `_jsvalue` so string elements
@@ -459,7 +495,12 @@ pub(crate) fn lower_array_method(
             let i32_v = blk.call(
                 I32,
                 "js_array_indexOf_jsvalue",
-                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &val_box),
+                    (DOUBLE, &from_box),
+                    (I32, has_from),
+                ],
             );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
@@ -767,7 +808,20 @@ pub(crate) fn lower_array_method(
         // `.next().value` was then `undefined` (same class of bug as #800's
         // `lastIndexOf`). Route through the runtime's generic dispatch so the
         // `ARRAY_ITERATOR_CLASS_ID` check reaches `dispatch_array_iterator_method`.
-        "next" | "return" | "throw" => {
+        // #2808: `Array.prototype.toLocaleString` has no static HIR fold, so a
+        // typed / `as any` array receiver reaches this codegen path. The old
+        // catch-all returned the receiver unchanged (so `JSON.stringify` saw
+        // the array, not the joined locale string). Route through the runtime
+        // dispatch tower, which walks elements and calls each element's own
+        // `toLocaleString(locales, options)`.
+        //
+        // #2803 defensive: `toReversed` / `toSorted` / `toSpliced` normally fold
+        // to dedicated `Expr::ArrayTo*` nodes upstream, but if that fold ever
+        // bails for an `any`-typed receiver they would otherwise hit the
+        // receiver-returning catch-all below. Dispatching them dynamically here
+        // keeps the immutable-copy semantics (the runtime arms added in #2803).
+        "next" | "return" | "throw" | "toLocaleString" | "toReversed" | "toSorted"
+        | "toSpliced" => {
             let mut lowered_args = Vec::with_capacity(args.len());
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);

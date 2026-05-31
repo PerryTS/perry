@@ -1136,6 +1136,8 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::Uint8ArrayNew(Some(operand))
         | Expr::Uint8ArrayLength(operand)
         | Expr::JsonParse(operand)
+        | Expr::JsonRawJson(operand)
+        | Expr::JsonIsRawJson(operand)
         | Expr::MathSqrt(operand)
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)
@@ -1285,9 +1287,16 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(e, out);
             }
         }
-        Expr::ArrayIncludes { array, value } => {
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => {
             walk(array, out);
             walk(value, out);
+            if let Some(fi) = from_index {
+                walk(fi, out);
+            }
         }
         Expr::Object(props) => {
             for (_, v) in props {
@@ -1394,6 +1403,12 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(message, out);
             walk(cause, out);
         }
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            walk(message, out);
+            walk(options, out);
+        }
         Expr::DateNew(args) => {
             for a in args {
                 walk(a, out);
@@ -1421,9 +1436,16 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(items, out);
             walk(key_fn, out);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             walk(iterable, out);
             walk(map_fn, out);
+            if let Some(t) = this_arg {
+                walk(t, out);
+            }
         }
         Expr::RegExpTest { regex, string } | Expr::RegExpExec { regex, string } => {
             walk(regex, out);

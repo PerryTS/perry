@@ -117,6 +117,16 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_length", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
+    // #2773: Array.from(source) — throws TypeError for nullish sources, keeps
+    // number/boolean/symbol -> [], otherwise materializes via js_array_clone.
+    // Takes the raw NaN-boxed value so the tag bits survive.
+    module.declare_function("js_array_from_value", I64, &[DOUBLE]);
+    // #2773: Array.from(source, mapFn, thisArg?) — nullish-throw + mapFn
+    // callability validation + (value,index) mapped call with thisArg binding.
+    module.declare_function("js_array_from_mapped", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    // #2805: Array.prototype.concat(...args) — non-mutating, variadic, with
+    // Symbol.isConcatSpreadable handling. (recv_handle, args_ptr, count).
+    module.declare_function("js_array_concat_variadic", I64, &[I64, PTR, I32]);
     // Spread `[...x]` — wraps js_array_clone with a null/undefined
     // TypeError check so plain spread matches ECMA semantics.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
