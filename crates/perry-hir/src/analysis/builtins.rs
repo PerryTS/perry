@@ -95,6 +95,10 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Buffer"
             | "process"
             | "console"
+            // Test262 installs `globalThis.print`; bare `print(...)` must
+            // resolve through the global object instead of the unknown-ident
+            // numeric fallback.
+            | "print"
             // #2905: standard global helper functions used as bare values
             // (`const p = parseInt`). Bare CALLS (`parseInt(x)`) are picked
             // off earlier by `try_global_builtins` → `Expr::ParseInt`/etc., so

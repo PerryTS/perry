@@ -760,7 +760,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 ctx.func_signatures
                     .get(fid)
-                    .map(|(_, _, returns_number)| *returns_number)
+                    .map(|(_, _, returns_number, _)| *returns_number)
                     .unwrap_or(false)
             } else {
                 false

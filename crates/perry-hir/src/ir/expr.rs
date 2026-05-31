@@ -239,6 +239,9 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// Runtime `new.target` value for ordinary functions.
+    NewTarget,
+
     // Class reference (for new expressions)
     ClassRef(String),
 

@@ -15,6 +15,9 @@ pub extern "C" fn js_object_delete_field(
     key: *const crate::StringHeader,
 ) -> i32 {
     unsafe {
+        if let Some(result) = super::arguments_object_before_delete(obj, key) {
+            return result;
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously

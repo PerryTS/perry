@@ -28,10 +28,10 @@ pub use registry::{
     build_rest_array, closure_arity, dispatch_rest_bundled, dispatch_with_arity,
     is_registered_async_function, is_registered_generator_function, js_register_closure_arity,
     js_register_closure_async_function, js_register_closure_generator_function,
-    js_register_closure_rest, js_register_closure_synthetic_arguments, lookup_closure_arity,
-    lookup_closure_rest, lookup_closure_rest_full, real_capture_count, resolve_strategy,
-    DispatchStrategy, BOUND_FUNCTION_FUNC_PTR, BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG,
-    CLOSURE_MAGIC,
+    js_register_closure_rest, js_register_closure_rest_and_arguments,
+    js_register_closure_synthetic_arguments, lookup_closure_arity, lookup_closure_rest,
+    lookup_closure_rest_full, real_capture_count, resolve_strategy, DispatchStrategy,
+    BOUND_FUNCTION_FUNC_PTR, BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC,
 };
 
 pub use dispatch::{

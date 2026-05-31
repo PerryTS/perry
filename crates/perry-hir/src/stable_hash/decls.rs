@@ -250,6 +250,7 @@ impl SH for Param {
             default,
             decorators,
             is_rest,
+            arguments_object,
         } = self;
         id.hash(h);
         name.hash(h);
@@ -257,5 +258,21 @@ impl SH for Param {
         default.hash(h);
         decorators.hash(h);
         is_rest.hash(h);
+        arguments_object.hash(h);
+    }
+}
+
+impl SH for ArgumentsObjectMeta {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        let ArgumentsObjectMeta {
+            strict,
+            simple_parameters,
+            mapped_parameter_ids,
+            restricted_callee,
+        } = self;
+        strict.hash(h);
+        simple_parameters.hash(h);
+        mapped_parameter_ids.hash(h);
+        restricted_callee.hash(h);
     }
 }

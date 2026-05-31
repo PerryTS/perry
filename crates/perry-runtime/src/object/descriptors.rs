@@ -195,6 +195,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
 
+        if let Some(desc) = super::arguments_object_descriptor(obj, key_str) {
+            return desc;
+        }
+
         // Check whether the key is actually present on the object. A property can
         // legitimately hold `undefined`, and accessor descriptors have no value slot,
         // so we check the keys_array directly instead of relying on "value != undefined".

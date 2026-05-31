@@ -15,6 +15,36 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn module_is_strict(ast_module: &ast::Module) -> bool {
+    let has_module_syntax = ast_module.body.iter().any(|item| {
+        matches!(
+            item,
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(_))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(_))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultDecl(_))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(_))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportNamed(_))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportAll(_))
+        )
+    });
+    if has_module_syntax {
+        return true;
+    }
+
+    for item in &ast_module.body {
+        let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) = item else {
+            return false;
+        };
+        let ast::Expr::Lit(ast::Lit::Str(s)) = expr_stmt.expr.as_ref() else {
+            return false;
+        };
+        if s.value.as_str() == Some("use strict") {
+            return true;
+        }
+    }
+    false
+}
+
 fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> HashSet<String> {
     fn collect_from_stmt(stmt: &ast::Stmt, out: &mut HashSet<String>) {
         match stmt {
@@ -276,6 +306,7 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
+    ctx.module_strict = module_is_strict(ast_module);
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
     }

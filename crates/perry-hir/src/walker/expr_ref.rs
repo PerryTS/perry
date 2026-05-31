@@ -26,6 +26,7 @@ where
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
+        | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::This
         | Expr::SuperPropertyGet { .. }

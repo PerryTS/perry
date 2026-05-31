@@ -44,6 +44,12 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         return f64::from_bits(v.bits());
     }
 
+    if let Some(value) =
+        unsafe { arguments_object_get_index(raw as *const ObjectHeader, idx_i32 as u32) }
+    {
+        return value;
+    }
+
     if crate::buffer::is_registered_buffer(raw as usize) {
         let byte_val =
             crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, idx_i32);
@@ -129,6 +135,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         let s = idx_i32.to_string();
         let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
         js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
+        return;
+    }
+
+    if unsafe { arguments_object_set_index(raw as *mut ObjectHeader, idx_i32 as u32, value) } {
         return;
     }
 

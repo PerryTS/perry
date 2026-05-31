@@ -357,7 +357,9 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
                 || expr_uses_arguments(&c.cons)
                 || expr_uses_arguments(&c.alt)
         }
-        ast::Expr::Assign(a) => expr_uses_arguments(&a.right),
+        ast::Expr::Assign(a) => {
+            assign_target_uses_arguments(&a.left) || expr_uses_arguments(&a.right)
+        }
         ast::Expr::Paren(p) => expr_uses_arguments(&p.expr),
         ast::Expr::TsAs(t) => expr_uses_arguments(&t.expr),
         ast::Expr::TsNonNull(t) => expr_uses_arguments(&t.expr),
@@ -378,11 +380,13 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
                 }
             }
         }),
-        ast::Expr::New(n) => n
-            .args
-            .as_ref()
-            .map(|args| args.iter().any(|a| expr_uses_arguments(&a.expr)))
-            .unwrap_or(false),
+        ast::Expr::New(n) => {
+            expr_uses_arguments(&n.callee)
+                || n.args
+                    .as_ref()
+                    .map(|args| args.iter().any(|a| expr_uses_arguments(&a.expr)))
+                    .unwrap_or(false)
+        }
         // Arrows inherit `arguments` from the enclosing function (per spec).
         // If an inner arrow references `arguments`, the enclosing non-arrow
         // function must synthesize the binding so the arrow's closure
@@ -398,18 +402,124 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
     }
 }
 
-/// Synthesize a trailing `...arguments` rest parameter. Call after lowering
-/// the user's parameters, before lowering the body, when the body references
-/// `arguments` and the user hasn't already bound it (either explicitly or via
-/// their own rest param).
-pub fn append_synthetic_arguments_param(ctx: &mut LoweringContext, params: &mut Vec<Param>) {
+fn assign_target_uses_arguments(target: &ast::AssignTarget) -> bool {
+    match target {
+        ast::AssignTarget::Simple(simple) => simple_assign_target_uses_arguments(simple),
+        ast::AssignTarget::Pat(pat) => pat_uses_arguments(pat),
+    }
+}
+
+fn simple_assign_target_uses_arguments(target: &ast::SimpleAssignTarget) -> bool {
+    match target {
+        ast::SimpleAssignTarget::Ident(i) => i.id.sym.as_ref() == "arguments",
+        ast::SimpleAssignTarget::Member(m) => {
+            expr_uses_arguments(&m.obj)
+                || matches!(&m.prop, ast::MemberProp::Computed(c) if expr_uses_arguments(&c.expr))
+        }
+        ast::SimpleAssignTarget::Paren(p) => expr_uses_arguments(&p.expr),
+        ast::SimpleAssignTarget::TsAs(t) => expr_uses_arguments(&t.expr),
+        ast::SimpleAssignTarget::TsNonNull(t) => expr_uses_arguments(&t.expr),
+        ast::SimpleAssignTarget::TsTypeAssertion(t) => expr_uses_arguments(&t.expr),
+        ast::SimpleAssignTarget::TsSatisfies(t) => expr_uses_arguments(&t.expr),
+        _ => false,
+    }
+}
+
+fn pat_uses_arguments(pat: &ast::AssignTargetPat) -> bool {
+    match pat {
+        ast::AssignTargetPat::Array(a) => a.elems.iter().flatten().any(binding_pat_uses_arguments),
+        ast::AssignTargetPat::Object(o) => o.props.iter().any(|prop| match prop {
+            ast::ObjectPatProp::KeyValue(kv) => binding_pat_uses_arguments(&kv.value),
+            ast::ObjectPatProp::Assign(a) => {
+                a.key.sym.as_ref() == "arguments"
+                    || a.value.as_deref().map(expr_uses_arguments).unwrap_or(false)
+            }
+            ast::ObjectPatProp::Rest(r) => binding_pat_uses_arguments(&r.arg),
+        }),
+        ast::AssignTargetPat::Invalid(_) => false,
+    }
+}
+
+fn binding_pat_uses_arguments(pat: &ast::Pat) -> bool {
+    match pat {
+        ast::Pat::Ident(i) => i.id.sym.as_ref() == "arguments",
+        ast::Pat::Array(a) => a.elems.iter().flatten().any(binding_pat_uses_arguments),
+        ast::Pat::Rest(r) => binding_pat_uses_arguments(&r.arg),
+        ast::Pat::Object(o) => o.props.iter().any(|prop| match prop {
+            ast::ObjectPatProp::KeyValue(kv) => binding_pat_uses_arguments(&kv.value),
+            ast::ObjectPatProp::Assign(a) => {
+                a.key.sym.as_ref() == "arguments"
+                    || a.value.as_deref().map(expr_uses_arguments).unwrap_or(false)
+            }
+            ast::ObjectPatProp::Rest(r) => binding_pat_uses_arguments(&r.arg),
+        }),
+        ast::Pat::Assign(a) => binding_pat_uses_arguments(&a.left) || expr_uses_arguments(&a.right),
+        ast::Pat::Expr(e) => expr_uses_arguments(e),
+        ast::Pat::Invalid(_) => false,
+    }
+}
+
+pub fn body_has_use_strict(body: &[ast::Stmt]) -> bool {
+    for stmt in body {
+        let ast::Stmt::Expr(expr_stmt) = stmt else {
+            return false;
+        };
+        let ast::Expr::Lit(ast::Lit::Str(s)) = expr_stmt.expr.as_ref() else {
+            return false;
+        };
+        if s.value.as_str() == Some("use strict") {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn params_are_simple_arguments_list(params: &[ast::Param]) -> bool {
+    params.iter().all(|param| match &param.pat {
+        ast::Pat::Ident(ident) => ident.id.sym.as_ref() == "this" || !ident.id.sym.is_empty(),
+        _ => false,
+    })
+}
+
+pub fn mapped_argument_parameter_ids(params: &[Param]) -> Vec<(u32, LocalId)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut mapped = Vec::new();
+    for (idx, param) in params.iter().enumerate().rev() {
+        if param.is_rest || param.arguments_object.is_some() {
+            continue;
+        }
+        if seen.insert(param.name.clone()) {
+            mapped.push((idx as u32, param.id));
+        }
+    }
+    mapped
+}
+
+/// Synthesize a hidden raw-arguments parameter. Call after lowering the user's
+/// parameters, before lowering the body, when the body references `arguments`
+/// and the user hasn't already bound it explicitly.
+pub fn append_synthetic_arguments_param(
+    ctx: &mut LoweringContext,
+    params: &mut Vec<Param>,
+    strict: bool,
+    simple_parameters: bool,
+    restricted_callee: bool,
+    mapped_parameter_ids: Vec<(u32, LocalId)>,
+) {
     let arguments_id = ctx.define_local("arguments".to_string(), Type::Any);
+    let has_user_rest = params.iter().any(|p| p.is_rest);
     params.push(Param {
         id: arguments_id,
         name: "arguments".to_string(),
         ty: Type::Any,
         default: None,
         decorators: Vec::new(),
-        is_rest: true,
+        is_rest: !has_user_rest,
+        arguments_object: Some(ArgumentsObjectMeta {
+            strict,
+            simple_parameters,
+            mapped_parameter_ids,
+            restricted_callee,
+        }),
     });
 }

@@ -19,8 +19,8 @@ console.log([].concat.call([1], [2, 3]));
 // .apply with a clean literal args array.
 console.log(Array.prototype.slice.apply([1, 2, 3, 4], [1, 3]));
 
-// The classic arguments-to-array idiom (perry materializes `arguments` as a
-// real array, so the borrowed slice dispatches just like Node's intent).
+// The classic arguments-to-array idiom. The borrowed Array method must accept
+// real ECMAScript Arguments objects.
 function args2arr() {
   return [].slice.call(arguments);
 }

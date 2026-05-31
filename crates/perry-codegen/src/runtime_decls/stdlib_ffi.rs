@@ -1377,7 +1377,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);
     // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
     module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64]);
-    module.declare_function("js_register_class_method", VOID, &[I64, I64, I64, I64, I64]);
+    module.declare_function(
+        "js_register_class_method",
+        VOID,
+        &[I64, I64, I64, I64, I64, I64],
+    );
     // #1787: register a class's standalone constructor so `new
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
     module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64]);

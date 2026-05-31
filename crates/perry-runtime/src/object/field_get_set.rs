@@ -1953,6 +1953,20 @@ pub extern "C" fn js_object_get_field_by_name(
                         let v = crate::error::js_error_get_cause(err_ptr);
                         return JSValue::from_bits(v.to_bits());
                     }
+                    b"constructor" => {
+                        let name: &[u8] = match (*err_ptr).error_kind {
+                            crate::error::ERROR_KIND_TYPE_ERROR => b"TypeError",
+                            crate::error::ERROR_KIND_RANGE_ERROR => b"RangeError",
+                            crate::error::ERROR_KIND_REFERENCE_ERROR => b"ReferenceError",
+                            crate::error::ERROR_KIND_SYNTAX_ERROR => b"SyntaxError",
+                            crate::error::ERROR_KIND_AGGREGATE_ERROR => b"AggregateError",
+                            crate::error::ERROR_KIND_EVAL_ERROR => b"EvalError",
+                            crate::error::ERROR_KIND_URI_ERROR => b"URIError",
+                            _ => b"Error",
+                        };
+                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        return JSValue::from_bits(v.to_bits());
+                    }
                     b"code" => {
                         // Errors thrown by runtime validation paths (e.g.
                         // diagnostics_channel argument checks) register
@@ -2242,6 +2256,11 @@ pub extern "C" fn js_object_get_field_by_name(
             let object_type = (*obj).object_type;
             if object_type != crate::error::OBJECT_TYPE_REGULAR {
                 return JSValue::undefined();
+            }
+        }
+        if super::is_arguments_object(obj) {
+            if let Some(value) = super::arguments_object_get_field(obj, key) {
+                return value;
             }
         }
 

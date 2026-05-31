@@ -45,7 +45,7 @@ pub(super) fn compile_module_entry(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     is_entry: bool,

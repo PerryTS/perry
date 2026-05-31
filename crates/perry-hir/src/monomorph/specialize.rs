@@ -30,6 +30,7 @@ pub fn specialize_function(func: &Function, type_args: &[Type], new_id: FuncId) 
                     .map(|d| substitute_expr(d, &substitutions)),
                 decorators: p.decorators.clone(),
                 is_rest: p.is_rest,
+                arguments_object: p.arguments_object.clone(),
             })
             .collect(),
         return_type: substitute_type(&func.return_type, &substitutions),
@@ -99,6 +100,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                         .map(|d| substitute_expr(d, &substitutions)),
                     decorators: p.decorators.clone(),
                     is_rest: p.is_rest,
+                    arguments_object: p.arguments_object.clone(),
                 })
                 .collect(),
             return_type: Type::Void,
@@ -132,6 +134,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                                 .map(|d| substitute_expr(d, &substitutions)),
                             decorators: p.decorators.clone(),
                             is_rest: p.is_rest,
+                            arguments_object: p.arguments_object.clone(),
                         })
                         .collect(),
                     return_type: substitute_type(&m.return_type, &substitutions),
@@ -193,6 +196,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                                     .map(|d| substitute_expr(d, &substitutions)),
                                 decorators: p.decorators.clone(),
                                 is_rest: p.is_rest,
+                                arguments_object: p.arguments_object.clone(),
                             })
                             .collect(),
                         return_type: Type::Void,

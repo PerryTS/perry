@@ -112,6 +112,8 @@ impl LoweringContext {
             prototype_function_locals: HashMap::new(),
             object_static_method_aliases: HashMap::new(),
             is_entry_module: false,
+            module_strict: false,
+            strict_mode_stack: Vec::new(),
             is_external_module: false,
             optional_require_try_depth: 0,
         }
@@ -224,6 +226,21 @@ impl LoweringContext {
         id
     }
 
+    pub(crate) fn current_strict_mode(&self) -> bool {
+        self.strict_mode_stack
+            .last()
+            .copied()
+            .unwrap_or(self.module_strict)
+    }
+
+    pub(crate) fn enter_strict_mode(&mut self, strict: bool) {
+        self.strict_mode_stack.push(strict);
+    }
+
+    pub(crate) fn exit_strict_mode(&mut self) {
+        self.strict_mode_stack.pop();
+    }
+
     /// If `ast_arg` is a bare `Boolean`, `Number`, or `String` identifier, wrap the
     /// already-lowered callback `cb` in a synthetic closure that calls the corresponding
     /// coerce expression.  Otherwise return `cb` unchanged.  This is needed because
@@ -253,6 +270,7 @@ impl LoweringContext {
                         default: None,
                         decorators: Vec::new(),
                         is_rest: false,
+                        arguments_object: None,
                     }],
                     return_type: Type::Any,
                     body: vec![Stmt::Return(Some(coerce_body))],
@@ -731,6 +749,7 @@ impl LoweringContext {
                 default: None,
                 decorators: Vec::new(),
                 is_rest: false,
+                arguments_object: None,
             });
             ctor_body.push(Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),

@@ -1045,6 +1045,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
+        | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::Number(_)
         | Expr::Integer(_)

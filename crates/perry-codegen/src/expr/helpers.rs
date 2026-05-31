@@ -334,6 +334,10 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "decodeURI"
             | "encodeURIComponent"
             | "decodeURIComponent"
+            // Test262 installs this dynamically on globalThis. Route reads
+            // through the singleton so bare `print(...)` can call it once the
+            // harness assigns the property.
+            | "print"
             // Namespaces (typeof === "object" in spec).
             | "globalThis"
             | "console"
@@ -363,6 +367,7 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
                 | "performance"
                 | "process"
                 | "navigator"
+                | "print"
         )
 }
 

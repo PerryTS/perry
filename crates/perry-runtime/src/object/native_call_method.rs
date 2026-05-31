@@ -1379,6 +1379,28 @@ pub unsafe extern "C" fn js_native_call_method(
             }
         }
 
+        // Builtin-prototype borrowing is lowered to a direct receiver call
+        // (`[].slice.call(arguments, 1)` -> `arguments.slice(1)`). Arguments
+        // objects do not expose Array methods as properties, but this dynamic
+        // dispatch path preserves the borrowed Array.prototype.slice behavior.
+        if method_name == "slice" {
+            if let Some(args_arr) =
+                crate::object::arguments_object_to_array(raw_ptr as *const ObjectHeader)
+            {
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg_value = |i: usize| -> f64 {
+                    if i < args_len && !args_ptr.is_null() {
+                        *args_ptr.add(i)
+                    } else {
+                        undefined
+                    }
+                };
+                let result =
+                    crate::array::js_array_slice_values(args_arr, arg_value(0), arg_value(1));
+                return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+            }
+        }
+
         // Array method dispatch: when the object is a real or lazy array at runtime,
         // dispatch callback-bearing array methods directly to the array runtime helpers.
         // This covers the `anyTypedVar.map(fn)` / `anyTypedVar.filter(fn)` pattern where
@@ -1445,8 +1467,18 @@ pub unsafe extern "C" fn js_native_call_method(
                                 undefined
                             }
                         };
-                        let result =
-                            crate::array::js_array_slice_values(arr, arg_value(0), arg_value(1));
+                        let result = if let Some(args_arr) =
+                            crate::object::arguments_object_to_array(
+                                raw_ptr as *const crate::object::ObjectHeader,
+                            ) {
+                            crate::array::js_array_slice_values(
+                                args_arr,
+                                arg_value(0),
+                                arg_value(1),
+                            )
+                        } else {
+                            crate::array::js_array_slice_values(arr, arg_value(0), arg_value(1))
+                        };
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
                     // Issue #321 (effect Context/Layer): defensive `splice`
@@ -2012,11 +2044,18 @@ pub unsafe extern "C" fn js_native_call_method(
             // Vtable lookup for class instances — fast path via per-callsite IC
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some((func_ptr, param_count)) =
+                if let Some((func_ptr, param_count, has_synthetic_arguments)) =
                     vtable_ic_lookup(class_id, method_name_ptr as usize)
                 {
                     let this_i64 = jsval.as_pointer::<u8>() as i64;
-                    return call_vtable_method(func_ptr, this_i64, args_ptr, args_len, param_count);
+                    return call_vtable_method(
+                        func_ptr,
+                        this_i64,
+                        args_ptr,
+                        args_len,
+                        param_count,
+                        has_synthetic_arguments,
+                    );
                 }
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                     if let Some(ref reg) = *registry {
@@ -2041,6 +2080,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         method_name_ptr as usize,
                                         entry.func_ptr,
                                         entry.param_count,
+                                        entry.has_synthetic_arguments,
                                     );
                                     let this_i64 = jsval.as_pointer::<u8>() as i64;
                                     return call_vtable_method(
@@ -2049,6 +2089,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         args_ptr,
                                         args_len,
                                         entry.param_count,
+                                        entry.has_synthetic_arguments,
                                     );
                                 }
                             }
@@ -2438,11 +2479,18 @@ pub unsafe extern "C" fn js_native_call_method(
             // Vtable lookup — fast path via per-callsite IC
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some((func_ptr, param_count)) =
+                if let Some((func_ptr, param_count, has_synthetic_arguments)) =
                     vtable_ic_lookup(class_id, method_name_ptr as usize)
                 {
                     let this_i64 = raw_bits as i64;
-                    return call_vtable_method(func_ptr, this_i64, args_ptr, args_len, param_count);
+                    return call_vtable_method(
+                        func_ptr,
+                        this_i64,
+                        args_ptr,
+                        args_len,
+                        param_count,
+                        has_synthetic_arguments,
+                    );
                 }
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                     if let Some(ref reg) = *registry {
@@ -2458,6 +2506,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         method_name_ptr as usize,
                                         entry.func_ptr,
                                         entry.param_count,
+                                        entry.has_synthetic_arguments,
                                     );
                                     let this_i64 = raw_bits as i64;
                                     return call_vtable_method(
@@ -2466,6 +2515,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         args_ptr,
                                         args_len,
                                         entry.param_count,
+                                        entry.has_synthetic_arguments,
                                     );
                                 }
                             }
@@ -2656,15 +2706,21 @@ pub unsafe extern "C" fn js_native_call_method(
                 };
                 let args_arr_jsval = JSValue::from_bits(args_arr_val.to_bits());
                 let buf: Vec<f64> = if args_arr_jsval.is_pointer() {
-                    let arr_ptr = (args_arr_val.to_bits() & 0x0000_FFFF_FFFF_FFFF)
-                        as *const crate::array::ArrayHeader;
-                    if arr_ptr.is_null() {
-                        Vec::new()
+                    let raw_ptr = (args_arr_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                    if let Some(values) = crate::object::arguments_object_to_vec(
+                        raw_ptr as *const crate::object::ObjectHeader,
+                    ) {
+                        values
                     } else {
-                        let n = crate::array::js_array_length(arr_ptr) as usize;
-                        (0..n)
-                            .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
-                            .collect()
+                        let arr_ptr = raw_ptr as *const crate::array::ArrayHeader;
+                        if arr_ptr.is_null() {
+                            Vec::new()
+                        } else {
+                            let n = crate::array::js_array_length(arr_ptr) as usize;
+                            (0..n)
+                                .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
+                                .collect()
+                        }
                     }
                 } else {
                     Vec::new()
@@ -2931,6 +2987,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                 args_ptr,
                                 args_len,
                                 entry.param_count,
+                                entry.has_synthetic_arguments,
                             );
                         }
                     }
@@ -3003,6 +3060,24 @@ pub unsafe extern "C" fn js_native_call_method(
             let guard = REGISTERED_CLASS_IDS.read().unwrap();
             if let Some(set) = guard.as_ref() {
                 if set.contains(&payload) {
+                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                        if let Some(ref reg) = *registry {
+                            if let Some(vtable) = reg.get(&payload) {
+                                if let Some(entry) = vtable.methods.get(method_name) {
+                                    let undefined_this =
+                                        f64::from_bits(crate::value::TAG_UNDEFINED);
+                                    return call_vtable_method(
+                                        entry.func_ptr,
+                                        undefined_this.to_bits() as i64,
+                                        args_ptr,
+                                        args_len,
+                                        entry.param_count,
+                                        entry.has_synthetic_arguments,
+                                    );
+                                }
+                            }
+                        }
+                    }
                     return object;
                 }
             }

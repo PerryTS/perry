@@ -478,6 +478,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         default: param_default,
                         decorators: Vec::new(),
                         is_rest,
+                        arguments_object: None,
                     });
                     if is_destructuring_pattern(&param.pat) {
                         destructuring_params.push((param_id, param.pat.clone()));
@@ -490,13 +491,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     .params
                     .iter()
                     .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-                let user_has_rest = fn_decl
+                let strict = fn_decl
                     .function
-                    .params
-                    .iter()
-                    .any(|p| is_rest_param(&p.pat));
+                    .body
+                    .as_ref()
+                    .map(|b| body_has_use_strict(&b.stmts))
+                    .unwrap_or(false);
+                let simple_parameters = params_are_simple_arguments_list(&fn_decl.function.params);
                 let needs_arguments_synth = !user_has_arguments_param
-                    && !user_has_rest
                     && fn_decl
                         .function
                         .body
@@ -504,7 +506,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         .map(|b| body_uses_arguments(&b.stmts))
                         .unwrap_or(false);
                 if needs_arguments_synth {
-                    append_synthetic_arguments_param(ctx, &mut params);
+                    let mapped = !strict && simple_parameters;
+                    let mapped_parameter_ids = if mapped {
+                        mapped_argument_parameter_ids(&params)
+                    } else {
+                        Vec::new()
+                    };
+                    append_synthetic_arguments_param(
+                        ctx,
+                        &mut params,
+                        strict,
+                        simple_parameters,
+                        !mapped,
+                        mapped_parameter_ids,
+                    );
                 }
 
                 // Generate destructuring stmts

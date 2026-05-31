@@ -61,6 +61,7 @@ impl SH for Expr {
             Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
             Expr::New { class_name, args, type_args, } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
             Expr::NewDynamic { callee, args } => { tag(h, 43); callee.as_ref().hash(h); args.hash(h); }
+            Expr::NewTarget => { tag(h, 12301); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }
             Expr::StaticFieldGet { class_name, field_name, } => { tag(h, 46); class_name.hash(h); field_name.hash(h); }

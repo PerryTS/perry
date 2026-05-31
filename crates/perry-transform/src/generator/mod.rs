@@ -94,11 +94,34 @@ pub fn transform_generators(module: &mut Module) {
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
             ctor.body = b;
         }
+        for m in &mut class.methods {
+            if m.is_generator {
+                transform_generator_function_with_extra_captures(
+                    m,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                    &[],
+                    &[],
+                    true,
+                    Some(class.name.clone()),
+                );
+            }
+            let mut b = std::mem::take(&mut m.body);
+            transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
+            m.body = b;
+        }
+        for m in &mut class.static_methods {
+            if m.is_generator {
+                transform_generator_function(m, &mut next_local_id, &mut next_func_id);
+            }
+            let mut b = std::mem::take(&mut m.body);
+            transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
+            m.body = b;
+        }
         for m in class
-            .methods
+            .getters
             .iter_mut()
-            .chain(class.static_methods.iter_mut())
-            .chain(class.getters.iter_mut().map(|(_, f)| f))
+            .map(|(_, f)| f)
             .chain(class.setters.iter_mut().map(|(_, f)| f))
         {
             let mut b = std::mem::take(&mut m.body);

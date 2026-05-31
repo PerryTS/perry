@@ -253,7 +253,7 @@ pub(super) fn lower_meta_prop(
                     Expr::String(class_name),
                 )]))
             } else {
-                Ok(Expr::Undefined)
+                Ok(Expr::NewTarget)
             }
         }
     }

@@ -23,6 +23,7 @@ use std::sync::RwLock;
 // surface (all `#[no_mangle]` FFI entry points keep their exact symbol).
 // ---------------------------------------------------------------------------
 mod alloc;
+mod arguments;
 mod assert;
 mod bigint_dispatch;
 mod buffer_dispatch;
@@ -48,6 +49,7 @@ pub(crate) mod prototype_chain;
 mod reflect_support;
 mod util_types;
 pub use alloc::*;
+pub use arguments::*;
 pub use assert::*;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
@@ -1654,6 +1656,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // Object via the GC header type byte.
     let raw_ptr = raw_addr as *const u8;
     if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        if let Some(tag) = arguments_object_to_string_tag(value) {
+            return tag;
+        }
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
         if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
