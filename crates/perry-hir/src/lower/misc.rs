@@ -14,6 +14,51 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+pub(crate) fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
+    let ast::Stmt::Expr(expr_stmt) = stmt else {
+        return None;
+    };
+    let ast::Expr::Lit(ast::Lit::Str(str_lit)) = expr_stmt.expr.as_ref() else {
+        return None;
+    };
+    let Some(raw) = str_lit.raw.as_ref() else {
+        return Some(false);
+    };
+    Some(raw.as_ref() == "\"use strict\"" || raw.as_ref() == "'use strict'")
+}
+
+pub(crate) fn block_has_use_strict_directive(stmts: &[ast::Stmt]) -> bool {
+    for stmt in stmts {
+        match is_use_strict_directive_stmt(stmt) {
+            Some(true) => return true,
+            Some(false) => continue,
+            None => return false,
+        }
+    }
+    false
+}
+
+pub(crate) fn module_has_use_strict_directive(module: &ast::Module) -> bool {
+    for item in &module.body {
+        match item {
+            ast::ModuleItem::Stmt(stmt) => match is_use_strict_directive_stmt(stmt) {
+                Some(true) => return true,
+                Some(false) => continue,
+                None => return false,
+            },
+            ast::ModuleItem::ModuleDecl(_) => return false,
+        }
+    }
+    false
+}
+
+pub(crate) fn module_has_module_declaration(module: &ast::Module) -> bool {
+    module
+        .body
+        .iter()
+        .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
+}
+
 /// Map a function's declared return type to a native-instance class when it
 /// matches a known stdlib pattern. Lets a wrapper function like
 /// `function openSocket(host, port): Socket { ... }` advertise that calls
