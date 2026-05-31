@@ -459,6 +459,16 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_VARARGS],
         ret: NR_F64,
     },
+    // ========== Node FS ==========
+    NativeModSig {
+        module: "fs",
+        has_receiver: false,
+        method: "_toUnixTimestamp",
+        class_filter: None,
+        runtime: "js_fs_to_unix_timestamp",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== Node TTY ==========
     NativeModSig {
         module: "tty",

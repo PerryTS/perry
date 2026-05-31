@@ -33,7 +33,9 @@ mod stats;
 pub use stats::*;
 mod dirent;
 pub use dirent::*;
+mod time;
 pub mod validate;
+pub use time::js_fs_to_unix_timestamp;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
