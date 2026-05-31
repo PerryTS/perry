@@ -957,6 +957,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "net"
+                    && ((class_name == "Socket" && is_net_socket_method_name(&property_name))
+                        || (class_name == "Server" && is_net_server_method_name(&property_name)))
+                {
+                    // `net.Socket` / `net.Server` method reads are callable
+                    // values. The call form still lowers through the native
+                    // method table; only bare reads use property dispatch.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "Headers" && is_headers_method_name(&property_name) {
                     // A bare Fetch Headers method read (`headers.entries`) is a
                     // function value, not a zero-arg native call. The call form
@@ -1905,6 +1917,63 @@ fn is_dgram_socket_method_name(prop: &str) -> bool {
             | "getSendBufferSize"
             | "ref"
             | "unref"
+    )
+}
+
+fn is_net_socket_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "address"
+            | "connect"
+            | "destroy"
+            | "destroySoon"
+            | "end"
+            | "pause"
+            | "ref"
+            | "resetAndDestroy"
+            | "resume"
+            | "setEncoding"
+            | "setKeepAlive"
+            | "setNoDelay"
+            | "setTimeout"
+            | "unref"
+            | "write"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "listenerCount"
+            | "eventNames"
+            | "listeners"
+            | "rawListeners"
+            | "upgradeToTLS"
+            | "setDefaultEncoding"
+            | "cork"
+            | "uncork"
+    )
+}
+
+fn is_net_server_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "address"
+            | "close"
+            | "getConnections"
+            | "listen"
+            | "ref"
+            | "unref"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "listenerCount"
+            | "eventNames"
+            | "listeners"
+            | "rawListeners"
     )
 }
 

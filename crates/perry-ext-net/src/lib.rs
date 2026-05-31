@@ -1726,6 +1726,11 @@ pub fn is_net_socket_handle(handle: i64) -> bool {
     statics::sockets().lock().unwrap().contains_key(&handle)
 }
 
+/// True iff `handle` is a currently-registered net server id.
+pub fn is_net_server_handle(handle: i64) -> bool {
+    statics::servers().lock().unwrap().contains_key(&handle)
+}
+
 /// `extern "C"` form of `is_net_socket_handle` — used by
 /// perry-stdlib's `common::dispatch::dispatch_handle_method`
 /// (HANDLE_METHOD_DISPATCH) when bundled-net is stripped and
@@ -1743,6 +1748,17 @@ pub fn is_net_socket_handle(handle: i64) -> bool {
 #[no_mangle]
 pub extern "C" fn js_ext_net_is_socket_handle(handle: i64) -> i32 {
     if is_net_socket_handle(handle) {
+        1
+    } else {
+        0
+    }
+}
+
+/// `extern "C"` form of `is_net_server_handle` for method-value/property
+/// dispatch on `net.Server` handles.
+#[no_mangle]
+pub extern "C" fn js_ext_net_is_server_handle(handle: i64) -> i32 {
+    if is_net_server_handle(handle) {
         1
     } else {
         0
