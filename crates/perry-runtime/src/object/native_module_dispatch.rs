@@ -1177,6 +1177,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util.types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util.types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util.types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util.types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util.types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util.types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
 
         // ── node:util/types direct module ──
         ("util/types", "isPromise") => {
@@ -1263,6 +1269,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util/types", "isBoxedPrimitive") => {
             crate::object::js_util_types_is_boxed_primitive(arg(0))
         }
+        // #3678: predicate tail.
+        ("util/types", "isDataView") => crate::object::js_util_types_is_data_view(arg(0)),
+        ("util/types", "isFloat16Array") => crate::object::js_util_types_is_float16_array(arg(0)),
+        ("util/types", "isWeakMap") => crate::object::js_util_types_is_weak_map(arg(0)),
+        ("util/types", "isWeakSet") => crate::object::js_util_types_is_weak_set(arg(0)),
+        ("util/types", "isExternal") => crate::object::js_util_types_is_external(arg(0)),
         // ── url module (module-level functions return NaN-boxed JS values) ──
         ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
         ("url", "fileURLToPathBuffer") => {

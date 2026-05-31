@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2117 entries across 98 modules
+// Coverage: 2124 entries across 98 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2769,6 +2769,8 @@ declare module "process" {
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
   /** stdlib */
+  export function setSourceMapsEnabled(...args: any[]): any;
+  /** stdlib */
   export function setegid(...args: any[]): any;
   /** stdlib */
   export function seteuid(...args: any[]): any;
@@ -2778,6 +2780,8 @@ declare module "process" {
   export function setgroups(...args: any[]): any;
   /** stdlib */
   export function setuid(...args: any[]): any;
+  /** stdlib */
+  export function sourceMapsEnabled(...args: any[]): any;
   /** stdlib */
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
@@ -3188,7 +3192,13 @@ declare module "util/types" {
   /** stdlib */
   export function isBoxedPrimitive(...args: any[]): any;
   /** stdlib */
+  export function isDataView(...args: any[]): any;
+  /** stdlib */
   export function isDate(...args: any[]): any;
+  /** stdlib */
+  export function isExternal(...args: any[]): any;
+  /** stdlib */
+  export function isFloat16Array(...args: any[]): any;
   /** stdlib */
   export function isFloat32Array(...args: any[]): any;
   /** stdlib */
@@ -3235,6 +3245,10 @@ declare module "util/types" {
   export function isUint8Array(...args: any[]): any;
   /** stdlib */
   export function isUint8ClampedArray(...args: any[]): any;
+  /** stdlib */
+  export function isWeakMap(...args: any[]): any;
+  /** stdlib */
+  export function isWeakSet(...args: any[]): any;
 }
 
 declare module "uuid" {
