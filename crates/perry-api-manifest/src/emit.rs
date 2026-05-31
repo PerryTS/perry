@@ -6,7 +6,9 @@
 //! alphabetically, entries within a module sort by kind then name —
 //! so regenerated docs produce stable diffs in CI.
 
-use crate::{ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST};
+use crate::{
+    entry_is_public_named_export, ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST,
+};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -56,17 +58,27 @@ pub fn emit_markdown(_perry_version: &str) -> String {
         let methods: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Method { .. }))
+            .filter(|e| match e.kind {
+                ApiKind::Method {
+                    has_receiver: true, ..
+                } => true,
+                ApiKind::Method {
+                    class_filter: Some(_),
+                    ..
+                } => true,
+                ApiKind::Method { .. } => entry_is_public_named_export(e),
+                _ => false,
+            })
             .collect();
         let properties: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Property))
+            .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_public_named_export(e))
             .collect();
         let classes: Vec<&ApiEntry> = entries
             .iter()
             .copied()
-            .filter(|e| matches!(e.kind, ApiKind::Class))
+            .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_public_named_export(e))
             .collect();
 
         if !classes.is_empty() {
@@ -156,7 +168,10 @@ pub fn emit_dts(_perry_version: &str) -> String {
         let _ = writeln!(out, "declare module \"{}\" {{", module_decl);
 
         // Classes first — methods may reference them via class_filter.
-        for e in entries.iter().filter(|e| matches!(e.kind, ApiKind::Class)) {
+        for e in entries
+            .iter()
+            .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_public_named_export(e))
+        {
             let _ = writeln!(
                 out,
                 "  /** {}{} */",
@@ -177,7 +192,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
         // Properties.
         for e in entries
             .iter()
-            .filter(|e| matches!(e.kind, ApiKind::Property))
+            .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_public_named_export(e))
         {
             let _ = writeln!(
                 out,
@@ -203,7 +218,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
                     has_receiver: false,
                     class_filter: None,
                 }
-            )
+            ) && entry_is_public_named_export(e)
         }) {
             // Same name can appear with multiple class_filter rows in
             // the dispatch table; the manifest collapses them but a
