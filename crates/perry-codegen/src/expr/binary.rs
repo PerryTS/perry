@@ -68,7 +68,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // per row in mixed-type CSV / log-line / template
                 // patterns. Only fires for chains of 3+ parts; smaller
                 // shapes go through the existing pairwise paths.
-                if l_is_str || r_is_str {
+                if l_is_str && r_is_str {
                     if let Some(parts) = flatten_string_add_chain(ctx, left, right) {
                         if parts.len() >= 3 {
                             return lower_string_concat_chain(ctx, &parts);
@@ -80,7 +80,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return lower_string_concat(ctx, left, right);
                 }
                 if l_is_str || r_is_str {
-                    return lower_string_coerce_concat(ctx, left, right, l_is_str, r_is_str);
+                    let other_known_primitive = if l_is_str {
+                        crate::type_analysis::is_numeric_expr(ctx, right)
+                            || is_bigint_expr(ctx, right)
+                            || is_bool_expr(ctx, right)
+                    } else {
+                        crate::type_analysis::is_numeric_expr(ctx, left)
+                            || is_bigint_expr(ctx, left)
+                            || is_bool_expr(ctx, left)
+                    };
+                    if other_known_primitive {
+                        return lower_string_coerce_concat(ctx, left, right, l_is_str, r_is_str);
+                    }
+                    let l = lower_expr(ctx, left)?;
+                    let r = lower_expr(ctx, right)?;
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_dynamic_string_or_number_add",
+                        &[(DOUBLE, &l), (DOUBLE, &r)],
+                    ));
                 }
                 // Refs #486: neither operand is statically known. Per JS
                 // spec for `+`, if EITHER side is a string at runtime, the
@@ -96,15 +114,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // step poisoned the result. Dispatch through the runtime
                 // helper that checks NaN-box tags: STRING_TAG / SHORT_STRING_TAG
                 // → string concat, BIGINT → bigint add, otherwise numeric.
-                // Stay on the static numeric/bigint paths when at least one
-                // operand is provably non-string (numeric / bigint / boolean
-                // / int) — those don't risk the string-concat semantics and
-                // we keep the inline fadd codegen for hot arithmetic loops.
-                let l_non_str =
+                // Stay on the static numeric/bigint paths only when both
+                // operands are provably non-string. A numeric literal on one
+                // side does not make the other side safe: objects can still
+                // become strings during ToPrimitive(default), and the runtime
+                // helper must observe that before choosing concat vs numeric
+                // addition.
+                let l_known_non_str =
                     crate::type_analysis::is_numeric_expr(ctx, left) || is_bigint_expr(ctx, left);
-                let r_non_str =
+                let r_known_non_str =
                     crate::type_analysis::is_numeric_expr(ctx, right) || is_bigint_expr(ctx, right);
-                if !l_non_str && !r_non_str {
+                if !(l_known_non_str && r_known_non_str) {
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
                     return Ok(ctx.block().call(

@@ -2001,11 +2001,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:path
 
-**Gap APIs: 4** · Already covered: 12
+**Gap APIs: 3** · Already covered: 13
 
 #### Missing from Perry
 
-- `path.matchesGlob(path, pattern)`
 - `path.toNamespacedPath(path)`
 - `path.posix`
 - `path.win32`
@@ -2020,6 +2019,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `path.format(pathObject)` | `manifest:path.format` |
 | `path.isAbsolute(path)` | `manifest:path.isAbsolute` |
 | `path.join([...paths])` | `manifest:path.join` |
+| `path.matchesGlob(path, pattern)` | `manifest:path.matchesGlob`; `test-parity/node-suite/path/matchesGlob/extglob-globstar.ts`; `test-parity/node-suite/path/matchesGlob/win32-separators.ts` |
 | `path.normalize(path)` | `manifest:path.normalize` |
 | `path.parse(path)` | `manifest:path.parse` |
 | `path.relative(from, to)` | `manifest:path.relative` |
