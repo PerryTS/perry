@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1846 entries across 90 modules
+// Coverage: 1891 entries across 91 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -256,6 +256,10 @@ declare module "buffer" {
   export function copyBytesFrom(...args: any[]): any;
   /** stdlib */
   export function from(...args: any[]): any;
+  /** stdlib */
+  export function fromBase64(...args: any[]): any;
+  /** stdlib */
+  export function fromHex(...args: any[]): any;
   /** stdlib */
   export function isAscii(...args: any[]): any;
   /** stdlib */
@@ -919,6 +923,15 @@ declare module "dayjs" {
 }
 
 declare module "decimal.js" {
+}
+
+declare module "dgram" {
+  /** stdlib */
+  export class Socket { [key: string]: any; }
+  /** stdlib */
+  export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function createSocket(...args: any[]): any;
 }
 
 declare module "dotenv" {
@@ -2625,6 +2638,8 @@ declare module "sys" {
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
   /** stdlib */
+  export function getCallSites(...args: any[]): any;
+  /** stdlib */
   export function getSystemErrorMap(...args: any[]): any;
   /** stdlib */
   export function getSystemErrorMessage(...args: any[]): any;
@@ -2644,6 +2659,8 @@ declare module "sys" {
   export function parseEnv(...args: any[]): any;
   /** stdlib */
   export function promisify(...args: any[]): any;
+  /** stdlib */
+  export function setTraceSigInt(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
   /** stdlib */
@@ -2695,6 +2712,10 @@ declare module "tty" {
   export class ReadStream { [key: string]: any; }
   /** stdlib */
   export class WriteStream { [key: string]: any; }
+  /** stdlib */
+  export function ReadStream(...args: any[]): any;
+  /** stdlib */
+  export function WriteStream(...args: any[]): any;
   /** stdlib */
   export function isatty(...args: any[]): any;
 }
@@ -2753,6 +2774,8 @@ declare module "util" {
   /** stdlib */
   export function formatWithOptions(...args: any[]): any;
   /** stdlib */
+  export function getCallSites(...args: any[]): any;
+  /** stdlib */
   export function getSystemErrorMap(...args: any[]): any;
   /** stdlib */
   export function getSystemErrorMessage(...args: any[]): any;
@@ -2772,6 +2795,8 @@ declare module "util" {
   export function parseEnv(...args: any[]): any;
   /** stdlib */
   export function promisify(...args: any[]): any;
+  /** stdlib */
+  export function setTraceSigInt(...args: any[]): any;
   /** stdlib */
   export function stripVTControlCharacters(...args: any[]): any;
   /** stdlib */

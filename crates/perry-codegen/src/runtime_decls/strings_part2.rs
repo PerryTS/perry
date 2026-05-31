@@ -119,6 +119,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_find_last_index", DOUBLE, &[I64, I64]);
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).
+    module.declare_function(
+        "js_object_property_is_enumerable",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // Issue #620: own-property override probe used by class-method dispatch.
     // Returns the stored value if `name` is in obj's own keys_array (data
     // property only — no vtable getter walk), else TAG_UNDEFINED. Lets

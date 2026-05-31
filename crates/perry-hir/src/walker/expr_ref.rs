@@ -160,6 +160,8 @@ where
         | Expr::RegExpLastIndex(v)
         | Expr::JsonParse(v)
         | Expr::JsonStringify(v)
+        | Expr::JsonRawJson(v)
+        | Expr::JsonIsRawJson(v)
         | Expr::JsonParseTyped { text: v, .. }
         | Expr::MathFloor(v)
         | Expr::MathCeil(v)
@@ -682,9 +684,16 @@ where
             f(items);
             f(key_fn);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             f(iterable);
             f(map_fn);
+            if let Some(t) = this_arg {
+                f(t);
+            }
         }
         Expr::IndexSet {
             object,
@@ -1506,9 +1515,16 @@ where
                 f(a);
             }
         }
-        Expr::ReflectGet { target, key }
-        | Expr::ReflectHas { target, key }
-        | Expr::ReflectDelete { target, key } => {
+        Expr::ReflectGet {
+            target,
+            key,
+            receiver,
+        } => {
+            f(target);
+            f(key);
+            f(receiver);
+        }
+        Expr::ReflectHas { target, key } | Expr::ReflectDelete { target, key } => {
             f(target);
             f(key);
         }
@@ -1516,6 +1532,10 @@ where
             f(target);
             f(key);
             f(value);
+        }
+        Expr::ReflectSetPrototypeOf { target, proto } => {
+            f(target);
+            f(proto);
         }
         Expr::ReflectApply {
             func,

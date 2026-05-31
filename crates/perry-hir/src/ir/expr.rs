@@ -674,6 +674,10 @@ pub enum Expr {
         space: Box<Expr>,
     },
     JsonStringifyFull(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `JSON.rawJSON(text)` (#2900) -> raw-JSON wrapper object.
+    JsonRawJson(Box<Expr>),
+    /// `JSON.isRawJSON(value)` (#2900) -> boolean.
+    JsonIsRawJson(Box<Expr>),
 
     // Math operations
     MathFloor(Box<Expr>),            // Math.floor(x) -> number
@@ -1907,11 +1911,13 @@ pub enum Expr {
     /// else drives its `[Symbol.iterator]`. Without it the index loop read
     /// `.length` off a raw Map/Set handle (→ 0) and iterated zero times.
     ForOfToArray(Box<Expr>),
-    /// Array.from(iterable, mapFn) -> Array
+    /// Array.from(iterable, mapFn, thisArg?) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
+    /// `this_arg` (#2773) binds `this` inside a non-arrow mapFn.
     ArrayFromMapped {
         iterable: Box<Expr>,
         map_fn: Box<Expr>,
+        this_arg: Option<Box<Expr>>,
     },
 
     // Global built-in functions
@@ -2091,6 +2097,9 @@ pub enum Expr {
     ReflectGet {
         target: Box<Expr>,
         key: Box<Expr>,
+        /// #2766: optional `receiver` argument (the `this` binding for accessor
+        /// getters). Lowering supplies `target` when the call omits it.
+        receiver: Box<Expr>,
     },
     ReflectSet {
         target: Box<Expr>,
@@ -2121,6 +2130,13 @@ pub enum Expr {
         descriptor: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
+    /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
+    /// (false when rejected), unlike `Object.setPrototypeOf` which returns the
+    /// object. Lowered separately so it can report failure / throw on bad args.
+    ReflectSetPrototypeOf {
+        target: Box<Expr>,
+        proto: Box<Expr>,
+    },
     // #2762: Reflect.isExtensible / Reflect.preventExtensions have
     // Reflect-specific semantics (boolean result, TypeError on non-object)
     // distinct from the Object.* helpers, so they use dedicated variants.

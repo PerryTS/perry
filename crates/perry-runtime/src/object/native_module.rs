@@ -409,6 +409,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"deprecate",
             b"format",
             b"formatWithOptions",
+            b"getCallSites",
             b"getSystemErrorMap",
             b"getSystemErrorName",
             b"getSystemErrorMessage",
@@ -420,6 +421,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"stripVTControlCharacters",
             b"styleText",
             b"toUSVString",
+            b"setTraceSigInt",
             b"types",
             b"parseArgs",
             b"TextDecoder",
@@ -896,60 +898,8 @@ pub(crate) fn util_debuglog_logger_value() -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn fn_value(func_ptr: *const u8, name: &str) -> f64 {
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    set_bound_native_closure_name(closure, name);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
-    let (packed, count) = if name == "WriteStream" {
-        (b"constructor\0hasColors\0getColorDepth\0".as_ptr(), 3)
-    } else {
-        (b"constructor\0".as_ptr(), 1)
-    };
-    let packed_len = if name == "WriteStream" {
-        b"constructor\0hasColors\0getColorDepth\0".len()
-    } else {
-        b"constructor\0".len()
-    };
-    let shape_id = if name == "WriteStream" {
-        0x7FFF_FF32
-    } else {
-        0x7FFF_FF31
-    };
-    let proto = js_object_alloc_with_shape(shape_id, count, packed, packed_len as u32);
-    js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
-    if name == "WriteStream" {
-        js_object_set_field(
-            proto,
-            1,
-            JSValue::from_bits(
-                fn_value(
-                    crate::tty::js_tty_write_stream_has_colors as *const u8,
-                    "hasColors",
-                )
-                .to_bits(),
-            ),
-        );
-        js_object_set_field(
-            proto,
-            2,
-            JSValue::from_bits(
-                fn_value(
-                    crate::tty::js_tty_write_stream_get_color_depth as *const u8,
-                    "getColorDepth",
-                )
-                .to_bits(),
-            ),
-        );
-    }
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    crate::closure::closure_set_dynamic_prop(
-        (constructor_value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
-        "prototype",
-        proto_value,
-    );
+    crate::tty::attach_tty_constructor_prototype(constructor_value, name);
 }
 
 pub(crate) unsafe fn bound_native_callable_module_and_method(
@@ -1091,6 +1041,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("dgram", "createSocket")
+            | ("dgram", "Socket")
             | ("process", "abort")
             | ("process", "cwd")
             | ("process", "uptime")
@@ -1418,6 +1370,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "aborted")
             | ("util", "debuglog")
+            | ("util", "getCallSites")
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
             | ("util", "getSystemErrorMap")
@@ -1434,6 +1387,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "stripVTControlCharacters")
             | ("util", "styleText")
             | ("util", "toUSVString")
+            | ("util", "setTraceSigInt")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")

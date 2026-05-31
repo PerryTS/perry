@@ -63,6 +63,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "assert/strict",
     "test",
     "child_process",
+    "dgram",
     "net",
     "tls",
     "stream",
@@ -132,7 +133,13 @@ pub const NATIVE_MODULES: &[&str] = &[
 /// `node_submodules` runtime table rather than `NATIVE_MODULES`.
 /// Keeping these separate preserves the compiler's submodule import
 /// lowering while still allowing manifest/docs entries for the subpath.
-pub const NODE_SUBMODULES: &[&str] = &["stream/promises", "punycode.ucs2", "sys"];
+pub const NODE_SUBMODULES: &[&str] = &[
+    "stream/promises",
+    "punycode.ucs2",
+    "sys",
+    "test",
+    "test/reporters",
+];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
@@ -148,6 +155,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "assert/strict",
     "test",
     "child_process",
+    "dgram",
     "stream",
     "module",
     "url",
@@ -536,6 +544,31 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Void,
     ),
+    // node:dgram UDP support is currently a runtime-only shape stub:
+    // createSocket returns a socket-like object with callable methods so
+    // feature detection and inventory probes compile without claiming packet IO.
+    method("dgram", "createSocket", false, None),
+    class("dgram", "Socket"),
+    method("dgram", "Socket", false, None),
+    method("dgram", "send", true, Some("Socket")),
+    method("dgram", "bind", true, Some("Socket")),
+    method("dgram", "close", true, Some("Socket")),
+    method("dgram", "address", true, Some("Socket")),
+    method("dgram", "connect", true, Some("Socket")),
+    method("dgram", "disconnect", true, Some("Socket")),
+    method("dgram", "addMembership", true, Some("Socket")),
+    method("dgram", "dropMembership", true, Some("Socket")),
+    method("dgram", "setBroadcast", true, Some("Socket")),
+    method("dgram", "setMulticastTTL", true, Some("Socket")),
+    method("dgram", "setMulticastLoopback", true, Some("Socket")),
+    method("dgram", "setMulticastInterface", true, Some("Socket")),
+    method("dgram", "setTTL", true, Some("Socket")),
+    method("dgram", "setRecvBufferSize", true, Some("Socket")),
+    method("dgram", "setSendBufferSize", true, Some("Socket")),
+    method("dgram", "getRecvBufferSize", true, Some("Socket")),
+    method("dgram", "getSendBufferSize", true, Some("Socket")),
+    method("dgram", "ref", true, Some("Socket")),
+    method("dgram", "unref", true, Some("Socket")),
     method_sig(
         "net",
         "createConnection",
@@ -2832,9 +2865,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "aborted", false, None),
     method("util", "transferableAbortController", false, None),
     method("util", "transferableAbortSignal", false, None),
+    method("util", "getCallSites", false, None),
     method("util", "parseEnv", false, None),
     // #2514: util.toUSVString(value) → string with lone surrogates replaced.
     method("util", "toUSVString", false, None),
+    method("util", "setTraceSigInt", false, None),
     // `util.formatWithOptions(options, format[, ...args])` — identical to
     // `util.format` except the first arg is an `util.inspect` options bag
     // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
@@ -2914,6 +2949,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "aborted", false, None),
     method("sys", "transferableAbortController", false, None),
     method("sys", "transferableAbortSignal", false, None),
+    method("sys", "getCallSites", false, None),
     method("sys", "parseEnv", false, None),
     method("sys", "formatWithOptions", false, None),
     method("sys", "promisify", false, None),
@@ -2933,6 +2969,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sys", "stripVTControlCharacters", false, None),
     method("sys", "styleText", false, None),
     method("sys", "toUSVString", false, None),
+    method("sys", "setTraceSigInt", false, None),
     class("sys", "TextEncoder"),
     class("sys", "TextDecoder"),
     property("sys", "types"),
@@ -3128,11 +3165,31 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // value-read passes the #463 surface gate and resolves to `undefined`.
     class("child_process", "ChildProcess"),
     property("child_process", "Stream"),
-    // --- tty (only `isatty` is implemented; ReadStream / WriteStream
-    //     are wrapped via process.stdin / process.stdout) ---
+    // --- tty ---
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
     class("tty", "WriteStream"),
+    // Constructor-style factory dispatch (`tty.ReadStream(fd)` /
+    // `tty.WriteStream(fd)`) — `has_receiver: false` rows in
+    // NATIVE_MODULE_TABLE need a matching Method entry so the
+    // dispatch->manifest drift guard (manifest_consistency.rs) passes.
+    method("tty", "ReadStream", false, None),
+    method("tty", "WriteStream", false, None),
+    method("tty", "setRawMode", true, Some("ReadStream")),
+    method("tty", "getColorDepth", true, Some("WriteStream")),
+    method("tty", "hasColors", true, Some("WriteStream")),
+    method("tty", "_refreshSize", true, Some("WriteStream")),
+    method("tty", "cursorTo", true, Some("WriteStream")),
+    method("tty", "moveCursor", true, Some("WriteStream")),
+    method("tty", "clearLine", true, Some("WriteStream")),
+    method("tty", "clearScreenDown", true, Some("WriteStream")),
+    method("tty", "getWindowSize", true, Some("WriteStream")),
+    method("tty", "on", true, Some("WriteStream")),
+    method("tty", "addListener", true, Some("WriteStream")),
+    method("tty", "once", true, Some("WriteStream")),
+    method("tty", "removeListener", true, Some("WriteStream")),
+    method("tty", "off", true, Some("WriteStream")),
+    method("tty", "removeAllListeners", true, Some("WriteStream")),
     // --- perf_hooks (W3C User Timing on `performance` + PerformanceObserver) ---
     method("perf_hooks", "now", false, None),
     method("perf_hooks", "mark", false, None),
@@ -3193,6 +3250,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("buffer", "of", false, None),
     method("buffer", "concat", false, None),
     method("buffer", "copyBytesFrom", false, None),
+    // #2901: TC39 `Uint8Array.fromBase64` / `fromHex` static factories,
+    // routed through the buffer module (Uint8Array ≡ Buffer in Perry).
+    method("buffer", "fromBase64", false, None),
+    method("buffer", "fromHex", false, None),
     method("buffer", "isBuffer", false, None),
     method("buffer", "isEncoding", false, None),
     method("buffer", "byteLength", false, None),

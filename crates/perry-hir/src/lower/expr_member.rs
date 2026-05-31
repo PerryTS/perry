@@ -931,6 +931,28 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "dgram"
+                    && class_name == "Socket"
+                    && is_dgram_socket_method_name(&property_name)
+                {
+                    // `dgram.createSocket()` returns a socket-shaped stub
+                    // object whose methods are callable fields. A bare method
+                    // read (`typeof s.close`) should observe that closure
+                    // instead of invoking the receiver stub as a getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "Headers" && is_headers_method_name(&property_name) {
+                    // A bare Fetch Headers method read (`headers.entries`) is a
+                    // function value, not a zero-arg native call. The call form
+                    // (`headers.entries()`) is handled by expr_call lowering.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1538,6 +1560,7 @@ const STDLIB_NAMESPACE_NAMES: &[&str] = &[
     "fs",
     "crypto",
     "child_process",
+    "dgram",
     "net",
     "os",
     "path",
@@ -1800,6 +1823,47 @@ fn is_console_instance_method_name(prop: &str) -> bool {
             | "profile"
             | "profileEnd"
             | "timeStamp"
+    )
+}
+
+fn is_dgram_socket_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "send"
+            | "bind"
+            | "close"
+            | "address"
+            | "connect"
+            | "disconnect"
+            | "addMembership"
+            | "dropMembership"
+            | "setBroadcast"
+            | "setMulticastTTL"
+            | "setMulticastLoopback"
+            | "setMulticastInterface"
+            | "setTTL"
+            | "setRecvBufferSize"
+            | "setSendBufferSize"
+            | "getRecvBufferSize"
+            | "getSendBufferSize"
+            | "ref"
+            | "unref"
+    )
+}
+
+fn is_headers_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
     )
 }
 

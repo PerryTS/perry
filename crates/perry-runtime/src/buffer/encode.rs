@@ -185,6 +185,48 @@ pub extern "C" fn js_value_to_string_with_encoding(value: f64, enc_tag: i32) -> 
     crate::value::js_jsvalue_to_string(value)
 }
 
+/// `value.toString(arg)` where `arg` is statically a *string* and `value` is
+/// NOT statically a string/array. The arg is ambiguous: for a `Buffer`
+/// receiver it is an encoding name; for a `Number`/`BigInt` receiver it is the
+/// radix (ECMAScript coerces a string radix via ToNumber — `(255).toString("16")`
+/// === `"ff"`, #2864). We can only disambiguate at runtime by the receiver's
+/// type, so codegen passes both the pre-parsed encoding `enc_tag` and the raw
+/// NaN-boxed `arg` value. Buffers use the encoding; numbers/bigints use the
+/// radix; everything else falls back to plain stringification.
+#[no_mangle]
+pub extern "C" fn js_value_to_string_with_encoding_or_radix(
+    value: f64,
+    enc_tag: i32,
+    arg: f64,
+) -> *mut StringHeader {
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    let ptr_addr = if top16 >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if top16 == 0 && bits >= 0x1000 {
+        bits as usize
+    } else {
+        0
+    };
+    if ptr_addr != 0 && is_registered_buffer(ptr_addr) {
+        return js_buffer_to_string(ptr_addr as *const BufferHeader, enc_tag);
+    }
+    // Non-buffer: a Number or BigInt receiver treats the string arg as a radix.
+    let jsval = crate::value::JSValue::from_bits(bits);
+    if jsval.is_number() || jsval.is_int32() || jsval.is_bigint() {
+        return crate::value::js_jsvalue_to_string_radix(value, arg);
+    }
+    crate::value::js_jsvalue_to_string(value)
+}
+
+/// Keepalive anchor: `js_value_to_string_with_encoding_or_radix` is emitted
+/// only from generated `.o`, so the auto-optimize whole-program LLVM rebuild
+/// would internalize + dead-strip it without a `#[used]` reference (see
+/// project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_VALUE_TO_STRING_ENCODING_OR_RADIX: extern "C" fn(f64, i32, f64) -> *mut StringHeader =
+    js_value_to_string_with_encoding_or_radix;
+
 /// Print a buffer in Node.js `<Buffer xx xx ...>` format to stdout
 #[no_mangle]
 pub extern "C" fn js_buffer_print(buf_ptr: *const BufferHeader) {

@@ -976,7 +976,7 @@ pub fn transform_expr(
         Expr::PathDirname(e) | Expr::PathBasename(e) | Expr::PathExtname(e) | Expr::PathResolve(e) | Expr::PathIsAbsolute(e) | Expr::PathToNamespacedPath(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::JsonParse(e) | Expr::JsonStringify(e) => {
+        Expr::JsonParse(e) | Expr::JsonStringify(e) | Expr::JsonRawJson(e) | Expr::JsonIsRawJson(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::MathFloor(e) | Expr::MathCeil(e) | Expr::MathRound(e) | Expr::MathAbs(e) | Expr::MathSqrt(e) => {

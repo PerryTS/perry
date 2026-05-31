@@ -263,7 +263,7 @@ pub(crate) fn is_known_math_static_method(name: &str) -> bool {
 
 /// Names of `JSON.<name>` static functions Perry's runtime implements.
 pub(crate) fn is_known_json_static_method(name: &str) -> bool {
-    matches!(name, "parse" | "stringify")
+    matches!(name, "parse" | "stringify" | "rawJSON" | "isRawJSON")
 }
 
 /// Names of `Number.<name>` static functions Perry's runtime implements.

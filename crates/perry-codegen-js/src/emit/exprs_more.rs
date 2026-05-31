@@ -1035,11 +1035,19 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
-            Expr::ArrayFromMapped { iterable, map_fn } => {
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
                 self.output.push_str("Array.from(");
                 self.emit_expr(iterable);
                 self.output.push_str(", ");
                 self.emit_expr(map_fn);
+                if let Some(t) = this_arg {
+                    self.output.push_str(", ");
+                    self.emit_expr(t);
+                }
                 self.output.push(')');
             }
 
@@ -1516,11 +1524,17 @@ impl JsEmitter {
             Expr::ProxyRevoke(_) => {
                 self.output.push_str("undefined");
             }
-            Expr::ReflectGet { target, key } => {
+            Expr::ReflectGet {
+                target,
+                key,
+                receiver,
+            } => {
                 self.output.push_str("Reflect.get(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(key);
+                self.output.push_str(", ");
+                self.emit_expr(receiver);
                 self.output.push(')');
             }
             Expr::ReflectSet { target, key, value } => {
@@ -1587,6 +1601,13 @@ impl JsEmitter {
             Expr::ReflectGetPrototypeOf(target) => {
                 self.output.push_str("Reflect.getPrototypeOf(");
                 self.emit_expr(target);
+                self.output.push(')');
+            }
+            Expr::ReflectSetPrototypeOf { target, proto } => {
+                self.output.push_str("Reflect.setPrototypeOf(");
+                self.emit_expr(target);
+                self.output.push_str(", ");
+                self.emit_expr(proto);
                 self.output.push(')');
             }
             Expr::ReflectIsExtensible(target) => {

@@ -579,6 +579,53 @@ pub extern "C" fn js_path_normalize(path_ptr: *const StringHeader) -> *mut Strin
     string_to_js(&normalize_str(&path_str))
 }
 
+/// Validate that a `path.relative` operand is a string, materializing it to a
+/// heap `StringHeader`. Throws `TypeError [ERR_INVALID_ARG_TYPE]` naming the
+/// offending argument (`from` / `to`) for non-string values, matching Node.
+fn require_relative_arg(value: f64, arg_name: &str) -> *const StringHeader {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_any_string() {
+        let ptr = js_string_materialize_to_heap(value);
+        if !ptr.is_null() {
+            return ptr;
+        }
+    }
+    let message = format!(
+        "The \"{}\" argument must be of type string. Received {}",
+        arg_name,
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+/// Validating entry point for the compiled `path.relative(from, to)` fast path.
+/// Both operands arrive NaN-boxed so their type can be checked before the
+/// underlying string-only helper is invoked (#2995).
+#[no_mangle]
+pub extern "C" fn js_path_relative_checked(from_f64: f64, to_f64: f64) -> *mut StringHeader {
+    let from = require_relative_arg(from_f64, "from");
+    let to = require_relative_arg(to_f64, "to");
+    js_path_relative(from, to)
+}
+
+/// `path.win32.relative(from, to)` validating entry point — see
+/// [`js_path_relative_checked`].
+#[no_mangle]
+pub extern "C" fn js_path_win32_relative_checked(from_f64: f64, to_f64: f64) -> *mut StringHeader {
+    let from = require_relative_arg(from_f64, "from");
+    let to = require_relative_arg(to_f64, "to");
+    js_path_win32_relative(from, to)
+}
+
+/// Keepalive anchors: these are emitted only from generated code, so the
+/// whole-program auto-optimize bitcode pass would otherwise dead-strip them.
+#[used]
+static KEEP_PATH_RELATIVE_CHECKED: extern "C" fn(f64, f64) -> *mut StringHeader =
+    js_path_relative_checked;
+#[used]
+static KEEP_PATH_WIN32_RELATIVE_CHECKED: extern "C" fn(f64, f64) -> *mut StringHeader =
+    js_path_win32_relative_checked;
+
 #[no_mangle]
 pub extern "C" fn js_path_relative(
     from_ptr: *const StringHeader,
@@ -655,69 +702,112 @@ pub extern "C" fn js_path_parse(path_ptr: *const StringHeader) -> *mut crate::ob
     obj
 }
 
+/// Throw `TypeError [ERR_INVALID_ARG_TYPE]` for a `path.format` descriptor that
+/// is not an object (Node validates the top-level `pathObject` argument).
+fn throw_invalid_path_object(value: f64) -> ! {
+    let message = format!(
+        "The \"pathObject\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+/// A single descriptor field read from a `path.format` argument: its
+/// Node-`ToString`-coerced text and whether the raw value is truthy.
+/// Node's `_format` uses `pathObject.field || ''`, so falsy fields (including
+/// `0`, `false`, `null`, `""`) contribute nothing.
+struct FormatField {
+    coerced: String,
+    truthy: bool,
+}
+
+/// Read a descriptor field by name and coerce it the way Node does (template
+/// literal / `||` semantics): truthy values are stringified via the standard
+/// `ToString`, falsy values become empty.
+fn read_format_field(obj_ptr: *mut crate::object::ObjectHeader, name: &str) -> FormatField {
+    use crate::object::js_object_get_field_by_name;
+    let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = js_object_get_field_by_name(obj_ptr, key_ptr);
+    let raw = f64::from_bits(val.bits());
+    if crate::value::js_is_truthy(raw) == 0 {
+        return FormatField {
+            coerced: String::new(),
+            truthy: false,
+        };
+    }
+    let s_ptr = crate::value::js_jsvalue_to_string(raw);
+    let coerced = unsafe { string_from_header(s_ptr) }.unwrap_or_default();
+    FormatField {
+        coerced,
+        truthy: true,
+    }
+}
+
+/// Shared `path.format` implementation for both posix (`sep = '/'`) and win32
+/// (`sep = '\\'`). Mirrors Node's `_format`:
+/// `dir = pathObject.dir || pathObject.root; base = pathObject.base ||
+/// `${name||''}${formatExt(ext)}`; if (!dir) return base; return dir ===
+/// pathObject.root ? dir+base : dir+sep+base;`
+fn format_descriptor(obj_f64: f64, sep: char) -> String {
+    use crate::value::js_nanbox_get_pointer;
+
+    let jv = crate::value::JSValue::from_bits(obj_f64.to_bits());
+    // Node: typeof pathObject !== 'object' || pathObject === null throws.
+    // Objects and arrays are POINTER_TAG values; strings/numbers/bool/null/
+    // undefined are not.
+    if !jv.is_pointer() {
+        throw_invalid_path_object(obj_f64);
+    }
+    let obj_ptr = js_nanbox_get_pointer(obj_f64) as *mut crate::object::ObjectHeader;
+    if obj_ptr.is_null() {
+        throw_invalid_path_object(obj_f64);
+    }
+
+    let dir_f = read_format_field(obj_ptr, "dir");
+    let root_f = read_format_field(obj_ptr, "root");
+    let base_f = read_format_field(obj_ptr, "base");
+    let name_f = read_format_field(obj_ptr, "name");
+    let ext_f = read_format_field(obj_ptr, "ext");
+
+    // formatExt: ensure a leading dot when ext is truthy.
+    let ext = if ext_f.truthy && !ext_f.coerced.starts_with('.') {
+        format!(".{}", ext_f.coerced)
+    } else {
+        ext_f.coerced.clone()
+    };
+
+    // base = pathObject.base || `${name||''}${formatExt(ext)}`
+    let base = if base_f.truthy {
+        base_f.coerced.clone()
+    } else {
+        format!("{}{}", name_f.coerced, ext)
+    };
+
+    // dir = pathObject.dir || pathObject.root
+    let (dir, dir_from_root) = if dir_f.truthy {
+        (dir_f.coerced.clone(), false)
+    } else {
+        (root_f.coerced.clone(), true)
+    };
+
+    if dir.is_empty() {
+        return base;
+    }
+
+    // dir === pathObject.root ? dir+base : dir+sep+base. dir equals root when
+    // it fell through to root, or when the (string) dir and root values match.
+    let no_sep = dir_from_root || (dir_f.truthy && root_f.truthy && dir == root_f.coerced);
+    if no_sep {
+        format!("{dir}{base}")
+    } else {
+        format!("{dir}{sep}{base}")
+    }
+}
+
 /// Build a path from a `{ dir, base, root, name, ext }` descriptor.
 #[no_mangle]
 pub extern "C" fn js_path_format(obj_f64: f64) -> *mut StringHeader {
-    use crate::object::js_object_get_field_by_name;
-    use crate::value::js_nanbox_get_pointer;
-
-    // Extract object pointer
-    let obj_ptr = js_nanbox_get_pointer(obj_f64) as *mut crate::object::ObjectHeader;
-    if obj_ptr.is_null() {
-        return string_to_js("");
-    }
-
-    // Helper: read a string field by name (returns "" if undefined/missing)
-    let get_str = |name: &str| -> String {
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let val = js_object_get_field_by_name(obj_ptr, key_ptr);
-        if val.is_undefined() {
-            return String::new();
-        }
-        let ptr = val.as_string_ptr();
-        unsafe { string_from_header(ptr) }.unwrap_or_default()
-    };
-
-    let dir = get_str("dir");
-    let root = get_str("root");
-    let base = get_str("base");
-    let name = get_str("name");
-    let mut ext = get_str("ext");
-    // Node inserts the separator dot when `ext` is provided without
-    // one: path.format({ name: "file", ext: "txt" }) === "file.txt".
-    if !ext.is_empty() && !ext.starts_with('.') {
-        ext.insert(0, '.');
-    }
-    let has_tail = !base.is_empty() || !name.is_empty() || !ext.is_empty();
-
-    // dir takes precedence over root; name+ext fallback when base missing
-    let mut result = if !dir.is_empty() {
-        let mut s = dir.clone();
-        // Node always inserts a separator between dir and base, even when
-        // dir already ends with `/`. If there is no tail, keep dir as-is
-        // (path.format(path.parse("/")) === "/").
-        if has_tail {
-            s.push('/');
-        }
-        s
-    } else if !root.is_empty() {
-        let mut s = root.clone();
-        if !s.ends_with('/') {
-            s.push('/');
-        }
-        s
-    } else {
-        String::new()
-    };
-
-    if !base.is_empty() {
-        result.push_str(&base);
-    } else {
-        result.push_str(&name);
-        result.push_str(&ext);
-    }
-
-    string_to_js(&result)
+    string_to_js(&format_descriptor(obj_f64, '/'))
 }
 
 #[no_mangle]
@@ -1190,54 +1280,7 @@ pub extern "C" fn js_path_win32_parse(
 /// version but emits backslash separators.
 #[no_mangle]
 pub extern "C" fn js_path_win32_format(obj_f64: f64) -> *mut StringHeader {
-    use crate::object::js_object_get_field_by_name;
-    use crate::value::js_nanbox_get_pointer;
-
-    let obj_ptr = js_nanbox_get_pointer(obj_f64) as *mut crate::object::ObjectHeader;
-    if obj_ptr.is_null() {
-        return string_to_js("");
-    }
-    let get_str = |name: &str| -> String {
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let val = js_object_get_field_by_name(obj_ptr, key_ptr);
-        if val.is_undefined() {
-            return String::new();
-        }
-        let ptr = val.as_string_ptr();
-        unsafe { string_from_header(ptr) }.unwrap_or_default()
-    };
-    let dir = get_str("dir");
-    let root = get_str("root");
-    let base = get_str("base");
-    let name = get_str("name");
-    let mut ext = get_str("ext");
-    if !ext.is_empty() && !ext.starts_with('.') {
-        ext.insert(0, '.');
-    }
-    let has_tail = !base.is_empty() || !name.is_empty() || !ext.is_empty();
-
-    let mut result = if !dir.is_empty() {
-        let mut s = dir.clone();
-        if has_tail && !s.ends_with('\\') && !s.ends_with('/') {
-            s.push('\\');
-        }
-        s
-    } else if !root.is_empty() {
-        let mut s = root.clone();
-        if !s.ends_with('\\') && !s.ends_with('/') {
-            s.push('\\');
-        }
-        s
-    } else {
-        String::new()
-    };
-    if !base.is_empty() {
-        result.push_str(&base);
-    } else {
-        result.push_str(&name);
-        result.push_str(&ext);
-    }
-    string_to_js(&result)
+    string_to_js(&format_descriptor(obj_f64, '\\'))
 }
 
 fn current_dir_as_win32() -> Option<String> {

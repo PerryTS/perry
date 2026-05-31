@@ -1512,6 +1512,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::PathBasenameExt(..)
         | Expr::PathParse(..)
         | Expr::JsonParse(..)
+        | Expr::JsonRawJson(..)
+        | Expr::JsonIsRawJson(..)
         | Expr::JsonParseTyped { .. }
         | Expr::JsonParseReviver { .. }
         | Expr::JsonParseWithReviver(..) => instance_misc1::lower(ctx, expr),
@@ -1858,6 +1860,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectConstruct { .. }
         | Expr::ReflectDefineProperty { .. }
         | Expr::ReflectGetPrototypeOf(..)
+        | Expr::ReflectSetPrototypeOf { .. }
         | Expr::ReflectIsExtensible(..)
         | Expr::ReflectPreventExtensions(..)
         | Expr::ReflectDefineMetadata { .. }

@@ -22,6 +22,33 @@ pub(super) fn static_receiver_class(
     ctx: &LoweringContext,
     obj: &ast::Expr,
 ) -> Option<&'static str> {
+    // #2808: an array receiver is definitely NOT a Date. Detect array literals,
+    // `as` / const-assertion casts wrapping any of the above, and locals typed
+    // as `T[]` / tuple, so `(arr as any).toLocaleString()` (and toString/etc.)
+    // skip the ambiguous Date arms and fall through to generic dynamic
+    // dispatch, where the runtime Array.prototype.toLocaleString lives.
+    {
+        // Peel `as`/`as const`/parens to inspect the underlying receiver shape.
+        let mut cur = obj;
+        loop {
+            match cur {
+                ast::Expr::TsAs(ts_as) => cur = ts_as.expr.as_ref(),
+                ast::Expr::TsConstAssertion(c) => cur = c.expr.as_ref(),
+                ast::Expr::Paren(p) => cur = p.expr.as_ref(),
+                _ => break,
+            }
+        }
+        if matches!(cur, ast::Expr::Array(_)) {
+            return Some("Array");
+        }
+        if let ast::Expr::Ident(ident) = cur {
+            if let Some(ty) = ctx.lookup_local_type(ident.sym.as_ref()) {
+                if matches!(ty, Type::Array(_) | Type::Tuple(_)) {
+                    return Some("Array");
+                }
+            }
+        }
+    }
     if let ast::Expr::New(new_expr) = obj {
         if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
             return match ident.sym.as_ref() {

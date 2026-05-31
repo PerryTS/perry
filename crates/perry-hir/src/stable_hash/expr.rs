@@ -183,6 +183,8 @@ impl SH for Expr {
             Expr::JsonStringify(e) => { tag(h, 138); e.as_ref().hash(h); }
             Expr::JsonStringifyPretty { value, replacer, space, } => { tag(h, 139); value.as_ref().hash(h); replacer.hash(h); space.as_ref().hash(h); }
             Expr::JsonStringifyFull(a, b, c) => { tag(h, 140); a.as_ref().hash(h); b.as_ref().hash(h); c.as_ref().hash(h); }
+            Expr::JsonRawJson(e) => { tag(h, 12130); e.as_ref().hash(h); }
+            Expr::JsonIsRawJson(e) => { tag(h, 12131); e.as_ref().hash(h); }
             Expr::MathFloor(e) => { tag(h, 141); e.as_ref().hash(h); }
             Expr::MathCeil(e) => { tag(h, 142); e.as_ref().hash(h); }
             Expr::MathRound(e) => { tag(h, 143); e.as_ref().hash(h); }
@@ -506,7 +508,7 @@ impl SH for Expr {
             Expr::IteratorToArray(e) => { tag(h, 398); e.as_ref().hash(h); }
             Expr::GetIterator(e) => { tag(h, 11238); e.as_ref().hash(h); }
             Expr::ForOfToArray(e) => { tag(h, 11243); e.as_ref().hash(h); }
-            Expr::ArrayFromMapped { iterable, map_fn } => { tag(h, 399); iterable.as_ref().hash(h); map_fn.as_ref().hash(h); }
+            Expr::ArrayFromMapped { iterable, map_fn, this_arg } => { tag(h, 399); iterable.as_ref().hash(h); map_fn.as_ref().hash(h); this_arg.is_some().hash(h); if let Some(t) = this_arg { t.as_ref().hash(h); } }
             Expr::ParseInt { string, radix } => { tag(h, 400); string.as_ref().hash(h); radix.hash(h); }
             Expr::ParseFloat(e) => { tag(h, 401); e.as_ref().hash(h); }
             Expr::NumberCoerce(e) => { tag(h, 402); e.as_ref().hash(h); }
@@ -541,7 +543,7 @@ impl SH for Expr {
             Expr::ProxyConstruct { proxy, args } => { tag(h, 430); proxy.as_ref().hash(h); args.hash(h); }
             Expr::ProxyRevocable { target, handler } => { tag(h, 431); target.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProxyRevoke(e) => { tag(h, 432); e.as_ref().hash(h); }
-            Expr::ReflectGet { target, key } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); }
+            Expr::ReflectGet { target, key, receiver } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ReflectSet { target, key, value } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ReflectHas { target, key } => { tag(h, 435); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectDelete { target, key } => { tag(h, 436); target.as_ref().hash(h); key.as_ref().hash(h); }
@@ -550,6 +552,7 @@ impl SH for Expr {
             Expr::ReflectConstruct { target, args } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); }
             Expr::ReflectDefineProperty { target, key, descriptor, } => { tag(h, 440); target.as_ref().hash(h); key.as_ref().hash(h); descriptor.as_ref().hash(h); }
             Expr::ReflectGetPrototypeOf(e) => { tag(h, 441); e.as_ref().hash(h); }
+            Expr::ReflectSetPrototypeOf { target, proto } => { tag(h, 12230); target.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::ReflectIsExtensible(e) => { tag(h, 12048); e.as_ref().hash(h); }
             Expr::ReflectPreventExtensions(e) => { tag(h, 12046); e.as_ref().hash(h); }
             Expr::ReflectDefineMetadata { key, value, target, property_key, } => { tag(h, 12023); key.as_ref().hash(h); value.as_ref().hash(h); target.as_ref().hash(h); property_key.hash(h); }

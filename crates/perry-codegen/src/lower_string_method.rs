@@ -749,8 +749,12 @@ pub(crate) fn lower_string_method(
             Ok(i32_bool_to_nanbox(blk, &result_i32))
         }
         "includes" => {
-            // str.includes(sub) -> boolean. Implemented as
-            // js_string_index_of(str, sub) != -1, then NaN-tagged.
+            // str.includes(sub, position?) -> boolean. Implemented as
+            // js_string_index_of_from(str, sub, position) != -1, then
+            // NaN-tagged. #2812: the optional `position` argument must be
+            // honored (search starts there), matching the dynamic dispatch
+            // path. Negative/NaN clamp to 0 and Infinity saturates past the
+            // end inside js_string_index_of_from.
             if args.is_empty() || args.len() > 2 {
                 bail!(
                     "perry-codegen: String.includes expects 1 or 2 args, got {}",
@@ -758,10 +762,13 @@ pub(crate) fn lower_string_method(
                 );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
-            // Optional fromIndex param is ignored for the boolean form.
-            if args.len() == 2 {
-                let _ = lower_expr(ctx, &args[1])?;
-            }
+            // Preserve evaluation of the second argument for side effects and
+            // use it as the start index when present.
+            let pos_d = if args.len() == 2 {
+                Some(lower_expr(ctx, &args[1])?)
+            } else {
+                None
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let method_id = regexp_search_method_id(property);
@@ -770,10 +777,16 @@ pub(crate) fn lower_string_method(
                 "js_string_search_value_to_string",
                 &[(DOUBLE, &needle_box), (I32, &method_id)],
             );
+            let from_i32 = match pos_d {
+                // Use the runtime ToIntegerOrInfinity helper rather than a raw
+                // `fptosi`, which is undefined for Infinity/NaN.
+                Some(pos_d) => blk.call(I32, "js_string_position_to_index", &[(DOUBLE, &pos_d)]),
+                None => "0".to_string(),
+            };
             let idx_i32 = blk.call(
                 I32,
-                "js_string_index_of",
-                &[(I64, &recv_handle), (I64, &needle_handle)],
+                "js_string_index_of_from",
+                &[(I64, &recv_handle), (I64, &needle_handle), (I32, &from_i32)],
             );
             // includes := indexOf != -1
             let neg_one = "-1".to_string();

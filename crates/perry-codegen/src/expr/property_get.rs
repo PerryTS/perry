@@ -50,6 +50,22 @@ use super::{
     TypedFeedbackKind,
 };
 
+fn is_headers_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertyGet { object, property }
@@ -1036,6 +1052,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "write" | "close" | "abort" | "releaseLock"
                         )
                 );
+                if class_name == "Headers" && is_headers_method_name(property) {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &obj_bits), (I64, &key_handle)],
+                    ));
+                }
                 if is_web_stream_method {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);
