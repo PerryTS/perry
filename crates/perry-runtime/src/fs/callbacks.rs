@@ -142,8 +142,12 @@ pub extern "C" fn js_fs_write_file_callback(
             return f64::from_bits(TAG_UNDEFINED);
         }
     }
-    let _ = js_fs_write_file_sync_options(path_value, content_value, options);
-    call_cb0(cb);
+    unsafe {
+        match write_file_path_or_fd_result(path_value, content_value, options) {
+            Ok(()) => call_cb0(cb),
+            Err(err_val) => call_cb_err1(cb, err_val),
+        }
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 

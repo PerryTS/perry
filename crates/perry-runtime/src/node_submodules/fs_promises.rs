@@ -109,9 +109,15 @@ pub(crate) extern "C" fn thunk_fs_promises_writeFile(
     data: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_undefined(|| {
-        let _ = crate::fs::js_fs_write_file_sync_options(path, data, options);
-    })
+    match catch_fs_promises_throw(|| {
+        match unsafe { crate::fs::write_file_path_or_fd_result(path, data, options) } {
+            Ok(()) => promise_undefined(),
+            Err(err) => promise_rejected(err),
+        }
+    }) {
+        Ok(promise) => promise,
+        Err(err) => promise_rejected(err),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_appendFile(

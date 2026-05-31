@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 
 use crate::closure::ClosureHeader;
 
@@ -336,42 +336,33 @@ pub(crate) extern "C" fn filehandle_read_file_impl(
 pub(crate) extern "C" fn filehandle_write_file_impl(
     closure: *const ClosureHeader,
     data: f64,
+    options: f64,
 ) -> f64 {
-    let fd = filehandle_fd(closure);
-    let bytes = bytes_from_value(data);
-    FD_REGISTRY.with(|r| {
-        let mut reg = r.borrow_mut();
-        if let Some(file) = reg.get_mut(&fd) {
-            let append =
-                FD_APPEND_MODE.with(|flags| flags.borrow().get(&fd).copied().unwrap_or(false));
-            if append {
-                let _ = file.seek(SeekFrom::End(0));
-            }
-            // Note: Node does NOT rewind/truncate on FileHandle#writeFile —
-            // empirically the file pointer advances naturally so successive
-            // writeFile calls concatenate (see parity test
-            // `fs-promises/basic/write-append-flush-options`). When the
-            // caller wants replace-semantics they should reopen the handle.
-            let _ = file.write_all(&bytes);
-        }
-    });
-    promise_undefined_fs()
+    let fd = match live_filehandle_fd_or_ebadf(closure, "write") {
+        Ok(fd) => fd,
+        Err(rejection) => return rejection,
+    };
+    // Node does NOT rewind/truncate on FileHandle#writeFile. The live file
+    // position advances naturally, while append-mode descriptors still append.
+    match unsafe { write_file_to_fd_result(fd, data, options, false) } {
+        Ok(()) => promise_undefined_fs(),
+        Err(err) => promise_rejected_fs(err),
+    }
 }
 
 pub(crate) extern "C" fn filehandle_append_file_impl(
     closure: *const ClosureHeader,
     data: f64,
+    options: f64,
 ) -> f64 {
-    let fd = filehandle_fd(closure);
-    let bytes = bytes_from_value(data);
-    FD_REGISTRY.with(|r| {
-        let mut reg = r.borrow_mut();
-        if let Some(file) = reg.get_mut(&fd) {
-            let _ = file.seek(SeekFrom::End(0));
-            let _ = file.write_all(&bytes);
-        }
-    });
-    promise_undefined_fs()
+    let fd = match live_filehandle_fd_or_ebadf(closure, "write") {
+        Ok(fd) => fd,
+        Err(rejection) => return rejection,
+    };
+    match unsafe { write_file_to_fd_result(fd, data, options, true) } {
+        Ok(()) => promise_undefined_fs(),
+        Err(err) => promise_rejected_fs(err),
+    }
 }
 
 pub(crate) extern "C" fn filehandle_read_impl(
@@ -636,6 +627,8 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
 
 fn build_filehandle_object(fd: i32) -> f64 {
     crate::closure::js_register_closure_arity(filehandle_stat_impl as *const u8, 1);
+    crate::closure::js_register_closure_arity(filehandle_write_file_impl as *const u8, 2);
+    crate::closure::js_register_closure_arity(filehandle_append_file_impl as *const u8, 2);
     crate::closure::js_register_closure_arity(filehandle_read_impl as *const u8, 5);
     crate::closure::js_register_closure_arity(filehandle_write_impl as *const u8, 5);
     crate::closure::js_register_closure_arity(filehandle_read_lines_impl as *const u8, 1);
@@ -688,11 +681,11 @@ fn build_filehandle_object(fd: i32) -> f64 {
     );
     set(
         "writeFile",
-        make_filehandle_method(fd, filehandle_write_file_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, filehandle_write_file_impl as *const u8),
     );
     set(
         "appendFile",
-        make_filehandle_method(fd, filehandle_append_file_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, filehandle_append_file_impl as *const u8),
     );
     set(
         "read",
