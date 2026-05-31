@@ -326,6 +326,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // fs.readFileSync(path, encoding) — returns a raw *mut StringHeader i64.
     module.declare_function("js_fs_read_file_sync", I64, &[DOUBLE]);
     module.declare_function("js_fs_read_file_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_fs_open_as_blob", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_promises_read_file", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_fs_promises_write_file",
@@ -520,6 +521,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `perry-wasm-host`'s C ABI; the wasmi engine is only linked when
     // the user passes `--enable-wasm-runtime`.
     module.declare_function("js_webassembly_validate", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_webassembly_compile", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_webassembly_module_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_webassembly_module_exports", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_webassembly_module_imports", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_webassembly_module_custom_sections",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_webassembly_instantiate", DOUBLE, &[DOUBLE]);
     module.declare_function("js_webassembly_call_export_0", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
@@ -614,7 +624,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_proxy", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map_iterator", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set_iterator", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_data_view_new", DOUBLE, &[DOUBLE, I32, I32]);
+    module.declare_function("js_data_view_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_getenv_value", DOUBLE, &[I64]);
     // #1344: process.env.X = v / delete process.env.X.

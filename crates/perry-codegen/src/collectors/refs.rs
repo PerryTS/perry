@@ -220,7 +220,6 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::ForOfToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
-        | Expr::StructuredClone(operand)
         | Expr::QueueMicrotask(operand)
         | Expr::FsExistsSync(operand)
         | Expr::FsReadFileSync(operand)
@@ -259,6 +258,10 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand) => {
             walk(operand, out);
+        }
+        Expr::StructuredClone { value, options } => {
+            walk(value, out);
+            walk(options, out);
         }
         Expr::ObjectCreate(proto, props) => {
             walk(proto, out);

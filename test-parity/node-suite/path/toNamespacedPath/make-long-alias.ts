@@ -14,5 +14,6 @@ console.log("posix equality:", posix._makeLong === path.posix.toNamespacedPath);
 console.log("win32 equality:", win32._makeLong === path.win32.toNamespacedPath);
 console.log("named result:", _makeLong("/tmp/a"));
 console.log("default result:", top._makeLong("/tmp/a"));
+console.log("default toNamespaced result:", top.toNamespacedPath("/tmp/a"));
 console.log("posix result:", posix._makeLong("/tmp/a"));
 console.log("win32 result:", win32._makeLong("C:\\tmp\\a"));
