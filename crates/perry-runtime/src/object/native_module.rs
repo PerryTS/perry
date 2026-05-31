@@ -1285,6 +1285,13 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("dns" | "dns/promises", "Resolver") => Some(0),
         ("events", "init") => Some(1),
         ("wasi", "WASI") => Some(0),
+        ("perf_hooks", "Performance") => Some(0),
+        ("perf_hooks", "PerformanceEntry") => Some(0),
+        ("perf_hooks", "PerformanceMark") => Some(1),
+        ("perf_hooks", "PerformanceMeasure") => Some(0),
+        ("perf_hooks", "PerformanceObserver") => Some(1),
+        ("perf_hooks", "PerformanceObserverEntryList") => Some(0),
+        ("perf_hooks", "PerformanceResourceTiming") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
         ("module", "enableCompileCache") => Some(1),
@@ -2059,10 +2066,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("buffer.Buffer", "isEncoding")
             | ("buffer.Buffer", "byteLength")
             | ("buffer.Buffer", "compare")
+            | ("perf_hooks", "Performance")
             | ("perf_hooks", "PerformanceObserver")
             | ("perf_hooks", "PerformanceEntry")
             | ("perf_hooks", "PerformanceMark")
             | ("perf_hooks", "PerformanceMeasure")
+            | ("perf_hooks", "PerformanceObserverEntryList")
+            | ("perf_hooks", "PerformanceResourceTiming")
             | ("perf_observer", "observe")
             | ("perf_observer", "disconnect")
             | ("perf_observer", "takeRecords")

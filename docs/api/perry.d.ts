@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2365 entries across 103 modules
+// Coverage: 2368 entries across 103 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2063,6 +2063,8 @@ declare module "path/win32" {
 
 declare module "perf_hooks" {
   /** stdlib */
+  export class Performance { [key: string]: any; }
+  /** stdlib */
   export class PerformanceEntry { [key: string]: any; }
   /** stdlib */
   export class PerformanceMark { [key: string]: any; }
@@ -2070,6 +2072,10 @@ declare module "perf_hooks" {
   export class PerformanceMeasure { [key: string]: any; }
   /** stdlib */
   export class PerformanceObserver { [key: string]: any; }
+  /** stdlib */
+  export class PerformanceObserverEntryList { [key: string]: any; }
+  /** stdlib */
+  export class PerformanceResourceTiming { [key: string]: any; }
   /** stdlib */
   export const constants: any;
   /** stdlib */
