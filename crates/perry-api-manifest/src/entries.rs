@@ -103,6 +103,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "cluster",
     "tty",
     "perf_hooks",
+    "v8",
     "process",
     "perry/tui",
     "perry/ui",
@@ -181,6 +182,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/background",
     "tty",
     "perf_hooks",
+    "v8",
 ];
 
 const fn method(
@@ -3373,6 +3375,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         true,
         Some("PerformanceObserver"),
     ),
+    // --- node:v8 (#3137/#3138/#3142) ---
+    method("v8", "serialize", false, None),
+    method("v8", "deserialize", false, None),
+    method("v8", "getHeapStatistics", false, None),
+    method("v8", "getHeapCodeStatistics", false, None),
+    method("v8", "getHeapSpaceStatistics", false, None),
+    method("v8", "cachedDataVersionTag", false, None),
+    class("v8", "GCProfiler"),
+    method("v8", "start", true, Some("GCProfiler")),
+    method("v8", "stop", true, Some("GCProfiler")),
     // --- buffer (module-level helpers in addition to the Buffer class
     //     already registered above) ---
     method("buffer", "alloc", false, None),

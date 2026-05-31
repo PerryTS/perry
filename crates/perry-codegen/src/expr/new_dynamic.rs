@@ -180,6 +180,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // `new v8.GCProfiler()` (#3142) — represent the profiler instance
+            // as the `"v8.GCProfiler"` native-module namespace so its
+            // `start()` / `stop()` methods dispatch through the runtime
+            // native-module method table (same shape as `new crypto.Certificate`).
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "GCProfiler" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "v8" {
+                            for a in args {
+                                let _ = lower_expr(ctx, a)?;
+                            }
+                            let module_name = "v8.GCProfiler";
+                            let mod_idx = ctx.strings.intern(module_name);
+                            let mod_bytes_global =
+                                format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+                            let mod_len_str = module_name.len().to_string();
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_create_native_module_namespace",
+                                &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
+                            ));
+                        }
+                    }
+                }
+            }
+
             // `new (PerformanceObserver as any)(cb?)` — the `as any` cast
             // (used because no-arg construction is a TS type error) strips the
             // bare identifier, so the constructor arrives as
