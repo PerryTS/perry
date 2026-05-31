@@ -244,66 +244,6 @@ pub(super) fn prepare_readable_for_iteration(stream: f64) {
     drain_iter_helper_microtasks();
 }
 
-pub(super) fn extend_compose_output_chunks(
-    mut out: *mut crate::array::ArrayHeader,
-    stage: f64,
-    chunks: f64,
-) -> *mut crate::array::ArrayHeader {
-    if !readable_object_mode(stage) {
-        let mut bytes = Vec::new();
-        append_chunk_bytes(chunks, &mut bytes, 0);
-        if !bytes.is_empty() {
-            out = crate::array::js_array_push_f64(out, buffer_value_from_bytes(&bytes));
-        }
-        return out;
-    }
-
-    if is_array_like_value(chunks) {
-        extend_with_array(out, raw_ptr_from_value(chunks) as *const _)
-    } else {
-        crate::array::js_array_push_f64(out, chunks)
-    }
-}
-
-pub(super) fn compose_readable_snapshot(source: f64, stage: f64) -> Option<f64> {
-    prepare_readable_for_iteration(source);
-    let arr = readable_chunks_array(source);
-    if arr.is_null() || !is_transform_stream(stage) {
-        return None;
-    }
-
-    let mut out = crate::array::js_array_alloc(0);
-    if has_truthy_hidden(stage, hidden_transform_passthrough_key()) {
-        out = extend_compose_output_chunks(out, stage, box_pointer(arr as *const u8));
-    } else {
-        transform_hidden_callback(stage)?;
-        clear_readable_buffer(stage);
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let chunk = crate::array::js_array_get_f64(arr, i);
-            let _ = write_writable_chunk(
-                stage,
-                chunk,
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-            );
-            if let Some(err) = readable_hidden_error(stage) {
-                let result = readable_from_chunks(out);
-                propagate_stream_state(source, f64::from_bits(TAG_UNDEFINED), result);
-                set_hidden_value(result, hidden_error_key(), err);
-                return Some(result);
-            }
-        }
-        if let Some(chunks) = readable_hidden_chunks(stage) {
-            out = extend_compose_output_chunks(out, stage, chunks);
-        }
-    }
-
-    let result = readable_from_chunks(out);
-    propagate_stream_state(source, f64::from_bits(TAG_UNDEFINED), result);
-    Some(result)
-}
-
 /// Resolve a callback result that may be a Promise (an async mapper /
 /// predicate) by driving Perry's await pump until it settles, then
 /// reading the fulfilled value or preserving the rejection reason.

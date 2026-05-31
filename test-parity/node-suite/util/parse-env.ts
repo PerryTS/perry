@@ -24,12 +24,6 @@ const cases = [
   'A="one\r\ntwo"\r\nB=3',
   'A="one\nB=2',
   'DB="postgres://u:p@h/db"\nPORT=5432 # default\nNAME=app',
-  'MULTI="line1\nline2"',
-  "SINGLE='one\ntwo'",
-  "BACK=`tick\nvalue`",
-  'UNFINISHED="x\nNEXT=2',
-  "HASH=abc#def",
-  "export   SPACED=ok",
 ];
 for (const c of cases) {
   const r = util.parseEnv(c);

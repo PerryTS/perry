@@ -621,6 +621,7 @@ fn is_numeric_typed_array_class(name: &str) -> bool {
             | "Uint16Array"
             | "Int32Array"
             | "Uint32Array"
+            | "Float16Array"
             | "Float32Array"
             | "Float64Array"
     )
@@ -1709,6 +1710,7 @@ pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     | "Int32Array"
                     | "Uint16Array"
                     | "Uint32Array"
+                    | "Float16Array"
                     | "Float32Array"
                     | "Float64Array"
                     | "BigInt64Array"
