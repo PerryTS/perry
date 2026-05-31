@@ -555,6 +555,55 @@ unsafe fn dispatch_typed_array_method(
     Some(r)
 }
 
+/// #3716: a built-in *prototype method* read off its prototype and called *as
+/// a value* (rather than as `recv.method(...)`) routes through
+/// `js_native_call_value`, which would invoke the shared no-op thunk
+/// (`global_this_builtin_noop_thunk`) and return `undefined`. This is the final
+/// link in the "uncurry-this" idiom `Function.prototype.call.bind(method)`: the
+/// `Function.prototype.call` thunk stashes the intended receiver in
+/// `IMPLICIT_THIS`, then calls the bound `method` value — which until now no-op'd.
+///
+/// When the invoked closure is a no-op-backed built-in proto method, recover its
+/// recorded method name and re-dispatch through the real `js_native_call_method`
+/// tower using the current `IMPLICIT_THIS` as the receiver. Returns `None` for
+/// any other closure so normal dispatch proceeds untouched.
+///
+/// Gated on a recorded built-in `.length` so bare no-op-backed global
+/// constructors (`const O = SomeCtor; O()`), which never call
+/// `set_builtin_closure_length`, are excluded.
+pub(crate) unsafe fn try_dispatch_value_called_proto_method(
+    closure: *const crate::closure::ClosureHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if closure.is_null() {
+        return None;
+    }
+    if (*closure).func_ptr != super::global_this::global_this_builtin_noop_thunk as *const u8 {
+        return None;
+    }
+    if super::native_module::builtin_closure_length(closure as usize).is_none() {
+        return None;
+    }
+    let name_val = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
+    let name_jsv = JSValue::from_bits(name_val.to_bits());
+    if !name_jsv.is_any_string() {
+        return None;
+    }
+    // `js_string_coerce` normalizes SSO short strings (e.g. "bind", "join") to a
+    // heap StringHeader so the byte read below is valid for inline-stored names.
+    let name_hdr = crate::builtins::js_string_coerce(name_val);
+    let name = super::has_own_helpers::str_from_string_header(name_hdr)?;
+    let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    Some(js_native_call_method(
+        receiver,
+        name.as_ptr() as *const i8,
+        name.len(),
+        args_ptr,
+        args_len,
+    ))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -2614,9 +2663,6 @@ pub unsafe extern "C" fn js_native_call_method(
             if obj_ptr.is_null() || !is_valid_obj_ptr(obj_ptr as *const u8) {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
-            if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
-                return f64::from_bits(JSValue::bool(false).bits());
-            }
             let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let name_len = (*key_str).byte_len as usize;
             let key_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
@@ -2624,6 +2670,17 @@ pub unsafe extern "C" fn js_native_call_method(
                 Ok(s) => s,
                 Err(_) => return f64::from_bits(JSValue::bool(false).bits()),
             };
+            if (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID {
+                if let Some(module_name) = read_native_module_name(obj_ptr) {
+                    return f64::from_bits(
+                        JSValue::bool(native_module_has_enumerable_key(&module_name, key_name))
+                            .bits(),
+                    );
+                }
+            }
+            if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
             let enumerable = get_property_attrs(obj_ptr as usize, &key_name)
                 .map(|attrs| attrs.enumerable())
                 .unwrap_or(true);

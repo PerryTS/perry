@@ -15,9 +15,10 @@ pub use super::class_handles::{
     handle_property_set_dispatch, js_register_event_emitter_handle_probe,
     js_register_event_emitter_on, js_register_handle_method_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
-    js_register_stream_handle_kind_probe, js_register_stream_handle_probe,
-    stream_handle_kind_probe, stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn,
-    HandleMethodDispatchFn, HandlePropertyDispatchFn, HandlePropertySetDispatchFn,
+    js_register_net_socket_handle_probe, js_register_stream_handle_kind_probe,
+    js_register_stream_handle_probe, net_socket_handle_probe, stream_handle_kind_probe,
+    stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn, HandleMethodDispatchFn,
+    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, NetSocketHandleProbeFn,
     StreamHandleKindProbeFn, StreamHandleProbeFn,
 };
 use super::*;
@@ -606,8 +607,17 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             return None;
         }
         let func_ptr = (*ptr).func_ptr as usize;
-        let noop_thunk = global_this_builtin_noop_thunk as *const u8 as usize;
-        if func_ptr != noop_thunk {
+        let is_global_builtin_func = func_ptr
+            == global_this_builtin_noop_thunk as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_message_channel_constructor_call_error as *const u8
+                    as usize
+            || func_ptr
+                == crate::messaging::js_message_port_constructor_call_error as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
+                    as usize;
+        if !is_global_builtin_func {
             return None;
         }
     }
@@ -934,6 +944,19 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_len: usize,
 ) -> f64 {
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
+        if module == "sqlite"
+            && matches!(
+                method.as_str(),
+                "DatabaseSync" | "Session" | "StatementSync"
+            )
+        {
+            let ptr =
+                crate::value::JS_NATIVE_SQLITE_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeSqliteDispatchFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len, 1);
+            }
+        }
         if module == "tty" && matches!(method.as_str(), "ReadStream" | "WriteStream") {
             let fd = if !args_ptr.is_null() && args_len > 0 {
                 *args_ptr
@@ -944,6 +967,36 @@ pub unsafe extern "C" fn js_new_function_construct(
                 crate::tty::js_tty_read_stream_new(fd)
             } else {
                 crate::tty::js_tty_write_stream_new(fd)
+            };
+        }
+        if module == "fs" && method == "Utf8Stream" {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::fs::js_fs_utf8_stream_new(options);
+        }
+        if module == "fs"
+            && matches!(
+                method.as_str(),
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+            )
+        {
+            let path = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let options = if !args_ptr.is_null() && args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return if matches!(method.as_str(), "ReadStream" | "FileReadStream") {
+                crate::fs::js_fs_create_read_stream(path, options)
+            } else {
+                crate::fs::js_fs_create_write_stream(path, options)
             };
         }
         if module == "tls" && method == "SecureContext" {
@@ -1095,6 +1148,19 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
             "TextEncoderStream" | "TextDecoderStream" => {
                 return js_text_encoding_stream_new();
+            }
+            "MessageChannel" => {
+                return crate::messaging::js_message_channel_new();
+            }
+            "MessagePort" => {
+                return crate::messaging::js_message_port_constructor_error();
+            }
+            "BroadcastChannel" => {
+                let name = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::messaging::js_broadcast_channel_new(name);
             }
             _ => {}
         }

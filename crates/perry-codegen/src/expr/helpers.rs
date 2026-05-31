@@ -302,12 +302,18 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "AbortController"
             | "AbortSignal"
             | "EventTarget"
+            | "Crypto"
+            | "CryptoKey"
+            | "SubtleCrypto"
             | "FormData"
             | "Blob"
             | "File"
             | "Headers"
             | "Request"
             | "Response"
+            | "MessageChannel"
+            | "MessagePort"
+            | "BroadcastChannel"
             | "FinalizationRegistry"
             | "Performance"
             | "PerformanceEntry"
@@ -350,6 +356,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "performance"
             | "process"
             | "navigator"
+            | "crypto"
     )
 }
 
@@ -370,6 +377,7 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
                 | "performance"
                 | "process"
                 | "navigator"
+                | "crypto"
         )
 }
 

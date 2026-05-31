@@ -155,6 +155,12 @@ pub const NODE_SUBMODULES: &[&str] = &[
     "sys",
     "test",
     "test/reporters",
+    // #2682: node:timers namespace + node:timers/promises subpath. Routed
+    // through the runtime's `node_submodules` table; manifest entries cover
+    // the export-shape (setTimeout/.../promises and the timers/promises
+    // helpers) so the unimplemented-API gate and docs recognize the modules.
+    "timers",
+    "timers/promises",
 ];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
@@ -596,30 +602,55 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("better-sqlite3", "pluck", true, None),
     method("better-sqlite3", "columns", true, None),
     method("better-sqlite3", "transaction", true, None),
-    // node:sqlite (#3183/#3184). Node's builtin synchronous SQLite
-    // module exposes `DatabaseSync` (constructor) and `StatementSync`
-    // (returned by `db.prepare`). The observable method surface reuses
-    // Perry's existing rusqlite backend (`js_sqlite_*`); these entries
-    // register the module so the strict-API import gate recognizes
-    // `import { DatabaseSync } from "node:sqlite"` and the dispatch
-    // tables route `exec`/`prepare`/`run`/`get`/`all`/`iterate`/
-    // `columns`/`close` to the shared statement registry.
-    method_sig(
-        "sqlite",
-        "DatabaseSync",
-        false,
-        None,
-        &[p_str("p0")],
-        TypeSpec::Any,
-    ),
+    class("sqlite", "DatabaseSync"),
+    class("sqlite", "Session"),
+    class("sqlite", "SQLTagStore"),
+    class("sqlite", "StatementSync"),
+    method("sqlite", "DatabaseSync", false, None),
+    method("sqlite", "Session", false, None),
+    method("sqlite", "StatementSync", false, None),
+    method("sqlite", "backup", false, None),
+    property("sqlite", "constants"),
+    method("sqlite", "open", true, None),
+    method("sqlite", "close", true, None),
+    method("sqlite", "__perry_dispose__", true, None),
+    method("sqlite", "@@__perry_wk_dispose", true, None),
+    method("sqlite", "exec", true, None),
     method("sqlite", "prepare", true, None),
+    method("sqlite", "function", true, Some("DatabaseSync")),
+    method("sqlite", "aggregate", true, Some("DatabaseSync")),
+    method("sqlite", "enableDefensive", true, Some("DatabaseSync")),
+    method("sqlite", "setAuthorizer", true, Some("DatabaseSync")),
+    method("sqlite", "createTagStore", true, Some("DatabaseSync")),
+    method("sqlite", "createSession", true, None),
+    method("sqlite", "applyChangeset", true, None),
+    method("sqlite", "enableLoadExtension", true, None),
+    method("sqlite", "loadExtension", true, None),
+    method("sqlite", "location", true, None),
+    method("sqlite", "isOpen", true, None),
+    method("sqlite", "isTransaction", true, None),
+    method("sqlite", "limits", true, None),
+    method("sqlite", "changeset", true, None),
+    method("sqlite", "patchset", true, None),
+    method("sqlite", "run", true, Some("SQLTagStore")),
+    method("sqlite", "get", true, Some("SQLTagStore")),
+    method("sqlite", "all", true, Some("SQLTagStore")),
+    method("sqlite", "iterate", true, Some("SQLTagStore")),
+    method("sqlite", "clear", true, Some("SQLTagStore")),
+    method("sqlite", "size", true, Some("SQLTagStore")),
+    method("sqlite", "capacity", true, Some("SQLTagStore")),
+    method("sqlite", "db", true, Some("SQLTagStore")),
     method("sqlite", "run", true, None),
     method("sqlite", "get", true, None),
     method("sqlite", "all", true, None),
-    method("sqlite", "exec", true, None),
-    method("sqlite", "close", true, None),
     method("sqlite", "iterate", true, None),
     method("sqlite", "columns", true, None),
+    method("sqlite", "setReadBigInts", true, None),
+    method("sqlite", "setReturnArrays", true, None),
+    method("sqlite", "setAllowBareNamedParameters", true, None),
+    method("sqlite", "setAllowUnknownNamedParameters", true, None),
+    method("sqlite", "sourceSQL", true, None),
+    method("sqlite", "expandedSQL", true, None),
     // tursodb (#424). open / exec / execBatch / close /
     // lastInsertRowid / isAutocommit shipped in v0.5.543; queryAll /
     // queryOne shipped in v0.5.553 (close the row-as-object gap by
@@ -877,6 +908,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method_sig("net", "Socket", false, None, &[], TypeSpec::Any),
+    method_sig("net", "Stream", false, None, &[], TypeSpec::Any),
     method_sig(
         "net",
         "_normalizeArgs",
@@ -905,6 +937,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "destroy", true, Some("Socket")),
     method("net", "on", true, Some("Socket")),
     method("net", "upgradeToTLS", true, Some("Socket")),
+    method("timers", "setTimeout", false, None),
+    method("timers", "clearTimeout", false, None),
+    method("timers", "setImmediate", false, None),
+    method("timers", "clearImmediate", false, None),
+    method("timers", "setInterval", false, None),
+    method("timers", "clearInterval", false, None),
+    property("timers", "promises"),
+    method("timers/promises", "setTimeout", false, None),
+    method("timers/promises", "setImmediate", false, None),
+    method("timers/promises", "setInterval", false, None),
+    property("timers/promises", "scheduler"),
     // Issue #1852 — chainable no-op `net.Socket` option setters. Perry's
     // TCP transport doesn't model Nagle/keep-alive/idle-timeout or read
     // back-pressure yet, but the methods must be callable (and return the
@@ -1856,6 +1899,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // by axios for stream wiring. Values are resolved at runtime by
     // `get_native_module_constant` in `perry-runtime/src/object.rs`.
     property("zlib", "constants"),
+    property("zlib", "codes"),
     class("zlib", "Deflate"),
     class("zlib", "DeflateRaw"),
     class("zlib", "Gzip"),
@@ -2619,6 +2663,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `WebCrypto*` HIR variant. Listing `subtle` here flips the strict
     // strict-API gate (#463) so unimported `crypto.subtle` reads inside
     // an import-style binding don't silently return undefined.
+    property("crypto", "webcrypto"),
     property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
     property("os", "default"),
@@ -2690,14 +2735,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "O_NOFOLLOW"),
     property("constants", "O_NOCTTY"),
     property("constants", "O_DIRECTORY"),
-    #[cfg(target_os = "linux")]
     property("constants", "O_DIRECT"),
-    #[cfg(target_os = "linux")]
     property("constants", "O_NOATIME"),
     property("constants", "O_NONBLOCK"),
     property("constants", "O_SYNC"),
     property("constants", "O_DSYNC"),
-    #[cfg(target_os = "macos")]
     property("constants", "O_SYMLINK"),
     property("constants", "O_CREAT"),
     property("constants", "O_TRUNC"),
@@ -2757,7 +2799,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "SIGALRM"),
     property("constants", "SIGTERM"),
     property("constants", "SIGCHLD"),
-    #[cfg(target_os = "linux")]
     property("constants", "SIGSTKFLT"),
     property("constants", "SIGCONT"),
     property("constants", "SIGSTOP"),
@@ -2771,12 +2812,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "SIGPROF"),
     property("constants", "SIGWINCH"),
     property("constants", "SIGIO"),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     property("constants", "SIGPOLL"),
-    #[cfg(target_os = "linux")]
     property("constants", "SIGPWR"),
     property("constants", "SIGSYS"),
-    #[cfg(target_os = "macos")]
     property("constants", "SIGINFO"),
     property("constants", "E2BIG"),
     property("constants", "EACCES"),
@@ -2867,7 +2905,6 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("constants", "RTLD_NOW"),
     property("constants", "RTLD_GLOBAL"),
     property("constants", "RTLD_LOCAL"),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     property("constants", "RTLD_DEEPBIND"),
     property("constants", "OPENSSL_VERSION_NUMBER"),
     property("constants", "SSL_OP_ALL"),
@@ -3166,6 +3203,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("ws", "WebSocketServer"),
     class("ws", "WebSocket"),
     class("net", "Socket"),
+    class("net", "Stream"),
     class("net", "Server"),
     class("ioredis", "Redis"),
     class("mysql2/promise", "Pool"),
@@ -3247,6 +3285,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "unlinkSync", false, None),
     method("fs", "openSync", false, None),
     method("fs", "open", false, None),
+    method("fs", "openAsBlob", false, None),
     method("fs", "closeSync", false, None),
     method("fs", "close", false, None),
     method("fs", "fstatSync", false, None),
@@ -3295,6 +3334,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "realpathSync", false, None),
     method("fs", "realpath", false, None),
     method("fs", "mkdtempSync", false, None),
+    method("fs", "mkdtempDisposableSync", false, None),
     method("fs", "mkdtemp", false, None),
     method("fs", "chmodSync", false, None),
     method("fs", "chmod", false, None),
@@ -3326,6 +3366,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs", "stat", false, None),
     method("fs", "createReadStream", false, None),
     method("fs", "createWriteStream", false, None),
+    class("fs", "Dir"),
+    class("fs", "Dirent"),
+    class("fs", "Stats"),
+    class("fs", "ReadStream"),
+    class("fs", "WriteStream"),
+    class("fs", "FileReadStream"),
+    class("fs", "FileWriteStream"),
+    class("fs", "Utf8Stream"),
+    method("fs", "_toUnixTimestamp", false, None),
     method("fs", "watchFile", false, None),
     method("fs", "unwatchFile", false, None),
     method("fs", "watch", false, None),
@@ -3342,9 +3391,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle
-    // methods (ftruncate/fchown/futimes etc.) and `mkdtempDisposable` are
-    // intentionally omitted — they are tracked separately (#2133). The parent
-    // `fs.promises` namespace above still resolves to the same surface.
+    // methods (ftruncate/fchown/futimes etc.) are intentionally omitted — they
+    // are tracked separately (#2133). The parent `fs.promises` namespace above
+    // still resolves to the same surface.
     property("fs/promises", "default"),
     property("fs/promises", "constants"),
     method("fs/promises", "access", false, None),
@@ -3361,6 +3410,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fs/promises", "lutimes", false, None),
     method("fs/promises", "mkdir", false, None),
     method("fs/promises", "mkdtemp", false, None),
+    method("fs/promises", "mkdtempDisposable", false, None),
     method("fs/promises", "open", false, None),
     method("fs/promises", "opendir", false, None),
     method("fs/promises", "readFile", false, None),

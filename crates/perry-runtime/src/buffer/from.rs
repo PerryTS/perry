@@ -613,45 +613,117 @@ pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
     buf
 }
 
+/// `Type(buffer) is not Object` → `TypeError` (DataView spec step 2). Also
+/// raised when `buffer` is a non-buffer pointer (Symbol, plain object, …) —
+/// Perry only models ArrayBuffer/SharedArrayBuffer storage as a registered
+/// `BufferHeader`.
+fn throw_dataview_buffer_not_object() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "First argument to DataView constructor must be an ArrayBuffer",
+        "ERR_INVALID_ARG_TYPE",
+    )
+}
+
+/// `ToIndex`/range validation failure → `RangeError` (DataView spec steps 6,
+/// 9, 11, and the `ToIndex` abstract operation: negative or non-integral
+/// indices, and offsets/lengths that escape the backing buffer).
+fn throw_dataview_range_error(message: &str) -> ! {
+    crate::fs::validate::throw_range_error_with_code(message)
+}
+
+/// `ToIndex(value)` for the `DataView` constructor's `byteOffset`/`byteLength`
+/// arguments: `undefined` → 0; otherwise `ToIntegerOrInfinity` with a
+/// `RangeError` for negative or out-of-`[[0, 2^53-1]]` results. `what` names
+/// the argument for the thrown message.
+fn dataview_to_index(value: f64, what: &str) -> i64 {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return 0;
+    }
+    let n = jv.to_number();
+    if n.is_nan() {
+        // ToIntegerOrInfinity(NaN) = 0.
+        return 0;
+    }
+    if n < 0.0 {
+        throw_dataview_range_error(&format!("Invalid DataView {what}"));
+    }
+    // ToIndex rejects values above 2^53-1 (and thus +Infinity).
+    if n > 9_007_199_254_740_991.0 {
+        throw_dataview_range_error(&format!("Invalid DataView {what}"));
+    }
+    n.trunc() as i64
+}
+
 /// `new DataView(buffer, byteOffset?, byteLength?)` — Perry models a DataView
 /// as a `BufferHeader` over the backing `ArrayBuffer`. With `byteOffset == 0`
 /// and no explicit length the view aliases the backing pointer directly
 /// (zero-copy; writes are visible through sibling `Uint8Array` views). A
 /// non-zero offset or explicit length produces a registered slice view so the
 /// numeric accessors index relative to the view start (#2878).
+///
+/// `offset_value` / `length_value` are NaN-boxed JS values (the raw arguments,
+/// `undefined` when absent) so the spec's `ToIndex`/range validation can run
+/// here (#3657): a non-object `buffer` throws `TypeError`; negative or
+/// out-of-range `byteOffset`/`byteLength` throw `RangeError`.
 #[no_mangle]
-pub extern "C" fn js_data_view_new(value: f64, byte_offset: i32, requested_length: i32) -> f64 {
+pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: f64) -> f64 {
     let v = crate::value::JSValue::from_bits(value.to_bits());
+    // Step 2: Type(buffer) must be Object holding [[ArrayBufferData]].
     if !v.is_pointer() {
-        return value;
+        throw_dataview_buffer_not_object();
     }
     let addr = v.as_pointer::<u8>() as usize;
-    if addr == 0 {
-        return value;
+    if addr == 0 || !is_registered_buffer(addr) {
+        throw_dataview_buffer_not_object();
     }
 
-    // Fast path: full-buffer view aliases the backing pointer.
-    if byte_offset <= 0 && requested_length < 0 {
-        mark_as_data_view(addr);
-        return value;
-    }
-
-    if !is_registered_buffer(addr) {
-        mark_as_data_view(addr);
-        return value;
-    }
+    // Steps 4-6: offset = ToIndex(byteOffset) (RangeError if negative).
+    let offset = dataview_to_index(offset_value, "byteOffset");
 
     let src = addr as *const BufferHeader;
+    let total_len = unsafe { (*src).length as i64 };
+
+    // Step 9: offset must not exceed the backing buffer's byteLength.
+    if offset > total_len {
+        throw_dataview_range_error("Start offset is outside the bounds of the buffer");
+    }
+
+    // Steps 10-12: byteLength defaults to the remainder; an explicit length is
+    // ToIndex-validated and must not escape the buffer.
+    let length_jv = crate::value::JSValue::from_bits(length_value.to_bits());
+    let view_len = if length_jv.is_undefined() {
+        total_len - offset
+    } else {
+        let requested = dataview_to_index(length_value, "byteLength");
+        if offset + requested > total_len {
+            throw_dataview_range_error("Invalid DataView length");
+        }
+        requested
+    };
+
+    // Fast path: full-buffer zero-offset view aliases the backing pointer
+    // directly (zero-copy; preserves the existing StringDecoder consumer).
+    if offset == 0 && view_len == total_len {
+        mark_as_data_view(addr);
+        return value;
+    }
+
+    // Otherwise build a registered slice view so the numeric accessors index
+    // relative to the view start and `.byteOffset`/`.byteLength`/`.buffer`
+    // report the right values — including the zero-length edge cases
+    // (`offset == total_len`) that `js_buffer_slice` would otherwise collapse
+    // to an unregistered empty buffer, losing offset and backing.
     unsafe {
-        let total_len = (*src).length as i32;
-        let start = byte_offset.clamp(0, total_len);
-        let len = if requested_length < 0 {
-            total_len.saturating_sub(start)
-        } else {
-            requested_length.max(0)
-        };
-        let end = start.saturating_add(len).min(total_len);
-        let view = js_buffer_slice(src, start, end);
+        let start = offset as u32;
+        let len = view_len as u32;
+        let view = buffer_alloc(len);
+        (*view).length = len;
+        if len > 0 {
+            let src_data = buffer_data(src).add(start as usize);
+            ptr::copy_nonoverlapping(src_data, buffer_data_mut(view), len as usize);
+        }
+        super::view::register(view as usize, src as usize, start, len);
         mark_as_data_view(view as usize);
         set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(addr));
         f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())

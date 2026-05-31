@@ -980,6 +980,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if module_name == "net"
+                    && matches!(class_name.as_str(), "Socket" | "Stream")
+                    && is_net_socket_method_name(&property_name)
+                {
+                    // `new net.Socket().write` / `net.Stream().destroy` are
+                    // method-value reads, not zero-arg native calls. Keep the
+                    // PropertyGet shape so runtime handle-property dispatch
+                    // can bind a callable to the socket handle.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if module_name == "console"
                     && class_name == "Console"
                     && is_console_instance_method_name(&property_name)
@@ -1063,6 +1076,78 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // `net.Socket` / `net.Server` method reads are callable
                     // values. The call form still lowers through the native
                     // method table; only bare reads use property dispatch.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "DatabaseSync"
+                    && matches!(
+                        property_name.as_str(),
+                        "open"
+                            | "close"
+                            | "exec"
+                            | "prepare"
+                            | "function"
+                            | "aggregate"
+                            | "enableDefensive"
+                            | "setAuthorizer"
+                            | "createTagStore"
+                            | "createSession"
+                            | "applyChangeset"
+                            | "enableLoadExtension"
+                            | "loadExtension"
+                            | "location"
+                    )
+                {
+                    // `node:sqlite` DatabaseSync methods are callable fields.
+                    // Bare reads like `typeof db.close` must not invoke the
+                    // lifecycle method as a zero-arg getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "Session"
+                    && matches!(property_name.as_str(), "changeset" | "patchset" | "close")
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "SQLTagStore"
+                    && matches!(
+                        property_name.as_str(),
+                        "run" | "get" | "all" | "iterate" | "clear"
+                    )
+                {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "sqlite"
+                    && class_name == "StatementSync"
+                    && matches!(
+                        property_name.as_str(),
+                        "run"
+                            | "get"
+                            | "all"
+                            | "iterate"
+                            | "columns"
+                            | "setReadBigInts"
+                            | "setReturnArrays"
+                            | "setAllowBareNamedParameters"
+                            | "setAllowUnknownNamedParameters"
+                    )
+                {
+                    // `node:sqlite` StatementSync methods are callable fields.
+                    // Getter properties such as `sourceSQL` and `expandedSQL`
+                    // keep the native getter path below.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1404,7 +1489,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
                             || p.sym.as_ref() == "__proto__"
                     );
-                    if !outer_is_prototype_or_proto {
+                    if !outer_is_prototype_or_proto && property != "crypto" {
                         object_expr = Expr::GlobalGet(0);
                     }
                 }

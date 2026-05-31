@@ -148,12 +148,18 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "URLSearchParams",
     "AbortController",
     "AbortSignal",
+    "Crypto",
+    "CryptoKey",
+    "SubtleCrypto",
     "FormData",
     "Blob",
     "File",
     "Headers",
     "Request",
     "Response",
+    "MessageChannel",
+    "MessagePort",
+    "BroadcastChannel",
     "FinalizationRegistry",
     // #2875: TC39 explicit-resource-management globals. Backed by the
     // no-op constructor thunk so `typeof DisposableStack === "function"`;
@@ -191,6 +197,8 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Blob"
         | "Headers"
         | "Response"
+        | "MessageChannel"
+        | "MessagePort"
         | "DisposableStack"
         | "AsyncDisposableStack" => 0,
         "Array"
@@ -213,6 +221,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "DataView"
         | "URL"
         | "Request"
+        | "BroadcastChannel"
         | "FinalizationRegistry"
         | "Promise" => 1,
         "RegExp" | "Proxy" | "AggregateError" | "File" => 2,
@@ -995,14 +1004,27 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // global value coerce like the bare-call lowering does.
             "Number" => global_this_number_thunk as *const u8,
             "Boolean" => global_this_boolean_thunk as *const u8,
+            "MessageChannel" => {
+                crate::messaging::js_message_channel_constructor_call_error as *const u8
+            }
+            "MessagePort" => crate::messaging::js_message_port_constructor_call_error as *const u8,
+            "BroadcastChannel" => {
+                crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
+            }
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure_ptr.is_null() {
             continue;
         }
-        if matches!(name, "Object" | "String" | "Number" | "Boolean") {
-            crate::closure::js_register_closure_arity(func_ptr, 1);
+        match name {
+            "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
+                crate::closure::js_register_closure_arity(func_ptr, 1);
+            }
+            "MessageChannel" | "MessagePort" => {
+                crate::closure::js_register_closure_arity(func_ptr, 0);
+            }
+            _ => {}
         }
         // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
         // on the constructor closure so rebound usage like
@@ -1033,9 +1055,11 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "length".to_string(),
             super::PropertyAttrs::new(false, false, true),
         );
+        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
+        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         // Stash `prototype` on the closure's dynamic-prop side table.
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
         // at offset 12 and dispatches into `closure_set_dynamic_prop`
@@ -1056,6 +1080,12 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // entry point — works in tandem with `.call`/`.apply` since
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
+            if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
+                crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+            }
+            if matches!(name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+                super::native_module::install_webcrypto_constructor_proto(proto_obj, ctor_value);
+            }
             // #2145: link per-kind typed-array constructors into the
             // `%TypedArray%` chain. `Int8Array.__proto__ === %TypedArray%`
             // and `Object.getPrototypeOf(Int8Array.prototype) ===
@@ -1093,7 +1123,6 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
-        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         js_object_set_field_by_name(singleton, name_key, ctor_value);
     }
     // Callable global functions: ClosureHeader-backed values with real
@@ -1189,6 +1218,7 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let value = super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton, key, value);
     }
+    super::native_module::install_global_webcrypto(singleton);
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
     // metadata object. typeof is "object". Built once per process.
     {

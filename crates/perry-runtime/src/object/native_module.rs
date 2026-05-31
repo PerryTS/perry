@@ -13,10 +13,17 @@ use std::cell::{Cell, RefCell};
 thread_local! {
     static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+    static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
+    static HANDLE_PROPERTY_BIND_REENTRY: Cell<bool> = const { Cell::new(false) };
     static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
+    static SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
+    static SQLITE_SESSION_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_STYLES: Cell<u64> = const { Cell::new(0) };
     static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
+    static TIMERS_PROMISES_PARENT_NAMESPACE: Cell<u64> = const { Cell::new(0) };
+    static ZLIB_CODES_OBJECT: Cell<u64> = const { Cell::new(0) };
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
@@ -28,7 +35,27 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             visitor.visit_nanbox_u64_slot(value_bits);
         }
     });
+    NATIVE_MODULE_ACCESSOR_EXPORTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
     BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    SQLITE_SESSION_CONSTRUCTOR_VALUE.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -50,6 +77,20 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     UTIL_INSPECT_COLORS.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    TIMERS_PROMISES_PARENT_NAMESPACE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    ZLIB_CODES_OBJECT.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -151,6 +192,7 @@ pub extern "C" fn js_create_native_module_namespace(
 }
 
 fn normalize_native_module_alias(module_name: &str) -> &str {
+    let module_name = module_name.strip_prefix("node:").unwrap_or(module_name);
     match module_name {
         "sys" => {
             crate::node_submodules::emit_sys_deprecation_warning_once();
@@ -160,6 +202,30 @@ fn normalize_native_module_alias(module_name: &str) -> &str {
         "path/win32" => "path.win32",
         _ => module_name,
     }
+}
+
+pub(crate) fn webcrypto_namespace() -> f64 {
+    js_create_native_module_namespace(b"crypto.webcrypto".as_ptr(), "crypto.webcrypto".len())
+}
+
+pub(crate) fn install_global_webcrypto(singleton: *mut ObjectHeader) {
+    let key = crate::string::js_string_from_bytes(b"crypto".as_ptr(), "crypto".len() as u32);
+    js_object_set_field_by_name(singleton, key, webcrypto_namespace());
+}
+
+pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, ctor_value: f64) {
+    let constructor = "constructor";
+    let key = crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, ctor_value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
+pub(crate) fn subtle_crypto_namespace() -> f64 {
+    js_create_native_module_namespace(b"crypto.subtle".as_ptr(), "crypto.subtle".len())
 }
 
 // #3677: `Object.keys(zlib.constants)` enumeration. Node exposes the full
@@ -592,6 +658,32 @@ const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"triggerAsyncId",
 ];
 
+const BUFFER_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Buffer",
+    b"transcode",
+    b"isUtf8",
+    b"isAscii",
+    b"kMaxLength",
+    b"kStringMaxLength",
+    b"btoa",
+    b"atob",
+    b"constants",
+    b"INSPECT_MAX_BYTES",
+    b"Blob",
+    b"resolveObjectURL",
+    b"File",
+];
+
+const TIMERS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"setTimeout",
+    b"clearTimeout",
+    b"setImmediate",
+    b"clearImmediate",
+    b"setInterval",
+    b"clearInterval",
+    b"promises",
+];
+
 const OS_DEFAULT_KEYS: &[&[u8]] = &[
     b"arch",
     b"availableParallelism",
@@ -1006,8 +1098,165 @@ mod tests {
     }
 }
 
+const FS_NAMESPACE_EXPORT_KEYS: &[&[u8]] = &[
+    b"appendFile",
+    b"appendFileSync",
+    b"access",
+    b"accessSync",
+    b"chown",
+    b"chownSync",
+    b"chmod",
+    b"chmodSync",
+    b"close",
+    b"closeSync",
+    b"copyFile",
+    b"copyFileSync",
+    b"cp",
+    b"cpSync",
+    b"createReadStream",
+    b"createWriteStream",
+    b"exists",
+    b"existsSync",
+    b"fchown",
+    b"fchownSync",
+    b"fchmod",
+    b"fchmodSync",
+    b"fdatasync",
+    b"fdatasyncSync",
+    b"fstat",
+    b"fstatSync",
+    b"fsync",
+    b"fsyncSync",
+    b"ftruncate",
+    b"ftruncateSync",
+    b"futimes",
+    b"futimesSync",
+    b"glob",
+    b"globSync",
+    b"lchown",
+    b"lchownSync",
+    b"lchmod",
+    b"lchmodSync",
+    b"link",
+    b"linkSync",
+    b"lstat",
+    b"lstatSync",
+    b"lutimes",
+    b"lutimesSync",
+    b"mkdir",
+    b"mkdirSync",
+    b"mkdtemp",
+    b"mkdtempDisposableSync",
+    b"mkdtempSync",
+    b"open",
+    b"openAsBlob",
+    b"openSync",
+    b"readdir",
+    b"readdirSync",
+    b"read",
+    b"readSync",
+    b"readv",
+    b"readvSync",
+    b"readFile",
+    b"readFileSync",
+    b"readlink",
+    b"readlinkSync",
+    b"realpath",
+    b"realpathSync",
+    b"rename",
+    b"renameSync",
+    b"rm",
+    b"rmSync",
+    b"rmdir",
+    b"rmdirSync",
+    b"stat",
+    b"statfs",
+    b"statSync",
+    b"statfsSync",
+    b"symlink",
+    b"symlinkSync",
+    b"truncate",
+    b"truncateSync",
+    b"unwatchFile",
+    b"unlink",
+    b"unlinkSync",
+    b"utimes",
+    b"utimesSync",
+    b"watch",
+    b"watchFile",
+    b"writeFile",
+    b"writeFileSync",
+    b"write",
+    b"writeSync",
+    b"writev",
+    b"writevSync",
+    b"Dirent",
+    b"Stats",
+    b"ReadStream",
+    b"WriteStream",
+    b"FileReadStream",
+    b"FileWriteStream",
+    b"Utf8Stream",
+    b"_toUnixTimestamp",
+    b"Dir",
+    b"opendir",
+    b"opendirSync",
+    b"constants",
+    b"promises",
+];
+
+const SQLITE_CONSTANTS_KEYS: &[&[u8]] = &[
+    b"SQLITE_CHANGESET_DATA",
+    b"SQLITE_CHANGESET_NOTFOUND",
+    b"SQLITE_CHANGESET_CONFLICT",
+    b"SQLITE_CHANGESET_CONSTRAINT",
+    b"SQLITE_CHANGESET_FOREIGN_KEY",
+    b"SQLITE_CHANGESET_OMIT",
+    b"SQLITE_CHANGESET_REPLACE",
+    b"SQLITE_CHANGESET_ABORT",
+    b"SQLITE_OK",
+    b"SQLITE_DENY",
+    b"SQLITE_IGNORE",
+    b"SQLITE_CREATE_INDEX",
+    b"SQLITE_CREATE_TABLE",
+    b"SQLITE_CREATE_TEMP_INDEX",
+    b"SQLITE_CREATE_TEMP_TABLE",
+    b"SQLITE_CREATE_TEMP_TRIGGER",
+    b"SQLITE_CREATE_TEMP_VIEW",
+    b"SQLITE_CREATE_TRIGGER",
+    b"SQLITE_CREATE_VIEW",
+    b"SQLITE_DELETE",
+    b"SQLITE_DROP_INDEX",
+    b"SQLITE_DROP_TABLE",
+    b"SQLITE_DROP_TEMP_INDEX",
+    b"SQLITE_DROP_TEMP_TABLE",
+    b"SQLITE_DROP_TEMP_TRIGGER",
+    b"SQLITE_DROP_TEMP_VIEW",
+    b"SQLITE_DROP_TRIGGER",
+    b"SQLITE_DROP_VIEW",
+    b"SQLITE_INSERT",
+    b"SQLITE_PRAGMA",
+    b"SQLITE_READ",
+    b"SQLITE_SELECT",
+    b"SQLITE_TRANSACTION",
+    b"SQLITE_UPDATE",
+    b"SQLITE_ATTACH",
+    b"SQLITE_DETACH",
+    b"SQLITE_ALTER_TABLE",
+    b"SQLITE_REINDEX",
+    b"SQLITE_ANALYZE",
+    b"SQLITE_CREATE_VTABLE",
+    b"SQLITE_DROP_VTABLE",
+    b"SQLITE_FUNCTION",
+    b"SQLITE_SAVEPOINT",
+    b"SQLITE_COPY",
+    b"SQLITE_RECURSIVE",
+];
+
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
+    let module_name = normalize_native_module_alias(module_name);
     match module_name {
+        "fs" => Some(FS_NAMESPACE_EXPORT_KEYS),
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
@@ -1033,6 +1282,15 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"strict",
         ]),
         "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
+        "sqlite" => Some(&[
+            b"DatabaseSync",
+            b"Session",
+            b"StatementSync",
+            b"backup",
+            b"constants",
+            b"default",
+        ]),
+        "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
         "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
         // #3677: zlib.constants enumerates the full Z_*/BROTLI_*/ZSTD_* table.
         "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
@@ -1043,8 +1301,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
         "fs" => Some(FS_NAMESPACE_KEYS),
         "constants" => Some(deprecated_constants_keys()),
+        "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
+        "timers" => Some(TIMERS_NAMESPACE_KEYS),
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
         "url" => Some(URL_NAMESPACE_KEYS),
@@ -1062,6 +1322,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isIPv6",
             b"Server",
             b"Socket",
+            b"Stream",
             b"getDefaultAutoSelectFamily",
             b"setDefaultAutoSelectFamily",
             b"getDefaultAutoSelectFamilyAttemptTimeout",
@@ -1076,8 +1337,24 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"globalAgent",
         ]),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
+        "timers" => Some(&[
+            b"setTimeout",
+            b"clearTimeout",
+            b"setImmediate",
+            b"clearImmediate",
+            b"setInterval",
+            b"clearInterval",
+            b"promises",
+        ]),
+        "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
+        "zlib" => Some(&[b"codes"]),
         _ => None,
     }
+}
+
+pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+    native_module_enumerable_keys(module_name)
+        .is_some_and(|keys| keys.iter().any(|candidate| *candidate == key.as_bytes()))
 }
 
 fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
@@ -1121,6 +1398,8 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
 
 fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a str) -> &'a str {
     match (module_name, property_name) {
+        ("fs", "FileReadStream") => "ReadStream",
+        ("fs", "FileWriteStream") => "WriteStream",
         ("path" | "path.posix" | "path.win32", "_makeLong") => "toNamespacedPath",
         ("querystring", "decode") => "parse",
         ("querystring", "encode") => "stringify",
@@ -1151,6 +1430,9 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "util.types"
             | "path.posix"
             | "path.win32"
+            | "timers/promises"
+            | "crypto.webcrypto"
+            | "crypto.subtle"
     )
 }
 
@@ -1267,6 +1549,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if is_native_module_callable_export(module_name, property_name) {
         return bound_native_callable_export_value(module_name, property_name);
     }
+    // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)
+    let js_val = crate::value::native_module_try_js_property(module_name, property_name);
+    if js_val.to_bits() != crate::value::TAG_UNDEFINED {
+        return js_val;
+    }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -1292,7 +1579,9 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    let exposed_name = if module_name == "url" && property_name == "resolveObject" {
+    let exposed_name = if module_name == "fs" {
+        native_callable_export_display_name(module_name, property_name)
+    } else if module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
     } else if module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
@@ -1322,6 +1611,12 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         )
     {
         attach_stream_constructor_prototype(value, property_name);
+    }
+    if module_name == "sqlite" && property_name == "DatabaseSync" {
+        attach_sqlite_database_sync_prototype(value);
+    }
+    if module_name == "sqlite" && property_name == "Session" {
+        attach_sqlite_session_prototype(value);
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
@@ -1404,6 +1699,70 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     value
 }
 
+extern "C" fn fs_namespace_descriptor_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    unsafe {
+        let property_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
+        let property_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        js_native_module_property_by_name(b"fs".as_ptr(), 2, property_ptr, property_len)
+    }
+}
+
+extern "C" fn fs_namespace_descriptor_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _value: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
+    let key = format!("fs\0get\0{property_name}");
+    if let Some(bits) = NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+
+    let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
+    let func_ptr = fs_namespace_descriptor_getter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 2);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, property_bytes.as_ptr() as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, property_bytes.len() as i64);
+    let name = if property_name == "promises" {
+        "get".to_string()
+    } else {
+        format!("get {property_name}")
+    };
+    set_bound_native_closure_name(closure, &name);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+
+    NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| {
+        c.borrow_mut().insert(key, value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    });
+    value
+}
+
+pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
+    let key = format!("fs\0set\0{property_name}");
+    if let Some(bits) = NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+
+    let func_ptr = fs_namespace_descriptor_setter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let name = format!("set {property_name}");
+    set_bound_native_closure_name(closure, &name);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+
+    NATIVE_MODULE_ACCESSOR_EXPORTS.with(|c| {
+        c.borrow_mut().insert(key, value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    });
+    value
+}
+
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         ("events", "EventEmitter") => Some(1),
@@ -1443,6 +1802,13 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
         ("util", "diff") => Some(2),
         ("dns" | "dns/promises", "Resolver") => Some(0),
+        ("fs", "ReadStream" | "WriteStream") => Some(2),
+        ("fs", "Utf8Stream") => Some(0),
+        ("fs", "Dir" | "Dirent") => Some(3),
+        ("fs", "Stats") => Some(14),
+        ("fs", "mkdtempDisposableSync") => Some(2),
+        ("fs", "openAsBlob") => Some(1),
+        ("fs", "_toUnixTimestamp") => Some(1),
         ("events", "init") => Some(1),
         ("wasi", "WASI") => Some(0),
         ("perf_hooks", "Performance") => Some(0),
@@ -1463,6 +1829,71 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("module", "syncBuiltinESMExports") => Some(0),
         ("module", "runMain") => Some(0),
         _ => None,
+    }
+}
+
+extern "C" fn sqlite_statement_sync_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
+}
+
+extern "C" fn sqlite_session_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
+}
+
+fn sqlite_statement_sync_constructor_value() -> f64 {
+    SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE.with(|slot| {
+        let cached = slot.get();
+        if cached != 0 {
+            return f64::from_bits(cached);
+        }
+
+        let func_ptr = sqlite_statement_sync_constructor_thunk as *const u8;
+        crate::closure::js_register_closure_arity(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+        if closure.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        set_bound_native_closure_name(closure, "StatementSync");
+        let value = crate::value::js_nanbox_pointer(closure as i64);
+        slot.set(value.to_bits());
+        value
+    })
+}
+
+fn sqlite_session_constructor_value() -> f64 {
+    SQLITE_SESSION_CONSTRUCTOR_VALUE.with(|slot| {
+        let cached = slot.get();
+        if cached != 0 {
+            return f64::from_bits(cached);
+        }
+
+        let func_ptr = sqlite_session_constructor_thunk as *const u8;
+        crate::closure::js_register_closure_arity(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+        if closure.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        set_bound_native_closure_name(closure, "Session");
+        let value = crate::value::js_nanbox_pointer(closure as i64);
+        attach_sqlite_session_prototype(value);
+        slot.set(value.to_bits());
+        value
+    })
+}
+
+fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
+    if module == "fs" {
+        match prop {
+            "_toUnixTimestamp" => "toUnixTimestamp",
+            "Stats" => "deprecated",
+            _ => prop,
+        }
+    } else {
+        prop
     }
 }
 
@@ -1544,6 +1975,184 @@ const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "indexOf",
     "lastIndexOf",
 ];
+
+const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
+    "open",
+    "close",
+    "exec",
+    "prepare",
+    "function",
+    "aggregate",
+    "enableDefensive",
+    "setAuthorizer",
+    "createTagStore",
+    "createSession",
+    "applyChangeset",
+    "enableLoadExtension",
+    "loadExtension",
+    "location",
+];
+
+const SQLITE_SESSION_PROTOTYPE_METHODS: &[&str] = &["changeset", "patchset", "close"];
+
+extern "C" fn sqlite_database_sync_prototype_method_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    arg0: f64,
+    arg1: f64,
+    arg2: f64,
+) -> f64 {
+    unsafe {
+        let method_name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
+        let method_name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        let receiver = crate::object::js_implicit_this_get();
+        let args = [arg0, arg1, arg2];
+        crate::object::js_native_call_method(
+            receiver,
+            method_name_ptr,
+            method_name_len,
+            args.as_ptr(),
+            args.len(),
+        )
+    }
+}
+
+fn attach_sqlite_database_sync_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    let func_ptr = sqlite_database_sync_prototype_method_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 3);
+    for method in SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS {
+        let leaked: &'static [u8] = method.as_bytes().to_vec().leak();
+        let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
+        if method_closure.is_null() {
+            continue;
+        }
+        crate::closure::js_closure_set_capture_ptr(method_closure, 0, leaked.as_ptr() as i64);
+        crate::closure::js_closure_set_capture_ptr(method_closure, 1, leaked.len() as i64);
+        set_bound_native_closure_name(method_closure, method);
+        set_builtin_closure_length(method_closure as usize, 0);
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
+        js_object_set_field_by_name(proto, key, method_value);
+        super::set_builtin_property_attrs(
+            proto as usize,
+            (*method).to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
+
+fn attach_sqlite_session_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+
+    let func_ptr = sqlite_database_sync_prototype_method_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 3);
+    for method in SQLITE_SESSION_PROTOTYPE_METHODS {
+        let leaked: &'static [u8] = method.as_bytes().to_vec().leak();
+        let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
+        if method_closure.is_null() {
+            continue;
+        }
+        crate::closure::js_closure_set_capture_ptr(method_closure, 0, leaked.as_ptr() as i64);
+        crate::closure::js_closure_set_capture_ptr(method_closure, 1, leaked.len() as i64);
+        set_bound_native_closure_name(method_closure, method);
+        set_builtin_closure_length(method_closure as usize, 0);
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
+        js_object_set_field_by_name(proto, key, method_value);
+        super::set_builtin_property_attrs(
+            proto as usize,
+            (*method).to_string(),
+            super::PropertyAttrs::new(true, true, true),
+        );
+    }
+
+    let dispose_method = "@@__perry_wk_dispose";
+    let dispose_leaked: &'static [u8] = dispose_method.as_bytes().to_vec().leak();
+    let dispose_closure = crate::closure::js_closure_alloc(func_ptr, 2);
+    if !dispose_closure.is_null() {
+        crate::closure::js_closure_set_capture_ptr(
+            dispose_closure,
+            0,
+            dispose_leaked.as_ptr() as i64,
+        );
+        crate::closure::js_closure_set_capture_ptr(dispose_closure, 1, dispose_leaked.len() as i64);
+        set_bound_native_closure_name(dispose_closure, "[Symbol.dispose]");
+        set_builtin_closure_length(dispose_closure as usize, 0);
+        let dispose_value = crate::value::js_nanbox_pointer(dispose_closure as i64);
+        let dispose_sym = crate::symbol::well_known_symbol("dispose");
+        if !dispose_sym.is_null() {
+            let dispose_sym_value = crate::value::js_nanbox_pointer(dispose_sym as i64);
+            unsafe {
+                crate::symbol::js_object_set_symbol_property(
+                    crate::value::js_nanbox_pointer(proto as i64),
+                    dispose_sym_value,
+                    dispose_value,
+                );
+            }
+        }
+    }
+
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
 
 pub(crate) fn buffer_constructor_value() -> f64 {
     BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
@@ -1714,6 +2323,73 @@ fn util_inspect_colors() -> f64 {
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
         value
     })
+}
+
+fn zlib_codes_object() -> f64 {
+    const ZLIB_RETURN_CODES: &[(&str, i32)] = &[
+        ("Z_OK", 0),
+        ("Z_STREAM_END", 1),
+        ("Z_NEED_DICT", 2),
+        ("Z_ERRNO", -1),
+        ("Z_STREAM_ERROR", -2),
+        ("Z_DATA_ERROR", -3),
+        ("Z_MEM_ERROR", -4),
+        ("Z_BUF_ERROR", -5),
+        ("Z_VERSION_ERROR", -6),
+    ];
+
+    ZLIB_CODES_OBJECT.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let obj = js_object_alloc(0, 0);
+        for (name, value) in ZLIB_RETURN_CODES.iter().take(3) {
+            native_set_field(obj, &value.to_string(), native_string_value(name));
+        }
+        for (name, value) in ZLIB_RETURN_CODES {
+            native_set_field(obj, name, *value as f64);
+        }
+        for (name, value) in ZLIB_RETURN_CODES.iter().skip(3) {
+            native_set_field(obj, &value.to_string(), native_string_value(name));
+        }
+
+        let value = native_object_value(obj);
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+pub(crate) fn timers_promises_parent_namespace() -> f64 {
+    TIMERS_PROMISES_PARENT_NAMESPACE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let module_name = "timers/promises";
+        let value = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+        slot.set(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+        value
+    })
+}
+
+extern "C" fn util_debuglog_logger_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+pub(crate) fn util_debuglog_logger_value() -> f64 {
+    let func_ptr = util_debuglog_logger_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+    set_bound_native_closure_name(closure, "debuglog");
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 fn attach_tty_stream_prototype(constructor_value: f64, name: &str) {
@@ -1916,6 +2592,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("sqlite", "DatabaseSync")
+            | ("sqlite", "Session")
+            | ("sqlite", "StatementSync")
             | ("domain", "Domain")
             | ("domain", "createDomain")
             | ("domain", "create")
@@ -2014,6 +2693,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "fork")
             | ("events", "EventEmitter")
             | ("events", "on")
+            | ("sqlite", "backup")
             | ("events", "once")
             | ("events", "addAbortListener")
             | ("events", "getEventListeners")
@@ -2108,8 +2788,15 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "cpSync")
             | ("fs", "createReadStream")
             | ("fs", "createWriteStream")
+            | ("fs", "Dir")
+            | ("fs", "Dirent")
             | ("fs", "existsSync")
             | ("fs", "exists")
+            | ("fs", "FileReadStream")
+            | ("fs", "FileWriteStream")
+            | ("fs", "ReadStream")
+            | ("fs", "Utf8Stream")
+            | ("fs", "WriteStream")
             | ("fs", "closeSync")
             | ("fs", "close")
             | ("fs", "fdatasync")
@@ -2136,10 +2823,12 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "lutimesSync")
             | ("fs", "mkdir")
             | ("fs", "mkdirSync")
+            | ("fs", "mkdtempDisposableSync")
             | ("fs", "mkdtempSync")
             | ("fs", "mkdtemp")
             | ("fs", "openSync")
             | ("fs", "open")
+            | ("fs", "openAsBlob")
             | ("fs", "opendir")
             | ("fs", "opendirSync")
             | ("fs", "readFile")
@@ -2166,6 +2855,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "statfs")
             | ("fs", "statfsSync")
             | ("fs", "statSync")
+            | ("fs", "Stats")
             | ("fs", "lstatSync")
             | ("fs", "truncateSync")
             | ("fs", "truncate")
@@ -2173,6 +2863,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("fs", "unlinkSync")
             | ("fs", "utimes")
             | ("fs", "utimesSync")
+            | ("fs", "_toUnixTimestamp")
             | ("fs", "watch")
             | ("fs", "watchFile")
             | ("fs", "unwatchFile")
@@ -2208,15 +2899,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // performance.timerify(fn) returns a wrapper that preserves the
             // result and emits observer-visible function entries.
             | ("perf_hooks", "timerify")
-            // #1366: `crypto.getRandomValues` is the WebCrypto sync
-            // randomness API. Perry lowers the call form via a
-            // synthetic `$$cryptoFillRandom` method on the buffer
-            // (see `lower/expr_call/module_static.rs`), but reading
-            // it as a value (`typeof crypto.getRandomValues ===
-            // "function"`, `const f = crypto.getRandomValues`)
-            // needs the property-read form to be a bound-method
-            // closure.
-            | ("crypto", "getRandomValues")
+            // `globalThis.crypto` is backed by the `crypto.webcrypto`
+            // singleton. Its methods must read as callable bound functions
+            // for feature checks and rebound calls.
+            | ("crypto.webcrypto", "getRandomValues")
+            | ("crypto.webcrypto", "randomUUID")
             | ("buffer.Buffer", "from")
             | ("buffer.Buffer", "alloc")
             | ("buffer.Buffer", "allocUnsafe")
@@ -2263,6 +2950,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("cluster", "setupMaster")
             | ("cluster", "Worker")
             | ("buffer.Buffer", "copyBytesFrom")
+            | ("buffer", "isAscii")
+            | ("buffer", "isUtf8")
             | ("buffer", "atob")
             | ("buffer", "btoa")
             | ("util", "convertProcessSignalToExitCode")
@@ -2599,7 +3288,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
 /// For constant properties (e.g., `path.sep`, `fs.constants`), returns the value directly.
 #[no_mangle]
 pub extern "C" fn js_native_module_bind_method(
-    namespace_obj: f64,
+    _namespace_obj: f64,
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
@@ -2611,13 +3300,20 @@ pub extern "C" fn js_native_module_bind_method(
     };
 
     // Extract module name from the namespace object's first field
-    let module_name = unsafe { get_module_name_from_namespace(namespace_obj) };
+    let module_name = unsafe { get_module_name_from_namespace(_namespace_obj) };
 
     // Check for known constant properties first
     if let Some(val) =
-        unsafe { get_native_module_constant(module_name, property_name, namespace_obj) }
+        unsafe { get_native_module_constant(module_name, property_name, _namespace_obj) }
     {
         return val;
+    }
+
+    // Not a constant. Only synthesize callables for
+    // exports that are actually callable on this platform; otherwise namespace
+    // reads such as Linux `fs.lchmodSync` must stay `undefined`.
+    if is_native_module_callable_export(module_name, property_name) {
+        return bound_native_callable_export_value(module_name, property_name);
     }
 
     // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)
@@ -2680,9 +3376,21 @@ pub extern "C" fn js_class_method_bind(
                     let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
                     if id > 0 && id < 0x100000 {
                         if let Some(dispatch) = handle_property_dispatch() {
-                            let value = unsafe { dispatch(id, method_name_ptr, method_name_len) };
-                            if value.to_bits() != crate::value::TAG_UNDEFINED {
-                                return value;
+                            let value = HANDLE_PROPERTY_BIND_REENTRY.with(|guard| {
+                                if guard.get() {
+                                    None
+                                } else {
+                                    guard.set(true);
+                                    let value =
+                                        unsafe { dispatch(id, method_name_ptr, method_name_len) };
+                                    guard.set(false);
+                                    Some(value)
+                                }
+                            });
+                            if let Some(value) = value {
+                                if value.to_bits() != crate::value::TAG_UNDEFINED {
+                                    return value;
+                                }
                             }
                         }
                     }
@@ -3689,6 +4397,57 @@ pub(crate) unsafe fn get_native_module_constant(
         })
     };
 
+    let sqlite_const = |prop: &str| -> Option<f64> {
+        Some(match prop {
+            "SQLITE_CHANGESET_DATA" => 1.0,
+            "SQLITE_CHANGESET_NOTFOUND" => 2.0,
+            "SQLITE_CHANGESET_CONFLICT" => 3.0,
+            "SQLITE_CHANGESET_CONSTRAINT" => 4.0,
+            "SQLITE_CHANGESET_FOREIGN_KEY" => 5.0,
+            "SQLITE_CHANGESET_OMIT" => 0.0,
+            "SQLITE_CHANGESET_REPLACE" => 1.0,
+            "SQLITE_CHANGESET_ABORT" => 2.0,
+            "SQLITE_OK" => 0.0,
+            "SQLITE_DENY" => 1.0,
+            "SQLITE_IGNORE" => 2.0,
+            "SQLITE_CREATE_INDEX" => 1.0,
+            "SQLITE_CREATE_TABLE" => 2.0,
+            "SQLITE_CREATE_TEMP_INDEX" => 3.0,
+            "SQLITE_CREATE_TEMP_TABLE" => 4.0,
+            "SQLITE_CREATE_TEMP_TRIGGER" => 5.0,
+            "SQLITE_CREATE_TEMP_VIEW" => 6.0,
+            "SQLITE_CREATE_TRIGGER" => 7.0,
+            "SQLITE_CREATE_VIEW" => 8.0,
+            "SQLITE_DELETE" => 9.0,
+            "SQLITE_DROP_INDEX" => 10.0,
+            "SQLITE_DROP_TABLE" => 11.0,
+            "SQLITE_DROP_TEMP_INDEX" => 12.0,
+            "SQLITE_DROP_TEMP_TABLE" => 13.0,
+            "SQLITE_DROP_TEMP_TRIGGER" => 14.0,
+            "SQLITE_DROP_TEMP_VIEW" => 15.0,
+            "SQLITE_DROP_TRIGGER" => 16.0,
+            "SQLITE_DROP_VIEW" => 17.0,
+            "SQLITE_INSERT" => 18.0,
+            "SQLITE_PRAGMA" => 19.0,
+            "SQLITE_READ" => 20.0,
+            "SQLITE_SELECT" => 21.0,
+            "SQLITE_TRANSACTION" => 22.0,
+            "SQLITE_UPDATE" => 23.0,
+            "SQLITE_ATTACH" => 24.0,
+            "SQLITE_DETACH" => 25.0,
+            "SQLITE_ALTER_TABLE" => 26.0,
+            "SQLITE_REINDEX" => 27.0,
+            "SQLITE_ANALYZE" => 28.0,
+            "SQLITE_CREATE_VTABLE" => 29.0,
+            "SQLITE_DROP_VTABLE" => 30.0,
+            "SQLITE_FUNCTION" => 31.0,
+            "SQLITE_SAVEPOINT" => 32.0,
+            "SQLITE_COPY" => 0.0,
+            "SQLITE_RECURSIVE" => 33.0,
+            _ => return None,
+        })
+    };
+
     match module_name {
         // node:punycode (deprecated, #2513) — the bundled punycode.js version
         // and the `ucs2` code-point helper sub-namespace (#2607).
@@ -3757,6 +4516,13 @@ pub(crate) unsafe fn get_native_module_constant(
                     None
                 }
             }),
+        "sqlite" => match property {
+            "constants" => Some(create_sub_namespace("sqlite.constants")),
+            "Session" => Some(sqlite_session_constructor_value()),
+            "StatementSync" => Some(sqlite_statement_sync_constructor_value()),
+            _ => None,
+        },
+        "sqlite.constants" => sqlite_const(property),
         "path" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("path"),
             "sep" => {
@@ -3827,6 +4593,15 @@ pub(crate) unsafe fn get_native_module_constant(
             "kMaxLength" => Some(9_007_199_254_740_991.0),
             "kStringMaxLength" => Some(536870888.0),
             "INSPECT_MAX_BYTES" => Some(50.0),
+            _ => None,
+        },
+        "timers" => match property {
+            "promises" => Some(unsafe {
+                crate::node_submodules::js_node_submodule_namespace(
+                    b"timers_promises".as_ptr(),
+                    "timers_promises".len() as u32,
+                )
+            }),
             _ => None,
         },
         "buffer.constants" => match property {
@@ -3956,9 +4731,37 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" if !is_cjs_default_object => cjs_default_export_value("url"),
             _ => None,
         },
+        "net" => match property {
+            "Stream" => Some(bound_native_callable_export_value("net", "Socket")),
+            _ => None,
+        },
+        "timers" => match property {
+            "promises" => Some(timers_promises_parent_namespace()),
+            _ => None,
+        },
+        "timers/promises" => match property {
+            "setTimeout" | "setImmediate" | "setInterval" => Some(unsafe {
+                crate::node_submodules::js_node_submodule_namespace_member(
+                    b"timers_promises".as_ptr(),
+                    "timers_promises".len() as u32,
+                    property.as_ptr(),
+                    property.len() as u32,
+                )
+            }),
+            "scheduler" => Some(unsafe {
+                crate::node_submodules::js_node_submodule_namespace_member(
+                    b"timers_promises".as_ptr(),
+                    "timers_promises".len() as u32,
+                    b"scheduler".as_ptr(),
+                    "scheduler".len() as u32,
+                )
+            }),
+            _ => None,
+        },
         "crypto" => match property {
             "constants" => Some(create_sub_namespace("crypto.constants")),
             "Certificate" => Some(create_sub_namespace("crypto.Certificate")),
+            "webcrypto" => Some(webcrypto_namespace()),
             // #1366: `crypto.subtle` is the WebCrypto SubtleCrypto
             // instance. Resolve to a sub-namespace so `typeof
             // crypto.subtle === "object"` matches Node and call
@@ -3967,7 +4770,22 @@ pub(crate) unsafe fn get_native_module_constant(
             // object. The actual `subtle.<method>(...)` lowering
             // is handled statically by HIR (see
             // `lower/expr_call/nested_namespace.rs`).
-            "subtle" => Some(create_sub_namespace("crypto.subtle")),
+            "subtle" => Some(subtle_crypto_namespace()),
+            _ => None,
+        },
+        "crypto.webcrypto" => match property {
+            "subtle" => Some(subtle_crypto_namespace()),
+            "constructor" => Some(js_get_global_this_builtin_value(
+                b"Crypto".as_ptr(),
+                "Crypto".len(),
+            )),
+            _ => None,
+        },
+        "crypto.subtle" => match property {
+            "constructor" => Some(js_get_global_this_builtin_value(
+                b"SubtleCrypto".as_ptr(),
+                "SubtleCrypto".len(),
+            )),
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
@@ -3992,6 +4810,21 @@ pub(crate) unsafe fn get_native_module_constant(
         // ~8 process tests in the node-core radar (#2135) were "skipping"
         // when they should have been running. (#2135)
         "worker_threads" => match property {
+            "MessageChannel" | "MessagePort" | "BroadcastChannel" => {
+                let global = crate::object::js_get_global_this();
+                let global_obj = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
+                if global_obj.is_null() {
+                    Some(f64::from_bits(JSValue::undefined().bits()))
+                } else {
+                    let key = crate::string::js_string_from_bytes(
+                        property.as_ptr(),
+                        property.len() as u32,
+                    );
+                    Some(f64::from_bits(
+                        js_object_get_field_by_name(global_obj, key).bits(),
+                    ))
+                }
+            }
             "isMainThread" => Some(f64::from_bits(JSValue::bool(true).bits())),
             "isInternalThread" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "parentPort" | "workerData" => Some(f64::from_bits(crate::value::TAG_NULL)),
@@ -4011,6 +4844,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // Node also exposes directly on `require('node:zlib')`.
         "zlib" => match property {
             "constants" => Some(create_sub_namespace("zlib.constants")),
+            "codes" => Some(zlib_codes_object()),
             _ => zlib_const(property),
         },
         "zlib.constants" => zlib_const(property),

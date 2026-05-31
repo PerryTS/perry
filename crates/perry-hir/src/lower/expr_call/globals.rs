@@ -190,7 +190,16 @@ pub(super) fn try_global_builtins(
             }
             "structuredClone" => {
                 if !args.is_empty() {
-                    return Ok(Ok(Expr::StructuredClone(Box::new(args.remove(0)))));
+                    let value = args.remove(0);
+                    let options = if !args.is_empty() {
+                        args.remove(0)
+                    } else {
+                        Expr::Undefined
+                    };
+                    return Ok(Ok(Expr::StructuredClone {
+                        value: Box::new(value),
+                        options: Box::new(options),
+                    }));
                 } else {
                     return Err(anyhow!("structuredClone requires one argument"));
                 }
