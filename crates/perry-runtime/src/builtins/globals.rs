@@ -402,7 +402,7 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
 /// should print "sync" then "micro", not "micro" then "sync".
 #[no_mangle]
 pub extern "C" fn js_queue_microtask(callback: i64) {
-    queue_microtask_with_type(callback, "Microtask", Vec::new());
+    crate::promise::enqueue_queue_microtask(callback);
 }
 
 #[no_mangle]
@@ -468,13 +468,20 @@ pub fn restore_queued_microtask_contexts() {
     });
 }
 
-/// Drain queued microtasks. Called by `js_promise_run_microtasks`.
+/// Drain queued nextTick jobs. Called by `js_promise_run_microtasks` before
+/// regular Promise/queueMicrotask jobs so Node's nextTick priority is
+/// preserved.
 #[no_mangle]
 pub extern "C" fn js_drain_queued_microtasks() {
+    let _ = drain_queued_microtasks_count();
+}
+
+pub(crate) fn drain_queued_microtasks_count() -> i32 {
     use crate::closure::{
         js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
         js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
     };
+    let mut ran = 0;
     loop {
         let task = QUEUED_MICROTASKS.with(|q| {
             let mut queue = q.borrow_mut();
@@ -547,10 +554,16 @@ pub extern "C" fn js_drain_queued_microtasks() {
                         crate::async_context::restore_context(previous);
                     }
                 });
+                ran += 1;
             }
             None => break,
         }
     }
+    ran
+}
+
+pub(crate) fn queued_microtasks_pending() -> bool {
+    QUEUED_MICROTASKS.with(|q| !q.borrow().is_empty())
 }
 
 pub fn scan_queued_microtask_roots(mark: &mut dyn FnMut(f64)) {
