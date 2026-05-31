@@ -533,11 +533,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_arguments_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_promise", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_big_int_object", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_symbol_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_array_buffer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_shared_array_buffer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_any_array_buffer", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_array_buffer_view", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_data_view", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_typed_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint8_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_int8_array", DOUBLE, &[DOUBLE]);
@@ -545,13 +549,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_uint16_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_int32_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint32_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_float16_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_float32_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_float64_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_uint8_clamped_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_big_int64_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_big_uint64_array", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_weak_map", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_weak_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_date", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_reg_exp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_async_function", DOUBLE, &[DOUBLE]);
@@ -562,12 +569,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_string_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boolean_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_boxed_primitive", DOUBLE, &[DOUBLE]);
-    // #3678: predicate tail.
-    module.declare_function("js_util_types_is_data_view", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_util_types_is_float16_array", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_util_types_is_weak_map", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_util_types_is_weak_set", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_external", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_util_types_is_module_namespace_object",
+        DOUBLE,
+        &[DOUBLE],
+    );
+    module.declare_function("js_util_types_is_key_object", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_util_types_is_crypto_key", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_proxy", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_map_iterator", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set_iterator", DOUBLE, &[DOUBLE]);
