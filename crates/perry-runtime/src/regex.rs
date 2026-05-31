@@ -15,6 +15,10 @@ use crate::value::js_nanbox_string;
 
 use crate::object::ObjectHeader;
 
+mod replace_fn;
+use replace_fn::call_replace_callback;
+pub use replace_fn::{js_string_replace_all_string_fn, js_string_replace_string_fn};
+
 thread_local! {
     /// Last exec result metadata: (index, groups_object_ptr)
     /// Stored per-thread so that `m.index` and `m.groups` can retrieve them
@@ -1500,27 +1504,7 @@ pub extern "C" fn js_string_replace_regex_fn(
             let call_args: Vec<f64> = arg_handles.iter().map(|h| h.get_nanbox_f64()).collect();
             let callback_value =
                 f64::from_bits(crate::value::JSValue::pointer(closure_ptr as *mut u8).bits());
-            let ret = crate::closure::js_native_call_value(
-                callback_value,
-                call_args.as_ptr(),
-                call_args.len(),
-            );
-
-            // Convert the NaN-boxed return value to a string. Issue #833:
-            // the previous tag-discriminated decode only handled STRING_TAG
-            // (0x7FFF) and POINTER_TAG (0x7FFD) — it silently dropped
-            // SHORT_STRING_TAG (0x7FF9) SSO values, so any replacer-fn
-            // whose result fit in ≤5 bytes (`s.charAt(0) + s.slice(1)` on
-            // a 5-byte input is exactly the edge case in the bug report)
-            // produced an empty replacement. Route through
-            // `js_get_string_pointer_unified` instead, which handles all
-            // four string representations (heap STRING_TAG, SSO with
-            // heap-materialization, POINTER_TAG, raw pointer) plus the
-            // JS spec's number-to-string coercion for numeric returns.
-            let ptr = crate::value::js_get_string_pointer_unified(ret) as *const StringHeader;
-            if is_valid_ptr(ptr) {
-                result.push_str(string_as_str(ptr));
-            }
+            result.push_str(&call_replace_callback(callback_value, &call_args));
 
             last_end = full_match.end();
         }

@@ -1804,6 +1804,8 @@ pub enum Expr {
         /// calling the closure returns a `{next,return,throw}` generator, then
         /// clears the flag. Refs #321 (effect's `Effect.gen(function*(){...})`).
         is_generator: bool,
+        /// Whether this closure body is strict mode code.
+        is_strict: bool,
     },
 
     // RegExp operations

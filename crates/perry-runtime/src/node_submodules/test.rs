@@ -24,7 +24,6 @@ const REPORTER_LCOV: i32 = 4;
 thread_local! {
     static MOCK_OBJECT: RefCell<Option<*mut crate::object::ObjectHeader>> = const { RefCell::new(None) };
     static SNAPSHOT_OBJECT: RefCell<Option<*mut crate::object::ObjectHeader>> = const { RefCell::new(None) };
-    static REPORTERS_DEFAULT_OBJECT: RefCell<Option<*mut crate::object::ObjectHeader>> = const { RefCell::new(None) };
     static SNAPSHOT_RESOLVER: Cell<f64> = const { Cell::new(f64::from_bits(TAG_UNDEFINED)) };
     static CURRENT_TEST_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
     static CURRENT_SNAPSHOT_INDEX: Cell<u32> = const { Cell::new(0) };
@@ -479,14 +478,6 @@ pub(crate) fn test_special_export_value(name: &str) -> Option<f64> {
     }
 }
 
-pub(crate) fn test_reporters_special_export_value(name: &str) -> Option<f64> {
-    (name == "default").then(reporters_default_object_value)
-}
-
-pub(crate) fn populate_reporters_default(obj: *mut crate::object::ObjectHeader, value: f64) {
-    set_field(obj, "default", value);
-}
-
 pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     MOCK_OBJECT.with(|slot| {
         if let Some(ptr) = slot.borrow_mut().as_mut() {
@@ -498,58 +489,11 @@ pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             visitor.visit_raw_mut_ptr_slot(ptr);
         }
     });
-    REPORTERS_DEFAULT_OBJECT.with(|slot| {
-        if let Some(ptr) = slot.borrow_mut().as_mut() {
-            visitor.visit_raw_mut_ptr_slot(ptr);
-        }
-    });
     SNAPSHOT_RESOLVER.with(|slot| {
         let mut value = slot.get();
         visitor.visit_nanbox_f64_slot(&mut value);
         slot.set(value);
     });
-}
-
-fn reporter_closure(func: *const u8, kind: i32) -> f64 {
-    let closure = make_closure(func, 1, 1);
-    js_closure_set_capture_f64(closure, 0, kind as f64);
-    boxed_ptr(closure)
-}
-
-fn reporters_default_object_value() -> f64 {
-    REPORTERS_DEFAULT_OBJECT.with(|slot| {
-        if let Some(ptr) = *slot.borrow() {
-            return boxed_ptr(ptr);
-        }
-        let obj = js_object_alloc(0, 5);
-        set_field(
-            obj,
-            "spec",
-            reporter_closure(thunk_reporter as *const u8, REPORTER_SPEC),
-        );
-        set_field(
-            obj,
-            "tap",
-            reporter_closure(thunk_reporter as *const u8, REPORTER_TAP),
-        );
-        set_field(
-            obj,
-            "dot",
-            reporter_closure(thunk_reporter as *const u8, REPORTER_DOT),
-        );
-        set_field(
-            obj,
-            "junit",
-            reporter_closure(thunk_reporter as *const u8, REPORTER_JUNIT),
-        );
-        set_field(
-            obj,
-            "lcov",
-            reporter_closure(thunk_reporter as *const u8, REPORTER_LCOV),
-        );
-        *slot.borrow_mut() = Some(obj);
-        boxed_ptr(obj)
-    })
 }
 
 fn reporter_with_kind(kind: i32, source: f64) -> f64 {

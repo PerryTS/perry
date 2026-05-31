@@ -175,6 +175,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            let is_url_module =
+                obj_name == "url" || ctx.lookup_builtin_module_alias(obj_name) == Some("url");
+            if is_url_module && prop_ident.sym.as_ref() == "Url" {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
             let dns_module =
                 if obj_name == "dns" || ctx.lookup_builtin_module_alias(obj_name) == Some("dns") {
                     Some("dns".to_string())
@@ -430,6 +441,18 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     match callee_expr {
         ast::Expr::Ident(ident) => {
             let class_name = ident.sym.to_string();
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("url", Some("Url")))
+            ) {
+                return Ok(Expr::NativeMethodCall {
+                    module: "url".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Url".to_string(),
+                    args: Vec::new(),
+                });
+            }
 
             if matches!(class_name.as_str(), "MIMEType" | "MIMEParams") {
                 if let Some((module_name, Some(method_name))) =

@@ -35,11 +35,11 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
 /// Takes and returns a NaN-boxed JSValue (`f64`):
 /// - `undefined` / `null` / no-arg → a fresh ordinary `{}`.
 /// - an existing object/array/function (any pointer value) → returned unchanged.
-/// - a primitive (number, string, boolean, bigint) → currently a fresh `{}`,
-///   which preserves `typeof Object(5) === "object"`; the primitive value is
-///   not retained in a wrapper object (Perry has no primitive-wrapper objects
-///   yet). This matches the acceptance criteria in #3149, which only require
-///   the nullish cases to round-trip.
+/// - BigInt and Symbol primitives → boxed primitive wrapper objects so
+///   `util.types.isBigIntObject(Object(1n))` and
+///   `util.types.isSymbolObject(Object(Symbol()))` match Node.
+/// - other primitives → a fresh `{}`, which preserves
+///   `typeof Object(5) === "object"`.
 ///
 /// The `new Object(value)` form is handled separately by
 /// `js_new_function_construct`'s `"Object"` arm; this is only the bare-call
@@ -48,6 +48,12 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
 #[no_mangle]
 pub extern "C" fn js_object_coerce(value: f64) -> f64 {
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_bigint() {
+        return crate::builtins::js_boxed_bigint_new(value);
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return crate::builtins::js_boxed_symbol_new(value);
+    }
     if jsval.is_pointer() {
         // Already an object/array/function — pass through unchanged.
         return value;

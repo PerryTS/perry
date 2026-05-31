@@ -946,6 +946,14 @@ pub unsafe extern "C" fn js_new_function_construct(
                 crate::tty::js_tty_write_stream_new(fd)
             };
         }
+        if module == "tls" && method == "SecureContext" {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::tls::js_tls_secure_context_new(options);
+        }
         if module == "wasi" && method == "WASI" {
             let options = if !args_ptr.is_null() && args_len > 0 {
                 *args_ptr
@@ -1009,8 +1017,11 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return crate::value::js_nanbox_pointer(arr as i64);
             }
             "Object" => {
-                let obj = js_object_alloc(0, 0);
-                return crate::value::js_nanbox_pointer(obj as i64);
+                let value = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::js_object_coerce(value);
             }
             // #2889: `new (rebound Error subclass)(msg)` through a global
             // constructor value. Mirrors the bare `new TypeError(msg)`

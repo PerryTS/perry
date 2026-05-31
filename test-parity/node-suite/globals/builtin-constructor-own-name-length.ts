@@ -50,6 +50,16 @@ function probe(o: any, label: string) {
   delete o.name;
   console.log("after delete hasOwn name", o.hasOwnProperty("name"));
   console.log("after delete desc", JSON.stringify(Object.getOwnPropertyDescriptor(o, "name")));
+
+  // `prototype` is non-configurable: delete must fail (strict mode throws, so
+  // catch it) and leave the property intact.
+  let protoDeleted = true;
+  try {
+    protoDeleted = delete o.prototype;
+  } catch {
+    protoDeleted = false;
+  }
+  console.log("delete prototype", protoDeleted, "still own", o.hasOwnProperty("prototype"));
 }
 
 // A representative spread of constructor arities: 0 (Map), 1 (DataView/BigInt),

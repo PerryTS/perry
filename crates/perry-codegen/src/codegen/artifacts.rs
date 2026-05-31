@@ -352,6 +352,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 body: ctor_body.1,
                 is_async: false,
                 is_generator: false,
+                is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
                 is_exported: false,

@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 16 | 427 | n/a |
-| Partial-module gaps | 31 | 1672 | 390 |
+| Partial-module gaps | 31 | 1656 | 406 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **2381** |  |
+| **Total true gaps** |  | **2365** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -155,19 +155,12 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:dgram
 
-**Total APIs: 28** · Perry covers: 0 · Gap: 28
+**Total APIs: 28** · Perry covers: 18 · Gap: 10
 
 Selected highlights (full list in `runtime-parity.md`):
 
-- `dgram.createSocket(options[, callback])`
-- `dgram.createSocket(type[, callback])`
-- `socket.addMembership(multicastAddress[, multicastInterface])`
-- `socket.addSourceSpecificMembership(sourceAddress, groupAddress[, multicastInterface])`
-- `socket.address()`
-- `socket.bind([port][, address][, callback])`
-- `socket.bind(options[, callback])`
-- `socket.close([callback])`
-- `socket.connect(port[, address][, callback])`
+- Deterministic loopback coverage: `createSocket`, `bind`, `address`, `send`, `message`, `connect`, `remoteAddress`, `disconnect`, `close`, `ref` / `unref`, buffer-size and send-queue getters.
+- Remaining gaps: real host UDP IO, multicast/source-specific membership behavior, socket option side effects, and `socket[Symbol.asyncDispose]()`.
 - `socket.disconnect()`
 - `socket.dropMembership(multicastAddress[, multicastInterface])`
 - `socket.dropSourceSpecificMembership(sourceAddress, groupAddress[, multicastInterface])`
@@ -539,7 +532,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:process (and global `process`)
 
-**Gap APIs: 99** · Already covered: 19
+**Gap APIs: 97** · Already covered: 21
 
 #### Missing from Perry
 
@@ -572,7 +565,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `process.hasUncaughtExceptionCaptureCallback()`
 - `process.dlopen(module, filename[, flags])`
 - `process.loadEnvFile(path)`
-- `process.setSourceMapsEnabled(val)`
 - `process.hrtime([time])`
 - `process.permission.has(scope[, reference])`
 - `process.umask()`
@@ -613,6 +605,8 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `process.argv` | `expr:ProcessArgv` |
 | `process.env` | `expr:ProcessEnv` |
 | `process.stdin` | `expr:ProcessStdin` |
+| `process.sourceMapsEnabled` | `manifest:process.sourceMapsEnabled` |
+| `process.setSourceMapsEnabled(val)` | `manifest:process.setSourceMapsEnabled` |
 | … | 2 more covered APIs |
 
 ### node:util
@@ -1255,24 +1249,12 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:tls
 
-**Gap APIs: 50** · Already covered: 3
+**Gap APIs: 38** · Already covered: 15
 
 #### Missing from Perry
 
-- `tls.checkServerIdentity(hostname, cert)`
-- `tls.createSecureContext([options])`
 - `tls.createSecurePair([context][, isServer][, requestCert][, rejectUnauthorized][, options])`
 - `tls.createServer([options][, secureConnectionListener])`
-- `tls.setDefaultCACertificates(certs)`
-- `tls.getCACertificates([type])`
-- `tls.getCiphers()`
-- `tls.DEFAULT_ECDH_CURVE`
-- `tls.DEFAULT_MAX_VERSION`
-- `tls.DEFAULT_MIN_VERSION`
-- `tls.DEFAULT_CIPHERS`
-- `tls.rootCertificates`
-- `tls.CLIENT_RENEG_LIMIT`
-- `tls.CLIENT_RENEG_WINDOW`
 - `server.addContext(hostname, context)`
 - `server.address()`
 - `server.close([callback])`
@@ -1317,6 +1299,18 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `tls.connect(options[, callback])` | `ffi:js_tls_connect` |
 | `tls.connect(port[, host][, options][, callback])` | `ffi:js_tls_connect` |
 | `tls.connect(path[, options][, callback])` | `ffi:js_tls_connect` |
+| `tls.checkServerIdentity(hostname, cert)` | `manifest:tls.checkServerIdentity`; `test-parity/node-suite/tls/identity/check-server-identity.ts` |
+| `tls.createSecureContext([options])` | `manifest:tls.createSecureContext`; `test-parity/node-suite/tls/context/secure-context.ts` |
+| `tls.setDefaultCACertificates(certs)` | `manifest:tls.setDefaultCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.getCACertificates([type])` | `manifest:tls.getCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.getCiphers()` | `manifest:tls.getCiphers`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_ECDH_CURVE` | `manifest:tls.DEFAULT_ECDH_CURVE`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_MAX_VERSION` | `manifest:tls.DEFAULT_MAX_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_MIN_VERSION` | `manifest:tls.DEFAULT_MIN_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.DEFAULT_CIPHERS` | `manifest:tls.DEFAULT_CIPHERS`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.rootCertificates` | `manifest:tls.rootCertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.CLIENT_RENEG_LIMIT` | `manifest:tls.CLIENT_RENEG_LIMIT`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+| `tls.CLIENT_RENEG_WINDOW` | `manifest:tls.CLIENT_RENEG_WINDOW`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
 
 ### node:fs/promises
 
@@ -1395,9 +1389,16 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 **Gap APIs: 44** · Already covered: 8
 
+#### Covered by Perry (#3183/#3184)
+
+- `new DatabaseSync(path)` (incl. `:memory:`) → rusqlite connection
+- `db.exec(sql)` / `db.prepare(sql)` → `StatementSync` / `db.close()`
+- `stmt.run(...params)` → `{ changes, lastInsertRowid }`
+- `stmt.get(...params)` / `stmt.all(...params)` → row object(s)
+- `stmt.iterate(...params)` (array-backed) / `stmt.columns()` metadata
+
 #### Missing from Perry
 
-- `new DatabaseSync(path[, options])`
 - `db.function(name[, options], fn)`
 - `db.aggregate(name, options)`
 - `db.applyChangeset(changeset[, options])`
@@ -1414,8 +1415,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `db.isTransaction`
 - `db.limits`
 - `db[Symbol.dispose]()`
-- `stmt.iterate([namedParameters][, ...anonymousParameters])`
-- `stmt.columns()`
 - `stmt.setAllowBareNamedParameters(enabled)`
 - `stmt.setAllowUnknownNamedParameters(enabled)`
 - `stmt.setReadBigInts(enabled)`
@@ -1727,29 +1726,13 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:readline
 
-**Gap APIs: 26** · Already covered: 3
+**Gap APIs: 10** · Already covered: 19
 
 #### Missing from Perry
 
-- `readline.clearLine(stream, dir[, callback])`
-- `readline.clearScreenDown(stream[, callback])`
-- `readline.cursorTo(stream, x[, y][, callback])`
-- `readline.moveCursor(stream, dx, dy[, callback])`
-- `readline.emitKeypressEvents(stream[, interface])`
 - `rl[Symbol.dispose]()`
-- `rl.pause()`
-- `rl.resume()`
-- `rl.prompt([preserveCursor])`
-- `rl.setPrompt(prompt)`
-- `rl.getPrompt()`
-- `rl.write(data[, key])`
-- `rl.getCursorPos()`
 - `rl[Symbol.asyncIterator]()`
-- `rl.line`
 - `rl.cursor`
-- `rl.terminal`
-- `'line'`
-- `'close'`
 - `'pause'`
 - `'resume'`
 - `'history'`
@@ -1763,8 +1746,24 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | API | Coverage source |
 |-----|-----------------|
 | `readline.createInterface(options)` | `ffi:js_readline_create_interface` |
+| `readline.clearLine(stream, dir[, callback])` | `rt:js_readline_clear_line_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.clearScreenDown(stream[, callback])` | `rt:js_readline_clear_screen_down_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.cursorTo(stream, x[, y][, callback])` | `rt:js_readline_cursor_to_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.moveCursor(stream, dx, dy[, callback])` | `rt:js_readline_move_cursor_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
+| `readline.emitKeypressEvents(stream[, interface])` | `rt:js_readline_emit_keypress_events_args`; `test-parity/node-suite/readline/helpers/emit-keypress-events.ts` |
 | `rl.close()` | `manifest:readline.close` |
+| `rl.pause()` | `ffi:js_readline_pause`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.resume()` | `ffi:js_readline_resume`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.prompt([preserveCursor])` | `ffi:js_readline_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.setPrompt(prompt)` | `ffi:js_readline_set_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getPrompt()` | `ffi:js_readline_get_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
 | `rl.question(query[, options], callback)` | `manifest:readline.question` |
+| `rl.write(data[, key])` | `ffi:js_readline_write`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.getCursorPos()` | `ffi:js_readline_get_cursor_pos`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.line` | `ffi:js_readline_line`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `rl.terminal` | `ffi:js_readline_terminal`; `test-parity/node-suite/readline/interface/control-methods.ts` |
+| `'line'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
+| `'close'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
 
 ### node:async_hooks
 
@@ -2007,11 +2006,10 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:path
 
-**Gap APIs: 4** · Already covered: 12
+**Gap APIs: 3** · Already covered: 13
 
 #### Missing from Perry
 
-- `path.matchesGlob(path, pattern)`
 - `path.toNamespacedPath(path)`
 - `path.posix`
 - `path.win32`
@@ -2026,6 +2024,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `path.format(pathObject)` | `manifest:path.format` |
 | `path.isAbsolute(path)` | `manifest:path.isAbsolute` |
 | `path.join([...paths])` | `manifest:path.join` |
+| `path.matchesGlob(path, pattern)` | `manifest:path.matchesGlob`; `test-parity/node-suite/path/matchesGlob/extglob-globstar.ts`; `test-parity/node-suite/path/matchesGlob/win32-separators.ts` |
 | `path.normalize(path)` | `manifest:path.normalize` |
 | `path.parse(path)` | `manifest:path.parse` |
 | `path.relative(from, to)` | `manifest:path.relative` |

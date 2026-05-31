@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2229 entries across 99 modules.
+Total: 2387 entries across 104 modules.
 
 ## Modules
 
@@ -29,8 +29,10 @@ Total: 2229 entries across 99 modules.
 - [`dayjs`](#dayjs)
 - [`decimal.js`](#decimal-js)
 - [`dgram`](#dgram)
+- [`diagnostics_channel`](#diagnostics-channel)
 - [`dns`](#dns)
 - [`dns/promises`](#dns-promises)
+- [`domain`](#domain)
 - [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
@@ -85,13 +87,16 @@ Total: 2229 entries across 99 modules.
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
+- [`sqlite`](#sqlite)
 - [`stream`](#stream)
 - [`stream/consumers`](#stream-consumers)
 - [`stream/promises`](#stream-promises)
+- [`stream/web`](#stream-web)
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
 - [`sys`](#sys)
 - [`test`](#test)
+- [`test/reporters`](#test-reporters)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -227,6 +232,10 @@ Total: 2229 entries across 99 modules.
 - `triggerAsyncId` — module
 - `triggerAsyncId` — instance *(class: `AsyncResource`)*
 
+### Properties
+
+- `default`
+
 ## `axios`
 
 ### Methods
@@ -284,22 +293,10 @@ Total: 2229 entries across 99 modules.
 
 ### Methods
 
-- `alloc` — module
-- `allocUnsafe` — module
-- `allocUnsafeSlow` — module
 - `atob` — module
 - `btoa` — module
-- `byteLength` — module
-- `concat` — module
-- `copyBytesFrom` — module
-- `from` — module
-- `fromBase64` — module
-- `fromHex` — module
 - `isAscii` — module
-- `isBuffer` — module
-- `isEncoding` — module
 - `isUtf8` — module
-- `of` — module
 - `resolveObjectURL` — module
 - `transcode` — module
 
@@ -344,10 +341,6 @@ Total: 2229 entries across 99 modules.
 - `spawn` — module
 - `spawnSync` — module
 
-### Properties
-
-- `Stream`
-
 ## `cluster`
 
 ### Classes
@@ -365,14 +358,11 @@ Total: 2229 entries across 99 modules.
 
 - `SCHED_NONE`
 - `SCHED_RR`
-- `addListener`
 - `isMaster`
 - `isPrimary`
 - `isWorker`
-- `on`
 - `schedulingPolicy`
 - `settings`
-- `worker`
 - `workers`
 
 ## `commander`
@@ -525,16 +515,15 @@ Total: 2229 entries across 99 modules.
 - `OPENSSL_VERSION_NUMBER`
 - `O_APPEND`
 - `O_CREAT`
-- `O_DIRECT`
 - `O_DIRECTORY`
 - `O_DSYNC`
 - `O_EXCL`
-- `O_NOATIME`
 - `O_NOCTTY`
 - `O_NOFOLLOW`
 - `O_NONBLOCK`
 - `O_RDONLY`
 - `O_RDWR`
+- `O_SYMLINK`
 - `O_SYNC`
 - `O_TRUNC`
 - `O_WRONLY`
@@ -555,7 +544,6 @@ Total: 2229 entries across 99 modules.
 - `RSA_PSS_SALTLEN_DIGEST`
 - `RSA_PSS_SALTLEN_MAX_SIGN`
 - `RSA_X931_PADDING`
-- `RTLD_DEEPBIND`
 - `RTLD_GLOBAL`
 - `RTLD_LAZY`
 - `RTLD_LOCAL`
@@ -569,6 +557,7 @@ Total: 2229 entries across 99 modules.
 - `SIGFPE`
 - `SIGHUP`
 - `SIGILL`
+- `SIGINFO`
 - `SIGINT`
 - `SIGIO`
 - `SIGIOT`
@@ -701,7 +690,6 @@ Total: 2229 entries across 99 modules.
 - `getRandomValues` — module
 - `hash` — module
 - `hkdfSync` — module
-- `md5` — module
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
 - `privateDecrypt` — module
@@ -714,9 +702,7 @@ Total: 2229 entries across 99 modules.
 - `randomInt` — module
 - `randomInt` — module
 - `randomUUID` — module
-- `randomUUIDv7` — module
 - `scryptSync` — module
-- `sha256` — module
 - `sign` — module
 - `timingSafeEqual` — module
 - `verify` — module
@@ -812,7 +798,9 @@ Total: 2229 entries across 99 modules.
 ### Methods
 
 - `Socket` — module
+- `addListener` — instance *(class: `Socket`)*
 - `addMembership` — instance *(class: `Socket`)*
+- `addSourceSpecificMembership` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Socket`)*
 - `bind` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Socket`)*
@@ -820,9 +808,19 @@ Total: 2229 entries across 99 modules.
 - `createSocket` — module
 - `disconnect` — instance *(class: `Socket`)*
 - `dropMembership` — instance *(class: `Socket`)*
+- `dropSourceSpecificMembership` — instance *(class: `Socket`)*
+- `emit` — instance *(class: `Socket`)*
 - `getRecvBufferSize` — instance *(class: `Socket`)*
 - `getSendBufferSize` — instance *(class: `Socket`)*
+- `getSendQueueCount` — instance *(class: `Socket`)*
+- `getSendQueueSize` — instance *(class: `Socket`)*
+- `listenerCount` — instance *(class: `Socket`)*
+- `off` — instance *(class: `Socket`)*
+- `on` — instance *(class: `Socket`)*
+- `once` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
+- `remoteAddress` — instance *(class: `Socket`)*
+- `removeListener` — instance *(class: `Socket`)*
 - `send` — instance *(class: `Socket`)*
 - `setBroadcast` — instance *(class: `Socket`)*
 - `setMulticastInterface` — instance *(class: `Socket`)*
@@ -832,6 +830,24 @@ Total: 2229 entries across 99 modules.
 - `setSendBufferSize` — instance *(class: `Socket`)*
 - `setTTL` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
+
+## `diagnostics_channel`
+
+### Classes
+
+- `Channel`
+
+### Methods
+
+- `channel` — module
+- `hasSubscribers` — module
+- `subscribe` — module
+- `tracingChannel` — module
+- `unsubscribe` — module
+
+### Properties
+
+- `default`
 
 ## `dns`
 
@@ -1018,6 +1034,34 @@ Total: 2229 entries across 99 modules.
 - `SERVFAIL`
 - `TIMEOUT`
 
+## `domain`
+
+### Classes
+
+- `Domain`
+
+### Methods
+
+- `Domain` — module
+- `add` — instance
+- `addListener` — instance
+- `bind` — instance
+- `create` — module
+- `createDomain` — module
+- `emit` — instance
+- `enter` — instance
+- `exit` — instance
+- `intercept` — instance
+- `on` — instance
+- `remove` — instance
+- `run` — instance
+
+### Properties
+
+- `_stack`
+- `active`
+- `members`
+
 ## `dotenv`
 
 ### Methods
@@ -1046,6 +1090,7 @@ Total: 2229 entries across 99 modules.
 - `EventEmitter` — module
 - `addAbortListener` — module
 - `addListener` — instance
+- `domain` — instance
 - `emit` — instance
 - `eventNames` — instance
 - `getEventListeners` — module
@@ -1072,6 +1117,7 @@ Total: 2229 entries across 99 modules.
 
 - `captureRejectionSymbol`
 - `captureRejections`
+- `default`
 - `defaultMaxListeners`
 - `errorMonitor`
 - `usingDomains`
@@ -1272,6 +1318,11 @@ Total: 2229 entries across 99 modules.
 - `watch` — module
 - `writeFile` — module
 
+### Properties
+
+- `constants`
+- `default`
+
 ## `http`
 
 ### Classes
@@ -1416,7 +1467,6 @@ Total: 2229 entries across 99 modules.
 
 ### Classes
 
-- `Http2SecureServer`
 - `Http2ServerRequest`
 - `Http2ServerResponse`
 
@@ -1440,11 +1490,8 @@ Total: 2229 entries across 99 modules.
 ### Classes
 
 - `Agent`
-- `ClientRequest`
-- `IncomingMessage`
 - `Server`
 - `Server`
-- `ServerResponse`
 
 ### Methods
 
@@ -1603,6 +1650,8 @@ Total: 2229 entries across 99 modules.
 
 - `builtinModules`
 - `constants`
+- `wrap`
+- `wrapper`
 
 ## `moment`
 
@@ -1820,6 +1869,7 @@ Total: 2229 entries across 99 modules.
 
 - `EOL`
 - `constants`
+- `default`
 - `devNull`
 
 ## `path`
@@ -1842,6 +1892,7 @@ Total: 2229 entries across 99 modules.
 
 ### Properties
 
+- `default`
 - `delimiter`
 - `posix`
 - `sep`
@@ -1867,6 +1918,7 @@ Total: 2229 entries across 99 modules.
 
 ### Properties
 
+- `default`
 - `delimiter`
 - `posix`
 - `sep`
@@ -1892,6 +1944,7 @@ Total: 2229 entries across 99 modules.
 
 ### Properties
 
+- `default`
 - `delimiter`
 - `posix`
 - `sep`
@@ -1908,33 +1961,18 @@ Total: 2229 entries across 99 modules.
 
 ### Methods
 
-- `clearMarks` — module
-- `clearMeasures` — module
-- `clearResourceTimings` — module
 - `createHistogram` — module
 - `disconnect` — instance *(class: `PerformanceObserver`)*
 - `eventLoopUtilization` — module
-- `getEntries` — module
-- `getEntriesByName` — module
-- `getEntriesByType` — module
-- `mark` — module
-- `markResourceTiming` — module
-- `measure` — module
 - `monitorEventLoopDelay` — module
-- `now` — module
 - `observe` — instance *(class: `PerformanceObserver`)*
-- `setResourceTimingBufferSize` — module
 - `takeRecords` — instance *(class: `PerformanceObserver`)*
 - `timerify` — module
-- `toJSON` — module
 
 ### Properties
 
 - `constants`
-- `nodeTiming`
 - `performance`
-- `supportedEntryTypes`
-- `timeOrigin`
 
 ## `perry/ads`
 
@@ -2332,44 +2370,32 @@ Total: 2229 entries across 99 modules.
 ### Methods
 
 - `abort` — module
-- `addListener` — module
+- `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
 - `chdir` — module
 - `constrainedMemory` — module
 - `cpuUsage` — module
 - `cwd` — module
-- `emit` — module
 - `emitWarning` — module
-- `eventNames` — module
 - `exit` — module
 - `getActiveResourcesInfo` — module
 - `getBuiltinModule` — module
-- `getMaxListeners` — module
 - `getegid` — module
 - `geteuid` — module
 - `getgid` — module
 - `getgroups` — module
 - `getuid` — module
+- `hasUncaughtExceptionCaptureCallback` — module
 - `hrtime` — module
 - `initgroups` — module
 - `kill` — module
-- `listenerCount` — module
-- `listeners` — module
 - `loadEnvFile` — module
 - `memoryUsage` — module
 - `nextTick` — module
-- `off` — module
-- `on` — module
-- `once` — module
-- `prependListener` — module
-- `prependOnceListener` — module
-- `rawListeners` — module
-- `removeAllListeners` — module
-- `removeListener` — module
 - `resourceUsage` — module
-- `setMaxListeners` — module
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
+- `setUncaughtExceptionCaptureCallback` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
@@ -2428,6 +2454,10 @@ Total: 2229 entries across 99 modules.
 - `unescape` — module
 - `unescapeBuffer` — module
 
+### Properties
+
+- `default`
+
 ## `rate-limiter-flexible`
 
 ### Classes
@@ -2447,6 +2477,7 @@ Total: 2229 entries across 99 modules.
 - `emitKeypressEvents` — module
 - `getCursorPos` — instance
 - `getPrompt` — instance
+- `line` — instance
 - `moveCursor` — module
 - `on` — instance
 - `pause` — instance
@@ -2454,6 +2485,7 @@ Total: 2229 entries across 99 modules.
 - `question` — instance
 - `resume` — instance
 - `setPrompt` — instance
+- `terminal` — instance
 - `write` — instance
 
 ## `readline/promises`
@@ -2507,6 +2539,20 @@ Total: 2229 entries across 99 modules.
 - `default` — module
 - `slugify` — module
 
+## `sqlite`
+
+### Methods
+
+- `DatabaseSync` — module
+- `all` — instance
+- `close` — instance
+- `columns` — instance
+- `exec` — instance
+- `get` — instance
+- `iterate` — instance
+- `prepare` — instance
+- `run` — instance
+
 ## `stream`
 
 ### Classes
@@ -2535,8 +2581,6 @@ Total: 2229 entries across 99 modules.
 - `errored` — instance
 - `eventNames` — instance
 - `finished` — module
-- `from` — module
-- `fromWeb` — module
 - `getDefaultHighWaterMark` — module
 - `getMaxListeners` — instance
 - `isDisturbed` — module
@@ -2572,7 +2616,6 @@ Total: 2229 entries across 99 modules.
 - `setDefaultHighWaterMark` — module
 - `setEncoding` — instance
 - `setMaxListeners` — instance
-- `toWeb` — module
 - `uncork` — instance
 - `unpipe` — instance
 - `unshift` — instance
@@ -2590,7 +2633,6 @@ Total: 2229 entries across 99 modules.
 
 - `promises`
 - `promises`
-- `prototype`
 
 ## `stream/consumers`
 
@@ -2603,6 +2645,10 @@ Total: 2229 entries across 99 modules.
 - `json` — module
 - `text` — module
 
+### Properties
+
+- `default`
+
 ## `stream/promises`
 
 ### Methods
@@ -2611,6 +2657,32 @@ Total: 2229 entries across 99 modules.
 - `finished` — module
 - `pipeline` — module
 - `pipeline` — module
+
+## `stream/web`
+
+### Classes
+
+- `ByteLengthQueuingStrategy`
+- `CompressionStream`
+- `CountQueuingStrategy`
+- `DecompressionStream`
+- `ReadableByteStreamController`
+- `ReadableStream`
+- `ReadableStreamBYOBReader`
+- `ReadableStreamBYOBRequest`
+- `ReadableStreamDefaultController`
+- `ReadableStreamDefaultReader`
+- `TextDecoderStream`
+- `TextEncoderStream`
+- `TransformStream`
+- `TransformStreamDefaultController`
+- `WritableStream`
+- `WritableStreamDefaultController`
+- `WritableStreamDefaultWriter`
+
+### Properties
+
+- `default`
 
 ## `streams`
 
@@ -2636,22 +2708,22 @@ Total: 2229 entries across 99 modules.
 - `end` — instance *(class: `StringDecoder`)*
 - `write` — instance *(class: `StringDecoder`)*
 
-### Properties
-
-- `encoding`
-- `lastChar`
-- `lastNeed`
-- `lastTotal`
-
 ## `sys`
 
 ### Classes
 
+- `MIMEParams`
+- `MIMEType`
 - `TextDecoder`
 - `TextEncoder`
 
 ### Methods
 
+- `MIMEParams` — module
+- `MIMEType` — module
+- `_errnoException` — module
+- `_exceptionWithHostPort` — module
+- `_extend` — module
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
@@ -2681,6 +2753,7 @@ Total: 2229 entries across 99 modules.
 
 ### Properties
 
+- `default`
 - `types`
 
 ## `test`
@@ -2706,11 +2779,45 @@ Total: 2229 entries across 99 modules.
 - `mock`
 - `snapshot`
 
-## `tls`
+## `test/reporters`
 
 ### Methods
 
+- `dot` — module
+- `junit` — module
+- `lcov` — module
+- `spec` — module
+- `tap` — module
+
+### Properties
+
+- `default`
+
+## `tls`
+
+### Classes
+
+- `SecureContext`
+
+### Methods
+
+- `SecureContext` — module
+- `checkServerIdentity` — module
 - `connect` — module
+- `createSecureContext` — module
+- `getCACertificates` — module
+- `getCiphers` — module
+- `setDefaultCACertificates` — module
+
+### Properties
+
+- `CLIENT_RENEG_LIMIT`
+- `CLIENT_RENEG_WINDOW`
+- `DEFAULT_CIPHERS`
+- `DEFAULT_ECDH_CURVE`
+- `DEFAULT_MAX_VERSION`
+- `DEFAULT_MIN_VERSION`
+- `rootCertificates`
 
 ## `tty`
 
@@ -2759,10 +2866,11 @@ Total: 2229 entries across 99 modules.
 
 - `URL`
 - `URLSearchParams`
+- `Url`
 
 ### Methods
 
-- `createObjectURL` — module
+- `Url` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
 - `fileURLToPath` — module
@@ -2771,18 +2879,29 @@ Total: 2229 entries across 99 modules.
 - `parse` — module
 - `pathToFileURL` — module
 - `resolve` — module
-- `revokeObjectURL` — module
+- `resolveObject` — module
 - `urlToHttpOptions` — module
+
+### Properties
+
+- `default`
 
 ## `util`
 
 ### Classes
 
+- `MIMEParams`
+- `MIMEType`
 - `TextDecoder`
 - `TextEncoder`
 
 ### Methods
 
+- `MIMEParams` — module
+- `MIMEType` — module
+- `_errnoException` — module
+- `_exceptionWithHostPort` — module
+- `_extend` — module
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
@@ -2812,6 +2931,7 @@ Total: 2229 entries across 99 modules.
 
 ### Properties
 
+- `default`
 - `types`
 
 ## `util/types`
@@ -2819,13 +2939,16 @@ Total: 2229 entries across 99 modules.
 ### Methods
 
 - `isAnyArrayBuffer` — module
+- `isArgumentsObject` — module
 - `isArrayBuffer` — module
 - `isArrayBufferView` — module
 - `isAsyncFunction` — module
 - `isBigInt64Array` — module
+- `isBigIntObject` — module
 - `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
+- `isCryptoKey` — module
 - `isDataView` — module
 - `isDate` — module
 - `isExternal` — module
@@ -2837,8 +2960,10 @@ Total: 2229 entries across 99 modules.
 - `isInt16Array` — module
 - `isInt32Array` — module
 - `isInt8Array` — module
+- `isKeyObject` — module
 - `isMap` — module
 - `isMapIterator` — module
+- `isModuleNamespaceObject` — module
 - `isNativeError` — module
 - `isNumberObject` — module
 - `isPromise` — module
@@ -2848,6 +2973,7 @@ Total: 2229 entries across 99 modules.
 - `isSetIterator` — module
 - `isSharedArrayBuffer` — module
 - `isStringObject` — module
+- `isSymbolObject` — module
 - `isTypedArray` — module
 - `isUint16Array` — module
 - `isUint32Array` — module
@@ -2869,18 +2995,53 @@ Total: 2229 entries across 99 modules.
 
 ### Classes
 
+- `DefaultDeserializer`
+- `DefaultSerializer`
+- `Deserializer`
 - `GCProfiler`
+- `Serializer`
 
 ### Methods
 
+- `addDeserializeCallback` — instance *(class: `startupSnapshot`)*
+- `addSerializeCallback` — instance *(class: `startupSnapshot`)*
 - `cachedDataVersionTag` — module
+- `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
 - `getHeapCodeStatistics` — module
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
+- `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
+- `onAfter` — instance *(class: `promiseHooks`)*
+- `onBefore` — instance *(class: `promiseHooks`)*
+- `onInit` — instance *(class: `promiseHooks`)*
+- `onSettled` — instance *(class: `promiseHooks`)*
+- `readDouble` — instance *(class: `Deserializer`)*
+- `readHeader` — instance *(class: `Deserializer`)*
+- `readRawBytes` — instance *(class: `Deserializer`)*
+- `readUint32` — instance *(class: `Deserializer`)*
+- `readUint64` — instance *(class: `Deserializer`)*
+- `readValue` — instance *(class: `Deserializer`)*
+- `releaseBuffer` — instance *(class: `Serializer`)*
 - `serialize` — module
+- `setDeserializeMainFunction` — instance *(class: `startupSnapshot`)*
+- `setFlagsFromString` — module
+- `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `stop` — instance *(class: `GCProfiler`)*
+- `stopCoverage` — module
+- `takeCoverage` — module
+- `writeDouble` — instance *(class: `Serializer`)*
+- `writeHeader` — instance *(class: `Serializer`)*
+- `writeRawBytes` — instance *(class: `Serializer`)*
+- `writeUint32` — instance *(class: `Serializer`)*
+- `writeUint64` — instance *(class: `Serializer`)*
+- `writeValue` — instance *(class: `Serializer`)*
+
+### Properties
+
+- `promiseHooks`
+- `startupSnapshot`
 
 ## `validator`
 
@@ -2924,7 +3085,6 @@ Total: 2229 entries across 99 modules.
 - `BroadcastChannel` — module
 - `MessageChannel` — module
 - `getEnvironmentData` — module
-- `getWorkerData` — module
 - `isMarkedAsUntransferable` — module
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module

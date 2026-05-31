@@ -3,7 +3,8 @@
 //! Three consumers:
 //!
 //! - **perry-hir** consults [`module_has_symbol`] during HIR lowering to
-//!   reject references to unimplemented APIs at compile time (#463).
+//!   reject references to unimplemented APIs at compile time (#463), and
+//!   [`module_has_public_named_export`] when checking Node-compatible named imports.
 //! - **perry-codegen** keeps its native dispatch table aligned with this
 //!   manifest via a CI test (`tests/manifest_consistency.rs`) — the
 //!   manifest is the entry list, codegen owns the dispatch metadata.
@@ -51,6 +52,15 @@ pub struct ApiEntry {
     /// flagged so the unimplemented-API check (#463) does NOT error on
     /// them — the runtime first-call warning from #464 surfaces those.
     pub stub: bool,
+    /// True when this row is a real top-level export of the module.
+    ///
+    /// Some rows exist only so the runtime dispatch table and strict
+    /// property gate can recognize object members (`Buffer.from`,
+    /// `performance.mark`, `process.on`, receiver methods, etc.). Those
+    /// rows must remain in `API_MANIFEST`, but they are not ESM named
+    /// exports and should not be accepted by named-import validation or
+    /// emitted as top-level declarations.
+    pub module_export: bool,
     /// ABI version this entry was published against. `None` for
     /// `Stdlib` source — the bundled stdlib is built and shipped
     /// together with the compiler, so its ABI moves in lockstep.
@@ -203,6 +213,170 @@ pub fn module_has_symbol(module: &str, name: &str) -> Option<&'static ApiEntry> 
     })
 }
 
+/// True if a module exposes a public ESM named export.
+///
+/// This is deliberately narrower than [`module_has_symbol`]. The manifest
+/// also stores receiver methods, class-filtered dispatch helpers, and a few
+/// object/static member shims so Perry can lower valid member access such as
+/// `Buffer.alloc()` or `performance.mark()`. Those rows must not make
+/// `import { alloc } from "node:buffer"` compile, because Node rejects that
+/// at module instantiation.
+pub fn module_has_public_named_export(module: &str, name: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    if name == "default" && is_node_core_module(module) {
+        return true;
+    }
+    API_MANIFEST.iter().any(|entry| {
+        entry.module == module && entry.name == name && entry_is_public_named_export(entry)
+    })
+}
+
+/// True for Node.js built-in module specifiers that should use Node's public
+/// named-export surface when validating static imports.
+pub fn is_node_core_module(module: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    matches!(
+        module,
+        "assert"
+            | "assert/strict"
+            | "async_hooks"
+            | "buffer"
+            | "child_process"
+            | "cluster"
+            | "console"
+            | "constants"
+            | "crypto"
+            | "dgram"
+            | "diagnostics_channel"
+            | "dns"
+            | "dns/promises"
+            | "events"
+            | "fs"
+            | "fs/promises"
+            | "http"
+            | "http2"
+            | "https"
+            | "module"
+            | "net"
+            | "os"
+            | "path"
+            | "path/posix"
+            | "path/win32"
+            | "perf_hooks"
+            | "process"
+            | "punycode"
+            | "querystring"
+            | "readline"
+            | "readline/promises"
+            | "stream"
+            | "stream/consumers"
+            | "stream/promises"
+            | "stream/web"
+            | "string_decoder"
+            | "sys"
+            | "test"
+            | "test/reporters"
+            | "timers"
+            | "timers/promises"
+            | "tls"
+            | "tty"
+            | "url"
+            | "util"
+            | "util/types"
+            | "v8"
+            | "vm"
+            | "wasi"
+            | "worker_threads"
+            | "zlib"
+    )
+}
+
+/// Public named-export filter shared by the import gate and docs emitters.
+pub(crate) fn entry_is_public_named_export(entry: &ApiEntry) -> bool {
+    if is_node_core_private_named_export(entry.module, entry.name) {
+        return false;
+    }
+    match entry.kind {
+        ApiKind::Method {
+            has_receiver: false,
+            class_filter: None,
+        }
+        | ApiKind::Property
+        | ApiKind::Class => true,
+        ApiKind::Method { .. } => false,
+    }
+}
+
+fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    if !is_node_core_module(module) {
+        return false;
+    }
+    match module {
+        "buffer" => matches!(
+            name,
+            "alloc"
+                | "allocUnsafe"
+                | "allocUnsafeSlow"
+                | "byteLength"
+                | "concat"
+                | "copyBytesFrom"
+                | "from"
+                | "fromBase64"
+                | "fromHex"
+                | "isBuffer"
+                | "isEncoding"
+                | "of"
+        ),
+        "crypto" => matches!(name, "md5" | "randomUUIDv7" | "sha256"),
+        "perf_hooks" => matches!(
+            name,
+            "clearMarks"
+                | "clearMeasures"
+                | "clearResourceTimings"
+                | "getEntries"
+                | "getEntriesByName"
+                | "getEntriesByType"
+                | "mark"
+                | "markResourceTiming"
+                | "measure"
+                | "nodeTiming"
+                | "now"
+                | "setResourceTimingBufferSize"
+                | "supportedEntryTypes"
+                | "timeOrigin"
+                | "toJSON"
+        ),
+        "string_decoder" => matches!(name, "encoding" | "lastChar" | "lastNeed" | "lastTotal"),
+        "process" => matches!(
+            name,
+            "addListener"
+                | "emit"
+                | "eventNames"
+                | "getMaxListeners"
+                | "listenerCount"
+                | "listeners"
+                | "off"
+                | "on"
+                | "once"
+                | "prependListener"
+                | "prependOnceListener"
+                | "rawListeners"
+                | "removeAllListeners"
+                | "removeListener"
+                | "setMaxListeners"
+        ),
+        "url" => matches!(name, "createObjectURL" | "revokeObjectURL"),
+        "worker_threads" => name == "getWorkerData",
+        "https" => matches!(name, "ClientRequest" | "IncomingMessage" | "ServerResponse"),
+        "http2" => name == "Http2SecureServer",
+        "child_process" => name == "Stream",
+        "cluster" => matches!(name, "addListener" | "on" | "worker"),
+        "stream" => matches!(name, "from" | "fromWeb" | "prototype" | "toWeb"),
+        _ => false,
+    }
+}
+
 /// True if `path` resolves to a Perry-implemented native module.
 /// Strips `node:` prefix. This is the migrated home of the
 /// `is_native_module` check that previously lived in
@@ -300,6 +474,68 @@ mod tests {
     }
 
     #[test]
+    fn node_core_named_export_view_rejects_member_only_rows() {
+        for (module, name) in [
+            ("node:buffer", "alloc"),
+            ("node:buffer", "from"),
+            ("node:perf_hooks", "mark"),
+            ("node:perf_hooks", "supportedEntryTypes"),
+            ("node:string_decoder", "encoding"),
+            ("node:tty", "clearLine"),
+            ("node:process", "on"),
+            ("node:process", "emit"),
+            ("node:url", "createObjectURL"),
+            ("node:worker_threads", "getWorkerData"),
+            ("node:https", "ClientRequest"),
+            ("node:http2", "Http2SecureServer"),
+            ("node:child_process", "Stream"),
+            ("node:cluster", "worker"),
+            ("node:stream", "fromWeb"),
+            ("node:crypto", "sha256"),
+        ] {
+            assert!(
+                !module_has_public_named_export(module, name),
+                "{module} should not expose invalid named export {name}"
+            );
+            assert!(
+                module_has_symbol(module, name).is_some(),
+                "{module}.{name} should remain available to member/dispatch checks"
+            );
+        }
+    }
+
+    #[test]
+    fn node_core_named_export_view_keeps_real_exports() {
+        for (module, name) in [
+            ("node:buffer", "Buffer"),
+            ("node:buffer", "atob"),
+            ("node:perf_hooks", "performance"),
+            ("node:perf_hooks", "timerify"),
+            ("node:string_decoder", "StringDecoder"),
+            ("node:tty", "ReadStream"),
+            ("node:process", "cwd"),
+            ("node:process", "env"),
+            ("node:url", "URL"),
+            ("node:url", "fileURLToPath"),
+            ("node:worker_threads", "workerData"),
+            ("node:path", "default"),
+            ("node:https", "Agent"),
+            ("node:https", "request"),
+            ("node:http2", "Http2ServerRequest"),
+            ("node:child_process", "ChildProcess"),
+            ("node:cluster", "workers"),
+            ("node:stream", "Readable"),
+            ("node:stream", "compose"),
+            ("node:crypto", "randomUUID"),
+        ] {
+            assert!(
+                module_has_public_named_export(module, name),
+                "{module} should expose real named export {name}"
+            );
+        }
+    }
+
+    #[test]
     fn path_make_long_is_manifest_method() {
         let entry = module_has_symbol("node:path", "_makeLong")
             .expect("node:path._makeLong should be in the manifest");
@@ -333,7 +569,6 @@ mod tests {
             "SIGINT",
             "EACCES",
             "PRIORITY_NORMAL",
-            "RTLD_DEEPBIND",
             "RSA_PKCS1_PADDING",
             "SSL_OP_NO_SSLv2",
             "SSL_OP_NO_TLSv1",
@@ -342,6 +577,15 @@ mod tests {
         ] {
             let entry = module_has_symbol("node:constants", name)
                 .expect("node:constants representative property should be in the manifest");
+            assert!(matches!(entry.kind, ApiKind::Property));
+        }
+
+        let rtld_deepbind = module_has_symbol("node:constants", "RTLD_DEEPBIND");
+        assert_eq!(
+            rtld_deepbind.is_some(),
+            cfg!(all(target_os = "linux", target_env = "gnu"))
+        );
+        if let Some(entry) = rtld_deepbind {
             assert!(matches!(entry.kind, ApiKind::Property));
         }
     }
@@ -495,6 +739,272 @@ mod tests {
                     class_filter: None,
                 }
             ));
+        }
+    }
+
+    #[test]
+    fn dispatch_only_node_members_are_not_module_exports() {
+        for (module, names) in [
+            (
+                "buffer",
+                &[
+                    "alloc",
+                    "allocUnsafe",
+                    "allocUnsafeSlow",
+                    "byteLength",
+                    "concat",
+                    "copyBytesFrom",
+                    "from",
+                    "fromBase64",
+                    "fromHex",
+                    "isBuffer",
+                    "isEncoding",
+                    "of",
+                ][..],
+            ),
+            ("crypto", &["md5", "randomUUIDv7", "sha256"][..]),
+            (
+                "perf_hooks",
+                &[
+                    "clearMarks",
+                    "clearMeasures",
+                    "clearResourceTimings",
+                    "getEntries",
+                    "getEntriesByName",
+                    "getEntriesByType",
+                    "mark",
+                    "markResourceTiming",
+                    "measure",
+                    "nodeTiming",
+                    "now",
+                    "setResourceTimingBufferSize",
+                    "supportedEntryTypes",
+                    "timeOrigin",
+                    "toJSON",
+                ][..],
+            ),
+            (
+                "process",
+                &[
+                    "addListener",
+                    "emit",
+                    "eventNames",
+                    "getMaxListeners",
+                    "listenerCount",
+                    "listeners",
+                    "off",
+                    "on",
+                    "once",
+                    "prependListener",
+                    "prependOnceListener",
+                    "rawListeners",
+                    "removeAllListeners",
+                    "removeListener",
+                    "setMaxListeners",
+                ][..],
+            ),
+            (
+                "string_decoder",
+                &["encoding", "lastChar", "lastNeed", "lastTotal"][..],
+            ),
+            (
+                "tty",
+                &["clearLine", "clearScreenDown", "cursorTo", "moveCursor"][..],
+            ),
+            ("url", &["createObjectURL", "revokeObjectURL"][..]),
+            ("worker_threads", &["getWorkerData"][..]),
+            (
+                "https",
+                &["ClientRequest", "IncomingMessage", "ServerResponse"][..],
+            ),
+            ("http2", &["Http2SecureServer"][..]),
+            ("child_process", &["Stream"][..]),
+            ("cluster", &["addListener", "on", "worker"][..]),
+            ("stream", &["from", "fromWeb", "prototype", "toWeb"][..]),
+        ] {
+            for name in names {
+                assert!(
+                    module_has_symbol(module, name).is_some(),
+                    "{module}.{name} should remain present for dispatch/member gates"
+                );
+                assert!(
+                    !module_has_public_named_export(module, name),
+                    "{module}.{name} must not be accepted as a top-level module export"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn representative_node_module_exports_stay_public() {
+        for (module, names) in [
+            (
+                "buffer",
+                &["Buffer", "Blob", "File", "atob", "constants"][..],
+            ),
+            (
+                "crypto",
+                &["createHash", "getRandomValues", "hash", "randomUUID"][..],
+            ),
+            (
+                "perf_hooks",
+                &[
+                    "PerformanceObserver",
+                    "constants",
+                    "createHistogram",
+                    "performance",
+                ][..],
+            ),
+            ("process", &["cwd", "env", "pid", "version"][..]),
+            ("string_decoder", &["StringDecoder"][..]),
+            ("tty", &["ReadStream", "WriteStream", "isatty"][..]),
+            ("url", &["URL", "URLSearchParams", "fileURLToPath"][..]),
+            (
+                "worker_threads",
+                &["Worker", "parentPort", "workerData"][..],
+            ),
+            ("https", &["Agent", "Server", "get", "request"][..]),
+            (
+                "http2",
+                &["Http2ServerRequest", "Http2ServerResponse", "constants"][..],
+            ),
+            ("child_process", &["ChildProcess", "exec", "spawn"][..]),
+            ("cluster", &["Worker", "fork", "isPrimary"][..]),
+            ("stream", &["Readable", "Stream", "default", "pipeline"][..]),
+        ] {
+            for name in names {
+                assert!(
+                    module_has_public_named_export(module, name),
+                    "{module}.{name} should remain a top-level module export"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn implemented_node_submodule_manifest_surfaces_are_registered() {
+        let expected: &[(&str, &[(&str, ApiKind)])] = &[
+            (
+                "diagnostics_channel",
+                &[
+                    ("default", ApiKind::Property),
+                    ("Channel", ApiKind::Class),
+                    (
+                        "channel",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "hasSubscribers",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "subscribe",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "tracingChannel",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "unsubscribe",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                ],
+            ),
+            (
+                "fs/promises",
+                &[
+                    ("default", ApiKind::Property),
+                    ("constants", ApiKind::Property),
+                ],
+            ),
+            ("stream/consumers", &[("default", ApiKind::Property)]),
+            (
+                "stream/web",
+                &[
+                    ("default", ApiKind::Property),
+                    ("ReadableStream", ApiKind::Class),
+                    ("WritableStream", ApiKind::Class),
+                    ("TransformStream", ApiKind::Class),
+                    ("ByteLengthQueuingStrategy", ApiKind::Class),
+                    ("CountQueuingStrategy", ApiKind::Class),
+                    ("TextEncoderStream", ApiKind::Class),
+                    ("TextDecoderStream", ApiKind::Class),
+                ],
+            ),
+            (
+                "test/reporters",
+                &[
+                    ("default", ApiKind::Property),
+                    (
+                        "spec",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "tap",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "dot",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "junit",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                    (
+                        "lcov",
+                        ApiKind::Method {
+                            has_receiver: false,
+                            class_filter: None,
+                        },
+                    ),
+                ],
+            ),
+        ];
+
+        for (module, symbols) in expected {
+            assert!(is_known_module(module), "{module} must be a known module");
+            assert!(
+                is_known_module(&format!("node:{module}")),
+                "node:{module} must be a known module"
+            );
+            assert!(
+                module_has_any_entries(module),
+                "{module} must have manifest entries"
+            );
+            for (name, kind) in *symbols {
+                let entry = module_has_symbol(&format!("node:{module}"), name)
+                    .unwrap_or_else(|| panic!("{module} missing {name}"));
+                assert_eq!(entry.kind, *kind, "{module}.{name}");
+            }
         }
     }
 }

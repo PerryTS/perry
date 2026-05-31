@@ -52,7 +52,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(slot) = ctx.this_stack.last().cloned() {
                 Ok(ctx.block().load(DOUBLE, &slot))
             } else {
-                Ok(ctx.block().call(DOUBLE, "js_get_global_this", &[]))
+                let helper = if ctx.is_strict_fn {
+                    "js_implicit_this_get"
+                } else {
+                    "js_implicit_this_get_sloppy"
+                };
+                Ok(ctx.block().call(DOUBLE, helper, &[]))
             }
         }
 
