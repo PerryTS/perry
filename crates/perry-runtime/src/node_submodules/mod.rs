@@ -133,17 +133,17 @@ use consumers::{
 pub use consumers::js_register_stream_consumer_callbacks;
 use fs_promises::{
     thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
-    thunk_fs_promises_chown, thunk_fs_promises_copyFile, thunk_fs_promises_cp,
-    thunk_fs_promises_glob, thunk_fs_promises_lchmod, thunk_fs_promises_lchown,
-    thunk_fs_promises_link, thunk_fs_promises_lstat, thunk_fs_promises_lutimes,
-    thunk_fs_promises_mkdir, thunk_fs_promises_mkdtemp, thunk_fs_promises_open,
-    thunk_fs_promises_opendir, thunk_fs_promises_readFile, thunk_fs_promises_readdir,
-    thunk_fs_promises_readlink, thunk_fs_promises_realpath, thunk_fs_promises_rename,
-    thunk_fs_promises_rm, thunk_fs_promises_rmdir, thunk_fs_promises_stat,
-    thunk_fs_promises_statfs, thunk_fs_promises_symlink, thunk_fs_promises_truncate,
-    thunk_fs_promises_unlink, thunk_fs_promises_utimes, thunk_fs_promises_watch,
-    thunk_fs_promises_writeFile, thunk_readline_Interface, thunk_readline_Readline,
-    thunk_readline_createInterface,
+    thunk_fs_promises_chown, thunk_fs_promises_constants, thunk_fs_promises_copyFile,
+    thunk_fs_promises_cp, thunk_fs_promises_glob, thunk_fs_promises_lchmod,
+    thunk_fs_promises_lchown, thunk_fs_promises_link, thunk_fs_promises_lstat,
+    thunk_fs_promises_lutimes, thunk_fs_promises_mkdir, thunk_fs_promises_mkdtemp,
+    thunk_fs_promises_open, thunk_fs_promises_opendir, thunk_fs_promises_readFile,
+    thunk_fs_promises_readdir, thunk_fs_promises_readlink, thunk_fs_promises_realpath,
+    thunk_fs_promises_rename, thunk_fs_promises_rm, thunk_fs_promises_rmdir,
+    thunk_fs_promises_stat, thunk_fs_promises_statfs, thunk_fs_promises_symlink,
+    thunk_fs_promises_truncate, thunk_fs_promises_unlink, thunk_fs_promises_utimes,
+    thunk_fs_promises_watch, thunk_fs_promises_writeFile, thunk_readline_Interface,
+    thunk_readline_Readline, thunk_readline_createInterface,
 };
 use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
 use test::{
@@ -365,6 +365,10 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             ExportSpec {
                 name: "access",
                 thunk: ExportThunk::Fn2(thunk_fs_promises_access),
+            },
+            ExportSpec {
+                name: "constants",
+                thunk: ExportThunk::Fn1(thunk_fs_promises_constants),
             },
         ],
     },
@@ -788,8 +792,20 @@ fn sys_util_export_value(name: &str) -> Option<f64> {
     }
 }
 
+fn fs_constants_namespace_value() -> f64 {
+    unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"fs".as_ptr(),
+            "fs".len(),
+            b"constants".as_ptr(),
+            "constants".len(),
+        )
+    }
+}
+
 fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
     let value = match submod_key {
+        "fs_promises" if name == "constants" => Some(fs_constants_namespace_value()),
         "test" => test::test_special_export_value(name),
         _ => None,
     };
@@ -1289,6 +1305,40 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    const FS_PROMISES_EXPORTS: &[&str] = &[
+        "access",
+        "appendFile",
+        "chmod",
+        "chown",
+        "copyFile",
+        "cp",
+        "glob",
+        "lchmod",
+        "lchown",
+        "link",
+        "lstat",
+        "lutimes",
+        "mkdir",
+        "mkdtemp",
+        "open",
+        "opendir",
+        "readFile",
+        "readdir",
+        "readlink",
+        "realpath",
+        "rename",
+        "rm",
+        "rmdir",
+        "stat",
+        "statfs",
+        "symlink",
+        "truncate",
+        "unlink",
+        "utimes",
+        "watch",
+        "writeFile",
+    ];
+
     #[test]
     fn known_submodules_have_at_least_one_export() {
         for s in SUBMODULES {
@@ -1305,6 +1355,7 @@ mod tests {
         for key in [
             "timers_promises",
             "readline_promises",
+            "fs_promises",
             "stream_promises",
             "stream_consumers",
             "stream_web",
@@ -1384,6 +1435,59 @@ mod tests {
         assert_eq!(actual_message, message);
     }
 
+    fn assert_fs_promises_namespace_exports(ns_value: f64) {
+        for name in FS_PROMISES_EXPORTS {
+            let property = get_object_property(ns_value, name.as_bytes())
+                .unwrap_or_else(|| panic!("fs_promises namespace missing runtime export: {name}"));
+            let direct = unsafe {
+                js_node_submodule_export_as_function(
+                    b"fs_promises".as_ptr(),
+                    "fs_promises".len() as u32,
+                    name.as_ptr(),
+                    name.len() as u32,
+                )
+            };
+            assert_eq!(
+                property.to_bits(),
+                direct.to_bits(),
+                "fs_promises namespace export `{name}` should match direct named export"
+            );
+        }
+
+        let constants = get_object_property(ns_value, b"constants")
+            .expect("fs_promises namespace missing constants export");
+        assert!(
+            object_ptr_from_value(constants).is_some(),
+            "fs_promises.constants should be an object"
+        );
+        let fs_constants = fs_constants_namespace_value();
+        assert_eq!(
+            constants.to_bits(),
+            fs_constants.to_bits(),
+            "fs_promises.constants should reuse fs.constants"
+        );
+        let direct_constants = unsafe {
+            js_node_submodule_export_as_function(
+                b"fs_promises".as_ptr(),
+                "fs_promises".len() as u32,
+                b"constants".as_ptr(),
+                "constants".len() as u32,
+            )
+        };
+        assert_eq!(
+            constants.to_bits(),
+            direct_constants.to_bits(),
+            "direct fs_promises constants export should match namespace property"
+        );
+
+        for not_implemented in ["mkdtempDisposable", "FileHandle", "Dir", "Dirent"] {
+            assert!(
+                get_object_property(ns_value, not_implemented.as_bytes()).is_none(),
+                "fs_promises namespace should not expose unimplemented `{not_implemented}`"
+            );
+        }
+    }
+
     #[test]
     fn stream_parent_promises_property_exposes_namespace() {
         let value = unsafe {
@@ -1417,12 +1521,25 @@ mod tests {
         };
         let ns = object_ptr_from_value(value).expect("fs.promises should be an object");
         let ns_value = boxed_ptr(ns as *const u8);
-        // Spot-check a few exports from the fs_promises submodule.
-        assert!(get_object_property(ns_value, b"open").is_some());
-        assert!(get_object_property(ns_value, b"readFile").is_some());
-        assert!(get_object_property(ns_value, b"writeFile").is_some());
-        assert!(get_object_property(ns_value, b"chmod").is_some());
-        assert!(get_object_property(ns_value, b"stat").is_some());
+        assert_fs_promises_namespace_exports(ns_value);
+
+        let direct = unsafe {
+            js_node_submodule_namespace(b"fs_promises".as_ptr(), "fs_promises".len() as u32)
+        };
+        assert_eq!(
+            value.to_bits(),
+            direct.to_bits(),
+            "fs.promises should reuse the direct fs_promises namespace singleton"
+        );
+    }
+
+    #[test]
+    fn fs_promises_direct_namespace_exposes_runtime_exports() {
+        let value = unsafe {
+            js_node_submodule_namespace(b"fs_promises".as_ptr(), "fs_promises".len() as u32)
+        };
+        let ns = object_ptr_from_value(value).expect("fs_promises namespace should be an object");
+        assert_fs_promises_namespace_exports(boxed_ptr(ns as *const u8));
     }
 
     #[test]

@@ -473,6 +473,11 @@ pub(crate) extern "C" fn thunk_readline_createInterface(
 }
 
 thunk!(
+    thunk_fs_promises_constants,
+    "node:fs/promises.constants is not callable."
+);
+
+thunk!(
     thunk_readline_Interface,
     "node:readline/promises.Interface is not yet implemented in Perry (tracked by issue #793)."
 );

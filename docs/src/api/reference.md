@@ -1183,8 +1183,19 @@ Total: 2373 entries across 104 modules.
 
 ## `fs`
 
+### Classes
+
+- `Dir`
+- `Dirent`
+- `FileReadStream`
+- `FileWriteStream`
+- `ReadStream`
+- `Stats`
+- `WriteStream`
+
 ### Methods
 
+- `_toUnixTimestamp` — module
 - `access` — module
 - `accessSync` — module
 - `appendFile` — module
@@ -2720,7 +2731,6 @@ Total: 2373 entries across 104 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
-- `debug` — module
 - `debuglog` — module
 - `deprecate` — module
 - `diff` — module
@@ -2891,7 +2901,6 @@ Total: 2373 entries across 104 modules.
 - `aborted` — module
 - `callbackify` — module
 - `convertProcessSignalToExitCode` — module
-- `debug` — module
 - `debuglog` — module
 - `deprecate` — module
 - `diff` — module

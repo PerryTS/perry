@@ -1336,9 +1336,25 @@ declare module "fetch" {
 
 declare module "fs" {
   /** stdlib */
+  export class Dir { [key: string]: any; }
+  /** stdlib */
+  export class Dirent { [key: string]: any; }
+  /** stdlib */
+  export class FileReadStream { [key: string]: any; }
+  /** stdlib */
+  export class FileWriteStream { [key: string]: any; }
+  /** stdlib */
+  export class ReadStream { [key: string]: any; }
+  /** stdlib */
+  export class Stats { [key: string]: any; }
+  /** stdlib */
+  export class WriteStream { [key: string]: any; }
+  /** stdlib */
   export const constants: any;
   /** stdlib */
   export const promises: any;
+  /** stdlib */
+  export function _toUnixTimestamp(...args: any[]): any;
   /** stdlib */
   export function access(...args: any[]): any;
   /** stdlib */
@@ -3070,8 +3086,6 @@ declare module "sys" {
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
   /** stdlib */
-  export function debug(...args: any[]): any;
-  /** stdlib */
   export function debuglog(...args: any[]): any;
   /** stdlib */
   export function deprecate(...args: any[]): any;
@@ -3263,8 +3277,6 @@ declare module "util" {
   export function callbackify(...args: any[]): any;
   /** stdlib */
   export function convertProcessSignalToExitCode(...args: any[]): any;
-  /** stdlib */
-  export function debug(...args: any[]): any;
   /** stdlib */
   export function debuglog(...args: any[]): any;
   /** stdlib */
