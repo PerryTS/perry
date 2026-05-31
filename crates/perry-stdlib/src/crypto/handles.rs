@@ -3,11 +3,17 @@ use super::*;
 pub struct SignHandle {
     pub(super) alg: RsaDigestKind,
     pub(super) data: std::sync::Mutex<Vec<u8>>,
+    /// #2963 — set once `.sign()` has run terminally. Node invalidates the
+    /// handle after the first `sign`; subsequent `update`/`sign` calls throw
+    /// `Error [ERR_CRYPTO_INVALID_STATE]: Not initialised`.
+    pub(super) finalized: std::sync::atomic::AtomicBool,
 }
 
 pub struct VerifyHandle {
     pub(super) alg: RsaDigestKind,
     pub(super) data: std::sync::Mutex<Vec<u8>>,
+    /// #2963 — set once `.verify()` has run terminally (see `SignHandle`).
+    pub(super) finalized: std::sync::atomic::AtomicBool,
 }
 
 pub struct EcdhHandle {
