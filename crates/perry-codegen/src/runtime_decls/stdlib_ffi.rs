@@ -375,6 +375,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_local_storage_new", I64, &[]);
     module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, DOUBLE]);
 
+    // ========== #2875 DisposableStack / AsyncDisposableStack / SuppressedError ==========
+    // `new` ctors (dispatched by lower_builtin_new). Instance methods are
+    // declared through the native_table dispatch path, but the constructors
+    // are called directly so they need an explicit declaration here.
+    module.declare_function("js_disposable_stack_new", I64, &[]);
+    module.declare_function("js_async_disposable_stack_new", I64, &[]);
+    module.declare_function("js_suppressed_error_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+
     // ========== zlib ==========
     // #2935: gzipSync/deflateSync take the data as raw NaN-box bits (I64) plus
     // an options object (DOUBLE) so the `{ level }` option can select the
@@ -1295,7 +1303,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_get_entries_by_name", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_clear_marks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_clear_measures", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_to_json", DOUBLE, &[]);
     module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
     module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);

@@ -308,6 +308,10 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            // #2875: TC39 explicit-resource-management global constructors.
+            | "DisposableStack"
+            | "AsyncDisposableStack"
+            | "SuppressedError"
             | "Buffer"
             // Global functions (typeof === "function" in spec).
             | "structuredClone"

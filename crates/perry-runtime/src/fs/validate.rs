@@ -380,8 +380,25 @@ pub(crate) fn validate_int32(value: f64, arg_name: &str, min: i64, max: i64) {
     }
 }
 
-fn format_received_number(n: f64) -> String {
-    if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e21 {
+/// Render an `f64` the way Node prints it in a `Received …` clause for
+/// value errors (`ERR_OUT_OF_RANGE` / `ERR_INVALID_ARG_VALUE`): integers
+/// without a fractional part, and `NaN`/`Infinity`/`-Infinity` spelled out
+/// (Rust's `Display` would print `inf`/`NaN`). Shared by the `net`/`fs`/
+/// `buffer` validators and the `process` exit/cpuUsage validators
+/// (#3039-#3049).
+pub fn format_received_number(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if n.fract() == 0.0 && n.abs() < 1e21 {
         format!("{}", n as i64)
     } else {
         format!("{}", n)
