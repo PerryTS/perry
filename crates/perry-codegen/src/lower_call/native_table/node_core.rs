@@ -456,6 +456,29 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_VOID,
     },
+    // #3108 (Node process parity): process.sourceMapsEnabled getter — reads
+    // the live flag toggled by setSourceMapsEnabled, returns a boolean.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "sourceMapsEnabled",
+        class_filter: None,
+        runtime: "js_process_source_maps_enabled",
+        args: &[],
+        ret: NR_F64,
+    },
+    // #3108 (Node process parity): process.setSourceMapsEnabled(enabled)
+    // toggles the live source-map flag. Pass the full JS value so the
+    // runtime can reject non-boolean arguments with ERR_INVALID_ARG_TYPE.
+    NativeModSig {
+        module: "process",
+        has_receiver: false,
+        method: "setSourceMapsEnabled",
+        class_filter: None,
+        runtime: "js_process_set_source_maps_enabled",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // #2135 (Node process parity): process.getgroups() — Array<number>
     // of supplementary GIDs from libc::getgroups (empty on non-unix).
     NativeModSig {
