@@ -5,6 +5,7 @@ use crate::closure::{
 };
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod credentials;
 pub use credentials::{
@@ -12,6 +13,66 @@ pub use credentials::{
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
     js_process_setgid, js_process_setgroups, js_process_setuid,
 };
+
+static PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET: AtomicBool = AtomicBool::new(false);
+
+fn bool_value(value: bool) -> f64 {
+    f64::from_bits(if value {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn is_function_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>() as usize;
+        if crate::closure::is_closure_ptr(ptr) {
+            return true;
+        }
+    }
+    crate::value::js_handle_is_function(value)
+}
+
+fn throw_uncaught_capture_callback_type_error(value: f64) -> ! {
+    let message = format!(
+        "The \"fn\" argument must be of type function or null. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_has_uncaught_exception_capture_callback() -> f64 {
+    bool_value(PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET.load(Ordering::SeqCst))
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_set_uncaught_exception_capture_callback(callback: f64) -> f64 {
+    let jv = JSValue::from_bits(callback.to_bits());
+    if jv.is_null() {
+        PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET.store(false, Ordering::SeqCst);
+        return undefined_value();
+    }
+    if !is_function_value(callback) {
+        throw_uncaught_capture_callback_type_error(callback);
+    }
+    PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET.store(true, Ordering::SeqCst);
+    undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_process_add_uncaught_exception_capture_callback(callback: f64) -> f64 {
+    if !is_function_value(callback) {
+        throw_uncaught_capture_callback_type_error(callback);
+    }
+    undefined_value()
+}
 
 /// Exit the process with the given exit code.
 /// process.exit(code?: number | string | null) -> never
@@ -801,12 +862,16 @@ pub extern "C" fn js_process_resource_usage() -> f64 {
 
 /// process.getActiveResourcesInfo() -> string[]. Node returns names of
 /// libuv handles currently keeping the loop alive (TLSWrap, Timeout,
-/// TCPSERVERWRAP, ...). Perry doesn't surface that introspection yet —
-/// return an empty array. The surface is callable so
-/// `typeof process.getActiveResourcesInfo === "function"` holds.
+/// TCPSERVERWRAP, ...). Perry reports its active timeout/interval handles as
+/// "Timeout", matching the resource name Node uses for both timer families.
 #[no_mangle]
 pub extern "C" fn js_process_active_resources_info() -> f64 {
-    let arr = crate::array::js_array_alloc(0);
+    let timeout_count = crate::timer::active_timeout_resource_count();
+    let mut arr = crate::array::js_array_alloc(timeout_count as u32);
+    for _ in 0..timeout_count {
+        let s = js_string_from_bytes(b"Timeout".as_ptr(), "Timeout".len() as u32);
+        arr = crate::array::js_array_push(arr, JSValue::string_ptr(s));
+    }
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
 }
 
@@ -822,10 +887,8 @@ pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
     // are finite non-negative numbers, else TypeError [ERR_INVALID_ARG_TYPE]
     // (wrong shape / non-number field) or RangeError [ERR_INVALID_ARG_VALUE]
     // (negative / NaN / Infinity field value).
-    let prior_jv = JSValue::from_bits(prior.to_bits());
     let (mut user_us, mut system_us) = read_process_cpu_micros();
-    if !prior_jv.is_undefined() && !prior_jv.is_null() {
-        let (prev_user, prev_system) = extract_cpu_pair(prior);
+    if let Some((prev_user, prev_system)) = validate_cpu_usage_prior(prior) {
         user_us = (user_us - prev_user).max(0.0);
         system_us = (system_us - prev_system).max(0.0);
     }
@@ -938,72 +1001,6 @@ fn format_node_number(value: f64) -> String {
     } else {
         format!("{}", value)
     }
-}
-
-/// Validate a `process.cpuUsage(prevValue)` object and read its `.user`
-/// and `.system` fields (microseconds), matching Node's checks (#3040):
-///
-/// * `prevValue` must be a non-array object — otherwise TypeError
-///   [ERR_INVALID_ARG_TYPE] `The "prevValue" argument must be of type
-///   object.`
-/// * `user` then `system` must each be present and a number — otherwise
-///   TypeError [ERR_INVALID_ARG_TYPE] `The "prevValue.<field>" property
-///   must be of type number.`
-/// * each must be finite and `>= 0` — otherwise RangeError
-///   [ERR_INVALID_ARG_VALUE] `The property 'prevValue.<field>' is invalid.`
-///
-/// Diverges via `js_throw` for any failure. Only called after the caller
-/// has ruled out the nullish (baseline) case.
-fn extract_cpu_pair(value: f64) -> (f64, f64) {
-    let jv = JSValue::from_bits(value.to_bits());
-    // `prevValue` must be a non-array object.
-    if !jv.is_pointer() || crate::process::is_array_value(jv) {
-        let message = format!(
-            "The \"prevValue\" argument must be of type object. Received {}",
-            crate::fs::validate::describe_received(value)
-        );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
-    let obj_ptr = jv.as_pointer::<u8>() as *const crate::object::ObjectHeader;
-    if obj_ptr.is_null() {
-        let message = format!(
-            "The \"prevValue\" argument must be of type object. Received {}",
-            crate::fs::validate::describe_received(value)
-        );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
-    let read_field = |name: &str| -> f64 {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let field = crate::object::js_object_get_field_by_name(obj_ptr, key);
-        let field_f64 = f64::from_bits(field.bits());
-        // Field must be a number (missing → undefined → not numeric).
-        if !crate::fs::validate::is_numeric(field) {
-            let message = format!(
-                "The \"prevValue.{}\" property must be of type number. Received {}",
-                name,
-                crate::fs::validate::describe_received(field_f64)
-            );
-            crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-        }
-        let n = if field.is_int32() {
-            field.as_int32() as f64
-        } else {
-            field.as_number()
-        };
-        // Number, but must be a finite non-negative value.
-        if !n.is_finite() || n < 0.0 {
-            let message = format!(
-                "The property 'prevValue.{}' is invalid. Received {}",
-                name,
-                crate::fs::validate::format_received_number(n)
-            );
-            crate::fs::validate::throw_range_error_named(&message, "ERR_INVALID_ARG_VALUE");
-        }
-        n
-    };
-    let user = read_field("user");
-    let system = read_field("system");
-    (user, system)
 }
 
 fn string_value(s: &str) -> f64 {
@@ -1785,7 +1782,6 @@ pub(crate) fn is_array_value(jv: JSValue) -> bool {
 // + validation lets feature-detecting libraries (and the parity suite)
 // behave identically. The flag starts `false`, matching a fresh Node process
 // launched without `--enable-source-maps`.
-use std::sync::atomic::{AtomicBool, Ordering};
 static SOURCE_MAPS_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// `process.sourceMapsEnabled` getter — returns the current toggle as a

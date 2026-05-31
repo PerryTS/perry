@@ -608,6 +608,23 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_thread_cpu_usage", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_available_memory", DOUBLE, &[]);
     module.declare_function("js_process_constrained_memory", DOUBLE, &[]);
+    module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
+    module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_process_has_uncaught_exception_capture_callback",
+        DOUBLE,
+        &[],
+    );
+    module.declare_function(
+        "js_process_set_uncaught_exception_capture_callback",
+        DOUBLE,
+        &[DOUBLE],
+    );
+    module.declare_function(
+        "js_process_add_uncaught_exception_capture_callback",
+        DOUBLE,
+        &[DOUBLE],
+    );
     module.declare_function("js_process_getuid", DOUBLE, &[]);
     module.declare_function("js_process_geteuid", DOUBLE, &[]);
     module.declare_function("js_process_getgid", DOUBLE, &[]);
