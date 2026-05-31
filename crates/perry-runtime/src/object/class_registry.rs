@@ -1009,8 +1009,11 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return crate::value::js_nanbox_pointer(arr as i64);
             }
             "Object" => {
-                let obj = js_object_alloc(0, 0);
-                return crate::value::js_nanbox_pointer(obj as i64);
+                let value = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::object::js_object_coerce(value);
             }
             // #2889: `new (rebound Error subclass)(msg)` through a global
             // constructor value. Mirrors the bare `new TypeError(msg)`
