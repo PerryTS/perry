@@ -38,7 +38,6 @@
 "trace_events" = "V8 trace events; not applicable to native binaries."
 "v8" = "V8-specific introspection (heap snapshots, cached data, serialization). Inapplicable."
 "domain" = "Deprecated since Node 4; not implementing legacy error-routing system."
-"punycode" = "Deprecated since Node 7; userland alternatives exist."
 
 # Out-of-scope test surface.
 "test/mock" = "Test-runner mocking; covered transitively by node:test if pursued."

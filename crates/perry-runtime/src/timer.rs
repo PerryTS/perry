@@ -331,7 +331,6 @@ static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
-static WARNED_TIMER_TRACE_HINT: AtomicBool = AtomicBool::new(false);
 
 fn timer_handle_value(id: i64) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(id as *mut u8).bits())
@@ -394,11 +393,20 @@ fn timer_delay_text(delay_ms: f64) -> String {
     }
 }
 
+fn timer_warning_string(s: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+}
+
 fn emit_timer_delay_warning(kind: &str, message: String) {
-    eprintln!("(node:{}) {}: {}", std::process::id(), kind, message);
-    if !WARNED_TIMER_TRACE_HINT.swap(true, Ordering::AcqRel) {
-        eprintln!("(Use `node --trace-warnings ...` to show where the warning was created)");
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message_handle = scope.root_nanbox_f64(timer_warning_string(&message));
+    let kind_handle = scope.root_nanbox_f64(timer_warning_string(kind));
+    crate::process::js_process_emit_warning(
+        message_handle.get_nanbox_f64(),
+        kind_handle.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
 }
 
 fn coerce_timer_delay(delay_value: f64) -> f64 {

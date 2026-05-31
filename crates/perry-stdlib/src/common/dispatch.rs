@@ -10,8 +10,6 @@ use super::handle::*;
 type EventEmitterOn = unsafe extern "C" fn(i64, i64, i64) -> i64;
 
 /// Dispatch a method call on a handle-based object.
-/// Called from perry-runtime's js_native_call_method when it detects a handle
-/// (pointer value < 0x100000, indicating an integer handle, not a real heap pointer).
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
     handle: i64,
@@ -55,6 +53,81 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
+
+    // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3
+    // SQLite fallbacks because method names like prepare/exec/close overlap
+    // but the lifecycle/error semantics are intentionally different.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "open"
+            | "close"
+            | "exec"
+            | "prepare"
+            | "createTagStore"
+            | "createSession"
+            | "applyChangeset"
+            | "enableLoadExtension"
+            | "loadExtension"
+            | "location"
+            | "__perry_dispose__"
+            | "@@__perry_wk_dispose"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_database_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite SQLTagStore handle. Keep this before StatementSync because
+    // the query execution method names overlap but tag stores consume tagged
+    // template arguments and bind them positionally.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(method_name, "run" | "get" | "all" | "iterate" | "clear") {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_tag_store_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite StatementSync handle. Keep this before the better-sqlite3
+    // statement fallback because run/get/all overlap but Node's parameter and
+    // result semantics are different.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "run"
+            | "get"
+            | "all"
+            | "iterate"
+            | "columns"
+            | "setReadBigInts"
+            | "setReturnArrays"
+            | "setAllowBareNamedParameters"
+            | "setAllowUnknownNamedParameters"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_statement_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
+
+    // node:sqlite Session handle. This follows DatabaseSync dispatch because
+    // `close` overlaps and the database lifecycle rules should win for DBs.
+    #[cfg(feature = "database-sqlite")]
+    if matches!(
+        method_name,
+        "changeset" | "patchset" | "close" | "__perry_dispose__" | "@@__perry_wk_dispose"
+    ) {
+        if let Some(result) =
+            crate::sqlite::dispatch_node_sqlite_session_method(handle, method_name, &args)
+        {
+            return result;
+        }
+    }
 
     // Fastify app: routes for HTTP verbs + lifecycle methods.
     // #1113 adds `"on"` here — `app.server.on(event, cb)` dispatches
@@ -972,10 +1045,6 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
     fn unbox_to_i64(v: f64) -> i64 {
         (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
     }
-    // Pack a raw i64 handle back as a NaN-boxed POINTER_TAG f64 — the
-    // shape every chainable Socket method returns so subsequent
-    // `.on(...)` / `.write(...)` calls dispatch through the same
-    // small-handle range check at the top of `js_native_call_method`.
     fn nanbox_handle(h: i64) -> f64 {
         f64::from_bits(0x7FFD_0000_0000_0000u64 | (h as u64 & 0x0000_FFFF_FFFF_FFFF))
     }
@@ -1119,7 +1188,6 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
 }
 
 /// Dispatch a property access on a handle-based object.
-/// Called from perry-runtime's js_dynamic_object_get_property when it detects a handle.
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_property_dispatch(
     handle: i64,
@@ -1157,6 +1225,10 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         && crate::streams::js_stream_handle_is_registered(handle as usize)
     {
         return crate::streams::dispatch_stream_property(handle as f64, property_name);
+    }
+
+    if let Some(value) = super::net_socket_bridge::bind_net_socket_property(handle, property_name) {
+        return value;
     }
 
     // zlib Transform streams: `typeof createGzip().write` must read
@@ -1230,6 +1302,33 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
         return v;
+    }
+
+    #[cfg(feature = "database-sqlite")]
+    {
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_database_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_tag_store_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::sqlite::dispatch_node_sqlite_statement_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) = crate::sqlite::dispatch_node_sqlite_limits_property(handle, property_name)
+        {
+            return v;
+        }
+        if let Some(v) = crate::sqlite::dispatch_node_sqlite_session_property(handle, property_name)
+        {
+            return v;
+        }
     }
 
     // Server-side node:http request/response handles whose static
@@ -1778,6 +1877,11 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     let _ = handle;
     let _ = value;
 
+    #[cfg(feature = "database-sqlite")]
+    if crate::sqlite::dispatch_node_sqlite_limits_set(handle, property_name, value) {
+        return;
+    }
+
     // Try Fastify context dispatch (request/reply properties)
     #[cfg(feature = "http-server")]
     if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
@@ -1910,6 +2014,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_event_emitter_handle_probe(event_emitter_probe);
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_on(crate::events::js_event_emitter_on);
+    super::net_socket_bridge::register_net_socket_handle_probe();
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
     #[cfg(feature = "crypto")]
@@ -1919,6 +2024,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,
     );
+    #[cfg(feature = "database-sqlite")]
+    perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to

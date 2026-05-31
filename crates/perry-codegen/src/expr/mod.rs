@@ -1445,6 +1445,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathLog1p(..)
         | Expr::MathRandom
         | Expr::WebAssemblyValidate(..)
+        | Expr::WebAssemblyCompile(..)
+        | Expr::WebAssemblyModuleNew(..)
+        | Expr::WebAssemblyModuleExports(..)
+        | Expr::WebAssemblyModuleImports(..)
+        | Expr::WebAssemblyModuleCustomSections { .. }
         | Expr::WebAssemblyInstantiate(..)
         | Expr::WebAssemblyCallExport { .. }
         | Expr::JsonStringifyFull(..)
@@ -1816,7 +1821,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessPid
         | Expr::ProcessPpid
         | Expr::ProcessArgv
-        | Expr::StructuredClone(..)
+        | Expr::StructuredClone { .. }
         | Expr::WeakRefNew(..) => env_clones::lower(ctx, expr),
         Expr::FsUnlinkSync(..) | Expr::Await(..) => fs_await::lower(ctx, expr),
         Expr::StaticFieldGet { .. }

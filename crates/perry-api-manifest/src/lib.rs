@@ -652,14 +652,20 @@ mod tests {
             assert!(matches!(entry.kind, ApiKind::Property));
         }
 
+        // Platform-specific constants are listed in the manifest
+        // unconditionally so the generated docs (`docs/api/perry.d.ts`,
+        // `docs/src/api/reference.md`) are byte-identical regardless of the
+        // host OS the generator runs on — otherwise `api-docs-drift` fails for
+        // every PR whenever the committed docs were regenerated on a different
+        // OS than CI (macOS vs Linux). RTLD_DEEPBIND is therefore present on
+        // all platforms; the runtime `constants` module still only exposes a
+        // real value where the OS provides one.
         let rtld_deepbind = module_has_symbol("node:constants", "RTLD_DEEPBIND");
-        assert_eq!(
+        assert!(
             rtld_deepbind.is_some(),
-            cfg!(all(target_os = "linux", target_env = "gnu"))
+            "RTLD_DEEPBIND should be in the manifest on every platform"
         );
-        if let Some(entry) = rtld_deepbind {
-            assert!(matches!(entry.kind, ApiKind::Property));
-        }
+        assert!(matches!(rtld_deepbind.unwrap().kind, ApiKind::Property));
     }
 
     #[test]

@@ -379,6 +379,15 @@ pub(crate) enum Task {
         AsyncContextSnapshot,
     ),
     Inline(ClosurePtr, f64, *mut Promise, bool, AsyncContextSnapshot),
+    /// `queueMicrotask(callback)` jobs share the same FIFO queue as Promise
+    /// reactions. `process.nextTick` stays in the separate higher-priority
+    /// queue owned by `builtins::globals`.
+    Microtask {
+        callback: ClosurePtr,
+        context: AsyncContextSnapshot,
+        async_id: u64,
+        trigger_async_id: u64,
+    },
     /// Direct dispatch to a 2-arg async-step closure. Equivalent to
     /// `Inline(then_v_arrow, value, next, true)` where `then_v_arrow`
     /// is a wrapper that calls `step(value, is_error)` — but skips the
@@ -471,6 +480,24 @@ pub(crate) struct AsyncStepGuard {
 /// and well below the 5.7M observed in #712 — high enough to avoid
 /// false positives, low enough to terminate quickly when the bug fires.
 pub(crate) const ASYNC_STEP_REENTRY_BOUND: u32 = 10_000;
+
+pub(crate) fn enqueue_queue_microtask(callback: i64) {
+    let context = capture_context();
+    let ids = crate::async_hooks::init_resource(
+        "Microtask",
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        false,
+    );
+    TASK_QUEUE.with(|q| {
+        q.borrow_mut().push_back(Task::Microtask {
+            callback: callback as ClosurePtr,
+            context,
+            async_id: ids.async_id,
+            trigger_async_id: ids.trigger_async_id,
+        });
+    });
+    crate::event_pump::js_notify_main_thread();
+}
 
 #[derive(Default)]
 pub(crate) struct PromiseContextStore {
@@ -694,6 +721,9 @@ pub extern "C" fn js_microtasks_pending() -> i32 {
         return 1;
     }
     if crate::thread::js_thread_has_pending() != 0 {
+        return 1;
+    }
+    if crate::builtins::queued_microtasks_pending() {
         return 1;
     }
     TASK_QUEUE.with(|q| if q.borrow().is_empty() { 0 } else { 1 })

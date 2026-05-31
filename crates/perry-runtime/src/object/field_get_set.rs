@@ -1739,6 +1739,13 @@ pub extern "C" fn js_object_get_field_by_name(
                         let key_len = (*key).byte_len as usize;
                         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                         if key_bytes == b"constructor" {
+                            if let Some(dispatch) = handle_property_dispatch() {
+                                let bits = dispatch(raw as i64, key_ptr, key_len);
+                                let value = JSValue::from_bits(bits.to_bits());
+                                if !value.is_undefined() {
+                                    return value;
+                                }
+                            }
                             let null_obj_ptr =
                                 &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                             return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
@@ -1816,6 +1823,14 @@ pub extern "C" fn js_object_get_field_by_name(
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
                 if key_bytes == b"constructor" {
+                    // #3657: a DataView's `.constructor` is the global
+                    // `DataView`, not `Buffer` — checked before the
+                    // Uint8Array/Buffer arms since a DataView slice is also a
+                    // registered buffer.
+                    if crate::buffer::is_data_view(obj as usize) {
+                        let ctor = super::js_get_global_this_builtin_value(b"DataView".as_ptr(), 8);
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
                     if crate::buffer::is_uint8array_buffer(obj as usize) {
                         let ctor =
                             super::js_get_global_this_builtin_value(b"Uint8Array".as_ptr(), 10);
@@ -2052,6 +2067,28 @@ pub extern "C" fn js_object_get_field_by_name(
                         let s =
                             crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
                         return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                    }
+                    // #3716: reading `f.bind` / `f.call` / `f.apply` *as a value*
+                    // off any function must yield a real callable, not
+                    // `undefined`. Reify it into a BOUND_METHOD closure bound to
+                    // this function as receiver; invoking it routes back through
+                    // `js_native_call_method(f, "<method>", …)`. This is what makes
+                    // the "uncurry-this" idiom
+                    // `Function.prototype.call.bind(method)` work — reading `.bind`
+                    // off the reified `Function.prototype.call` previously read
+                    // back `undefined`, so the bound function was never produced.
+                    let reified: Option<&'static [u8]> = match name_str {
+                        "bind" => Some(b"bind"),
+                        "call" => Some(b"call"),
+                        "apply" => Some(b"apply"),
+                        _ => None,
+                    };
+                    if let Some(method) = reified {
+                        let receiver =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        return JSValue::from_bits(
+                            crate::closure::reify_function_method_value(receiver, method).to_bits(),
+                        );
                     }
                     return JSValue::from_bits(val.to_bits());
                 }
@@ -2594,7 +2631,11 @@ pub extern "C" fn js_object_get_field_by_name(
             // `Object.create(P).m()` threw `TypeError: m is not a function`.
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some(v) = resolve_proto_chain_field(class_id, key) {
+                let receiver =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                if let Some(v) = super::class_registry::resolve_proto_chain_field_with_receiver(
+                    class_id, key, receiver,
+                ) {
                     return v;
                 }
                 let key_bytes = std::slice::from_raw_parts(
@@ -2903,7 +2944,9 @@ pub extern "C" fn js_object_get_field_by_name(
             // object — return its value directly. `pipe`, `[Equal.symbol]`,
             // etc. on Effect's EffectPrototype reach here.
             {
-                if let Some(v) = resolve_proto_chain_field(class_id, key) {
+                let receiver =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                if let Some(v) = resolve_proto_chain_field_with_receiver(class_id, key, receiver) {
                     return v;
                 }
             }
@@ -3127,6 +3170,12 @@ pub extern "C" fn js_object_get_field_ic_miss(
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             if key_bytes == b"constructor" {
+                if let Some(dispatch) = handle_property_dispatch() {
+                    let bits = dispatch(obj as i64, key_ptr, key_len);
+                    if bits.to_bits() != crate::value::TAG_UNDEFINED {
+                        return bits;
+                    }
+                }
                 let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                 return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
             }

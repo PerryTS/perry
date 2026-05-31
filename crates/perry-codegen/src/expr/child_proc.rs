@@ -46,10 +46,45 @@ use super::{
     I18nLowerCtx,
 };
 
+/// #3079: emit a setup-time `command`/`file` validation call. `cmd_box` is the
+/// original NaN-boxed value; `name` is the static argument name (`"command"`
+/// for exec/execSync, `"file"` for execFile/execFileSync/spawn/spawnSync). The
+/// runtime throws `TypeError [ERR_INVALID_ARG_TYPE]` on a non-string value, so
+/// this is emitted before the value is unboxed to a raw pointer.
+fn emit_cp_validate_command(ctx: &mut FnCtx<'_>, cmd_box: &str, name: &str) {
+    let name_label = emit_string_literal_global(ctx, name);
+    let name_len = name.len();
+    let blk = ctx.block();
+    let _ = blk.call(
+        DOUBLE,
+        "js_child_process_validate_command",
+        &[
+            (DOUBLE, cmd_box),
+            (PTR, &name_label),
+            (I32, &name_len.to_string()),
+        ],
+    );
+}
+
+/// #3079: emit a setup-time `args` validation call. `args_box` is the original
+/// NaN-boxed value passed in the args slot. The runtime throws `TypeError
+/// [ERR_INVALID_ARG_TYPE]` for a primitive (string/number/boolean/…), accepting
+/// `undefined`/`null`/objects. Emitted before the value is unboxed.
+fn emit_cp_validate_args(ctx: &mut FnCtx<'_>, args_box: &str) {
+    let blk = ctx.block();
+    let _ = blk.call(
+        DOUBLE,
+        "js_child_process_validate_args",
+        &[(DOUBLE, args_box)],
+    );
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::ChildProcessExecSync { command, options } => {
             let cmd_box = lower_expr(ctx, command)?;
+            // #3079: throw `ERR_INVALID_ARG_TYPE` for a missing/non-string command.
+            emit_cp_validate_command(ctx, &cmd_box, "command");
             let blk = ctx.block();
             let cmd_str = unbox_to_i64(blk, &cmd_box);
             let opts_str = if let Some(opts) = options {
@@ -76,10 +111,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             options,
         } => {
             let cmd_box = lower_expr(ctx, command)?;
+            // #3079: spawnSync's command argument is reported as "file".
+            emit_cp_validate_command(ctx, &cmd_box, "file");
             let blk = ctx.block();
             let cmd_str = unbox_to_i64(blk, &cmd_box);
             let args_str = if let Some(a) = args {
                 let v = lower_expr(ctx, a)?;
+                emit_cp_validate_args(ctx, &v);
                 unbox_to_i64(ctx.block(), &v)
             } else {
                 "0".to_string()
@@ -142,10 +180,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             options,
         } => {
             let cmd_box = lower_expr(ctx, command)?;
+            // #3079: spawn's command argument is reported as "file".
+            emit_cp_validate_command(ctx, &cmd_box, "file");
             let blk = ctx.block();
             let cmd_str = unbox_to_i64(blk, &cmd_box);
             let args_str = if let Some(a) = args {
                 let v = lower_expr(ctx, a)?;
+                emit_cp_validate_args(ctx, &v);
                 unbox_to_i64(ctx.block(), &v)
             } else {
                 "0".to_string()
@@ -211,6 +252,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // callback the runtime returns the stdout string (legacy shape).
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let cmd_box = lower_expr(ctx, command)?;
+            // #3079: throw `ERR_INVALID_ARG_TYPE` for a missing/non-string command.
+            emit_cp_validate_command(ctx, &cmd_box, "command");
             let cmd_str = unbox_to_i64(ctx.block(), &cmd_box);
             let arg1 = if let Some(o) = options {
                 lower_expr(ctx, o)?
@@ -243,9 +286,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `js_child_process_exec_file`.
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let file_box = lower_expr(ctx, file)?;
+            // #3079: throw `ERR_INVALID_ARG_TYPE` for a missing/non-string file.
+            emit_cp_validate_command(ctx, &file_box, "file");
             let file_str = unbox_to_i64(ctx.block(), &file_box);
             let args_v = if let Some(a) = args {
-                lower_expr(ctx, a)?
+                let v = lower_expr(ctx, a)?;
+                emit_cp_validate_args(ctx, &v);
+                v
             } else {
                 undef.clone()
             };
@@ -283,9 +330,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the result straight through.
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let file_box = lower_expr(ctx, file)?;
+            // #3079: throw `ERR_INVALID_ARG_TYPE` for a missing/non-string file.
+            emit_cp_validate_command(ctx, &file_box, "file");
             let file_str = unbox_to_i64(ctx.block(), &file_box);
             let args_v = if let Some(a) = args {
-                lower_expr(ctx, a)?
+                let v = lower_expr(ctx, a)?;
+                emit_cp_validate_args(ctx, &v);
+                v
             } else {
                 undef.clone()
             };

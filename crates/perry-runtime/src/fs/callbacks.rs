@@ -1,6 +1,7 @@
 //! Callback-style fs APIs — pre-flight probe + (err, value) dispatch.
 
 use crate::closure::ClosureHeader;
+use std::os::raw::c_int;
 
 use super::*;
 
@@ -95,6 +96,21 @@ fn callback_from_options_arg(options: f64, callback: f64) -> *const ClosureHeade
         } else {
             required_callback(options)
         }
+    }
+}
+
+fn catch_callback_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    if jumped == 0 {
+        let value = call();
+        crate::exception::js_try_end();
+        Ok(value)
+    } else {
+        let err = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        crate::exception::js_try_end();
+        Err(err)
     }
 }
 
@@ -410,10 +426,16 @@ pub extern "C" fn js_fs_glob_callback(pattern_value: f64, arg1: f64, arg2: f64) 
         f64::from_bits(TAG_UNDEFINED)
     };
     let cb = callback_or_arg2(arg1, arg2);
-    let raw = js_fs_glob_sync_options(pattern_value, options);
-    let entries = f64::from_bits(crate::value::JSValue::pointer(raw.to_bits() as *const u8).bits());
-    if !cb.is_null() {
-        crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), entries);
+    match catch_callback_throw(|| {
+        let raw = js_fs_glob_sync_options(pattern_value, options);
+        f64::from_bits(crate::value::JSValue::pointer(raw.to_bits() as *const u8).bits())
+    }) {
+        Ok(entries) => {
+            if !cb.is_null() {
+                crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), entries);
+            }
+        }
+        Err(err) => unsafe { call_cb_err2(cb, err) },
     }
     f64::from_bits(TAG_UNDEFINED)
 }

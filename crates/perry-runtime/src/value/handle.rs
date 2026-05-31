@@ -64,6 +64,13 @@ pub extern "C" fn js_set_native_querystring_dispatch(func: JsNativeQuerystringDi
     JS_NATIVE_QUERYSTRING_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the node:sqlite module dispatcher. Registered by perry-stdlib at
+/// startup so captured and dynamic-imported sqlite exports reach stdlib.
+#[no_mangle]
+pub extern "C" fn js_set_native_sqlite_dispatch(func: JsNativeSqliteDispatchFn) {
+    JS_NATIVE_SQLITE_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 #[no_mangle]
 pub extern "C" fn js_set_native_domain_dispatch(func: JsNativeDomainDispatchFn) {
     JS_NATIVE_DOMAIN_DISPATCH.store(func as *mut (), Ordering::SeqCst);

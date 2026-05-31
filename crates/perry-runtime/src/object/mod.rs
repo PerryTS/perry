@@ -1760,6 +1760,8 @@ fn native_module_to_string_tag(module: &str) -> Option<&'static str> {
         // `Object.prototype.toString.call(performance)` is
         // "[object Performance]" in Node.
         "perf_hooks" => Some("Performance"),
+        "crypto.webcrypto" => Some("Crypto"),
+        "crypto.subtle" => Some("SubtleCrypto"),
         _ => None,
     }
 }

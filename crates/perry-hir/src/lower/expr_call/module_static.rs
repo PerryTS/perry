@@ -26,6 +26,52 @@ pub(super) fn try_module_static_methods(
     has_spread: bool,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let ast::Expr::Member(member) = expr {
+        // WebAssembly.Module.* metadata statics. This is intentionally a
+        // direct-call lowering so it does not duplicate the runtime namespace
+        // descriptor work handled separately in #3635.
+        if let (ast::Expr::Member(class_member), ast::MemberProp::Ident(method_ident)) =
+            (member.obj.as_ref(), &member.prop)
+        {
+            if let (ast::Expr::Ident(root_ident), ast::MemberProp::Ident(class_ident)) =
+                (class_member.obj.as_ref(), &class_member.prop)
+            {
+                if root_ident.sym.as_ref() == "WebAssembly" && class_ident.sym.as_ref() == "Module"
+                {
+                    match method_ident.sym.as_ref() {
+                        "exports" => {
+                            if !args.is_empty() {
+                                ctx.uses_webassembly = true;
+                                return Ok(Ok(Expr::WebAssemblyModuleExports(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
+                            }
+                        }
+                        "imports" => {
+                            if !args.is_empty() {
+                                ctx.uses_webassembly = true;
+                                return Ok(Ok(Expr::WebAssemblyModuleImports(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
+                            }
+                        }
+                        "customSections" => {
+                            if args.len() >= 2 {
+                                ctx.uses_webassembly = true;
+                                let mut it = args.into_iter();
+                                let module = it.next().unwrap();
+                                let name = it.next().unwrap();
+                                return Ok(Ok(Expr::WebAssemblyModuleCustomSections {
+                                    module: Box::new(module),
+                                    name: Box::new(name),
+                                }));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
             let obj_name = obj_ident.sym.as_ref();
             let is_fs_module =
@@ -440,6 +486,14 @@ pub(super) fn try_module_static_methods(
                             if !args.is_empty() {
                                 ctx.uses_webassembly = true;
                                 return Ok(Ok(Expr::WebAssemblyValidate(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
+                            }
+                        }
+                        "compile" => {
+                            if !args.is_empty() {
+                                ctx.uses_webassembly = true;
+                                return Ok(Ok(Expr::WebAssemblyCompile(Box::new(
                                     args.into_iter().next().unwrap(),
                                 ))));
                             }

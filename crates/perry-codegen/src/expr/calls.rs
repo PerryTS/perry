@@ -1889,6 +1889,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &p), (DOUBLE, &options)],
                     ))
                 }
+                "openAsBlob" => {
+                    let p = if let Some(arg) = args.first() {
+                        lower_expr(ctx, arg)?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let options = if args.len() >= 2 {
+                        lower_expr(ctx, &args[1])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_open_as_blob",
+                        &[(DOUBLE, &p), (DOUBLE, &options)],
+                    ))
+                }
                 "statSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
                     let options = if args.len() >= 2 {

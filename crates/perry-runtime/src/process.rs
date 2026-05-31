@@ -549,12 +549,22 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
     let Some(module_name) = supported_builtin_module_name(name) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+<<<<<<< HEAD
     if module_name == "constants" {
         let cjs_default = "constants.default";
         return crate::object::js_create_native_module_namespace(
             cjs_default.as_ptr(),
             cjs_default.len(),
         );
+=======
+    if module_name == "timers/promises" {
+        return unsafe {
+            crate::node_submodules::js_node_submodule_namespace(
+                b"timers_promises".as_ptr(),
+                "timers_promises".len() as u32,
+            )
+        };
+>>>>>>> origin/main
     }
     crate::object::js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
 }
@@ -1073,6 +1083,8 @@ fn set_error_string_prop(error: *mut crate::error::ErrorHeader, name: &str, valu
     );
 }
 
+static WARNED_PROCESS_WARNING_TRACE_HINT: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn process_warning_callback(closure: *const ClosureHeader) -> f64 {
     use std::io::Write;
 
@@ -1110,7 +1122,11 @@ fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &s
     } else {
         "--trace-warnings"
     };
-    let hint = format!("(Use `node {hint_flag} ...` to show where the warning was created)");
+    let hint = if !WARNED_PROCESS_WARNING_TRACE_HINT.swap(true, Ordering::AcqRel) {
+        format!("(Use `node {hint_flag} ...` to show where the warning was created)")
+    } else {
+        String::new()
+    };
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let warning_handle = scope.root_nanbox_f64(warning);

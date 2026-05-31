@@ -656,7 +656,15 @@ pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
         jsval.as_pointer::<ObjectHeader>() as *mut ObjectHeader
     } else {
         let bits = value.to_bits();
-        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+        // Raw-I64-pointer fallback (module-level array/object vars store the
+        // untagged pointer directly). Every GC allocation is `align.max(8)`-
+        // aligned, so a real object pointer always has its low 3 bits clear.
+        // Requiring alignment here rejects non-object values whose raw bits
+        // merely *land* in the address range — e.g. a native-module namespace
+        // sentinel (`require('buffer')`) reaching a generic object op like
+        // `hasOwnProperty`. Without it, callers deref `[ptr-8]` for the
+        // GcHeader on a misaligned garbage address → SIGBUS (#3527).
+        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 && bits & 0x7 == 0 {
             bits as *mut ObjectHeader
         } else {
             ptr::null_mut()
@@ -1161,7 +1169,12 @@ pub(crate) unsafe fn own_key_present(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> bool {
-    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
+    // Every GC allocation is `align.max(8)`-aligned, so a real object pointer
+    // has its low 3 bits clear. Rejecting misaligned `obj` keeps a non-object
+    // value (e.g. a native-module namespace sentinel reaching `hasOwnProperty`
+    // via a caller that didn't route through `extract_obj_ptr`) from being
+    // dereferenced as an ObjectHeader. (#3527)
+    if obj.is_null() || (obj as usize) < 0x10000 || (obj as usize) & 0x7 != 0 || key.is_null() {
         return false;
     }
     let keys = (*obj).keys_array;
@@ -1169,7 +1182,11 @@ pub(crate) unsafe fn own_key_present(
         return false;
     }
     let keys_ptr = keys as usize;
-    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+    // Same alignment invariant for the keys_array pointer: when `obj` is not a
+    // genuine object its `keys_array` field holds garbage that may land in the
+    // address range yet be misaligned. Without this guard the `[keys-8]`
+    // GcHeader read below SIGBUSes on that garbage. (#3527)
+    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || keys_ptr & 0x7 != 0 {
         return false;
     }
     // Validate keys_array GC header
@@ -1895,6 +1912,37 @@ mod sso_tests_1781 {
             assert!(
                 !own_key_present(obj, incoming_other),
                 "absent key 'tag' must not match"
+            );
+        }
+    }
+
+    /// #3527: a non-object value reaching `own_key_present` must return
+    /// `false`, never SIGBUS. Two shapes seen compiling Express: (a) a
+    /// misaligned receiver pointer, and (b) a real-looking object whose
+    /// `keys_array` field holds misaligned garbage (the value read from a
+    /// native-module namespace sentinel mis-treated as an object). Both are
+    /// rejected by the low-3-bits alignment guard — every genuine GC pointer
+    /// is `align.max(8)`-aligned.
+    #[test]
+    fn own_key_present_rejects_misaligned_pointers() {
+        unsafe {
+            let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+
+            // (a) misaligned receiver — would deref `[obj-8]`/`(*obj).keys_array`
+            // on garbage without the guard.
+            let misaligned_obj = 0x2800_0203usize as *mut ObjectHeader;
+            assert!(
+                !own_key_present(misaligned_obj, key),
+                "misaligned receiver must return false, not crash"
+            );
+
+            // (b) aligned real object, but its keys_array points at misaligned
+            // garbage — the exact Express crash shape.
+            let obj = super::super::alloc::js_object_alloc(0, 4);
+            (*obj).keys_array = 0x2800_0203usize as *mut _;
+            assert!(
+                !own_key_present(obj, key),
+                "misaligned keys_array must return false, not crash"
             );
         }
     }

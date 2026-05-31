@@ -294,9 +294,10 @@ pub(crate) extern "C" fn thunk_fs_promises_cp(
     to: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_undefined(|| {
-        let _ = crate::fs::js_fs_cp_async_options(from, to, options);
-    })
+    match crate::fs::js_fs_cp_async_result(from, to, options) {
+        Ok(()) => promise_undefined(),
+        Err(err_val) => promise_rejected(err_val),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_truncate(
@@ -410,10 +411,7 @@ pub(crate) extern "C" fn thunk_fs_promises_glob(
     pattern: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_value(|| {
-        let raw = crate::fs::js_fs_glob_sync_options(pattern, options);
-        f64::from_bits(JSValue::pointer(raw.to_bits() as *const u8).bits())
-    })
+    crate::fs::js_fs_promises_glob_iterator(pattern, options)
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_watch(

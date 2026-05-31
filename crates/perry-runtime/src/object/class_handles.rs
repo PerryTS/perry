@@ -52,6 +52,10 @@ pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 /// as heap objects.
 pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 
+/// Probe for stdlib `net.Socket` handles. Socket instances are represented as
+/// pointer-tagged small integer handles, not heap objects with class ids.
+pub type NetSocketHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+
 /// Narrow registration hook for runtime code that needs to attach an
 /// EventEmitter listener without routing through the generic handle dispatcher.
 pub type EventEmitterOnFn =
@@ -68,6 +72,7 @@ static HANDLE_PROPERTY_SET_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::nul
 static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 #[inline]
@@ -153,6 +158,21 @@ pub fn event_emitter_handle_probe() -> Option<EventEmitterHandleProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_event_emitter_handle_probe(f: EventEmitterHandleProbeFn) {
     EVENT_EMITTER_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn net_socket_handle_probe() -> Option<NetSocketHandleProbeFn> {
+    let p = NET_SOCKET_HANDLE_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), NetSocketHandleProbeFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_net_socket_handle_probe(f: NetSocketHandleProbeFn) {
+    NET_SOCKET_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]
