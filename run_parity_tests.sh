@@ -241,6 +241,7 @@ for raw in sys.stdin:
         sed -E '/^\(node:[0-9]+\)( \[[^]]+\])? DeprecationWarning:/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
+        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: WASI is an experimental feature/d' | \
         sed -E 's/^\(node:[0-9]+\) (Timeout(Overflow|Negative|NaN)Warning:)/(node:<pid>) \1/' | \
         sed -E '/^Timeout duration was set to [0-9]+\.$/d' | \
         sed -E '/^\(Use `node --trace-deprecation/d' | \

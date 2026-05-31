@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2160 entries across 97 modules
+// Coverage: 2117 entries across 98 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3250,23 +3250,7 @@ declare module "uuid" {
 
 declare module "v8" {
   /** stdlib */
-  export class DefaultDeserializer { [key: string]: any; }
-  /** stdlib */
-  export class DefaultSerializer { [key: string]: any; }
-  /** stdlib */
-  export class Deserializer { [key: string]: any; }
-  /** stdlib */
   export class GCProfiler { [key: string]: any; }
-  /** stdlib */
-  export class Serializer { [key: string]: any; }
-  /** stdlib */
-  export function DefaultDeserializer(...args: any[]): any;
-  /** stdlib */
-  export function DefaultSerializer(...args: any[]): any;
-  /** stdlib */
-  export function Deserializer(...args: any[]): any;
-  /** stdlib */
-  export function Serializer(...args: any[]): any;
   /** stdlib */
   export function cachedDataVersionTag(...args: any[]): any;
   /** stdlib */
@@ -3292,6 +3276,15 @@ declare module "validator" {
   export function isURL(s: string): boolean;
   /** stdlib */
   export function isUUID(s: string): boolean;
+}
+
+declare module "wasi" {
+  /** stdlib */
+  export class WASI { [key: string]: any; }
+  /** stdlib */
+  export const wasiImport: any;
+  /** stdlib */
+  export function WASI(...args: any[]): any;
 }
 
 declare module "worker_threads" {
