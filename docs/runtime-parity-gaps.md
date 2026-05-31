@@ -113,7 +113,7 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:cluster
 
-**Total APIs: 35** · Perry covers: 0 · Gap: 35
+**Total APIs: 35** · Perry covers: primary lifecycle subset · Gap: worker handle distribution and remaining events
 
 Selected highlights (full list in `runtime-parity.md`):
 
@@ -129,7 +129,9 @@ Selected highlights (full list in `runtime-parity.md`):
 - `cluster.fork([env])`
 - `cluster.disconnect([callback])`
 - `cluster.setupPrimary([settings])`
-- … and 23 more
+- `cluster.setupMaster([settings])`
+- worker handle identity and disconnect lifecycle
+- … and remaining Worker/listening events
 
 ### node:vm
 

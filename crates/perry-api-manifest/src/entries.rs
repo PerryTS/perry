@@ -2832,11 +2832,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // at the same address.
     method("querystring", "decode", false, None),
     method("querystring", "encode", false, None),
-    // node:cluster — shape-only surface. The fixture probes
-    // typeof properties + reads constants; we never actually fork.
-    // Methods are wired through `is_native_module_callable_export`
-    // (bound-method closure path) so `typeof cluster.fork === "function"`
-    // holds without us implementing a real fork.
+    // node:cluster — primary lifecycle surface. `setupPrimary` /
+    // `setupMaster`, `fork`, and `disconnect` route through the native
+    // module bound-method path; handle sharing/listening distribution is
+    // outside this manifest entry.
     method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
     method("cluster", "setupPrimary", false, None),

@@ -34,6 +34,7 @@ pub mod buffer;
 pub mod builtins;
 pub mod child_process;
 pub mod closure;
+pub mod cluster;
 pub mod collection_iter;
 pub mod collection_iter_object;
 pub mod color_parse;

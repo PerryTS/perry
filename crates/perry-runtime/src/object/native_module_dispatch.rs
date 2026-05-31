@@ -1400,6 +1400,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
         }
+        ("cluster", "setupPrimary") | ("cluster", "setupMaster") => {
+            crate::cluster::js_cluster_setup_primary(arg(0))
+        }
+        ("cluster", "fork") => crate::cluster::js_cluster_fork(arg(0)),
+        ("cluster", "disconnect") => crate::cluster::js_cluster_disconnect(arg(0)),
+        ("cluster", "Worker") => f64::from_bits(JSValue::undefined().bits()),
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which
