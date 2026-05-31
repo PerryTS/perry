@@ -132,26 +132,36 @@ pub(super) fn lower_perf_hooks_method(
                     &[(DOUBLE, &a0)],
                 )
             }
-            // #1478: performance.markResourceTiming(info) appends a
-            // PerformanceResourceTiming entry built from a
-            // PerformanceTimingInfo-shaped object. Perry doesn't track
-            // the resource-timing buffer yet — return undefined as a
-            // no-op so feature-detect-and-call (`typeof X === "function"`
-            // + invocation) doesn't crash. The accompanying read of
-            // performance.getEntriesByType("resource") still returns
-            // an empty array.
-            "markResourceTiming" => undef.clone(),
-            // #1335: performance.timerify(fn) wraps `fn` so each call
-            // records a 'function' timeline entry; the wrapper still
-            // returns fn's result. Perry doesn't track function
-            // timings, so the simplest spec-compatible behavior is to
-            // return `fn` itself — `typeof timerified === "function"`
-            // still holds, calling it produces the original result,
-            // and the only missing side effect is pushing an entry
-            // into the PerformanceObserver "function" type (which
-            // isn't in our supported entryTypes set today, so no
-            // observer would see it anyway).
-            "timerify" => lower_or_undef(ctx, 0)?,
+            "markResourceTiming" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                let a1 = lower_or_undef(ctx, 1)?;
+                let a2 = lower_or_undef(ctx, 2)?;
+                let a3 = lower_or_undef(ctx, 3)?;
+                let a4 = lower_or_undef(ctx, 4)?;
+                let a5 = lower_or_undef(ctx, 5)?;
+                let a6 = lower_or_undef(ctx, 6)?;
+                let a7 = lower_or_undef(ctx, 7)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_perf_mark_resource_timing",
+                    &[
+                        (DOUBLE, &a0),
+                        (DOUBLE, &a1),
+                        (DOUBLE, &a2),
+                        (DOUBLE, &a3),
+                        (DOUBLE, &a4),
+                        (DOUBLE, &a5),
+                        (DOUBLE, &a6),
+                        (DOUBLE, &a7),
+                    ],
+                )
+            }
+            "timerify" => {
+                let a0 = lower_or_undef(ctx, 0)?;
+                let a1 = lower_or_undef(ctx, 1)?;
+                ctx.block()
+                    .call(DOUBLE, "js_perf_timerify", &[(DOUBLE, &a0), (DOUBLE, &a1)])
+            }
             // #1336: perf_hooks.monitorEventLoopDelay(options?) returns
             // an IntervalHistogram; createHistogram(options?) returns a
             // RecordableHistogram. Both are stubs (every stat reads 0

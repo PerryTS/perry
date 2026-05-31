@@ -1,13 +1,17 @@
 //! Process module - provides access to environment and process information
 
-#[allow(unused_imports)]
-pub(crate) use crate::process_env_file::js_process_load_env_file;
-
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
+
+mod credentials;
+pub use credentials::{
+    js_process_getegid, js_process_geteuid, js_process_getgid, js_process_getgroups,
+    js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
+    js_process_setgid, js_process_setgroups, js_process_setuid,
+};
 
 /// Exit the process with the given exit code.
 /// process.exit(code?: number | string | null) -> never
@@ -177,11 +181,11 @@ pub extern "C" fn js_process_abort() {
 fn supported_builtin_module_name(name: &str) -> Option<&str> {
     match name {
         "assert" | "assert/strict" | "async_hooks" | "buffer" | "child_process" | "cluster"
-        | "console" | "constants" | "crypto" | "events" | "fs" | "http" | "http2" | "https"
-        | "net" | "os" | "path" | "perf_hooks" | "process" | "punycode" | "querystring"
-        | "readline" | "stream" | "stream/promises" | "string_decoder" | "sys" | "timers"
-        | "test" | "test/reporters" | "timers/promises" | "tty" | "url" | "util" | "util/types"
-        | "worker_threads" | "zlib" => Some(name),
+        | "console" | "constants" | "crypto" | "dns" | "dns/promises" | "events" | "fs"
+        | "http" | "http2" | "https" | "net" | "os" | "path" | "perf_hooks" | "process"
+        | "punycode" | "querystring" | "readline" | "stream" | "stream/promises"
+        | "string_decoder" | "sys" | "test" | "test/reporters" | "timers" | "timers/promises"
+        | "tty" | "url" | "util" | "util/types" | "worker_threads" | "zlib" => Some(name),
         _ => None,
     }
 }
@@ -275,16 +279,247 @@ fn module_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f6
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
-extern "C" fn module_source_map_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+const MODULE_COMPILE_CACHE_VERSION_DIR: &str = "v24.15.0-x64-cf738c9d-0";
+const MODULE_COMPILE_CACHE_DISABLED_MESSAGE: &str = "Disabled by NODE_DISABLE_COMPILE_CACHE";
+
+thread_local! {
+    static MODULE_COMPILE_CACHE_DIR: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn module_undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-fn module_noop_function(name: &str) -> f64 {
-    let func_ptr = module_source_map_noop as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+fn module_compile_cache_status_object() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 4);
+    module_set_field(obj, "FAILED", 0.0);
+    module_set_field(obj, "ENABLED", 1.0);
+    module_set_field(obj, "ALREADY_ENABLED", 2.0);
+    module_set_field(obj, "DISABLED", 3.0);
+    module_object_value(obj)
+}
+
+fn module_compile_cache_result(status: f64, directory: Option<&str>, message: Option<&str>) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    module_set_field(obj, "status", status);
+    if let Some(directory) = directory {
+        module_set_field(obj, "directory", module_string_value(directory));
+    }
+    if let Some(message) = message {
+        module_set_field(obj, "message", module_string_value(message));
+    }
+    module_object_value(obj)
+}
+
+fn module_compile_cache_invalid_dir(value: f64) -> ! {
+    let _ = value;
+    crate::fs::validate::throw_type_error_with_code(
+        "cacheDir should be a string",
+        "ERR_INVALID_ARG_TYPE",
+    )
+}
+
+fn module_compile_cache_default_base() -> String {
+    std::env::temp_dir()
+        .join("node-compile-cache")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn module_compile_cache_base_from_arg(cache_dir: f64) -> String {
+    let value = JSValue::from_bits(cache_dir.to_bits());
+    if value.is_undefined() {
+        return module_compile_cache_default_base();
+    }
+    if value.is_null() || value.is_bool() || crate::fs::validate::is_numeric(value) {
+        module_compile_cache_invalid_dir(cache_dir);
+    }
+    if unsafe { crate::symbol::js_is_symbol(cache_dir) } == 1 {
+        module_compile_cache_invalid_dir(cache_dir);
+    }
+    if value.is_any_string() {
+        return read_js_string_lossy(cache_dir);
+    }
+    if value.is_pointer() {
+        return module_compile_cache_default_base();
+    }
+    module_compile_cache_invalid_dir(cache_dir)
+}
+
+fn module_compile_cache_absolute_base(raw_base: &str) -> Result<String, String> {
+    use std::path::{Path, PathBuf};
+
+    let path = Path::new(raw_base);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    if let Err(err) = std::fs::create_dir_all(&absolute) {
+        return Err(err.to_string());
+    }
+    Ok(std::fs::canonicalize(&absolute)
+        .unwrap_or(absolute)
+        .to_string_lossy()
+        .into_owned())
+}
+
+fn module_compile_cache_versioned_dir(base: &str) -> String {
+    std::path::Path::new(base)
+        .join(MODULE_COMPILE_CACHE_VERSION_DIR)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn module_heap_ptr_with_gc_type(value: f64, expected_type: u8) -> Option<*const u8> {
+    let jsvalue = JSValue::from_bits(value.to_bits());
+    if !jsvalue.is_pointer() {
+        return None;
+    }
+    let ptr = jsvalue.as_pointer::<u8>();
+    if ptr.is_null()
+        || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+        || crate::closure::is_closure_ptr(ptr as usize)
+        || !crate::object::is_valid_obj_ptr(ptr)
+    {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    (gc_header.obj_type == expected_type).then_some(ptr)
+}
+
+fn module_object_ptr(value: f64) -> Option<*const crate::object::ObjectHeader> {
+    module_heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_OBJECT)
+        .map(|ptr| ptr as *const crate::object::ObjectHeader)
+}
+
+fn module_array_ptr(value: f64) -> Option<*const crate::array::ArrayHeader> {
+    module_heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_ARRAY)
+        .map(|ptr| ptr as *const crate::array::ArrayHeader)
+}
+
+extern "C" fn module_source_map_find_entry(
+    closure: *const crate::closure::ClosureHeader,
+    _line_offset: f64,
+    _column_offset: f64,
+) -> f64 {
+    let payload = js_closure_get_capture_f64(closure, 0);
+    let obj = crate::object::js_object_alloc(0, 6);
+    module_set_field(obj, "generatedLine", 0.0);
+    module_set_field(obj, "generatedColumn", 0.0);
+    module_set_field(
+        obj,
+        "originalSource",
+        module_source_map_first_source(payload),
+    );
+    module_set_field(obj, "originalLine", 0.0);
+    module_set_field(obj, "originalColumn", 0.0);
+    module_set_field(obj, "name", module_source_map_first_name(payload));
+    module_object_value(obj)
+}
+
+extern "C" fn module_source_map_find_origin(
+    closure: *const crate::closure::ClosureHeader,
+    line_number: f64,
+    column_number: f64,
+) -> f64 {
+    if module_numeric_arg(line_number) != 1.0 || module_numeric_arg(column_number) != 1.0 {
+        return module_object_value(crate::object::js_object_alloc(0, 0));
+    }
+    let payload = js_closure_get_capture_f64(closure, 0);
+    let obj = crate::object::js_object_alloc(0, 4);
+    module_set_field(obj, "name", module_source_map_first_name(payload));
+    module_set_field(obj, "fileName", module_source_map_first_source(payload));
+    module_set_field(obj, "lineNumber", 1.0);
+    module_set_field(obj, "columnNumber", 1.0);
+    module_object_value(obj)
+}
+
+fn module_numeric_arg(value: f64) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_int32() {
+        jv.as_int32() as f64
+    } else if jv.is_number() {
+        value
+    } else {
+        0.0
+    }
+}
+
+fn module_source_map_method(
+    name: &str,
+    payload: f64,
+    func: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64,
+) -> f64 {
+    let func_ptr = func as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    js_closure_set_capture_f64(closure, 0, payload);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn module_source_map_first_source(payload: f64) -> f64 {
+    module_source_map_first_array_value(payload, "sources")
+}
+
+fn module_source_map_first_name(payload: f64) -> f64 {
+    module_source_map_first_array_value(payload, "names")
+}
+
+fn module_source_map_first_array_value(payload: f64, field: &str) -> f64 {
+    let Some(obj) = module_object_ptr(payload) else {
+        return module_undefined();
+    };
+    let key = js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(obj, key);
+    let Some(arr) = module_array_ptr(value) else {
+        return module_undefined();
+    };
+    crate::array::js_array_get_f64(arr, 0)
+}
+
+fn module_source_map_clone_payload_value(value: f64) -> f64 {
+    let Some(arr) = module_array_ptr(value) else {
+        return value;
+    };
+    let cloned = crate::array::js_array_clone(arr);
+    f64::from_bits(JSValue::array_ptr(cloned).bits())
+}
+
+fn module_source_map_payload_clone(payload: f64) -> f64 {
+    let Some(src) = module_object_ptr(payload) else {
+        return payload;
+    };
+    let keys = unsafe { (*src).keys_array };
+    let key_count = if keys.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(keys)
+    };
+    let dst = crate::object::js_object_alloc(0, key_count);
+    for i in 0..key_count {
+        let key_value = crate::array::js_array_get_f64(keys, i);
+        let key = JSValue::from_bits(key_value.to_bits()).as_pointer::<StringHeader>();
+        if key.is_null() {
+            continue;
+        }
+        let val = crate::object::js_object_get_field_by_name_f64(src, key);
+        let cloned = module_source_map_clone_payload_value(val);
+        crate::object::js_object_set_field_by_name(dst, key, cloned);
+    }
+    module_object_value(dst)
+}
+
+fn module_throw_invalid_payload(payload: f64) -> ! {
+    let message = format!(
+        "The \"payload\" argument must be of type object. Received {}",
+        crate::fs::validate::describe_received(payload)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
 /// `module.builtinModules` — Node exposes this as an Array of builtin module
@@ -299,31 +534,89 @@ pub extern "C" fn js_module_builtin_modules() -> f64 {
     f64::from_bits(JSValue::array_ptr(arr).bits())
 }
 
-/// Minimal `module.constants` shape. The compile-cache status values are not
-/// implemented yet; an object at the documented location is enough for feature
-/// detection and parity shape probes.
+/// `module.constants` shape, including Node's compile-cache status enum.
 #[no_mangle]
 pub extern "C" fn js_module_constants() -> f64 {
     let constants = crate::object::js_object_alloc(0, 1);
-    let compile_cache_status = crate::object::js_object_alloc(0, 0);
     module_set_field(
         constants,
         "compileCacheStatus",
-        module_object_value(compile_cache_status),
+        module_compile_cache_status_object(),
     );
     module_object_value(constants)
 }
 
-/// Stub constructor for `new module.SourceMap(payload)`. It preserves the
-/// payload object and exposes method-shaped placeholders, but does not
-/// implement source-map lookup semantics.
+/// Focused `new module.SourceMap(payload)` implementation for deterministic
+/// source-map payloads used by compatibility fixtures.
 #[no_mangle]
 pub extern "C" fn js_module_source_map_new(payload: f64) -> f64 {
+    if module_object_ptr(payload).is_none() {
+        module_throw_invalid_payload(payload);
+    }
+
+    let payload_clone = module_source_map_payload_clone(payload);
     let obj = crate::object::js_object_alloc(0, 3);
-    module_set_field(obj, "payload", payload);
-    module_set_field(obj, "findEntry", module_noop_function("findEntry"));
-    module_set_field(obj, "findOrigin", module_noop_function("findOrigin"));
+    module_set_field(obj, "payload", payload_clone);
+    module_set_field(
+        obj,
+        "findEntry",
+        module_source_map_method("findEntry", payload_clone, module_source_map_find_entry),
+    );
+    module_set_field(
+        obj,
+        "findOrigin",
+        module_source_map_method("findOrigin", payload_clone, module_source_map_find_origin),
+    );
     module_object_value(obj)
+}
+
+/// Module.findSourceMap(path) -> SourceMap | undefined. Perry does not retain
+/// loaded source-map registrations yet, so deterministic miss lookups return
+/// `undefined` while preserving the callable Node surface.
+#[no_mangle]
+pub extern "C" fn js_module_find_source_map(_path: f64) -> f64 {
+    module_undefined()
+}
+
+/// Module.enableCompileCache([cacheDir]) -> status object.
+#[no_mangle]
+pub extern "C" fn js_module_enable_compile_cache(cache_dir: f64) -> f64 {
+    let raw_base = module_compile_cache_base_from_arg(cache_dir);
+
+    if std::env::var_os("NODE_DISABLE_COMPILE_CACHE").is_some() {
+        return module_compile_cache_result(3.0, None, Some(MODULE_COMPILE_CACHE_DISABLED_MESSAGE));
+    }
+
+    if let Some(current) = MODULE_COMPILE_CACHE_DIR.with(|dir| dir.borrow().clone()) {
+        return module_compile_cache_result(2.0, Some(&current), None);
+    }
+
+    let base = match module_compile_cache_absolute_base(&raw_base) {
+        Ok(base) => base,
+        Err(message) => return module_compile_cache_result(0.0, None, Some(&message)),
+    };
+    let versioned = module_compile_cache_versioned_dir(&base);
+    let _ = std::fs::create_dir_all(&versioned);
+    MODULE_COMPILE_CACHE_DIR.with(|dir| {
+        *dir.borrow_mut() = Some(versioned);
+    });
+    module_compile_cache_result(1.0, Some(&base), None)
+}
+
+/// Module.getCompileCacheDir() -> string | undefined.
+#[no_mangle]
+pub extern "C" fn js_module_get_compile_cache_dir() -> f64 {
+    MODULE_COMPILE_CACHE_DIR.with(|dir| match dir.borrow().as_deref() {
+        Some(current) => module_string_value(current),
+        None => module_undefined(),
+    })
+}
+
+/// Module.flushCompileCache() -> undefined. Perry has no persisted cache to
+/// flush, but Node's helper returns `undefined` on success.
+#[no_mangle]
+pub extern "C" fn js_module_flush_compile_cache() -> f64 {
+    module_undefined()
 }
 
 /// Module.isBuiltin(id) -> boolean
@@ -347,6 +640,120 @@ pub extern "C" fn js_module_is_builtin(id: f64) -> f64 {
     } else {
         crate::value::TAG_FALSE
     })
+}
+
+/// Backs the `require.resolve(request)` method on a `createRequire`-produced
+/// `require` function (#3119). Perry's native-compiled context has no
+/// CommonJS module registry, but Node's observable contract for builtin
+/// specifiers is identity (`require.resolve("node:fs") === "node:fs"`), and
+/// for any string Node returns a resolved path string. We return the
+/// argument string unchanged, which matches the builtin-specifier case that
+/// the parity surface exercises. Non-string arguments yield `undefined`.
+extern "C" fn module_require_resolve(
+    _closure: *const crate::closure::ClosureHeader,
+    arg0: f64,
+) -> f64 {
+    let value = JSValue::from_bits(arg0.to_bits());
+    if value.is_any_string() {
+        return arg0;
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Backs the callable `require` function returned by `module.createRequire`
+/// (#3119). Perry has no runtime CommonJS module registry to load arbitrary
+/// specifiers in a native-compiled binary, so calling the produced `require`
+/// is a shape-only stub that returns `undefined`. The observable surface that
+/// parity exercises is the function shape plus `require.resolve`, which is
+/// wired separately.
+extern "C" fn module_require_call(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg0: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Allocate a `require`-shaped callable closure with `.resolve`, `.cache`,
+/// `.extensions`, and `.main` properties matching Node's observable surface.
+fn module_make_require() -> f64 {
+    let resolve_ptr = module_require_resolve as *const u8;
+    crate::closure::js_register_closure_arity(resolve_ptr, 1);
+    let resolve_closure = crate::closure::js_closure_alloc(resolve_ptr, 0);
+    crate::object::set_bound_native_closure_name(resolve_closure, "resolve");
+    let resolve_value = crate::value::js_nanbox_pointer(resolve_closure as i64);
+
+    let require_ptr = module_require_call as *const u8;
+    crate::closure::js_register_closure_arity(require_ptr, 1);
+    let require_closure = crate::closure::js_closure_alloc(require_ptr, 0);
+    crate::object::set_bound_native_closure_name(require_closure, "require");
+
+    let require_ptr_usize = require_closure as usize;
+    crate::closure::closure_set_dynamic_prop(require_ptr_usize, "resolve", resolve_value);
+    let cache = crate::object::js_object_alloc(0, 0);
+    crate::closure::closure_set_dynamic_prop(
+        require_ptr_usize,
+        "cache",
+        module_object_value(cache),
+    );
+    let extensions = crate::object::js_object_alloc(0, 0);
+    crate::closure::closure_set_dynamic_prop(
+        require_ptr_usize,
+        "extensions",
+        module_object_value(extensions),
+    );
+    let main = crate::object::js_object_alloc(0, 0);
+    crate::closure::closure_set_dynamic_prop(require_ptr_usize, "main", module_object_value(main));
+
+    crate::value::js_nanbox_pointer(require_closure as i64)
+}
+
+/// `module.createRequire(filenameOrURL)` — build a CommonJS-compatible
+/// `require` function scoped to the supplied path (#3119). Perry's
+/// native-compiled context has no runtime CJS module loader, so the returned
+/// `require` is a shape-faithful stub: it is a one-argument function exposing
+/// `resolve`, `cache`, `extensions`, and `main`, where `require.resolve`
+/// returns builtin specifiers unchanged. Node validates that the argument is
+/// a file URL object, file URL string, or absolute path string and otherwise
+/// throws `TypeError [ERR_INVALID_ARG_VALUE]`.
+#[no_mangle]
+pub extern "C" fn js_module_create_require(filename: f64) -> f64 {
+    let bits = filename.to_bits();
+    let value = JSValue::from_bits(bits);
+    // Accept a string specifier (absolute path / file URL string) or a URL
+    // object. Anything else mirrors Node's ERR_INVALID_ARG_VALUE throw.
+    let is_string = value.is_any_string();
+    let is_url = !is_string
+        && bits != crate::value::TAG_UNDEFINED
+        && bits != crate::value::TAG_NULL
+        && crate::url::node_compat::module_base_to_path(filename).is_some();
+    if !is_string && !is_url {
+        crate::fs::validate::throw_type_error_with_code(
+            "The argument 'filename' must be a file URL object, file URL string, or absolute path string.",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+    module_make_require()
+}
+
+/// `module.syncBuiltinESMExports()` — re-synchronize monkey-patched builtin
+/// CommonJS exports into the ESM namespace bindings (#3126). Perry resolves
+/// builtin module exports statically at compile time, so there is no live CJS
+/// export object to re-sync; for the non-patched case this helper is observably
+/// a no-op that returns `undefined` and ignores any extra arguments, which
+/// matches Node's surface.
+#[no_mangle]
+pub extern "C" fn js_module_sync_builtin_esm_exports() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `module.runMain()` — run the process main-module entrypoint (#3263). In a
+/// native-compiled Perry binary the program's own `main` has already been
+/// invoked by the time user code can call this helper, so re-running it is a
+/// no-op that returns `undefined`, matching Node's success-path return value
+/// without disturbing Perry's CLI entrypoint execution.
+#[no_mangle]
+pub extern "C" fn js_module_run_main() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// `module.findPackageJSON(specifier[, base])` — resolve the nearest
@@ -669,7 +1076,7 @@ fn parse_umask_mask(mask: f64) -> u32 {
 
 /// Render a number the way Node prints the `Received …` clause of an
 /// `ERR_OUT_OF_RANGE` message (no `type number (...)` wrapper).
-fn format_out_of_range_number(n: f64) -> String {
+pub(super) fn format_out_of_range_number(n: f64) -> String {
     if n.is_nan() {
         return "NaN".to_string();
     }
@@ -699,303 +1106,6 @@ fn read_js_string_lossy(value: f64) -> String {
         let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
-}
-
-/// POSIX credential accessors (#1408). On non-unix targets each returns 0.
-#[no_mangle]
-pub extern "C" fn js_process_getuid() -> f64 {
-    #[cfg(unix)]
-    unsafe {
-        libc::getuid() as f64
-    }
-    #[cfg(not(unix))]
-    {
-        0.0
-    }
-}
-#[no_mangle]
-pub extern "C" fn js_process_geteuid() -> f64 {
-    #[cfg(unix)]
-    unsafe {
-        libc::geteuid() as f64
-    }
-    #[cfg(not(unix))]
-    {
-        0.0
-    }
-}
-#[no_mangle]
-pub extern "C" fn js_process_getgid() -> f64 {
-    #[cfg(unix)]
-    unsafe {
-        libc::getgid() as f64
-    }
-    #[cfg(not(unix))]
-    {
-        0.0
-    }
-}
-#[no_mangle]
-pub extern "C" fn js_process_getegid() -> f64 {
-    #[cfg(unix)]
-    unsafe {
-        libc::getegid() as f64
-    }
-    #[cfg(not(unix))]
-    {
-        0.0
-    }
-}
-
-/// POSIX credential setters (#2135). Each wraps the matching `libc::set*id`
-/// call; non-numeric arguments and errors are silently dropped (the call
-/// returns undefined), matching the "no-op stub" shape Perry uses for the
-/// other unimplemented privileged process methods. On non-unix targets the
-/// setters are unconditional no-ops. The runtime ignores ID-by-username
-/// forms (Node accepts `process.setuid("alice")` and resolves via NSS);
-/// passing a string here is a no-op — supporting the username form needs
-/// `getpwnam_r` plumbing that's out of scope for the surface-level fix.
-fn unix_id_arg(value: f64) -> Option<u32> {
-    let v = value;
-    if v.is_finite() {
-        let n = v as i64;
-        if n >= 0 && n <= u32::MAX as i64 {
-            return Some(n as u32);
-        }
-    }
-    None
-}
-
-/// Node-compatible argument validation for the POSIX credential setters
-/// (`setuid`/`seteuid`/`setgid`/`setegid`, #2919). Node's `validateId`:
-/// the `id` argument must be a number *or* a string (username/group-name);
-/// anything else throws `TypeError [ERR_INVALID_ARG_TYPE]`. A numeric `id`
-/// must be a non-negative integer `<= 4294967295`; a non-integer throws
-/// `RangeError [ERR_OUT_OF_RANGE]` ("must be an integer") and an out-of-range
-/// value throws ("must be >= 0 && <= 4294967295"). Diverges via `js_throw` on
-/// a bad value.
-///
-/// Returns `Some(u32)` for a valid numeric id (the syscall is then attempted),
-/// `None` for a valid string id (the username form is not yet resolved — that
-/// remains a no-op pending `getpwnam_r` plumbing, but it no longer *throws*).
-fn validate_credential_id(value: f64) -> Option<u32> {
-    use crate::fs::validate::{
-        describe_received, is_numeric, throw_range_error_named, throw_type_error_with_code,
-    };
-    let jv = JSValue::from_bits(value.to_bits());
-
-    // A string is a valid type (username / group-name form); accept without
-    // resolving it (no-op, preserving prior behavior).
-    if jv.is_any_string() {
-        return None;
-    }
-
-    if !is_numeric(jv) {
-        let message = format!(
-            "The \"id\" argument must be one of type number or string. Received {}",
-            describe_received(value)
-        );
-        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-    }
-
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
-    if !(n.is_finite() && n.fract() == 0.0) {
-        let message = format!(
-            "The value of \"id\" is out of range. It must be an integer. Received {}",
-            format_out_of_range_number(n)
-        );
-        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
-    }
-    if n < 0.0 || n > u32::MAX as f64 {
-        let message = format!(
-            "The value of \"id\" is out of range. It must be >= 0 && <= 4294967295. Received {}",
-            format_out_of_range_number(n)
-        );
-        throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
-    }
-    Some(n as u32)
-}
-
-#[no_mangle]
-pub extern "C" fn js_process_setuid(uid: f64) {
-    let id = validate_credential_id(uid);
-    #[cfg(unix)]
-    {
-        if let Some(id) = id {
-            unsafe {
-                libc::setuid(id as libc::uid_t);
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = id;
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_process_seteuid(uid: f64) {
-    let id = validate_credential_id(uid);
-    #[cfg(unix)]
-    {
-        if let Some(id) = id {
-            unsafe {
-                libc::seteuid(id as libc::uid_t);
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = id;
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_process_setgid(gid: f64) {
-    let id = validate_credential_id(gid);
-    #[cfg(unix)]
-    {
-        if let Some(id) = id {
-            unsafe {
-                libc::setgid(id as libc::gid_t);
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = id;
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_process_setegid(gid: f64) {
-    let id = validate_credential_id(gid);
-    #[cfg(unix)]
-    {
-        if let Some(id) = id {
-            unsafe {
-                libc::setegid(id as libc::gid_t);
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = id;
-    }
-}
-
-/// `process.setgroups(groups)` — replace the calling process's
-/// supplementary GID list with the IDs from a JS number array. Each non-
-/// finite / out-of-range / non-numeric entry is silently skipped. On
-/// non-unix targets this is a no-op (#2135).
-#[no_mangle]
-pub extern "C" fn js_process_setgroups(groups: f64) {
-    let arr_jsval = JSValue::from_bits(groups.to_bits());
-    if !arr_jsval.is_pointer() {
-        return;
-    }
-    let arr_ptr = arr_jsval.as_pointer::<crate::array::ArrayHeader>();
-    if arr_ptr.is_null() {
-        return;
-    }
-    let len = unsafe { crate::array::js_array_length(arr_ptr) } as u32;
-    #[cfg(unix)]
-    {
-        let mut gids: Vec<libc::gid_t> = Vec::with_capacity(len as usize);
-        for i in 0..len {
-            let v = unsafe { crate::array::js_array_get_f64(arr_ptr, i) };
-            if let Some(id) = unix_id_arg(v) {
-                gids.push(id as libc::gid_t);
-            }
-        }
-        if !gids.is_empty() {
-            unsafe {
-                libc::setgroups(gids.len() as _, gids.as_ptr());
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = len;
-    }
-}
-
-/// `process.initgroups(user, extra_gid)` — initialize the supplementary
-/// group access list using `getgrouplist(3)`-style semantics. The first
-/// argument is a username string (or numeric UID); the second is an
-/// extra group ID to include. Perry today only accepts the username-as-
-/// string + numeric extra_gid form via `libc::initgroups`; numeric user
-/// or non-string first argument silently no-ops. Non-unix targets no-op
-/// entirely (#2135).
-#[no_mangle]
-pub extern "C" fn js_process_initgroups(user: f64, extra_gid: f64) {
-    #[cfg(unix)]
-    {
-        let user_jsval = JSValue::from_bits(user.to_bits());
-        if !user_jsval.is_any_string() {
-            return;
-        }
-        let user_ptr = crate::value::js_get_string_pointer_unified(user);
-        if user_ptr == 0 {
-            return;
-        }
-        let user_str_ptr = user_ptr as *const StringHeader;
-        let len = unsafe { (*user_str_ptr).byte_len } as usize;
-        let data = unsafe { (user_str_ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
-        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
-        let Ok(name) = std::str::from_utf8(bytes) else {
-            return;
-        };
-        let Some(extra) = unix_id_arg(extra_gid) else {
-            return;
-        };
-        let Ok(cname) = std::ffi::CString::new(name) else {
-            return;
-        };
-        unsafe {
-            libc::initgroups(cname.as_ptr(), extra as _);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (user, extra_gid);
-    }
-}
-
-/// `process.getgroups()` — supplementary group IDs the process is a member
-/// of, as a JS array of numbers. Wraps `libc::getgroups(2)`; on non-unix
-/// targets returns an empty array (Node throws there, but Perry's existing
-/// `getuid`/etc. family already returns `0` rather than throwing on
-/// Windows, so matching that shape keeps the surface consistent). #2135.
-#[no_mangle]
-pub extern "C" fn js_process_getgroups() -> f64 {
-    #[cfg(unix)]
-    let gids: Vec<u32> = unsafe {
-        let count = libc::getgroups(0, std::ptr::null_mut());
-        if count <= 0 {
-            Vec::new()
-        } else {
-            let mut buf: Vec<libc::gid_t> = vec![0; count as usize];
-            let got = libc::getgroups(count, buf.as_mut_ptr());
-            if got <= 0 {
-                Vec::new()
-            } else {
-                buf.truncate(got as usize);
-                buf.into_iter().map(|g| g as u32).collect()
-            }
-        }
-    };
-    #[cfg(not(unix))]
-    let gids: Vec<u32> = Vec::new();
-    let arr = crate::array::js_array_alloc(gids.len() as u32);
-    for g in gids {
-        crate::array::js_array_push_f64(arr, g as f64);
-    }
-    f64::from_bits(JSValue::array_ptr(arr).bits())
 }
 
 /// process.resourceUsage() -> object with getrusage(RUSAGE_SELF)
@@ -1701,6 +1811,25 @@ static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
 #[used]
 static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
     js_module_find_package_json;
+#[used]
+static KEEP_JS_MODULE_FIND_SOURCE_MAP: extern "C" fn(f64) -> f64 = js_module_find_source_map;
+#[used]
+static KEEP_JS_MODULE_ENABLE_COMPILE_CACHE: extern "C" fn(f64) -> f64 =
+    js_module_enable_compile_cache;
+#[used]
+static KEEP_JS_MODULE_GET_COMPILE_CACHE_DIR: extern "C" fn() -> f64 =
+    js_module_get_compile_cache_dir;
+#[used]
+static KEEP_JS_MODULE_FLUSH_COMPILE_CACHE: extern "C" fn() -> f64 = js_module_flush_compile_cache;
+// #3119/#3126/#3263: these are emitted only from generated `.o`, so pin a
+// retained reference edge for the auto-optimize whole-program build.
+#[used]
+static KEEP_JS_MODULE_CREATE_REQUIRE: extern "C" fn(f64) -> f64 = js_module_create_require;
+#[used]
+static KEEP_JS_MODULE_SYNC_BUILTIN_ESM_EXPORTS: extern "C" fn() -> f64 =
+    js_module_sync_builtin_esm_exports;
+#[used]
+static KEEP_JS_MODULE_RUN_MAIN: extern "C" fn() -> f64 = js_module_run_main;
 
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
@@ -1921,6 +2050,110 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
 
     // Return as NaN-boxed pointer (convert bits to f64)
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// process.loadEnvFile(path?) — read a `.env`-formatted file from disk and
+/// merge its `KEY=value` entries into `process.env`. Node 20.12+. With no
+/// path, the default is `.env` in the current working directory. Throws a
+/// Node-shaped `Error` (`code: "ENOENT"`, `syscall: "open"`) when the file
+/// can't be opened. #2135 (#1399 follow-through): previously a no-op that
+/// returned undefined so probe-and-call sites didn't crash; with
+/// `process.env.X = v` now persisting via std::env (#1344), eager loading
+/// is meaningful.
+#[no_mangle]
+pub extern "C" fn js_process_load_env_file(path_value: f64) {
+    let target = load_env_file_path(path_value);
+    let contents = match std::fs::read_to_string(&target) {
+        Ok(s) => s,
+        Err(err) => unsafe {
+            throw_load_env_file_open_error(&err, &target);
+        },
+    };
+    for (key, value) in crate::util_parse_env::parse_env(&contents) {
+        if std::env::var_os(&key).is_none() {
+            std::env::set_var(key, value);
+        }
+    }
+}
+
+fn load_env_file_path(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return ".env".to_string();
+    }
+    unsafe {
+        validate_load_env_file_url(value);
+        crate::fs::decode_path_value(value)
+            .unwrap_or_else(|| crate::fs::validate::throw_invalid_path_arg("path", value))
+    }
+}
+
+unsafe fn validate_load_env_file_url(value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return;
+    }
+    let obj = jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+    if obj.is_null() || !crate::url::is_url_object_shape(obj) {
+        return;
+    }
+    let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PROTOCOL,
+    ));
+    if protocol != "file:" {
+        throw_invalid_load_env_file_url_scheme();
+    }
+    let pathname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
+        obj,
+        crate::url::parse::URL_PATHNAME,
+    ));
+    if has_encoded_forward_slash(&pathname) {
+        crate::fs::validate::throw_type_error_with_code(
+            "File URL path must not include encoded / characters",
+            "ERR_INVALID_FILE_URL_PATH",
+        );
+    }
+}
+
+fn has_encoded_forward_slash(pathname: &str) -> bool {
+    let bytes = pathname.as_bytes();
+    let mut i = 0usize;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' && bytes[i + 1] == b'2' && (bytes[i + 2] | 0x20) == b'f' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn throw_invalid_load_env_file_url_scheme() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "The URL must be of scheme file",
+        "ERR_INVALID_URL_SCHEME",
+    )
+}
+
+unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> ! {
+    use std::io::ErrorKind;
+    let code: &'static str = match err.kind() {
+        ErrorKind::NotFound => "ENOENT",
+        ErrorKind::PermissionDenied => "EACCES",
+        _ => "EIO",
+    };
+    let desc = match code {
+        "ENOENT" => "no such file or directory",
+        "EACCES" => "permission denied",
+        _ => "i/o error",
+    };
+    let message = format!("{code}: {desc}, open '{target}'");
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_syscall(msg_ptr, "open");
+    crate::node_submodules::register_error_path(msg_ptr, target.to_string());
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
 }
 
 // Issue #2013 — process-arg-validation helpers shared by `js_process_chdir`

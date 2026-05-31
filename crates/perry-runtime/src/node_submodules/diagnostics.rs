@@ -456,7 +456,9 @@ pub fn error_path_for_message(message_ptr: *const StringHeader) -> Option<String
     ERROR_MESSAGE_PATHS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
 }
 
-/// Attach a Node-style `dest` string to two-path syscall errors.
+/// Attach a Node-style `dest` string to an Error keyed by its message
+/// StringHeader. Node sets `dest` on two-path fs errors (rename/copyFile/
+/// link/symlink) alongside `path`. Read back from the `.dest` getter.
 pub fn register_error_dest(message_ptr: *const StringHeader, dest: String) {
     if message_ptr.is_null() {
         return;

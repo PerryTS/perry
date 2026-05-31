@@ -83,6 +83,29 @@ pub(super) fn try_global_builtins(
                     return Ok(Ok(Expr::Bool(false)));
                 }
             }
+            "Object"
+                if ctx.lookup_local("Object").is_none()
+                    && ctx.lookup_func("Object").is_none()
+                    && ctx.lookup_imported_func("Object").is_none() =>
+            {
+                // #3149: `Object(x)` called as a plain function (not `new`).
+                // ECMAScript §20.1.1.1: `Object()`/`Object(undefined)`/
+                // `Object(null)` yield a fresh `{}`; an existing object/array
+                // passes through; primitives yield an object placeholder (so
+                // `typeof Object(5) === "object"`). Pre-fix the bare call fell
+                // through to the generic dispatcher and returned `undefined`
+                // (the `new Object(...)` form already worked via
+                // `js_new_function_construct`). Route through `ObjectCoerce`,
+                // whose runtime (`js_object_coerce`) implements all cases.
+                // Shadow-safe: only fires when no local / user fn / imported
+                // fn named `Object` is in scope.
+                let arg = if args.is_empty() {
+                    Expr::Undefined
+                } else {
+                    args.remove(0)
+                };
+                return Ok(Ok(Expr::ObjectCoerce(Box::new(arg))));
+            }
             "Array"
                 if ctx.lookup_local("Array").is_none()
                     && ctx.lookup_func("Array").is_none()

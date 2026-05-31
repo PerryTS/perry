@@ -4,18 +4,18 @@
 // message is an implementation detail, not part of the observable contract.
 import { AsyncLocalStorage } from "node:async_hooks";
 
-const als = new AsyncLocalStorage<string>();
+const als = new AsyncLocalStorage();
 
-function probe(method: string, label: string, fn: () => unknown) {
+function probe(method, label, fn) {
   try {
     fn();
     console.log(method, label, "no-throw");
-  } catch (err: any) {
+  } catch (err) {
     console.log(method, label, err.name);
   }
 }
 
-const bad: [string, unknown][] = [
+const bad = [
   ["undefined", undefined],
   ["null", null],
   ["number", 0],
@@ -25,17 +25,34 @@ const bad: [string, unknown][] = [
   ["array", []],
 ];
 for (const [label, value] of bad) {
-  probe("run", label, () => als.run("store", value as any));
+  probe("run", label, () => als.run("store", value));
 }
 for (const [label, value] of bad) {
-  probe("exit", label, () => als.exit(value as any));
+  probe("exit", label, () => als.exit(value));
 }
 
-// Valid callbacks still run, with the expected store visibility.
-const runOut = als.run("S", () => als.getStore());
+// Issue #3093 - valid callbacks receive forwarded rest arguments while store
+// visibility and exit restoration stay intact.
+const runOut = als.run(
+  "S",
+  function (...args) {
+    console.log("valid run args:", JSON.stringify(args));
+    return als.getStore();
+  },
+  "a",
+  "b",
+  "c",
+);
 console.log("valid run store:", runOut);
 
 als.enterWith("OUTER");
-const exitOut = als.exit(() => als.getStore());
+const exitOut = als.exit(
+  function (...args) {
+    console.log("valid exit args:", JSON.stringify(args));
+    return als.getStore();
+  },
+  "x",
+  "y",
+);
 console.log("valid exit store:", exitOut);
 console.log("store after exit:", als.getStore());
