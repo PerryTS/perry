@@ -188,8 +188,10 @@ pub(crate) extern "C" fn thunk_fs_promises_rename(
     from: f64,
     to: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_rename_sync(from, to);
-    promise_undefined()
+    match unsafe { crate::fs::fs_rename_result(from, to) } {
+        Ok(()) => promise_undefined(),
+        Err(err_val) => promise_rejected(err_val),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_copyFile(
@@ -198,8 +200,10 @@ pub(crate) extern "C" fn thunk_fs_promises_copyFile(
     to: f64,
     flags: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_copy_file_sync_flags(from, to, flags);
-    promise_undefined()
+    match unsafe { crate::fs::fs_copy_file_result(from, to, flags) } {
+        Ok(()) => promise_undefined(),
+        Err(err_val) => promise_rejected(err_val),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_cp(
@@ -246,8 +250,10 @@ pub(crate) extern "C" fn thunk_fs_promises_link(
     from: f64,
     to: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_link_sync(from, to);
-    promise_undefined()
+    match unsafe { crate::fs::fs_link_result(from, to) } {
+        Ok(()) => promise_undefined(),
+        Err(err_val) => promise_rejected(err_val),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_symlink(
@@ -256,8 +262,10 @@ pub(crate) extern "C" fn thunk_fs_promises_symlink(
     path: f64,
     _type: f64,
 ) -> f64 {
-    let _ = crate::fs::js_fs_symlink_sync(target, path);
-    promise_undefined()
+    match unsafe { crate::fs::fs_symlink_result(target, path) } {
+        Ok(()) => promise_undefined(),
+        Err(err_val) => promise_rejected(err_val),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_readlink(
@@ -265,7 +273,10 @@ pub(crate) extern "C" fn thunk_fs_promises_readlink(
     path: f64,
     options: f64,
 ) -> f64 {
-    promise_value(crate::fs::js_fs_readlink_dispatch(path, options))
+    match unsafe { crate::fs::fs_readlink_value_result(path, options) } {
+        Ok(value) => promise_value(value),
+        Err(err_val) => promise_rejected(err_val),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_realpath(

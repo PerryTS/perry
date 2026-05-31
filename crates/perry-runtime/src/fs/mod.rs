@@ -934,21 +934,26 @@ fn open_file_for_write_flag(path: &str, flag: &str) -> std::io::Result<fs::File>
 /// `fs.renameSync(from, to)` — returns 1 on success, 0 on failure.
 #[no_mangle]
 pub extern "C" fn js_fs_rename_sync(from_value: f64, to_value: f64) -> i32 {
+    match unsafe { fs_rename_result(from_value, to_value) } {
+        Ok(()) => 1,
+        Err(err_val) => crate::exception::js_throw(err_val),
+    }
+}
+
+pub(crate) unsafe fn fs_rename_result(from_value: f64, to_value: f64) -> Result<(), f64> {
     crate::fs::validate::validate_path("oldPath", from_value);
     crate::fs::validate::validate_path("newPath", to_value);
-    unsafe {
-        let from = match decode_path_value(from_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let to = match decode_path_value(to_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        match fs::rename(from, to) {
-            Ok(_) => 1,
-            Err(_) => 0,
-        }
+    let from = match decode_path_value(from_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("rename")),
+    };
+    let to = match decode_path_value(to_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("rename")),
+    };
+    match fs::rename(&from, &to) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(&err, "rename", &from, &to)),
     }
 }
 
@@ -968,38 +973,39 @@ pub extern "C" fn js_fs_copy_file_sync_flags(
     to_value: f64,
     flags_value: f64,
 ) -> i32 {
+    match unsafe { fs_copy_file_result(from_value, to_value, flags_value) } {
+        Ok(()) => 1,
+        Err(err_val) => crate::exception::js_throw(err_val),
+    }
+}
+
+pub(crate) unsafe fn fs_copy_file_result(
+    from_value: f64,
+    to_value: f64,
+    flags_value: f64,
+) -> Result<(), f64> {
     crate::fs::validate::validate_path("src", from_value);
     crate::fs::validate::validate_path("dest", to_value);
     let flags_jv = crate::value::JSValue::from_bits(flags_value.to_bits());
     if !flags_jv.is_undefined() {
         crate::fs::validate::validate_int32(flags_value, "mode", 0, 7);
     }
-    unsafe {
-        let from = match decode_path_value(from_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let to = match decode_path_value(to_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let excl = flags_value.is_finite() && (flags_value as i64 & 1) == 1;
-        if excl && Path::new(&to).exists() {
-            // Node throws `EEXIST: file already exists, copyfile '<src>' -> '<dst>'`.
-            // Surface the same via `js_throw` so user `try/catch` fires; the
-            // existing code path silently returned 0 which left callers
-            // believing the copy was a no-op.
-            let err = std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "destination already exists",
-            );
-            let err_val = build_fs_error_value(&err, "copyfile", &to);
-            crate::exception::js_throw(err_val);
-        }
-        match fs::copy(from, to) {
-            Ok(_) => 1,
-            Err(_) => 0,
-        }
+    let from = match decode_path_value(from_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("copyfile")),
+    };
+    let to = match decode_path_value(to_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("copyfile")),
+    };
+    let excl = flags_value.is_finite() && (flags_value as i64 & 1) == 1;
+    if excl && Path::new(&to).exists() {
+        let err = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "file already exists");
+        return Err(build_fs_error_value_with_dest(&err, "copyfile", &from, &to));
+    }
+    match fs::copy(&from, &to) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(&err, "copyfile", &from, &to)),
     }
 }
 
@@ -1162,27 +1168,33 @@ pub extern "C" fn js_fs_mkdtemp_dispatch(prefix_value: f64, options_value: f64) 
     f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
 }
 
-fn readlink_bytes(path_value: f64) -> Vec<u8> {
-    unsafe {
-        let path_str = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return Vec::new(),
-        };
-        match fs::read_link(path_str) {
-            Ok(p) => p.to_string_lossy().as_bytes().to_vec(),
-            Err(_) => Vec::new(),
-        }
+unsafe fn readlink_bytes_result(path_value: f64) -> Result<Vec<u8>, f64> {
+    validate::validate_path("path", path_value);
+    let path_str = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("readlink")),
+    };
+    match fs::read_link(&path_str) {
+        Ok(p) => Ok(p.to_string_lossy().as_bytes().to_vec()),
+        Err(err) => Err(build_fs_error_value(&err, "readlink", &path_str)),
     }
 }
 
-fn readlink_value(path_value: f64, options_value: f64) -> f64 {
-    let bytes = readlink_bytes(path_value);
+fn readlink_value_from_bytes(bytes: &[u8], options_value: f64) -> f64 {
     if fs_encoding_option(options_value).as_deref() == Some("buffer") {
-        return buffer_value_from_bytes(&bytes);
+        return buffer_value_from_bytes(bytes);
     }
     let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
-    let s = encoded_string_ptr(&bytes, &enc);
+    let s = encoded_string_ptr(bytes, &enc);
     f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
+}
+
+pub(crate) unsafe fn fs_readlink_value_result(
+    path_value: f64,
+    options_value: f64,
+) -> Result<f64, f64> {
+    let bytes = readlink_bytes_result(path_value)?;
+    Ok(readlink_value_from_bytes(&bytes, options_value))
 }
 
 /// `fs.rmdirSync(path)` — removes an empty directory. Returns i32 status.
@@ -1560,51 +1572,61 @@ pub extern "C" fn js_fs_futimes_sync(fd_value: f64, atime_value: f64, mtime_valu
 /// `fs.linkSync(existingPath, newPath)` — create a hard link.
 #[no_mangle]
 pub extern "C" fn js_fs_link_sync(from_value: f64, to_value: f64) -> i32 {
-    unsafe {
-        let from = match decode_path_value(from_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let to = match decode_path_value(to_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        if fs::hard_link(from, to).is_ok() {
-            1
-        } else {
-            0
-        }
+    match unsafe { fs_link_result(from_value, to_value) } {
+        Ok(()) => 1,
+        Err(err_val) => crate::exception::js_throw(err_val),
+    }
+}
+
+pub(crate) unsafe fn fs_link_result(from_value: f64, to_value: f64) -> Result<(), f64> {
+    validate::validate_path("existingPath", from_value);
+    validate::validate_path("newPath", to_value);
+    let from = match decode_path_value(from_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("link")),
+    };
+    let to = match decode_path_value(to_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("link")),
+    };
+    match fs::hard_link(&from, &to) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(&err, "link", &from, &to)),
     }
 }
 
 /// `fs.symlinkSync(target, path)` — create a symbolic link.
 #[no_mangle]
 pub extern "C" fn js_fs_symlink_sync(target_value: f64, path_value: f64) -> i32 {
-    unsafe {
-        let target = match decode_path_value(target_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let path = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-        #[cfg(unix)]
-        {
-            if std::os::unix::fs::symlink(target, path).is_ok() {
-                1
-            } else {
-                0
-            }
-        }
-        #[cfg(windows)]
-        {
-            if std::os::windows::fs::symlink_file(target, path).is_ok() {
-                1
-            } else {
-                0
-            }
-        }
+    match unsafe { fs_symlink_result(target_value, path_value) } {
+        Ok(()) => 1,
+        Err(err_val) => crate::exception::js_throw(err_val),
+    }
+}
+
+pub(crate) unsafe fn fs_symlink_result(target_value: f64, path_value: f64) -> Result<(), f64> {
+    validate::validate_path("target", target_value);
+    validate::validate_path("path", path_value);
+    let target = match decode_path_value(target_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("symlink")),
+    };
+    let path = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => return Err(build_invalid_path_error("symlink")),
+    };
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(&target, &path);
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_file(&target, &path);
+    #[cfg(not(any(unix, windows)))]
+    let result: std::io::Result<()> = Ok(());
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(err) => Err(build_fs_error_value_with_dest(
+            &err, "symlink", &target, &path,
+        )),
     }
 }
 
@@ -1616,16 +1638,21 @@ pub extern "C" fn js_fs_readlink_sync(path_value: f64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_readlink_sync_options(path_value: f64, options_value: f64) -> i64 {
-    validate::validate_path("path", path_value);
-    let bytes = readlink_bytes(path_value);
-    let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
-    encoded_string_ptr(&bytes, &enc) as i64
+    match unsafe { readlink_bytes_result(path_value) } {
+        Ok(bytes) => {
+            let enc = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
+            encoded_string_ptr(&bytes, &enc) as i64
+        }
+        Err(err_val) => crate::exception::js_throw(err_val),
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_fs_readlink_dispatch(path_value: f64, options_value: f64) -> f64 {
-    validate::validate_path("path", path_value);
-    readlink_value(path_value, options_value)
+    match unsafe { fs_readlink_value_result(path_value, options_value) } {
+        Ok(value) => value,
+        Err(err_val) => crate::exception::js_throw(err_val),
+    }
 }
 
 fn flag_string(value: f64) -> String {
@@ -1758,6 +1785,28 @@ unsafe fn build_fs_error_value(err: &std::io::Error, syscall: &'static str, path
     crate::node_submodules::register_error_syscall(msg_ptr, syscall);
     crate::node_submodules::register_error_path(msg_ptr, path.to_string());
     crate::value::js_nanbox_pointer(err_ptr as i64)
+}
+
+unsafe fn build_fs_error_value_with_dest(
+    err: &std::io::Error,
+    syscall: &'static str,
+    path: &str,
+    dest: &str,
+) -> f64 {
+    let code = io_error_code(err);
+    let msg = format!("{}: {}, {} '{}' -> '{}'", code, err, syscall, path, dest);
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
+    crate::node_submodules::register_error_code_pub(msg_ptr, code);
+    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
+    crate::node_submodules::register_error_path(msg_ptr, path.to_string());
+    crate::node_submodules::register_error_dest(msg_ptr, dest.to_string());
+    crate::value::js_nanbox_pointer(err_ptr as i64)
+}
+
+unsafe fn build_invalid_path_error(syscall: &'static str) -> f64 {
+    let err = std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid path");
+    build_fs_error_value(&err, syscall, "")
 }
 
 unsafe fn build_fs_error_value_no_path(err: &std::io::Error, syscall: &'static str) -> f64 {

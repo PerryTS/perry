@@ -371,6 +371,8 @@ thread_local! {
         RefCell::new(HashMap::new());
     pub(crate) static ERROR_MESSAGE_PATHS: RefCell<HashMap<usize, String>> =
         RefCell::new(HashMap::new());
+    pub(crate) static ERROR_MESSAGE_DESTS: RefCell<HashMap<usize, String>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Attach a Node-style `syscall` string to an Error keyed by its message
@@ -408,6 +410,23 @@ pub fn error_path_for_message(message_ptr: *const StringHeader) -> Option<String
         return None;
     }
     ERROR_MESSAGE_PATHS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
+}
+
+/// Attach a Node-style `dest` string to two-path syscall errors.
+pub fn register_error_dest(message_ptr: *const StringHeader, dest: String) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_DESTS.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, dest);
+    });
+}
+
+pub fn error_dest_for_message(message_ptr: *const StringHeader) -> Option<String> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_DESTS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
 }
 
 /// A user-assigned own property value on an `Error` object. String values are
