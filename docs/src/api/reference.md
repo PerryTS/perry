@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2062 entries across 95 modules.
+Total: 2110 entries across 97 modules.
 
 ## Modules
 
@@ -38,6 +38,7 @@ Total: 2062 entries across 95 modules.
 - [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`fs`](#fs)
+- [`fs/promises`](#fs-promises)
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
@@ -80,6 +81,7 @@ Total: 2062 entries across 95 modules.
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
+- [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
@@ -1164,6 +1166,42 @@ Total: 2062 entries across 95 modules.
 
 - `constants`
 - `promises`
+
+## `fs/promises`
+
+### Methods
+
+- `access` — module
+- `appendFile` — module
+- `chmod` — module
+- `chown` — module
+- `copyFile` — module
+- `cp` — module
+- `glob` — module
+- `lchmod` — module
+- `lchown` — module
+- `link` — module
+- `lstat` — module
+- `lutimes` — module
+- `mkdir` — module
+- `mkdtemp` — module
+- `open` — module
+- `opendir` — module
+- `readFile` — module
+- `readdir` — module
+- `readlink` — module
+- `realpath` — module
+- `rename` — module
+- `rm` — module
+- `rmdir` — module
+- `stat` — module
+- `statfs` — module
+- `symlink` — module
+- `truncate` — module
+- `unlink` — module
+- `utimes` — module
+- `watch` — module
+- `writeFile` — module
 
 ## `http`
 
@@ -2295,9 +2333,34 @@ Total: 2062 entries across 95 modules.
 
 ### Methods
 
+- `clearLine` — module
+- `clearScreenDown` — module
 - `close` — instance
 - `createInterface` — module
+- `cursorTo` — module
+- `emitKeypressEvents` — module
+- `getCursorPos` — instance
+- `getPrompt` — instance
+- `moveCursor` — module
 - `on` — instance
+- `pause` — instance
+- `prompt` — instance
+- `question` — instance
+- `resume` — instance
+- `setPrompt` — instance
+- `write` — instance
+
+## `readline/promises`
+
+### Classes
+
+- `Interface`
+- `Readline`
+
+### Methods
+
+- `close` — instance
+- `createInterface` — module
 - `question` — instance
 
 ## `redis`
