@@ -12,7 +12,6 @@ use super::*;
 mod array_buffer;
 mod boxed_primitives;
 mod collection_equality;
-pub(crate) use boxed_primitives::boxed_primitive_value;
 pub use boxed_primitives::scan_boxed_primitive_payload_roots_mut;
 mod collections;
 mod identity_equality;

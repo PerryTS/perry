@@ -460,10 +460,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
-    // Typed arrays — Int8Array..BigUint64Array reserved IDs (0xFFFF0030..3A).
+    // Typed arrays — Int8Array..Float16Array reserved IDs (0xFFFF0030..3B).
     // The pointer can arrive as either a NaN-boxed POINTER_TAG value or a
     // raw bitcast f64, so handle both forms.
-    if (0xFFFF0030..=0xFFFF003A).contains(&class_id) {
+    if (0xFFFF0030..=0xFFFF003B).contains(&class_id) {
         let addr = if jsval.is_pointer() {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {

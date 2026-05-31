@@ -115,6 +115,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     | "Uint16Array"
                                     | "Int32Array"
                                     | "Uint32Array"
+                                    | "Float16Array"
                                     | "Float32Array"
                                     | "Float64Array"
                             ) {
@@ -289,13 +290,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         // dispatch correctly.
                                         | ("http", "Agent")
                                         | ("https", "Agent")
-                                        | (
-                                            "v8",
-                                            "Serializer"
-                                                | "Deserializer"
-                                                | "DefaultSerializer"
-                                                | "DefaultDeserializer",
-                                        )
                                         | ("dns" | "dns/promises", "Resolver")
                                 );
                                 if is_known_native_class {
@@ -1436,9 +1430,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
-            if !mutable {
-                ctx.mark_local_immutable(id);
-            }
             // Issue #886: detect `let/const/var <name> = Object.<staticMethod>`
             // from the raw AST so a subsequent indirect call `<name>(args)`
             // can route to the dedicated HIR variant the literal
@@ -1706,9 +1697,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
-            if !mutable {
-                ctx.mark_local_immutable(id);
-            }
             result.push(Stmt::Let {
                 id,
                 name,
