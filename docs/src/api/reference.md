@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2340 entries across 102 modules.
+Total: 2368 entries across 103 modules.
 
 ## Modules
 
@@ -32,6 +32,7 @@ Total: 2340 entries across 102 modules.
 - [`diagnostics_channel`](#diagnostics-channel)
 - [`dns`](#dns)
 - [`dns/promises`](#dns-promises)
+- [`domain`](#domain)
 - [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
@@ -229,6 +230,10 @@ Total: 2340 entries across 102 modules.
 - `runInAsyncScope` — instance *(class: `AsyncResource`)*
 - `triggerAsyncId` — module
 - `triggerAsyncId` — instance *(class: `AsyncResource`)*
+
+### Properties
+
+- `default`
 
 ## `axios`
 
@@ -1032,6 +1037,34 @@ Total: 2340 entries across 102 modules.
 - `SERVFAIL`
 - `TIMEOUT`
 
+## `domain`
+
+### Classes
+
+- `Domain`
+
+### Methods
+
+- `Domain` — module
+- `add` — instance
+- `addListener` — instance
+- `bind` — instance
+- `create` — module
+- `createDomain` — module
+- `emit` — instance
+- `enter` — instance
+- `exit` — instance
+- `intercept` — instance
+- `on` — instance
+- `remove` — instance
+- `run` — instance
+
+### Properties
+
+- `_stack`
+- `active`
+- `members`
+
 ## `dotenv`
 
 ### Methods
@@ -1060,6 +1093,7 @@ Total: 2340 entries across 102 modules.
 - `EventEmitter` — module
 - `addAbortListener` — module
 - `addListener` — instance
+- `domain` — instance
 - `emit` — instance
 - `eventNames` — instance
 - `getEventListeners` — module
@@ -1086,6 +1120,7 @@ Total: 2340 entries across 102 modules.
 
 - `captureRejectionSymbol`
 - `captureRejections`
+- `default`
 - `defaultMaxListeners`
 - `errorMonitor`
 - `usingDomains`
@@ -1837,6 +1872,7 @@ Total: 2340 entries across 102 modules.
 
 - `EOL`
 - `constants`
+- `default`
 - `devNull`
 
 ## `path`
@@ -1859,6 +1895,7 @@ Total: 2340 entries across 102 modules.
 
 ### Properties
 
+- `default`
 - `delimiter`
 - `posix`
 - `sep`
@@ -1884,6 +1921,7 @@ Total: 2340 entries across 102 modules.
 
 ### Properties
 
+- `default`
 - `delimiter`
 - `posix`
 - `sep`
@@ -1909,6 +1947,7 @@ Total: 2340 entries across 102 modules.
 
 ### Properties
 
+- `default`
 - `delimiter`
 - `posix`
 - `sep`
@@ -2418,6 +2457,10 @@ Total: 2340 entries across 102 modules.
 - `unescape` — module
 - `unescapeBuffer` — module
 
+### Properties
+
+- `default`
+
 ## `rate-limiter-flexible`
 
 ### Classes
@@ -2692,6 +2735,7 @@ Total: 2340 entries across 102 modules.
 
 ### Properties
 
+- `default`
 - `types`
 
 ## `test`
@@ -2820,6 +2864,10 @@ Total: 2340 entries across 102 modules.
 - `resolveObject` — module
 - `urlToHttpOptions` — module
 
+### Properties
+
+- `default`
+
 ## `util`
 
 ### Classes
@@ -2858,6 +2906,7 @@ Total: 2340 entries across 102 modules.
 
 ### Properties
 
+- `default`
 - `types`
 
 ## `util/types`
