@@ -1606,6 +1606,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto.Certificate", "verifySpkac")
             | ("crypto.Certificate", "exportPublicKey")
             | ("crypto.Certificate", "exportChallenge")
+            // #3142: `(new v8.GCProfiler()).start` / `.stop` read as functions
+            // so `typeof profiler.start === "function"` holds.
+            | ("v8.GCProfiler", "start")
+            | ("v8.GCProfiler", "stop")
             // node:zlib — sync codecs, callback codecs, stream factories and
             // class names read as callables. Needed for `util.promisify(zlib.gzip)`
             // (#1857-style hook), `const compress = zlib.gzipSync`, and

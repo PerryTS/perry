@@ -1811,6 +1811,30 @@ pub(crate) fn js_node_stream_hidden_error(stream: f64) -> Option<f64> {
     readable_hidden_error(stream)
 }
 
+pub(crate) fn js_node_stream_is_classic_stream(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_readable_flag_key()).is_some()
+        || get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_has_readable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_readable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_has_writable_side(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_writable_flag_key()).is_some()
+}
+
+pub(crate) fn js_node_stream_readable_side_done(stream: f64) -> bool {
+    !js_node_stream_has_readable_side(stream)
+        || stream_hidden_ended(stream)
+        || has_truthy_hidden(stream, hidden_end_emitted_key())
+}
+
+pub(crate) fn js_node_stream_writable_side_done(stream: f64) -> bool {
+    !js_node_stream_has_writable_side(stream)
+        || has_truthy_hidden(stream, hidden_finish_emitted_key())
+}
+
 #[cfg(test)]
 pub(crate) fn js_node_stream_is_stub_ended_after_read(stream: f64) -> bool {
     probe_read_once(stream);

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2046 entries across 94 modules
+// Coverage: 2055 entries across 95 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3148,6 +3148,23 @@ declare module "uuid" {
   export function v7(): string;
   /** stdlib */
   export function validate(id: string): boolean;
+}
+
+declare module "v8" {
+  /** stdlib */
+  export class GCProfiler { [key: string]: any; }
+  /** stdlib */
+  export function cachedDataVersionTag(...args: any[]): any;
+  /** stdlib */
+  export function deserialize(...args: any[]): any;
+  /** stdlib */
+  export function getHeapCodeStatistics(...args: any[]): any;
+  /** stdlib */
+  export function getHeapSpaceStatistics(...args: any[]): any;
+  /** stdlib */
+  export function getHeapStatistics(...args: any[]): any;
+  /** stdlib */
+  export function serialize(...args: any[]): any;
 }
 
 declare module "validator" {

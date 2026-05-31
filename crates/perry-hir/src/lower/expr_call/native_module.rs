@@ -425,6 +425,34 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
+            // node:v8 module methods (#3137/#3138). serialize/deserialize and
+            // the heap-stat helpers lower to a receiver-less NativeMethodCall
+            // dispatched in codegen to the `js_v8_*` runtime entry points.
+            let is_v8_module =
+                obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
+            if is_v8_module {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    match method_name {
+                        "serialize"
+                        | "deserialize"
+                        | "getHeapStatistics"
+                        | "getHeapCodeStatistics"
+                        | "getHeapSpaceStatistics"
+                        | "cachedDataVersionTag" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "v8".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
+                        }
+                        _ => {} // Fall through to generic handling
+                    }
+                }
+            }
+
             // Check for Buffer static methods. Issue #831: aliased
             // imports of Buffer (`import { Buffer as RuntimeBuffer } from
             // "node:buffer"`) must route through the same dedicated

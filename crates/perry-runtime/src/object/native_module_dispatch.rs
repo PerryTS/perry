@@ -1463,6 +1463,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
             }
         }
 
+        // #3142: `new v8.GCProfiler()` is the "v8.GCProfiler" namespace.
+        // `start()` returns undefined; `stop()` returns the report object.
+        ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
+        ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
+
         // #2533: captured / aliased server factories
         // (`const createServer = options.createServer || createServerHTTP;
         // createServer(opts, handler)` — `@hono/node-server`'s `serve()`). The
