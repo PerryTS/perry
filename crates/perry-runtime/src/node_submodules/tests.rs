@@ -304,8 +304,8 @@ fn namespace_member_missing_export_returns_undefined() {
         js_node_submodule_namespace_member(
             b"diagnostics_channel".as_ptr(),
             "diagnostics_channel".len() as u32,
-            b"boundedChannel".as_ptr(),
-            "boundedChannel".len() as u32,
+            b"notARealExport".as_ptr(),
+            "notARealExport".len() as u32,
         )
     };
 
@@ -318,8 +318,8 @@ fn direct_missing_export_keeps_legacy_true_sentinel() {
         js_node_submodule_export_as_function(
             b"diagnostics_channel".as_ptr(),
             "diagnostics_channel".len() as u32,
-            b"boundedChannel".as_ptr(),
-            "boundedChannel".len() as u32,
+            b"notARealExport".as_ptr(),
+            "notARealExport".len() as u32,
         )
     };
 

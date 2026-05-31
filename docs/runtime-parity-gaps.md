@@ -141,26 +141,6 @@ Selected highlights (full list in `runtime-parity.md`):
 - `module.evaluate([options])`
 - … and 20 more
 
-### node:diagnostics_channel
-
-**Total APIs: 30** · Perry covers: 0 · Gap: 30
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `diagnostics_channel.hasSubscribers(name)`
-- `diagnostics_channel.channel(name)`
-- `diagnostics_channel.subscribe(name, onMessage)`
-- `diagnostics_channel.unsubscribe(name, onMessage)`
-- `diagnostics_channel.tracingChannel(nameOrChannels)`
-- `diagnostics_channel.boundedChannel(nameOrChannels)`
-- `channel.hasSubscribers`
-- `channel.publish(message)`
-- `channel.subscribe(onMessage)`
-- `channel.unsubscribe(onMessage)`
-- `channel.bindStore(store[, transform])`
-- `channel.unbindStore(store)`
-- … and 18 more
-
 ### node:dgram
 
 **Total APIs: 28** · Perry covers: 27 · Gap: 1

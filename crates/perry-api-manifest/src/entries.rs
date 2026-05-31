@@ -3318,7 +3318,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("fs", "constants"),
     // --- node:diagnostics_channel direct submodule.
     property("diagnostics_channel", "default"),
+    class("diagnostics_channel", "BoundedChannel"),
     class("diagnostics_channel", "Channel"),
+    method("diagnostics_channel", "boundedChannel", false, None),
     method("diagnostics_channel", "channel", false, None),
     method("diagnostics_channel", "hasSubscribers", false, None),
     method("diagnostics_channel", "subscribe", false, None),

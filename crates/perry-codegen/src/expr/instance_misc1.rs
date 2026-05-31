@@ -68,7 +68,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(ty) {
-                if submod_key == "diagnostics_channel" && exported_name == "Channel" {
+                if submod_key == "diagnostics_channel"
+                    && matches!(exported_name.as_str(), "Channel" | "BoundedChannel")
+                {
                     let submod_label = emit_string_literal_global(ctx, submod_key);
                     let name_label = emit_string_literal_global(ctx, exported_name);
                     let submod_len = submod_key.len();

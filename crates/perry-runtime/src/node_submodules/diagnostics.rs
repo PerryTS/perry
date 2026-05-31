@@ -63,13 +63,14 @@ pub(crate) enum DiagChannelKey {
 
 /// The `transform` argument remembered by `bindStore(store, transform)`.
 ///
-/// Node distinguishes three cases (#3085): an omitted/`undefined` transform
-/// (the store context is just the published `data`), a callable transform
-/// (its return value becomes the context), and a *non-callable, non-undefined*
-/// transform value (`null`, a number, a string, …). The last case is retained
-/// — during `runStores` Node attempts to call it, fails, runs the callback
-/// with no store context, and reports an uncaught `TypeError: transform is not
-/// a function`. Discarding it (treating it like `undefined`) was the bug.
+/// Node distinguishes three cases (#3085): an omitted/`undefined`/`null`
+/// transform (the store context is just the published `data`), a callable
+/// transform (its return value becomes the context), and a *non-callable,
+/// non-nullish* transform value (a number, a string, …). The last case is
+/// retained — during `runStores` Node attempts to call it, fails, runs the
+/// callback with no store context, and reports an uncaught
+/// `TypeError: transform is not a function`. Discarding it (treating it like
+/// `undefined`) was the bug.
 #[derive(Clone, Copy)]
 pub(crate) enum StoreTransform {
     /// No transform: context is the published `data` value.
@@ -764,6 +765,7 @@ pub(crate) fn update_channel_active(id: i64) {
         }
     });
     update_all_tracing_active();
+    super::diagnostics_tail::update_all_bounded_active();
 }
 
 pub(crate) fn update_all_tracing_active() {
@@ -845,7 +847,7 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
     }
     evict_inactive_diag_channels_if_needed();
     let id = next_diag_id();
-    let obj = js_object_alloc(0, 9);
+    let obj = js_object_alloc(0, 10);
     let has_global_subscribers = global_active_count(&key) > 0;
     set_field_value(obj, "name", name);
     set_field_value(obj, "hasSubscribers", bool_value(has_global_subscribers));
@@ -875,6 +877,15 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
         method_closure(cast1(diag_channel_unbind_store), 1, id),
     );
     set_field_value(obj, "runStores", run_stores_method_closure(id));
+    set_field_value(
+        obj,
+        "withStoreScope",
+        method_closure(
+            cast1(super::diagnostics_tail::diag_channel_with_store_scope),
+            1,
+            id,
+        ),
+    );
     DIAG_CHANNEL_BY_KEY.with(|m| {
         m.borrow_mut().insert(key, id);
     });
@@ -1101,11 +1112,11 @@ pub(crate) extern "C" fn diag_channel_bind_store(
 ) -> f64 {
     ensure_subscriber_owner_thread();
     let id = method_id(closure);
-    // An omitted or explicit `undefined` transform is the no-transform case;
-    // a callable is stored as-is; any other value is remembered as a
-    // non-callable transform so `runStores` can reproduce Node's uncaught
-    // `TypeError: transform is not a function` (#3085).
-    let transform = if transform.to_bits() == TAG_UNDEFINED {
+    // An omitted, explicit `undefined`, or `null` transform is the
+    // no-transform case in Node 26; a callable is stored as-is; any other
+    // value is remembered as a non-callable transform so `runStores` can
+    // reproduce Node's uncaught `TypeError: transform is not a function`.
+    let transform = if matches!(transform.to_bits(), TAG_UNDEFINED | crate::value::TAG_NULL) {
         StoreTransform::None
     } else if valid_closure_value(transform) {
         StoreTransform::Callable(transform)
@@ -1585,8 +1596,6 @@ pub(crate) extern "C" fn diag_trace_promise(
             "result",
             result,
         );
-        publish_channel(events[2], context);
-        publish_channel(events[3], context);
         return result;
     }
 }

@@ -3023,21 +3023,7 @@ pub fn run_with_parse_cache(
                             // with CommonJS-style default objects route through
                             // the explicit "default" export below.
                             //
-                            // For `node:diagnostics_channel`, the CJS-wrap
-                            // converts `require('node:diagnostics_channel')`
-                            // into `import diagChan from 'node:diagnostics_channel'`
-                            // and pino then reads `diagChan.tracingChannel(...)`.
-                            // Route the default-import local to the namespace
-                            // stub so the receiver is a real object whose
-                            // `tracingChannel` slot is a callable thunk —
-                            // not the function-singleton form, which would
-                            // produce `(function).tracingChannel is not a
-                            // function` because functions don't carry the
-                            // module's exported methods.
-                            if matches!(
-                                submod_key.as_str(),
-                                "diagnostics_channel" | "timers" | "sys" | "trace_events"
-                            ) {
+                            if matches!(submod_key.as_str(), "timers" | "sys" | "trace_events") {
                                 // Default imports of these modules are module
                                 // objects — route to the namespace so they work
                                 // like `import * as ...` (#1213, #2629).

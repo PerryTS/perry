@@ -3757,7 +3757,7 @@ Bun status: 🟢 Fully implemented.
 | `diagnostics_channel.subscribe(name, onMessage)` | ✓ | ✓ |  |
 | `diagnostics_channel.unsubscribe(name, onMessage)` | ✓ | ✓ |  |
 | `diagnostics_channel.tracingChannel(nameOrChannels)` | ✓ | ✓ | experimental |
-| `diagnostics_channel.boundedChannel(nameOrChannels)` | ✓ | ⚠ | v26.1.0 experimental |
+| `diagnostics_channel.boundedChannel(nameOrChannels)` | ✓ | ✓ | v26.1.0 experimental |
 
 #### Class: Channel
 
@@ -3770,7 +3770,7 @@ Bun status: 🟢 Fully implemented.
 | `channel.bindStore(store[, transform])` | ✓ | ✓ | experimental |
 | `channel.unbindStore(store)` | ✓ | ✓ | experimental |
 | `channel.runStores(context, fn[, thisArg[, ...args]])` | ✓ | ✓ | experimental |
-| `channel.withStoreScope(data)` | ✓ | ⚠ | v26.1.0 experimental |
+| `channel.withStoreScope(data)` | ✓ | ✓ | v26.1.0 experimental |
 
 #### Class: TracingChannel
 
@@ -3787,11 +3787,11 @@ Bun status: 🟢 Fully implemented.
 
 | Member | Node.js | Bun | Notes |
 |--------|---------|-----|-------|
-| `boundedChannel.hasSubscribers` | ✓ | ⚠ |  |
-| `boundedChannel.subscribe(handlers)` | ✓ | ⚠ |  |
-| `boundedChannel.unsubscribe(handlers)` | ✓ | ⚠ |  |
-| `boundedChannel.run(context, fn[, thisArg[, ...args]])` | ✓ | ⚠ |  |
-| `boundedChannel.withScope([context])` | ✓ | ⚠ |  |
+| `boundedChannel.hasSubscribers` | ✓ | ✓ |  |
+| `boundedChannel.subscribe(handlers)` | ✓ | ✓ |  |
+| `boundedChannel.unsubscribe(handlers)` | ✓ | ✓ |  |
+| `boundedChannel.run(context, fn[, thisArg[, ...args]])` | ✓ | ✓ |  |
+| `boundedChannel.withScope([context])` | ✓ | ✓ |  |
 
 #### TracingChannel Subscriber Hooks
 
