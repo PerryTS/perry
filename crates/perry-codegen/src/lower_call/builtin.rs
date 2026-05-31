@@ -242,6 +242,40 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_target_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "MessageChannel" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(DOUBLE, "js_message_channel_new", &[])))
+        }
+        "MessagePort" => {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_message_port_constructor_error",
+                &[],
+            )))
+        }
+        "BroadcastChannel" => {
+            let name = if let Some(a) = args.first() {
+                lower_expr(ctx, a)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            Ok(Some(blk.call(
+                DOUBLE,
+                "js_broadcast_channel_new",
+                &[(DOUBLE, &name)],
+            )))
+        }
         "Console" => {
             let opts = if let Some(a) = args.first() {
                 lower_expr(ctx, a)?

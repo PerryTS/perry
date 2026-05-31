@@ -2143,8 +2143,8 @@ The counts above are the last generated parity-gap counts on this branch. They w
 | `AbortSignal.timeout(ms)` | `ffi:js_abort_signal_timeout` |
 | `new TextEncoder()` | `expr:TextEncoderNew` |
 | `new TextDecoder(label?, options?)` | `expr:TextDecoderNew` |
-| `new MessageChannel()` | `partial via worker_threads` |
-| `new BroadcastChannel(name)` | `partial` |
+| `new MessageChannel()` | `rt:js_message_channel_new` |
+| `new BroadcastChannel(name)` | `rt:js_broadcast_channel_new` |
 | `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` |
 | `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
 | `crypto.randomUUID()` | `expr:CryptoRandomUUID` |

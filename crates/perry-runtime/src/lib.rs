@@ -54,6 +54,7 @@ pub mod gc;
 pub mod iterator_helpers;
 pub mod map;
 pub mod math;
+pub mod messaging;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;

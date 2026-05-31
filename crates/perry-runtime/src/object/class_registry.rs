@@ -606,8 +606,17 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             return None;
         }
         let func_ptr = (*ptr).func_ptr as usize;
-        let noop_thunk = global_this_builtin_noop_thunk as *const u8 as usize;
-        if func_ptr != noop_thunk {
+        let is_global_builtin_func = func_ptr
+            == global_this_builtin_noop_thunk as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_message_channel_constructor_call_error as *const u8
+                    as usize
+            || func_ptr
+                == crate::messaging::js_message_port_constructor_call_error as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
+                    as usize;
+        if !is_global_builtin_func {
             return None;
         }
     }
@@ -1125,6 +1134,19 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
             "TextEncoderStream" | "TextDecoderStream" => {
                 return js_text_encoding_stream_new();
+            }
+            "MessageChannel" => {
+                return crate::messaging::js_message_channel_new();
+            }
+            "MessagePort" => {
+                return crate::messaging::js_message_port_constructor_error();
+            }
+            "BroadcastChannel" => {
+                let name = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::messaging::js_broadcast_channel_new(name);
             }
             _ => {}
         }

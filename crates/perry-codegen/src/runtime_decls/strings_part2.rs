@@ -1022,4 +1022,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_event_target_get_event_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_target_get_max_listeners", DOUBLE, &[I64]);
     module.declare_function("js_event_target_set_max_listeners", I32, &[I64, DOUBLE]);
+    module.declare_function("js_message_channel_new", DOUBLE, &[]);
+    module.declare_function("js_message_port_constructor_error", DOUBLE, &[]);
+    module.declare_function("js_broadcast_channel_new", DOUBLE, &[DOUBLE]);
 }
