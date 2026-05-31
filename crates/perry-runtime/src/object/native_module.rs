@@ -452,7 +452,13 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
-        "assert/strict" | "constants" | "util" | "util.types" | "path.posix" | "path.win32"
+        "assert/strict"
+            | "constants"
+            | "process"
+            | "util"
+            | "util.types"
+            | "path.posix"
+            | "path.win32"
     )
 }
 

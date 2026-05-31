@@ -18,7 +18,7 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 - `node:os` — 195
 - `node:fs` — 139
 - `node:crypto` — 128
-- `node:process (and global `process`)` — 101
+- `node:process (and global `process`)` — 99
 - `node:util` — 95
 - `node:http2` — 97
 - `node:test (and node:test/reporters, node:test/mock)` — 93
@@ -568,7 +568,7 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 
 ### node:process (and global `process`)
 
-**Gap APIs: 101** · Already covered: 17
+**Gap APIs: 99** · Already covered: 19
 
 #### Missing from Perry
 
@@ -577,8 +577,6 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 - `process.memoryUsage.rss()`
 - `process.availableMemory()`
 - `process.constrainedMemory()`
-- `process.cpuUsage([previousValue])`
-- `process.threadCpuUsage([previousValue])`
 - `process.resourceUsage()`
 - `process.getActiveResourcesInfo()`
 - `process.getuid()`
@@ -631,6 +629,8 @@ Modules where Perry has at least one coverage source. Listed in descending gap-s
 | `process.chdir(directory)` | `expr:ProcessChdir` |
 | `process.cwd()` | `expr:ProcessCwd` |
 | `process.memoryUsage()` | `expr:ProcessMemoryUsage` |
+| `process.cpuUsage([previousValue])` | `expr:ProcessCpuUsage` |
+| `process.threadCpuUsage([previousValue])` | `expr:ProcessThreadCpuUsage` |
 | `process.uptime()` | `expr:ProcessUptime` |
 | `process.kill(pid[, signal])` | `expr:ProcessKill` |
 | `process.hrtime.bigint()` | `expr:ProcessHrtimeBigint` |

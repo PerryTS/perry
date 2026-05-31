@@ -449,6 +449,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
+        ("process", "threadCpuUsage") => crate::process::js_process_thread_cpu_usage(arg(0)),
         ("process", "nextTick") => {
             crate::os::js_process_next_tick(arg_closure_ptr(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)

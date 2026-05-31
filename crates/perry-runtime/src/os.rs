@@ -726,7 +726,7 @@ struct ProcessListener {
 struct ProcessEmitter {
     events: HashMap<String, Vec<ProcessListener>>,
     event_order: Vec<String>,
-    max_listeners: i32,
+    max_listeners: f64,
 }
 
 impl ProcessEmitter {
@@ -734,7 +734,7 @@ impl ProcessEmitter {
         Self {
             events: HashMap::new(),
             event_order: Vec::new(),
-            max_listeners: 10,
+            max_listeners: 10.0,
         }
     }
 
@@ -1041,17 +1041,59 @@ pub extern "C" fn js_process_event_names() -> *mut ArrayHeader {
 
 #[no_mangle]
 pub extern "C" fn js_process_set_max_listeners(value: f64) -> f64 {
-    if value.is_finite() && value >= 0.0 {
-        PROCESS_EMITTER.with(|emitter| {
-            emitter.borrow_mut().max_listeners = value as i32;
-        });
-    }
+    let value = validate_process_max_listeners(value);
+    PROCESS_EMITTER.with(|emitter| {
+        emitter.borrow_mut().max_listeners = value;
+    });
     process_namespace_value()
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_get_max_listeners() -> f64 {
-    PROCESS_EMITTER.with(|emitter| emitter.borrow().max_listeners as f64)
+    PROCESS_EMITTER.with(|emitter| emitter.borrow().max_listeners)
+}
+
+fn validate_process_max_listeners(value: f64) -> f64 {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if !crate::fs::validate::is_numeric(js_value) {
+        let message = format!(
+            "The \"setMaxListeners\" argument must be of type number. Received {}",
+            crate::fs::validate::describe_received(value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let n = if js_value.is_int32() {
+        js_value.as_int32() as f64
+    } else {
+        js_value.as_number()
+    };
+    if n.is_nan() || n < 0.0 {
+        let message = format!(
+            "The value of \"setMaxListeners\" is out of range. It must be >= 0. Received {}",
+            format_process_number(n)
+        );
+        crate::fs::validate::throw_range_error_with_code(&message);
+    }
+    n
+}
+
+fn format_process_number(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if value.fract() == 0.0 && value.abs() < 1e21 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
 }
 
 pub fn scan_process_event_listener_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
