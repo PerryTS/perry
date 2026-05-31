@@ -24,6 +24,7 @@
 
 use perry_ffi::{alloc_string, get_handle, JsValue, StringHeader};
 
+use crate::https_server::HttpsServer;
 use crate::request::IncomingMessage;
 use crate::response::ServerResponse;
 use crate::server::HttpServer;
@@ -40,6 +41,18 @@ extern "C" {
         event_name_ptr: *const StringHeader,
         callback: i64,
     ) -> f64;
+    fn js_node_http_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
+    fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64;
+    fn js_node_https_server_close(server_handle: i64, callback: i64);
+    fn js_node_https_server_close_all_connections(handle: i64);
+    fn js_node_https_server_close_idle_connections(handle: i64);
+    fn js_node_https_server_address_json(handle: i64) -> *mut StringHeader;
+    fn js_node_https_server_on(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+        callback: i64,
+    ) -> f64;
+    fn js_node_https_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
     /// Runtime-side JSON.parse — converts the JSON-encoded `address()`
     /// payload into the `{ port, address, family }` object Node returns.
     /// Returns the JSValue bits as u64 (NaN-boxed value).
@@ -95,7 +108,7 @@ extern "C" {
 /// misroute.
 #[no_mangle]
 pub extern "C" fn js_ext_http_server_is_handle(handle: i64) -> i32 {
-    if get_handle::<HttpServer>(handle).is_some() {
+    if get_handle::<HttpServer>(handle).is_some() || get_handle::<HttpsServer>(handle).is_some() {
         1
     } else {
         0
@@ -133,7 +146,22 @@ pub const HTTP_SERVER_METHODS: &[&str] = &[
     "address",
     "on",
     "addListener",
+    "setTimeout",
 ];
+
+fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "listen" => Some(b"listen"),
+        "close" => Some(b"close"),
+        "closeAllConnections" => Some(b"closeAllConnections"),
+        "closeIdleConnections" => Some(b"closeIdleConnections"),
+        "address" => Some(b"address"),
+        "on" => Some(b"on"),
+        "addListener" => Some(b"addListener"),
+        "setTimeout" => Some(b"setTimeout"),
+        _ => None,
+    }
+}
 
 /// Build a transient `ArrayHeader`-shaped buffer carrying NaN-boxed args.
 /// `js_node_http_server_listen` reads its `args_array` arg as a raw
@@ -174,6 +202,7 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
     } else {
         &[]
     };
+    let is_https = get_handle::<HttpsServer>(handle).is_some();
     // Server re-boxed as POINTER_TAG so chained calls (`server.on(...).on(...)`,
     // `server.listen(...).address()`) keep flowing through this same dispatcher.
     let self_ref = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
@@ -190,28 +219,48 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 inline.args[i] = args[i].to_bits();
             }
             let args_array = &inline as *const _ as i64;
-            js_node_http_server_listen(handle, args_array);
+            if is_https {
+                js_node_https_server_listen(handle, args_array);
+            } else {
+                js_node_http_server_listen(handle, args_array);
+            }
             // Node returns the server for chaining (`createServer(...).listen(p).address()`).
             self_ref
         }
         "close" => {
             let cb = closure_arg(args.first().copied());
-            js_node_http_server_close(handle, cb);
+            if is_https {
+                js_node_https_server_close(handle, cb);
+            } else {
+                js_node_http_server_close(handle, cb);
+            }
             self_ref
         }
         "closeAllConnections" => {
-            js_node_http_server_close_all_connections(handle);
+            if is_https {
+                js_node_https_server_close_all_connections(handle);
+            } else {
+                js_node_http_server_close_all_connections(handle);
+            }
             undef
         }
         "closeIdleConnections" => {
-            js_node_http_server_close_idle_connections(handle);
+            if is_https {
+                js_node_https_server_close_idle_connections(handle);
+            } else {
+                js_node_http_server_close_idle_connections(handle);
+            }
             undef
         }
         "address" => {
             // Node returns `{ port, address, family }` or null. The FFI hands
             // back a JSON-encoded string (`"null"` when not listening); run
             // it through JSON.parse so the value the caller sees matches Node.
-            let s = js_node_http_server_address_json(handle);
+            let s = if is_https {
+                js_node_https_server_address_json(handle)
+            } else {
+                js_node_http_server_address_json(handle)
+            };
             if s.is_null() {
                 f64::from_bits(crate::types::TAG_NULL)
             } else {
@@ -224,7 +273,21 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 return self_ref;
             }
             let cb = closure_arg(Some(args[1]));
-            js_node_http_server_on(handle, event_ptr, cb);
+            if is_https {
+                js_node_https_server_on(handle, event_ptr, cb);
+            } else {
+                js_node_http_server_on(handle, event_ptr, cb);
+            }
+            self_ref
+        }
+        "setTimeout" => {
+            let msecs = args.first().copied().unwrap_or(0.0);
+            let cb = closure_arg(args.get(1).copied());
+            if is_https {
+                js_node_https_server_set_timeout_method(handle, msecs, cb);
+            } else {
+                js_node_http_server_set_timeout_method(handle, msecs, cb);
+            }
             self_ref
         }
         // `listening` is a property on the JS side; the only known property
@@ -232,6 +295,25 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
         // expose it as a method, so fall through to undef.
         _ => undef,
     }
+}
+
+/// Dispatch a property read on a registered `HttpServer` / `HttpsServer`
+/// handle. Bare method-value reads bind to a callable closure.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_server_dispatch_property(
+    handle: i64,
+    property_ptr: *const u8,
+    property_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let property = method_name(property_ptr, property_len);
+    if property.is_empty() {
+        return undef;
+    }
+    if let Some(name) = http_server_method_bytes(&property) {
+        return bind_handle_method(handle, name);
+    }
+    undef
 }
 
 /// Dispatch a method on a registered server-side `IncomingMessage` handle.
