@@ -2771,6 +2771,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("process", "cwd", false, None),
     method("process", "uptime", false, None),
     method("process", "memoryUsage", false, None),
+    // #3108 (shipped in #3684): manifest rows for the source-map toggle
+    // implemented in the native dispatch table. Without these the
+    // manifest-consistency drift check fails.
+    method("process", "sourceMapsEnabled", false, None),
+    method("process", "setSourceMapsEnabled", false, None),
     method("process", "nextTick", false, None),
     method("process", "chdir", false, None),
     method("process", "kill", false, None),
@@ -3174,6 +3179,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util/types", "isStringObject", false, None),
     method("util/types", "isBooleanObject", false, None),
     method("util/types", "isBoxedPrimitive", false, None),
+    // #3678: predicate tail beyond Perry's previously-claimed subset. Only the
+    // predicates Perry can correctly back are exposed — isBigIntObject /
+    // isSymbolObject / isArgumentsObject / isModuleNamespaceObject / isKeyObject
+    // / isCryptoKey are omitted because Perry has no distinct backing value type
+    // for them and a `false`-always stub would lie about Node's positive cases.
+    method("util/types", "isDataView", false, None),
+    method("util/types", "isFloat16Array", false, None),
+    method("util/types", "isWeakMap", false, None),
+    method("util/types", "isWeakSet", false, None),
+    method("util/types", "isExternal", false, None),
     // --- sys: deprecated alias for node:util. Keep this module-level
     // surface aligned with the public `util` manifest rows above; the
     // runtime routes `node:sys` through the util namespace.

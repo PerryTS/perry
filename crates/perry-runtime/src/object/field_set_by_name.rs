@@ -760,8 +760,8 @@ pub extern "C" fn js_object_set_field_by_name(
                     crate::error::throw_immutable_write(0, &key_str);
                 }
                 // Accessor short-circuit: if a setter is registered, invoke
-                // it instead of writing the slot. A property with `get` but
-                // no `set` silently ignores the write (non-strict mode).
+                // it instead of writing the slot. A getter-only accessor is
+                // read-only under Perry's strict-by-default TS semantics.
                 if ACCESSORS_IN_USE.with(|c| c.get()) {
                     if let Some(ref k) = incoming_key_str {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
@@ -771,6 +771,8 @@ pub extern "C" fn js_object_set_field_by_name(
                                 if !closure.is_null() {
                                     crate::closure::js_closure_call1(closure, value);
                                 }
+                            } else {
+                                crate::error::throw_immutable_write(0, k);
                             }
                             return;
                         }

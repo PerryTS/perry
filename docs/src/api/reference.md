@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2155 entries across 99 modules.
+Total: 2162 entries across 99 modules.
 
 ## Modules
 
@@ -2302,11 +2302,13 @@ Total: 2155 entries across 99 modules.
 - `resourceUsage` — module
 - `setMaxListeners` — module
 - `setSourceMapsEnabled` — module
+- `setSourceMapsEnabled` — module
 - `setegid` — module
 - `seteuid` — module
 - `setgid` — module
 - `setgroups` — module
 - `setuid` — module
+- `sourceMapsEnabled` — module
 - `sourceMapsEnabled` — module
 - `threadCpuUsage` — module
 - `umask` — module
@@ -2757,7 +2759,10 @@ Total: 2155 entries across 99 modules.
 - `isBigUint64Array` — module
 - `isBooleanObject` — module
 - `isBoxedPrimitive` — module
+- `isDataView` — module
 - `isDate` — module
+- `isExternal` — module
+- `isFloat16Array` — module
 - `isFloat32Array` — module
 - `isFloat64Array` — module
 - `isGeneratorFunction` — module
@@ -2781,6 +2786,8 @@ Total: 2155 entries across 99 modules.
 - `isUint32Array` — module
 - `isUint8Array` — module
 - `isUint8ClampedArray` — module
+- `isWeakMap` — module
+- `isWeakSet` — module
 
 ## `uuid`
 
