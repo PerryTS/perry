@@ -5592,6 +5592,7 @@ dependencies = [
  "rust_decimal",
  "rustls",
  "rustls-native-certs",
+ "rustls-pemfile",
  "ryu",
  "scraper",
  "scrypt",

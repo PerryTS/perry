@@ -727,6 +727,7 @@ pub(crate) fn lower_stmt(
                                     ("http", "createServer") => Some("HttpServer"),
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
+                                    ("tls", "createServer" | "Server") => Some("Server"),
                                     ("async_hooks", "createHook") => Some("AsyncHook"),
                                     _ => None,
                                 };

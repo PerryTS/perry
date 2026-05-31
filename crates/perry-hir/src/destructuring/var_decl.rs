@@ -469,6 +469,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             // HttpServer arm → returns NaN.
                                             ("http", "createServer") => Some("HttpServer"),
                                             ("https", "createServer") => Some("HttpsServer"),
+                                            ("tls", "createServer" | "Server") => Some("Server"),
                                             ("http2", "createSecureServer") => {
                                                 Some("Http2SecureServer")
                                             }

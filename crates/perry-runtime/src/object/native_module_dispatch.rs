@@ -1913,6 +1913,18 @@ pub(crate) unsafe fn dispatch_native_module_method(
             _ => f64::from_bits(JSValue::undefined().bits()),
         },
 
+        ("tls", _) => {
+            let ptr =
+                crate::value::JS_NATIVE_TLS_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
+
         // #2533: captured / aliased server factories
         // (`const createServer = options.createServer || createServerHTTP;
         // createServer(opts, handler)` — `@hono/node-server`'s `serve()`). The

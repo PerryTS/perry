@@ -471,6 +471,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_sign(handle, method_name, &args);
     }
 
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if crate::tls::should_dispatch_tls_handle(handle, method_name) {
+        return crate::tls::dispatch_tls_handle(handle, method_name, &args);
+    }
+
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
     // routes the dynamic-receiver path used by drizzle's
     // `this.stmt.raw().all(...params)` chain (where `this.stmt` is
@@ -1415,6 +1420,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return value;
     }
 
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
+        return value;
+    }
+
     // #1670: Web Streams handle property reads. A numeric stream id reaches
     // here via `js_object_get_field_by_name`'s stream probe (inline
     // `res.body.locked`). Route getter properties to their accessors, return
@@ -2306,6 +2316,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext

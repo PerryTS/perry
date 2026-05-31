@@ -334,6 +334,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         let native_class = match (mod_name.as_str(), method.as_str()) {
                             ("net", "createConnection" | "connect") => Some(("net", "Socket")),
                             ("tls", "connect") => Some(("net", "Socket")),
+                            ("tls", "createServer" | "Server") => Some(("tls", "Server")),
                             ("net", "Socket") => Some(("net", "Socket")),
                             ("net", "Server") => Some(("net", "Server")),
                             _ => None,

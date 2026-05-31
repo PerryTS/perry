@@ -521,6 +521,7 @@ fn native_class_from_factory_call(
         ("http", "createServer") => Some(("http", "HttpServer")),
         ("https", "createServer") => Some(("https", "HttpsServer")),
         ("http2", "createSecureServer") => Some(("http2", "Http2SecureServer")),
+        ("tls", "createServer") | ("tls", "Server") => Some(("tls", "Server")),
         // Issue #2208: `http.request(...).on(...)` / `https.get(...).on(...)`
         // chains — the inline factory call returns a `ClientRequest` whose
         // instance methods (`on`/`end`/`write`/`setHeader`/`setTimeout`) are

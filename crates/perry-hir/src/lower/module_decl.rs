@@ -661,6 +661,8 @@ pub(crate) fn lower_module_decl(
                                                         ("https", "createServer") => {
                                                             Some("HttpsServer")
                                                         }
+                                                        ("tls", "createServer")
+                                                        | ("tls", "Server") => Some("Server"),
                                                         ("http2", "createSecureServer") => {
                                                             Some("Http2SecureServer")
                                                         }
@@ -741,6 +743,8 @@ pub(crate) fn lower_module_decl(
                                                 ("https", Some("createServer")) => {
                                                     Some("HttpsServer")
                                                 }
+                                                ("tls", Some("createServer"))
+                                                | ("tls", Some("Server")) => Some("Server"),
                                                 ("http2", Some("createSecureServer")) => {
                                                     Some("Http2SecureServer")
                                                 }

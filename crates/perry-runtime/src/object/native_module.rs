@@ -2451,6 +2451,25 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
+        "tls" => Some(&[
+            b"checkServerIdentity",
+            b"connect",
+            b"createServer",
+            b"createSecureContext",
+            b"getCACertificates",
+            b"getCiphers",
+            b"setDefaultCACertificates",
+            b"Server",
+            b"SecureContext",
+            b"TLSSocket",
+            b"DEFAULT_ECDH_CURVE",
+            b"DEFAULT_MAX_VERSION",
+            b"DEFAULT_MIN_VERSION",
+            b"DEFAULT_CIPHERS",
+            b"rootCertificates",
+            b"CLIENT_RENEG_LIMIT",
+            b"CLIENT_RENEG_WINDOW",
+        ]),
         _ => None,
     }
 }
@@ -3139,6 +3158,9 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("module", "stripTypeScriptTypes") => Some(1),
         ("module", "syncBuiltinESMExports") => Some(0),
         ("module", "runMain") => Some(0),
+        ("tls", "connect") => Some(4),
+        ("tls", "createServer" | "Server") => Some(2),
+        ("tls", "TLSSocket") => Some(2),
         _ => None,
     }
 }
@@ -3949,12 +3971,6 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
                 "readline/promises",
                 "createInterface" | "Interface" | "Readline",
             )
-            // #3698: node:tls.connect import-surface fix — the manifest-claimed
-            // named/namespace import must be function-valued (typeof ===
-            // "function"). Deeper TLS behavior is tracked separately
-            // (#3196-#3200); only `connect` is in the api-manifest today, so
-            // it's the only tls symbol exposed here.
-            | ("tls", "connect")
             // #3712: node:http module-level helper exports. `validateHeaderName`
             // / `validateHeaderValue` perform Node's HTTP-token / header-value
             // validation (throwing the matching error codes); the parser/proxy
@@ -4063,6 +4079,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("net", "SocketAddress")
             | ("net", "_normalizeArgs")
             | ("net", "_createServerHandle")
+            | ("tls", "connect")
+            | ("tls", "createServer")
+            | ("tls", "Server")
+            | ("tls", "TLSSocket")
             // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.
             | ("child_process", "ChildProcess")
             // #1857 / #2130: every exported function reads as a bound-method
@@ -5060,6 +5080,16 @@ pub(crate) unsafe fn get_native_module_constant(
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = cjs_default_base.unwrap_or(module_name);
+    let tls_dispatch_noargs = |method: &str| -> Option<f64> {
+        let ptr = crate::value::JS_NATIVE_TLS_DISPATCH.load(Ordering::SeqCst);
+        if ptr.is_null() {
+            None
+        } else {
+            let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                std::mem::transmute(ptr);
+            Some(dispatch(method.as_ptr(), method.len(), std::ptr::null(), 0))
+        }
+    };
 
     if property == "default" && !is_cjs_default_object {
         if let Some(value) = cjs_default_export_value(module_name) {
@@ -6109,16 +6139,6 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "test" => crate::node_test::property(property),
-        "tls" => match property {
-            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
-            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
-            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
-            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
-            "CLIENT_RENEG_LIMIT" => Some(3.0),
-            "CLIENT_RENEG_WINDOW" => Some(600.0),
-            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
-            _ => None,
-        },
         "wasi" => match property {
             "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
             _ => None,
@@ -6195,6 +6215,17 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
+        "tls" => match property {
+            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
+            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
+            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
+            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
+            "CLIENT_RENEG_LIMIT" => Some(3.0),
+            "CLIENT_RENEG_WINDOW" => Some(600.0),
+            "rootCertificates" => tls_dispatch_noargs("rootCertificates")
+                .or_else(|| Some(crate::tls::js_tls_root_certificates())),
+            _ => None,
+        },
         "events" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("events"),
             "defaultMaxListeners" => Some(10.0),
