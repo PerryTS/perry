@@ -1902,6 +1902,17 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
+            // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
+            // `.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`/`.next`).
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                );
+            }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
             let keys = (*obj).keys_array;
@@ -2347,6 +2358,15 @@ pub unsafe extern "C" fn js_native_call_method(
                 return crate::collection_iter_object::dispatch_set_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
+                );
+            }
+            // #2874: lazy iterator-helper objects, same as the NaN-boxed path.
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
                 );
             }
 

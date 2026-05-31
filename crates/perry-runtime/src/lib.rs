@@ -48,6 +48,7 @@ pub mod ffi;
 pub mod frame;
 pub mod fs;
 pub mod gc;
+pub mod iterator_helpers;
 pub mod map;
 pub mod math;
 pub mod native_abi;
