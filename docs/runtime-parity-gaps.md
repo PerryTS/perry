@@ -155,19 +155,12 @@ Selected highlights (full list in `runtime-parity.md`):
 
 ### node:dgram
 
-**Total APIs: 28** · Perry covers: 0 · Gap: 28
+**Total APIs: 28** · Perry covers: 18 · Gap: 10
 
 Selected highlights (full list in `runtime-parity.md`):
 
-- `dgram.createSocket(options[, callback])`
-- `dgram.createSocket(type[, callback])`
-- `socket.addMembership(multicastAddress[, multicastInterface])`
-- `socket.addSourceSpecificMembership(sourceAddress, groupAddress[, multicastInterface])`
-- `socket.address()`
-- `socket.bind([port][, address][, callback])`
-- `socket.bind(options[, callback])`
-- `socket.close([callback])`
-- `socket.connect(port[, address][, callback])`
+- Deterministic loopback coverage: `createSocket`, `bind`, `address`, `send`, `message`, `connect`, `remoteAddress`, `disconnect`, `close`, `ref` / `unref`, buffer-size and send-queue getters.
+- Remaining gaps: real host UDP IO, multicast/source-specific membership behavior, socket option side effects, and `socket[Symbol.asyncDispose]()`.
 - `socket.disconnect()`
 - `socket.dropMembership(multicastAddress[, multicastInterface])`
 - `socket.dropSourceSpecificMembership(sourceAddress, groupAddress[, multicastInterface])`

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2255 entries across 99 modules.
+Total: 2299 entries across 99 modules.
 
 ## Modules
 
@@ -816,7 +816,9 @@ Total: 2255 entries across 99 modules.
 ### Methods
 
 - `Socket` — module
+- `addListener` — instance *(class: `Socket`)*
 - `addMembership` — instance *(class: `Socket`)*
+- `addSourceSpecificMembership` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Socket`)*
 - `bind` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Socket`)*
@@ -824,9 +826,19 @@ Total: 2255 entries across 99 modules.
 - `createSocket` — module
 - `disconnect` — instance *(class: `Socket`)*
 - `dropMembership` — instance *(class: `Socket`)*
+- `dropSourceSpecificMembership` — instance *(class: `Socket`)*
+- `emit` — instance *(class: `Socket`)*
 - `getRecvBufferSize` — instance *(class: `Socket`)*
 - `getSendBufferSize` — instance *(class: `Socket`)*
+- `getSendQueueCount` — instance *(class: `Socket`)*
+- `getSendQueueSize` — instance *(class: `Socket`)*
+- `listenerCount` — instance *(class: `Socket`)*
+- `off` — instance *(class: `Socket`)*
+- `on` — instance *(class: `Socket`)*
+- `once` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
+- `remoteAddress` — instance *(class: `Socket`)*
+- `removeListener` — instance *(class: `Socket`)*
 - `send` — instance *(class: `Socket`)*
 - `setBroadcast` — instance *(class: `Socket`)*
 - `setMulticastInterface` — instance *(class: `Socket`)*
@@ -2904,18 +2916,53 @@ Total: 2255 entries across 99 modules.
 
 ### Classes
 
+- `DefaultDeserializer`
+- `DefaultSerializer`
+- `Deserializer`
 - `GCProfiler`
+- `Serializer`
 
 ### Methods
 
+- `addDeserializeCallback` — instance *(class: `startupSnapshot`)*
+- `addSerializeCallback` — instance *(class: `startupSnapshot`)*
 - `cachedDataVersionTag` — module
+- `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
 - `getHeapCodeStatistics` — module
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
+- `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
+- `onAfter` — instance *(class: `promiseHooks`)*
+- `onBefore` — instance *(class: `promiseHooks`)*
+- `onInit` — instance *(class: `promiseHooks`)*
+- `onSettled` — instance *(class: `promiseHooks`)*
+- `readDouble` — instance *(class: `Deserializer`)*
+- `readHeader` — instance *(class: `Deserializer`)*
+- `readRawBytes` — instance *(class: `Deserializer`)*
+- `readUint32` — instance *(class: `Deserializer`)*
+- `readUint64` — instance *(class: `Deserializer`)*
+- `readValue` — instance *(class: `Deserializer`)*
+- `releaseBuffer` — instance *(class: `Serializer`)*
 - `serialize` — module
+- `setDeserializeMainFunction` — instance *(class: `startupSnapshot`)*
+- `setFlagsFromString` — module
+- `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `stop` — instance *(class: `GCProfiler`)*
+- `stopCoverage` — module
+- `takeCoverage` — module
+- `writeDouble` — instance *(class: `Serializer`)*
+- `writeHeader` — instance *(class: `Serializer`)*
+- `writeRawBytes` — instance *(class: `Serializer`)*
+- `writeUint32` — instance *(class: `Serializer`)*
+- `writeUint64` — instance *(class: `Serializer`)*
+- `writeValue` — instance *(class: `Serializer`)*
+
+### Properties
+
+- `promiseHooks`
+- `startupSnapshot`
 
 ## `validator`
 
