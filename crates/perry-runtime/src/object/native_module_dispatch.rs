@@ -301,10 +301,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
             ptr_addr(v)
         }
     };
-    let arg_event_ptr = |n: usize| -> *const crate::StringHeader {
+    let _arg_event_ptr = |n: usize| -> *const crate::StringHeader {
         crate::value::js_get_string_pointer_unified(arg(n)) as *const crate::StringHeader
     };
-    let arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
+    // Raw NaN-box bits of arg `n` (undefined when missing). Used by the
+    // process EventEmitter arms so the runtime can coerce event names and
+    // validate listeners against the full JS value (#3047/#3046).
+    let arg_bits = |n: usize| -> i64 { arg(n).to_bits() as i64 };
+    let _arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
         if n >= args_len {
             return std::ptr::null();
         }
@@ -413,33 +417,31 @@ pub(crate) unsafe fn dispatch_native_module_method(
         }
 
         // ── process EventEmitter API ──
-        ("process", "on") => crate::os::js_process_on(arg_event_ptr(0), arg_closure_ptr(1)),
-        ("process", "addListener") => {
-            crate::os::js_process_add_listener(arg_event_ptr(0), arg_closure_ptr(1))
-        }
-        ("process", "once") => crate::os::js_process_once(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
+        ("process", "addListener") => crate::os::js_process_add_listener(arg_bits(0), arg_bits(1)),
+        ("process", "once") => crate::os::js_process_once(arg_bits(0), arg_bits(1)),
         ("process", "prependListener") => {
-            crate::os::js_process_prepend_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_prepend_listener(arg_bits(0), arg_bits(1))
         }
         ("process", "prependOnceListener") => {
-            crate::os::js_process_prepend_once_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_prepend_once_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "emit") => crate::os::js_process_emit(arg_event_ptr(0), pack_args_from(1)),
+        ("process", "emit") => crate::os::js_process_emit(arg_bits(0), pack_args_from(1)),
         ("process", "removeListener") => {
-            crate::os::js_process_remove_listener(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_remove_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "off") => crate::os::js_process_off(arg_event_ptr(0), arg_closure_ptr(1)),
+        ("process", "off") => crate::os::js_process_off(arg_bits(0), arg_bits(1)),
         ("process", "removeAllListeners") => {
-            crate::os::js_process_remove_all_listeners(arg_event_ptr(0))
+            crate::os::js_process_remove_all_listeners(arg_bits(0))
         }
         ("process", "listenerCount") => {
-            crate::os::js_process_listener_count(arg_event_ptr(0), arg_closure_ptr(1))
+            crate::os::js_process_listener_count(arg_bits(0), arg_bits(1))
         }
         ("process", "listeners") => {
-            ptr_to_f64(crate::os::js_process_listeners(arg_event_ptr(0)) as *const u8)
+            ptr_to_f64(crate::os::js_process_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "rawListeners") => {
-            ptr_to_f64(crate::os::js_process_raw_listeners(arg_event_ptr(0)) as *const u8)
+            ptr_to_f64(crate::os::js_process_raw_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
@@ -449,16 +451,24 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "cwd") => str_to_f64(crate::os::js_process_cwd()),
         ("process", "uptime") => crate::os::js_process_uptime(),
         ("process", "memoryUsage") => crate::process::js_process_memory_usage(),
+        ("process", "threadCpuUsage") => crate::process::js_process_thread_cpu_usage(arg(0)),
         ("process", "nextTick") => {
-            crate::os::js_process_next_tick(arg_closure_ptr(0));
+            // Validate the callback and forward trailing args (#3046).
+            unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "chdir") => {
-            crate::os::js_process_chdir(arg_event_ptr(0));
+            // #3043 — route dynamic/method-value chdir calls through the
+            // full-value validator (matching the static codegen path) so a
+            // non-string argument throws TypeError [ERR_INVALID_ARG_TYPE]
+            // instead of silently no-oping on a null string pointer.
+            unsafe {
+                crate::process::js_process_chdir_jsv(arg(0));
+            }
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "loadEnvFile") => {
-            crate::process::js_process_load_env_file(optional_path_str_ptr(0));
+            crate::process::js_process_load_env_file(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "getgroups") => crate::process::js_process_getgroups(),
@@ -486,10 +496,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::process::js_process_initgroups(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
-        ("process", "kill") => {
-            crate::os::js_process_kill(arg(0), arg(1));
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        }
+        ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -503,6 +510,8 @@ pub(crate) unsafe fn dispatch_native_module_method(
 
         // ── tty module ──
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
+        ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
+        ("tty", "WriteStream") => crate::tty::js_tty_write_stream_new(arg(0)),
 
         // ── net module legacy/internal helpers ──
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
@@ -530,7 +539,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "clearMarks") => crate::perf_hooks::js_perf_clear_marks(arg(0)),
         ("perf_hooks", "clearMeasures") => crate::perf_hooks::js_perf_clear_measures(arg(0)),
         ("perf_hooks", "eventLoopUtilization") => {
-            crate::perf_hooks::js_perf_event_loop_utilization(arg(0))
+            crate::perf_hooks::js_perf_event_loop_utilization(arg(0), arg(1))
         }
         ("perf_hooks", "toJSON") => crate::perf_hooks::js_perf_to_json(),
         ("perf_hooks", "clearResourceTimings") => {
@@ -539,6 +548,17 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("perf_hooks", "setResourceTimingBufferSize") => {
             crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
         }
+        ("perf_hooks", "markResourceTiming") => crate::perf_hooks::js_perf_mark_resource_timing(
+            arg(0),
+            arg(1),
+            arg(2),
+            arg(3),
+            arg(4),
+            arg(5),
+            arg(6),
+            arg(7),
+        ),
+        ("perf_hooks", "timerify") => crate::perf_hooks::js_perf_timerify(arg(0), arg(1)),
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the
@@ -975,15 +995,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
             crate::builtins::js_util_format_with_options(arg(0), arr)
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
+        ("util", "convertProcessSignalToExitCode") => {
+            crate::os::js_util_convert_process_signal_to_exit_code(arg(0))
+        }
         // #2514: libuv-style errno → name/message/map helpers.
         ("util", "getSystemErrorName") => crate::util_syserr::js_util_get_system_error_name(arg(0)),
         ("util", "getSystemErrorMessage") => {
             crate::util_syserr::js_util_get_system_error_message(arg(0))
         }
         ("util", "getSystemErrorMap") => crate::util_syserr::js_util_get_system_error_map(),
+        ("util", "aborted") => crate::util_abort::js_util_aborted(arg(0), arg(1)),
+        ("util", "transferableAbortController") => {
+            crate::util_abort::js_util_transferable_abort_controller()
+        }
+        ("util", "transferableAbortSignal") => {
+            crate::util_abort::js_util_transferable_abort_signal(arg(0))
+        }
+        ("util", "getCallSites") => crate::util_call_sites::js_util_get_call_sites(arg(0), arg(1)),
         // #2514: util.parseEnv(content) → object.
         ("util", "parseEnv") => crate::util_parse_env::js_util_parse_env(arg(0)),
-        ("util", "debuglog") => super::native_module::util_debuglog_logger_value(),
+        ("util", "debuglog") | ("util", "debug") => {
+            crate::util_debuglog::js_util_debuglog(arg(0), arg(1))
+        }
+        ("util", "diff") => crate::util_diff::js_util_diff(arg(0), arg(1)),
         ("util", "isArray") => crate::array::js_array_is_array(arg(0)),
         ("util", "isDeepStrictEqual") => {
             crate::builtins::js_util_is_deep_strict_equal(arg(0), arg(1))
@@ -991,8 +1025,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("util", "stripVTControlCharacters") => {
             crate::builtins::js_util_strip_vt_control_characters(arg(0))
         }
+        ("util", "styleText") => crate::util_style_text::js_util_style_text(arg(0), arg(1), arg(2)),
         // #2514: util.toUSVString(value) → string with lone surrogates → U+FFFD.
         ("util", "toUSVString") => crate::util_usv::js_util_to_usv_string(arg(0)),
+        ("util", "setTraceSigInt") => crate::util_settracesigint::js_util_set_trace_sig_int(arg(0)),
         ("util", "promisify") => crate::util_promisify::js_util_promisify(arg(0)),
         ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
@@ -1447,6 +1483,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let opts_p = optional_ptr_addr(arg(2)) as i64;
             crate::child_process::fork::js_child_process_fork(module, args_p, opts_p)
         }
+        ("cluster", "setupPrimary") | ("cluster", "setupMaster") => {
+            crate::cluster::js_cluster_setup_primary(arg(0))
+        }
+        ("cluster", "fork") => crate::cluster::js_cluster_fork(arg(0)),
+        ("cluster", "disconnect") => crate::cluster::js_cluster_disconnect(arg(0)),
+        ("cluster", "Worker") => f64::from_bits(JSValue::undefined().bits()),
 
         // #1577: captured-then-called crypto methods (`const f =
         // crypto.createHash; f(...)`). The impls live in perry-stdlib (which
@@ -1509,6 +1551,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
                 dispatch(qualified.as_ptr(), qualified.len(), args_ptr, args_len)
             }
         }
+
+        // #3142: `new v8.GCProfiler()` is the "v8.GCProfiler" namespace.
+        // `start()` returns undefined; `stop()` returns the report object.
+        ("v8.GCProfiler", "start") => f64::from_bits(JSValue::undefined().bits()),
+        ("v8.GCProfiler", "stop") => crate::node_v8::js_v8_gc_profiler_report(),
 
         // #2533: captured / aliased server factories
         // (`const createServer = options.createServer || createServerHTTP;

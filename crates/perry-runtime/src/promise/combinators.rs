@@ -285,7 +285,9 @@ fn rejected_not_iterable(value: f64) -> *mut Promise {
 /// engine that backs spread / `Array.from`), but gates it behind an explicit
 /// iterability probe so non-iterable primitives and plain objects reject with
 /// a `TypeError` instead of silently coercing to `[]`.
-fn combinator_iterable_to_array(value: f64) -> Result<*mut crate::array::ArrayHeader, ()> {
+pub(crate) fn combinator_iterable_to_array(
+    value: f64,
+) -> Result<*mut crate::array::ArrayHeader, ()> {
     use crate::value::JSValue;
 
     // Arrays and strings are always iterable.

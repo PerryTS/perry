@@ -18,6 +18,8 @@
 use crate::url::create_string_f64;
 use crate::value::JSValue;
 
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
 /// errno-backed libuv codes: `(libc errno value, name, libuv message)`.
 #[cfg(unix)]
 fn errno_backed() -> Vec<(i32, &'static str, &'static str)> {
@@ -139,6 +141,9 @@ fn errno_backed() -> Vec<(i32, &'static str, &'static str)> {
     #[cfg(target_os = "linux")]
     {
         t.push((libc::ENODATA, "ENODATA", "no data available"));
+        t.push((libc::EUNATCH, "EUNATCH", "protocol driver not attached"));
+        t.push((libc::EREMOTEIO, "EREMOTEIO", "remote I/O error"));
+        t.push((libc::ENONET, "ENONET", "machine is not on the network"));
     }
     t
 }
@@ -169,8 +174,13 @@ fn uv_internal() -> &'static [(i32, &'static str, &'static str)] {
         (-3011, "EAI_SOCKTYPE", "socket type not supported"),
         (-3013, "EAI_BADHINTS", "invalid value for hints"),
         (-3014, "EAI_PROTOCOL", "resolved protocol is unknown"),
+        #[cfg(not(target_os = "macos"))]
+        (-4028, "EFTYPE", "inappropriate file type or format"),
+        #[cfg(not(target_os = "linux"))]
         (-4023, "EUNATCH", "protocol driver not attached"),
+        #[cfg(not(target_os = "linux"))]
         (-4030, "EREMOTEIO", "remote I/O error"),
+        #[cfg(not(target_os = "linux"))]
         (-4056, "ENONET", "machine is not on the network"),
         (-4080, "ECHARSET", "invalid Unicode character"),
         (-4094, "UNKNOWN", "unknown error"),
@@ -178,15 +188,81 @@ fn uv_internal() -> &'static [(i32, &'static str, &'static str)] {
     ]
 }
 
-/// Coerce a JS value to the libuv-style code integer Node would receive.
+fn group_decimal_digits(digits: &str) -> String {
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    let first = digits.len() % 3;
+    if first != 0 {
+        out.push_str(&digits[..first]);
+        if digits.len() > first {
+            out.push('_');
+        }
+    }
+    for (idx, chunk) in digits[first..].as_bytes().chunks(3).enumerate() {
+        if idx > 0 {
+            out.push('_');
+        }
+        out.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+    }
+    out
+}
+
+fn format_out_of_range_number(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if n.fract() == 0.0 && n.abs() <= i64::MAX as f64 {
+        let sign = if n.is_sign_negative() { "-" } else { "" };
+        let digits = format!("{}", n.abs() as i64);
+        if n.abs() > MAX_SAFE_INTEGER {
+            return format!("{sign}{}", group_decimal_digits(&digits));
+        }
+        return format!("{sign}{digits}");
+    }
+    format!("{n}")
+}
+
+fn throw_invalid_err_type(value: f64) -> ! {
+    let message = format!(
+        "The \"err\" argument must be of type number. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_err_out_of_range(n: f64) -> ! {
+    let message = format!(
+        "The value of \"err\" is out of range. It must be a negative integer. Received {}",
+        format_out_of_range_number(n)
+    );
+    crate::fs::validate::throw_range_error_named(&message, "ERR_OUT_OF_RANGE")
+}
+
+/// Validate a JS value as the negative safe-integer libuv code Node accepts.
 fn code_of(value: f64) -> i64 {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_int32() {
-        jsval.as_int32() as i64
-    } else if value.is_finite() {
-        value as i64
+        let n = jsval.as_int32() as f64;
+        if n < 0.0 {
+            return jsval.as_int32() as i64;
+        }
+        throw_err_out_of_range(n);
+    }
+    if !crate::fs::validate::is_numeric(jsval) {
+        throw_invalid_err_type(value);
+    }
+    let n = jsval.as_number();
+    if n.is_finite() && n < 0.0 && n.fract() == 0.0 && n.abs() <= MAX_SAFE_INTEGER {
+        n as i64
     } else {
-        0
+        throw_err_out_of_range(n);
     }
 }
 
@@ -282,5 +358,38 @@ mod tests {
         assert_eq!(system_error_message(-3008.0), "unknown node or service");
         // unmapped:
         assert_eq!(system_error_name(-999999.0), "Unknown system error -999999");
+    }
+
+    #[test]
+    fn range_number_format_matches_node() {
+        assert_eq!(format_out_of_range_number(f64::NAN), "NaN");
+        assert_eq!(format_out_of_range_number(f64::INFINITY), "Infinity");
+        assert_eq!(
+            format_out_of_range_number(-9_007_199_254_740_992.0),
+            "-9_007_199_254_740_992"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_libuv_aliases_match_node_map() {
+        let entry_count = errno_backed().len() + uv_internal().len();
+        assert_eq!(entry_count, 85);
+        assert_eq!(lookup(-4028).map(|(name, _)| name), Some("EFTYPE"));
+        assert_eq!(
+            lookup(-(libc::EUNATCH as i64)).map(|(name, _)| name),
+            Some("EUNATCH")
+        );
+        assert_eq!(
+            lookup(-(libc::EREMOTEIO as i64)).map(|(name, _)| name),
+            Some("EREMOTEIO")
+        );
+        assert_eq!(
+            lookup(-(libc::ENONET as i64)).map(|(name, _)| name),
+            Some("ENONET")
+        );
+        assert_eq!(lookup(-4023), None);
+        assert_eq!(lookup(-4030), None);
+        assert_eq!(lookup(-4056), None);
     }
 }

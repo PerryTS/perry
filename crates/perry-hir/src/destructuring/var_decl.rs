@@ -236,6 +236,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 "EventEmitter" => Some("events".to_string()),
                                 "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                 "AsyncResource" => Some("async_hooks".to_string()),
+                                // #2875: explicit-resource-management stacks.
+                                // Registering the binding as a native instance
+                                // routes `stack.use/.adopt/.defer/.dispose/
+                                // .move/.disposed` through the
+                                // `__disposable__` dispatch rows.
+                                "DisposableStack" | "AsyncDisposableStack" => {
+                                    Some("__disposable__".to_string())
+                                }
                                 "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                                 "Redis" => Some("ioredis".to_string()),
                                 "LRUCache" => Some("lru-cache".to_string()),
@@ -288,6 +296,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                                 | "DefaultSerializer"
                                                 | "DefaultDeserializer",
                                         )
+                                        | ("dns" | "dns/promises", "Resolver")
                                 );
                                 if is_known_native_class {
                                     let (mod_for_class, cls_for_class) = if class_name == "Agent" {
@@ -407,6 +416,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         // Map factory functions to their class names
                                         let class_name = match (module_name, method_name) {
                                             ("async_hooks", "createHook") => Some("AsyncHook"),
+                                            ("dns" | "dns/promises", "Resolver") => {
+                                                Some("Resolver")
+                                            }
                                             ("mysql2" | "mysql2/promise", "createPool") => {
                                                 Some("Pool")
                                             }
@@ -575,6 +587,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
                                     ("async_hooks", "createHook") => Some("AsyncHook"),
+                                    ("dns" | "dns/promises", "Resolver") => Some("Resolver"),
                                     _ => None,
                                 };
                                 if let Some(cn) = http_class {

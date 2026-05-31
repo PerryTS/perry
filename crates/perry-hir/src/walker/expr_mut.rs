@@ -47,7 +47,6 @@ where
         | Expr::ProcessStdout
         | Expr::ProcessStderr
         | Expr::ProcessAbort
-        | Expr::ProcessThreadCpuUsage
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(_)
@@ -65,7 +64,6 @@ where
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
         | Expr::CryptoRandomUUID
         | Expr::CryptoRandomUUIDv7
         | Expr::OsPlatform
@@ -159,6 +157,8 @@ where
         | Expr::RegExpLastIndex(v)
         | Expr::JsonParse(v)
         | Expr::JsonStringify(v)
+        | Expr::JsonRawJson(v)
+        | Expr::JsonIsRawJson(v)
         | Expr::JsonParseTyped { text: v, .. }
         | Expr::MathFloor(v)
         | Expr::MathCeil(v)
@@ -194,7 +194,9 @@ where
         | Expr::Atob(v)
         | Expr::Btoa(v)
         | Expr::TextEncoderEncode(v)
-        | Expr::TextDecoderDecode(v)
+        | Expr::TextDecoderEncoding(v)
+        | Expr::TextDecoderFatal(v)
+        | Expr::TextDecoderIgnoreBom(v)
         | Expr::EncodeURI(v)
         | Expr::DecodeURI(v)
         | Expr::EncodeURIComponent(v)
@@ -220,6 +222,7 @@ where
         | Expr::NumberCoerce(v)
         | Expr::BigIntCoerce(v)
         | Expr::StringCoerce(v)
+        | Expr::ObjectCoerce(v)
         | Expr::BooleanCoerce(v)
         | Expr::IsNaN(v)
         | Expr::IsUndefinedOrBareNan(v)
@@ -231,6 +234,7 @@ where
         | Expr::StaticPluginResolve(v)
         | Expr::ArrayIsArray(v)
         | Expr::ArrayFrom(v)
+        | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
         | Expr::ForOfToArray(v)
@@ -319,6 +323,12 @@ where
             f(proto);
             if let Some(props) = props {
                 f(props);
+            }
+        }
+        Expr::UrlSearchParamsMissingArgs { params, args, .. } => {
+            f(params);
+            for arg in args {
+                f(arg);
             }
         }
         Expr::BufferConcatWithLength { list, total_length } => {
@@ -534,6 +544,19 @@ where
             f(source);
             f(dest);
         }
+        Expr::TextDecoderNew {
+            label,
+            fatal,
+            ignore_bom,
+        } => {
+            f(label);
+            f(fatal);
+            f(ignore_bom);
+        }
+        Expr::TextDecoderDecode { decoder, input } => {
+            f(decoder);
+            f(input);
+        }
         Expr::PropertySet { object, value, .. } => {
             f(object);
             f(value);
@@ -681,9 +704,16 @@ where
             f(items);
             f(key_fn);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
+        Expr::ArrayFromMapped {
+            iterable,
+            map_fn,
+            this_arg,
+        } => {
             f(iterable);
             f(map_fn);
+            if let Some(t) = this_arg {
+                f(t);
+            }
         }
 
         // ─── Three-child variants ─────────────────────────────────────────
@@ -889,9 +919,22 @@ where
             f(message);
             f(cause);
         }
-        Expr::AggregateErrorNew { errors, message } => {
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => {
+            f(message);
+            f(options);
+        }
+        Expr::AggregateErrorNew {
+            errors,
+            message,
+            options,
+        } => {
             f(errors);
             f(message);
+            if let Some(o) = options {
+                f(o);
+            }
         }
 
         // ─── URL family ──────────────────────────────────────────────────
@@ -1181,6 +1224,11 @@ where
                 f(v);
             }
         }
+        Expr::ProcessThreadCpuUsage(opt) => {
+            if let Some(v) = opt {
+                f(v);
+            }
+        }
         Expr::ProcessEmitWarning(args) => {
             for a in args {
                 f(a);
@@ -1359,11 +1407,17 @@ where
         | Expr::SetAdd { value, .. } => {
             f(value);
         }
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
-            f(array);
-            f(value);
+        Expr::ArrayIndexOf {
+            array,
+            value,
+            from_index,
         }
-        Expr::ArrayLastIndexOf {
+        | Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        }
+        | Expr::ArrayLastIndexOf {
             array,
             value,
             from_index,
@@ -1516,9 +1570,16 @@ where
                 f(a);
             }
         }
-        Expr::ReflectGet { target, key }
-        | Expr::ReflectHas { target, key }
-        | Expr::ReflectDelete { target, key } => {
+        Expr::ReflectGet {
+            target,
+            key,
+            receiver,
+        } => {
+            f(target);
+            f(key);
+            f(receiver);
+        }
+        Expr::ReflectHas { target, key } | Expr::ReflectDelete { target, key } => {
             f(target);
             f(key);
         }
@@ -1526,6 +1587,10 @@ where
             f(target);
             f(key);
             f(value);
+        }
+        Expr::ReflectSetPrototypeOf { target, proto } => {
+            f(target);
+            f(proto);
         }
         Expr::ReflectApply {
             func,

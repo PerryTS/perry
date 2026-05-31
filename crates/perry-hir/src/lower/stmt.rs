@@ -743,6 +743,23 @@ pub(crate) fn lower_stmt(
                                         cn.to_string(),
                                     ));
                                 }
+                                let dns_class = match (mod_name.as_str(), method.as_str()) {
+                                    ("dns" | "dns/promises", "Resolver") => Some("Resolver"),
+                                    _ => None,
+                                };
+                                if let Some(cn) = dns_class {
+                                    let module_owned = mod_name.clone();
+                                    ctx.register_native_instance(
+                                        name.clone(),
+                                        module_owned.clone(),
+                                        cn.to_string(),
+                                    );
+                                    ctx.module_native_instances.push((
+                                        name.clone(),
+                                        module_owned,
+                                        cn.to_string(),
+                                    ));
+                                }
                                 // Issue #769 — node:http / node:https CLIENT factories.
                                 // `const req = http.request(url, cb)` and `http.get` / `https.*`
                                 // variants return a ClientRequest handle; register under

@@ -16,7 +16,11 @@ fn test_map_set_foreach_runtime_handles_survive_callback_copied_minor_gc() {
     crate::map::js_map_set(map, 2.0, test_string_value(b"map-foreach-b"));
     TEST_FOREACH_FORCE_MINOR_VISITS.with(|visits| visits.set(0));
     let before_map = gc_collection_count();
-    crate::map::js_map_foreach(map, callback_handle.get_nanbox_f64());
+    crate::map::js_map_foreach(
+        map,
+        callback_handle.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
     assert!(
         gc_collection_count() > before_map,
         "Map.forEach callback should force copied-minor GC during JS re-entry"
@@ -31,7 +35,11 @@ fn test_map_set_foreach_runtime_handles_survive_callback_copied_minor_gc() {
     crate::set::js_set_add(set, test_string_value(b"set-foreach-b"));
     TEST_FOREACH_FORCE_MINOR_VISITS.with(|visits| visits.set(0));
     let before_set = gc_collection_count();
-    crate::set::js_set_foreach(set, callback_handle.get_nanbox_f64());
+    crate::set::js_set_foreach(
+        set,
+        callback_handle.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
     assert!(
         gc_collection_count() > before_set,
         "Set.forEach callback should force copied-minor GC during JS re-entry"

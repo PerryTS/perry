@@ -941,6 +941,53 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if matches!(module_name.as_str(), "dns" | "dns/promises")
+                    && class_name == "Resolver"
+                    && is_dns_resolver_method_name(&property_name)
+                {
+                    // `dns.Resolver`/`dns/promises.Resolver` instances expose
+                    // callable method-valued fields. A bare method read
+                    // (`typeof r.resolve4`) returns that closure rather than
+                    // invoking the receiver stub as a 0-arg getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "dgram"
+                    && class_name == "Socket"
+                    && is_dgram_socket_method_name(&property_name)
+                {
+                    // `dgram.createSocket()` returns a socket-shaped stub
+                    // object whose methods are callable fields. A bare method
+                    // read (`typeof s.close`) should observe that closure
+                    // instead of invoking the receiver stub as a getter.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "net"
+                    && ((class_name == "Socket" && is_net_socket_method_name(&property_name))
+                        || (class_name == "Server" && is_net_server_method_name(&property_name)))
+                {
+                    // `net.Socket` / `net.Server` method reads are callable
+                    // values. The call form still lowers through the native
+                    // method table; only bare reads use property dispatch.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "Headers" && is_headers_method_name(&property_name) {
+                    // A bare Fetch Headers method read (`headers.entries`) is a
+                    // function value, not a zero-arg native call. The call form
+                    // (`headers.entries()`) is handled by expr_call lowering.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(
                     module_name.as_str(),
                     "readable_stream"
@@ -1043,6 +1090,26 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // Inline `new TextDecoder(...).encoding | .fatal | .ignoreBOM`.
+    if let ast::Expr::New(new_expr) = member.obj.as_ref() {
+        if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
+            if class_ident.sym.as_ref() == "TextDecoder" {
+                if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                    let prop_name = prop_ident.sym.as_ref();
+                    if matches!(prop_name, "encoding" | "fatal" | "ignoreBOM") {
+                        let d =
+                            super::expr_new::lower_text_decoder_new(ctx, new_expr.args.as_deref())?;
+                        return Ok(match prop_name {
+                            "encoding" => Expr::TextDecoderEncoding(Box::new(d)),
+                            "fatal" => Expr::TextDecoderFatal(Box::new(d)),
+                            _ => Expr::TextDecoderIgnoreBom(Box::new(d)),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // TextEncoder / TextDecoder property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
@@ -1056,8 +1123,25 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 .lookup_local_type(&obj_name)
                 .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
                 .unwrap_or(false);
-            if (is_text_encoder || is_text_decoder) && prop_name == "encoding" {
+            if is_text_encoder && prop_name == "encoding" {
                 return Ok(Expr::String("utf-8".to_string()));
+            }
+            if is_text_decoder {
+                match prop_name {
+                    "encoding" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderEncoding(Box::new(d)));
+                    }
+                    "fatal" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderFatal(Box::new(d)));
+                    }
+                    "ignoreBOM" => {
+                        let d = lower_expr(ctx, &member.obj)?;
+                        return Ok(Expr::TextDecoderIgnoreBom(Box::new(d)));
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -1548,6 +1632,7 @@ const STDLIB_NAMESPACE_NAMES: &[&str] = &[
     "fs",
     "crypto",
     "child_process",
+    "dgram",
     "net",
     "os",
     "path",
@@ -1565,6 +1650,7 @@ const STDLIB_NAMESPACE_NAMES: &[&str] = &[
     "async_hooks",
     "readline",
     "string_decoder",
+    "test",
     "tty",
     "worker_threads",
 ];
@@ -1790,6 +1876,13 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
     )
 }
 
+fn is_dns_resolver_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "cancel" | "getServers" | "setServers" | "setLocalAddress"
+    )
+}
+
 fn is_console_instance_method_name(prop: &str) -> bool {
     matches!(
         prop,
@@ -1840,6 +1933,104 @@ fn is_v8_serializer_instance_method_name(class_name: &str, prop: &str) -> bool {
         ),
         _ => false,
     }
+}
+
+fn is_dgram_socket_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "send"
+            | "bind"
+            | "close"
+            | "address"
+            | "connect"
+            | "disconnect"
+            | "addMembership"
+            | "dropMembership"
+            | "setBroadcast"
+            | "setMulticastTTL"
+            | "setMulticastLoopback"
+            | "setMulticastInterface"
+            | "setTTL"
+            | "setRecvBufferSize"
+            | "setSendBufferSize"
+            | "getRecvBufferSize"
+            | "getSendBufferSize"
+            | "ref"
+            | "unref"
+    )
+}
+
+fn is_net_socket_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "address"
+            | "connect"
+            | "destroy"
+            | "destroySoon"
+            | "end"
+            | "pause"
+            | "ref"
+            | "resetAndDestroy"
+            | "resume"
+            | "setEncoding"
+            | "setKeepAlive"
+            | "setNoDelay"
+            | "setTimeout"
+            | "unref"
+            | "write"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "listenerCount"
+            | "eventNames"
+            | "listeners"
+            | "rawListeners"
+            | "upgradeToTLS"
+            | "setDefaultEncoding"
+            | "cork"
+            | "uncork"
+    )
+}
+
+fn is_net_server_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "address"
+            | "close"
+            | "getConnections"
+            | "listen"
+            | "ref"
+            | "unref"
+            | "on"
+            | "addListener"
+            | "once"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "listenerCount"
+            | "eventNames"
+            | "listeners"
+            | "rawListeners"
+    )
+}
+
+fn is_headers_method_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "append"
+            | "delete"
+            | "entries"
+            | "forEach"
+            | "get"
+            | "getSetCookie"
+            | "has"
+            | "keys"
+            | "set"
+            | "values"
+    )
 }
 
 /// #1378: `process.features` literal. Boolean capability flags Node

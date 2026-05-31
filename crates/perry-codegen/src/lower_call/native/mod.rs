@@ -178,6 +178,38 @@ pub(crate) fn lower_native_method_call(
         return Ok(v);
     }
 
+    // node:v8 (#3137/#3138). serialize/deserialize + heap-stat helpers route to
+    // the `js_v8_*` runtime entry points. All are receiver-less statics.
+    if module == "v8" && object.is_none() {
+        let runtime = match method {
+            "serialize" => Some(("js_v8_serialize", true)),
+            "deserialize" => Some(("js_v8_deserialize", true)),
+            "getHeapStatistics" => Some(("js_v8_get_heap_statistics", false)),
+            "getHeapCodeStatistics" => Some(("js_v8_get_heap_code_statistics", false)),
+            "getHeapSpaceStatistics" => Some(("js_v8_get_heap_space_statistics", false)),
+            "cachedDataVersionTag" => Some(("js_v8_cached_data_version_tag", false)),
+            _ => None,
+        };
+        if let Some((fname, takes_arg)) = runtime {
+            if takes_arg {
+                let arg = if let Some(first) = args.first() {
+                    lower_expr(ctx, first)?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                // Lower remaining args for side effects (Node ignores them).
+                for extra in args.iter().skip(1) {
+                    let _ = lower_expr(ctx, extra)?;
+                }
+                return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]));
+            }
+            for extra in args {
+                let _ = lower_expr(ctx, extra)?;
+            }
+            return Ok(ctx.block().call(DOUBLE, fname, &[]));
+        }
+    }
+
     if module == "crypto"
         && class_name == Some("ECDH")
         && method == "convertKey"

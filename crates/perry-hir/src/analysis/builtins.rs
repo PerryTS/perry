@@ -47,6 +47,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "ReferenceError"
             | "EvalError"
             | "URIError"
+            | "AggregateError"
             | "Symbol"
             | "Promise"
             | "Map"
@@ -86,9 +87,25 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Request"
             | "Response"
             | "FinalizationRegistry"
+            // #2875: TC39 explicit-resource-management globals.
+            | "DisposableStack"
+            | "AsyncDisposableStack"
+            | "SuppressedError"
             | "Buffer"
             | "process"
             | "console"
+            // #2905: standard global helper functions used as bare values
+            // (`const p = parseInt`). Bare CALLS (`parseInt(x)`) are picked
+            // off earlier by `try_global_builtins` → `Expr::ParseInt`/etc., so
+            // these only fire for value reads.
+            | "parseInt"
+            | "parseFloat"
+            | "isNaN"
+            | "isFinite"
+            | "encodeURI"
+            | "decodeURI"
+            | "encodeURIComponent"
+            | "decodeURIComponent"
     )
 }
 

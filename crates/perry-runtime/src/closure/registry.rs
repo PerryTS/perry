@@ -84,6 +84,9 @@ pub enum DispatchStrategy {
     /// Bound-method receiver pretending to be a closure (BOUND_METHOD_FUNC_PTR
     /// sentinel). Dispatch via `dispatch_bound_method`.
     BoundMethod,
+    /// `Function.prototype.bind` result (BOUND_FUNCTION_FUNC_PTR sentinel).
+    /// Dispatch via `dispatch_bound_function`.
+    BoundFunction,
     /// Closure body has a rest param at the given fixed_arity index.
     /// Dispatch via `dispatch_rest_bundled`. The bool flag is true when
     /// the rest param is the synthesized `arguments` array (HIR-injected
@@ -141,6 +144,12 @@ fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
             c.borrow_mut().insert(key, DispatchStrategy::BoundMethod);
         });
         return DispatchStrategy::BoundMethod;
+    }
+    if func_ptr == BOUND_FUNCTION_FUNC_PTR {
+        DISPATCH_CACHE.with(|c| {
+            c.borrow_mut().insert(key, DispatchStrategy::BoundFunction);
+        });
+        return DispatchStrategy::BoundFunction;
     }
     let strategy = if let Some((fixed_arity, synthetic)) = lookup_closure_rest_full(func_ptr) {
         DispatchStrategy::Rest(fixed_arity, synthetic)
@@ -473,70 +482,92 @@ pub unsafe fn dispatch_with_arity(
             }
         };
     }
+    // One match arm per declared arity. Each arm transmutes `func_ptr` to
+    // the concrete `(closure, f64 x N)` signature and forwards the (padded)
+    // args. Arities up to 32 are supported so high-arity closures dispatched
+    // dynamically — e.g. qs's recursive `stringify`, which declares 18
+    // params and self-calls with 18 args (#3527) — call their body
+    // correctly instead of mis-calling and corrupting registers. The
+    // `arm!` macro builds the fn type and the (padded) call args from the
+    // arg-index token list; `arm!(@ty $i)` maps any index token to `f64`.
+    macro_rules! arm {
+        (@ty $i:tt) => { f64 };
+        ($($i:tt),* $(,)?) => {{
+            let f: extern "C" fn(*const ClosureHeader $(, arm!(@ty $i))*) -> f64 =
+                std::mem::transmute(func_ptr);
+            f(closure $(, a!($i))*)
+        }};
+    }
     match k {
         0 => {
             let f: extern "C" fn(*const ClosureHeader) -> f64 = std::mem::transmute(func_ptr);
             f(closure)
         }
-        1 => {
-            let f: extern "C" fn(*const ClosureHeader, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(closure, a!(0))
+        1 => arm!(0),
+        2 => arm!(0, 1),
+        3 => arm!(0, 1, 2),
+        4 => arm!(0, 1, 2, 3),
+        5 => arm!(0, 1, 2, 3, 4),
+        6 => arm!(0, 1, 2, 3, 4, 5),
+        7 => arm!(0, 1, 2, 3, 4, 5, 6),
+        8 => arm!(0, 1, 2, 3, 4, 5, 6, 7),
+        9 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8),
+        10 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+        11 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+        12 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+        13 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        14 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+        15 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+        16 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        17 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+        18 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
+        19 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18),
+        20 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19),
+        21 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20),
+        22 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21),
+        23 => {
+            arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22)
         }
-        2 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1))
+        24 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
+        ),
+        25 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24
+        ),
+        26 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25
+        ),
+        27 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26
+        ),
+        28 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27
+        ),
+        29 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28
+        ),
+        30 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29
+        ),
+        31 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30
+        ),
+        32 => arm!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31
+        ),
+        _ => {
+            // Unsupported arity (>32 declared params). Fall back to
+            // undefined rather than mis-calling and triggering UB.
+            f64::from_bits(crate::value::TAG_UNDEFINED)
         }
-        3 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2))
-        }
-        4 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3))
-        }
-        5 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4))
-        }
-        6 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5))
-        }
-        7 => {
-            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5), a!(6))
-        }
-        8 => {
-            let f: extern "C" fn(
-                *const ClosureHeader,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-            ) -> f64 = std::mem::transmute(func_ptr);
-            f(
-                closure,
-                a!(0),
-                a!(1),
-                a!(2),
-                a!(3),
-                a!(4),
-                a!(5),
-                a!(6),
-                a!(7),
-            )
-        }
-        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }
 
@@ -544,6 +575,19 @@ pub unsafe fn dispatch_with_arity(
 /// When js_closure_callN detects this, it extracts captures and dispatches via js_native_call_method.
 /// Captures layout: [0] = namespace_obj (f64), [1] = method_name_ptr (i64), [2] = method_name_len (i64)
 pub const BOUND_METHOD_FUNC_PTR: *const u8 = 0xBADD_DEAD_u64 as *const u8;
+
+/// Sentinel func_ptr value indicating this closure is a `Function.prototype.bind`
+/// result: a bound function with a fixed `this`, prepended partial args, and an
+/// adjusted `.name` / `.length`. When `js_closure_callN` (or `js_native_call_value`)
+/// detects this sentinel it dispatches via `dispatch_bound_function`, which
+/// prepends the bound args, sets `IMPLICIT_THIS` to the bound receiver, and calls
+/// the target closure.
+///
+/// Captures layout:
+///   [0] = target closure value (f64, NaN-boxed)
+///   [1] = bound `this` value (f64)
+///   [2] = bound-args JS Array pointer (i64; 0 when no partial args)
+pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B12D_u64 as *const u8;
 
 /// Flag stored in the high bit of capture_count to indicate that capture slot 0
 /// holds `this` (i.e., this closure is an object literal method that captures `this`).

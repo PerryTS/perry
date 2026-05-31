@@ -2,11 +2,12 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 1871 entries across 90 modules.
+Total: 2126 entries across 96 modules.
 
 ## Modules
 
 - [`@perryts/pdf`](#-perryts-pdf)
+- [`__disposable__`](#--disposable--)
 - [`argon2`](#argon2)
 - [`assert`](#assert)
 - [`assert/strict`](#assert-strict)
@@ -27,6 +28,9 @@ Total: 1871 entries across 90 modules.
 - [`date-fns`](#date-fns)
 - [`dayjs`](#dayjs)
 - [`decimal.js`](#decimal-js)
+- [`dgram`](#dgram)
+- [`dns`](#dns)
+- [`dns/promises`](#dns-promises)
 - [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
@@ -76,6 +80,7 @@ Total: 1871 entries across 90 modules.
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
+- [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
@@ -84,6 +89,7 @@ Total: 1871 entries across 90 modules.
 - [`streams`](#streams)
 - [`string_decoder`](#string-decoder)
 - [`sys`](#sys)
+- [`test`](#test)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -108,6 +114,18 @@ Total: 1871 entries across 90 modules.
 - `pdfAddText` — module
 - `pdfNewPage` — module
 - `pdfSave` — module
+
+## `__disposable__`
+
+### Methods
+
+- `adopt` — instance
+- `defer` — instance
+- `dispose` — instance
+- `disposeAsync` — instance
+- `disposed` — instance
+- `move` — instance
+- `use` — instance
 
 ## `argon2`
 
@@ -272,6 +290,8 @@ Total: 1871 entries across 90 modules.
 - `concat` — module
 - `copyBytesFrom` — module
 - `from` — module
+- `fromBase64` — module
+- `fromHex` — module
 - `isAscii` — module
 - `isBuffer` — module
 - `isEncoding` — module
@@ -746,6 +766,189 @@ Total: 1871 entries across 90 modules.
 - `toNumber` — instance
 - `toString` — instance
 - `valueOf` — instance
+
+## `dgram`
+
+### Classes
+
+- `Socket`
+
+### Methods
+
+- `Socket` — module
+- `addMembership` — instance *(class: `Socket`)*
+- `address` — instance *(class: `Socket`)*
+- `bind` — instance *(class: `Socket`)*
+- `close` — instance *(class: `Socket`)*
+- `connect` — instance *(class: `Socket`)*
+- `createSocket` — module
+- `disconnect` — instance *(class: `Socket`)*
+- `dropMembership` — instance *(class: `Socket`)*
+- `getRecvBufferSize` — instance *(class: `Socket`)*
+- `getSendBufferSize` — instance *(class: `Socket`)*
+- `ref` — instance *(class: `Socket`)*
+- `send` — instance *(class: `Socket`)*
+- `setBroadcast` — instance *(class: `Socket`)*
+- `setMulticastInterface` — instance *(class: `Socket`)*
+- `setMulticastLoopback` — instance *(class: `Socket`)*
+- `setMulticastTTL` — instance *(class: `Socket`)*
+- `setRecvBufferSize` — instance *(class: `Socket`)*
+- `setSendBufferSize` — instance *(class: `Socket`)*
+- `setTTL` — instance *(class: `Socket`)*
+- `unref` — instance *(class: `Socket`)*
+
+## `dns`
+
+### Classes
+
+- `Resolver`
+
+### Methods
+
+- `Resolver` — module
+- `cancel` — instance *(class: `Resolver`)*
+- `getDefaultResultOrder` — module
+- `getServers` — module
+- `getServers` — instance *(class: `Resolver`)*
+- `lookup` — module
+- `lookupService` — module
+- `resolve` — module
+- `resolve4` — module
+- `resolve6` — module
+- `resolveAny` — module
+- `resolveCaa` — module
+- `resolveCname` — module
+- `resolveMx` — module
+- `resolveNaptr` — module
+- `resolveNs` — module
+- `resolvePtr` — module
+- `resolveSoa` — module
+- `resolveSrv` — module
+- `resolveTlsa` — module
+- `resolveTxt` — module
+- `reverse` — module
+- `setDefaultResultOrder` — module
+- `setLocalAddress` — instance *(class: `Resolver`)*
+- `setServers` — module
+- `setServers` — instance *(class: `Resolver`)*
+
+### Properties
+
+- `ADDRCONFIG`
+- `ADDRCONFIG`
+- `ADDRGETNETWORKPARAMS`
+- `ADDRGETNETWORKPARAMS`
+- `ALL`
+- `ALL`
+- `BADFAMILY`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADHINTS`
+- `BADNAME`
+- `BADNAME`
+- `BADQUERY`
+- `BADQUERY`
+- `BADRESP`
+- `BADRESP`
+- `BADSTR`
+- `BADSTR`
+- `CANCELLED`
+- `CANCELLED`
+- `CONNREFUSED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `DESTRUCTION`
+- `EOF`
+- `EOF`
+- `FILE`
+- `FILE`
+- `FORMERR`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NODATA`
+- `NOMEM`
+- `NOMEM`
+- `NONAME`
+- `NONAME`
+- `NOTFOUND`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `REFUSED`
+- `SERVFAIL`
+- `SERVFAIL`
+- `TIMEOUT`
+- `TIMEOUT`
+- `V4MAPPED`
+- `V4MAPPED`
+- `promises`
+
+## `dns/promises`
+
+### Classes
+
+- `Resolver`
+
+### Methods
+
+- `Resolver` — module
+- `cancel` — instance *(class: `Resolver`)*
+- `getDefaultResultOrder` — module
+- `getServers` — module
+- `getServers` — instance *(class: `Resolver`)*
+- `lookup` — module
+- `lookupService` — module
+- `resolve` — module
+- `resolve4` — module
+- `resolve6` — module
+- `resolveAny` — module
+- `resolveCaa` — module
+- `resolveCname` — module
+- `resolveMx` — module
+- `resolveNaptr` — module
+- `resolveNs` — module
+- `resolvePtr` — module
+- `resolveSoa` — module
+- `resolveSrv` — module
+- `resolveTlsa` — module
+- `resolveTxt` — module
+- `reverse` — module
+- `setDefaultResultOrder` — module
+- `setServers` — module
+
+### Properties
+
+- `ADDRGETNETWORKPARAMS`
+- `BADFAMILY`
+- `BADFLAGS`
+- `BADHINTS`
+- `BADNAME`
+- `BADQUERY`
+- `BADRESP`
+- `BADSTR`
+- `CANCELLED`
+- `CONNREFUSED`
+- `DESTRUCTION`
+- `EOF`
+- `FILE`
+- `FORMERR`
+- `LOADIPHLPAPI`
+- `NODATA`
+- `NOMEM`
+- `NONAME`
+- `NOTFOUND`
+- `NOTIMP`
+- `NOTINITIALIZED`
+- `REFUSED`
+- `SERVFAIL`
+- `TIMEOUT`
 
 ## `dotenv`
 
@@ -1356,13 +1559,19 @@ Total: 1871 entries across 90 modules.
 - `addListener` — instance *(class: `Server`)*
 - `address` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Server`)*
+- `autoSelectFamilyAttemptedAddresses` — instance *(class: `Socket`)*
+- `bufferSize` — instance *(class: `Socket`)*
+- `bytesRead` — instance *(class: `Socket`)*
+- `bytesWritten` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
+- `connecting` — instance *(class: `Socket`)*
 - `cork` — instance *(class: `Socket`)*
 - `createConnection` — module
 - `createServer` — module
 - `destroy` — instance *(class: `Socket`)*
+- `destroyed` — instance *(class: `Socket`)*
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Server`)*
@@ -1376,15 +1585,23 @@ Total: 1871 entries across 90 modules.
 - `listenerCount` — instance *(class: `Server`)*
 - `listeners` — instance *(class: `Socket`)*
 - `listeners` — instance *(class: `Server`)*
+- `localAddress` — instance *(class: `Socket`)*
+- `localFamily` — instance *(class: `Socket`)*
+- `localPort` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
 - `pause` — instance *(class: `Socket`)*
+- `pending` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
+- `readyState` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
+- `remoteAddress` — instance *(class: `Socket`)*
+- `remoteFamily` — instance *(class: `Socket`)*
+- `remotePort` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Socket`)*
 - `removeAllListeners` — instance *(class: `Server`)*
 - `removeListener` — instance *(class: `Socket`)*
@@ -1398,6 +1615,7 @@ Total: 1871 entries across 90 modules.
 - `setKeepAlive` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
+- `timeout` — instance *(class: `Socket`)*
 - `uncork` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
@@ -2075,9 +2293,34 @@ Total: 1871 entries across 90 modules.
 
 ### Methods
 
+- `clearLine` — module
+- `clearScreenDown` — module
 - `close` — instance
 - `createInterface` — module
+- `cursorTo` — module
+- `emitKeypressEvents` — module
+- `getCursorPos` — instance
+- `getPrompt` — instance
+- `moveCursor` — module
 - `on` — instance
+- `pause` — instance
+- `prompt` — instance
+- `question` — instance
+- `resume` — instance
+- `setPrompt` — instance
+- `write` — instance
+
+## `readline/promises`
+
+### Classes
+
+- `Interface`
+- `Readline`
+
+### Methods
+
+- `close` — instance
+- `createInterface` — module
 - `question` — instance
 
 ## `redis`
@@ -2252,10 +2495,16 @@ Total: 1871 entries across 90 modules.
 
 ### Methods
 
+- `aborted` — module
 - `callbackify` — module
+- `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
 - `deprecate` — module
+- `diff` — module
 - `format` — module
 - `formatWithOptions` — module
+- `getCallSites` — module
 - `getSystemErrorMap` — module
 - `getSystemErrorMessage` — module
 - `getSystemErrorName` — module
@@ -2266,12 +2515,39 @@ Total: 1871 entries across 90 modules.
 - `parseArgs` — module
 - `parseEnv` — module
 - `promisify` — module
+- `setTraceSigInt` — module
 - `stripVTControlCharacters` — module
+- `styleText` — module
 - `toUSVString` — module
+- `transferableAbortController` — module
+- `transferableAbortSignal` — module
 
 ### Properties
 
 - `types`
+
+## `test`
+
+### Methods
+
+- `after` — module
+- `afterEach` — module
+- `before` — module
+- `beforeEach` — module
+- `describe` — module
+- `fn` — module *(class: `mock`)*
+- `it` — module
+- `only` — module
+- `property` — module *(class: `mock`)*
+- `run` — module
+- `skip` — module
+- `suite` — module
+- `todo` — module
+
+### Properties
+
+- `mock`
+- `snapshot`
 
 ## `tls`
 
@@ -2288,7 +2564,24 @@ Total: 1871 entries across 90 modules.
 
 ### Methods
 
+- `ReadStream` — module
+- `WriteStream` — module
+- `_refreshSize` — instance *(class: `WriteStream`)*
+- `addListener` — instance *(class: `WriteStream`)*
+- `clearLine` — instance *(class: `WriteStream`)*
+- `clearScreenDown` — instance *(class: `WriteStream`)*
+- `cursorTo` — instance *(class: `WriteStream`)*
+- `getColorDepth` — instance *(class: `WriteStream`)*
+- `getWindowSize` — instance *(class: `WriteStream`)*
+- `hasColors` — instance *(class: `WriteStream`)*
 - `isatty` — module
+- `moveCursor` — instance *(class: `WriteStream`)*
+- `off` — instance *(class: `WriteStream`)*
+- `on` — instance *(class: `WriteStream`)*
+- `once` — instance *(class: `WriteStream`)*
+- `removeAllListeners` — instance *(class: `WriteStream`)*
+- `removeListener` — instance *(class: `WriteStream`)*
+- `setRawMode` — instance *(class: `ReadStream`)*
 
 ## `tursodb`
 
@@ -2333,10 +2626,16 @@ Total: 1871 entries across 90 modules.
 
 ### Methods
 
+- `aborted` — module
 - `callbackify` — module
+- `convertProcessSignalToExitCode` — module
+- `debug` — module
+- `debuglog` — module
 - `deprecate` — module
+- `diff` — module
 - `format` — module
 - `formatWithOptions` — module
+- `getCallSites` — module
 - `getSystemErrorMap` — module
 - `getSystemErrorMessage` — module
 - `getSystemErrorName` — module
@@ -2347,8 +2646,12 @@ Total: 1871 entries across 90 modules.
 - `parseArgs` — module
 - `parseEnv` — module
 - `promisify` — module
+- `setTraceSigInt` — module
 - `stripVTControlCharacters` — module
+- `styleText` — module
 - `toUSVString` — module
+- `transferableAbortController` — module
+- `transferableAbortSignal` — module
 
 ### Properties
 
@@ -2407,6 +2710,7 @@ Total: 1871 entries across 90 modules.
 - `DefaultDeserializer`
 - `DefaultSerializer`
 - `Deserializer`
+- `GCProfiler`
 - `Serializer`
 
 ### Methods
@@ -2420,9 +2724,14 @@ Total: 1871 entries across 90 modules.
 - `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `Serializer`)*
 - `_setTreatArrayBufferViewsAsHostObjects` — instance *(class: `DefaultSerializer`)*
 - `cachedDataVersionTag` — module
+- `cachedDataVersionTag` — module
+- `deserialize` — module
 - `deserialize` — module
 - `getHeapCodeStatistics` — module
+- `getHeapCodeStatistics` — module
 - `getHeapSpaceStatistics` — module
+- `getHeapSpaceStatistics` — module
+- `getHeapStatistics` — module
 - `getHeapStatistics` — module
 - `getWireFormatVersion` — instance *(class: `Deserializer`)*
 - `getWireFormatVersion` — instance *(class: `DefaultDeserializer`)*
@@ -2441,6 +2750,9 @@ Total: 1871 entries across 90 modules.
 - `releaseBuffer` — instance *(class: `Serializer`)*
 - `releaseBuffer` — instance *(class: `DefaultSerializer`)*
 - `serialize` — module
+- `serialize` — module
+- `start` — instance *(class: `GCProfiler`)*
+- `stop` — instance *(class: `GCProfiler`)*
 - `transferArrayBuffer` — instance *(class: `Serializer`)*
 - `transferArrayBuffer` — instance *(class: `DefaultSerializer`)*
 - `transferArrayBuffer` — instance *(class: `Deserializer`)*

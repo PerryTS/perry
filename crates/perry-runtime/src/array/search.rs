@@ -36,16 +36,55 @@ fn as_typed_array(
     }
 }
 
-/// indexOf for arrays, using jsvalue comparison (handles NaN-boxed strings correctly)
+/// Resolve a forward-search `fromIndex` (ECMA-262 ToIntegerOrInfinity +
+/// clamping) into the first index to inspect. Returns `None` when nothing can
+/// match (e.g. `fromIndex >= length`, including `+Infinity`). `has_from == 0`
+/// means no argument was supplied → start at 0. `NaN` coerces to 0; negative
+/// values count from the end and clamp at 0.
+#[inline]
+fn forward_start_index(length: i64, from_index: f64, has_from: i32) -> Option<i64> {
+    if has_from == 0 {
+        return Some(0);
+    }
+    let n = if from_index.is_nan() {
+        0.0
+    } else {
+        from_index.trunc()
+    };
+    if n >= length as f64 {
+        // Covers +Infinity and any fromIndex past the end.
+        None
+    } else if n >= 0.0 {
+        Some(n as i64)
+    } else if n >= -(length as f64) {
+        Some(length + n as i64)
+    } else {
+        // fromIndex <= -length (including -Infinity): clamp to 0.
+        Some(0)
+    }
+}
+
+/// indexOf for arrays, using jsvalue comparison (handles NaN-boxed strings
+/// correctly). `from_index` / `has_from` implement the optional ECMA-262
+/// `fromIndex` argument (#2804); `has_from == 0` searches from index 0.
 #[no_mangle]
-pub extern "C" fn js_array_indexOf_jsvalue(arr: *const ArrayHeader, value: f64) -> i32 {
+pub extern "C" fn js_array_indexOf_jsvalue(
+    arr: *const ArrayHeader,
+    value: f64,
+    from_index: f64,
+    has_from: i32,
+) -> i32 {
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return -1;
     }
     // TypedArray: strict-equality numeric search over the typed store.
     if let Some((ta, len)) = as_typed_array(arr) {
-        for i in 0..len {
+        let start = match forward_start_index(len as i64, from_index, has_from) {
+            Some(s) => s as i32,
+            None => return -1,
+        };
+        for i in start..len {
             if crate::typedarray::js_typed_array_get(ta, i) == value {
                 return i;
             }
@@ -53,10 +92,14 @@ pub extern "C" fn js_array_indexOf_jsvalue(arr: *const ArrayHeader, value: f64) 
         return -1;
     }
     unsafe {
-        let length = (*arr).length;
+        let length = (*arr).length as i64;
+        let start = match forward_start_index(length, from_index, has_from) {
+            Some(s) => s,
+            None => return -1,
+        };
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+        for i in start..length {
+            let element = *elements_ptr.add(i as usize);
             if crate::value::js_jsvalue_equals(element, value) == 1 {
                 return i as i32;
             }
@@ -170,9 +213,16 @@ pub extern "C" fn js_array_includes_f64(arr: *const ArrayHeader, value: f64) -> 
 
 /// Check if an array includes a value using deep equality comparison.
 /// This handles NaN-boxed strings by comparing string contents.
+/// `from_index` / `has_from` implement the optional ECMA-262 `fromIndex`
+/// argument (#2804); `has_from == 0` searches from index 0.
 /// Returns 1 if found, 0 if not.
 #[no_mangle]
-pub extern "C" fn js_array_includes_jsvalue(arr: *const ArrayHeader, value: f64) -> i32 {
+pub extern "C" fn js_array_includes_jsvalue(
+    arr: *const ArrayHeader,
+    value: f64,
+    from_index: f64,
+    has_from: i32,
+) -> i32 {
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return 0;
@@ -180,7 +230,11 @@ pub extern "C" fn js_array_includes_jsvalue(arr: *const ArrayHeader, value: f64)
     // TypedArray: SameValueZero numeric search (so includes(NaN) is true for
     // float typed arrays).
     if let Some((ta, len)) = as_typed_array(arr) {
-        for i in 0..len {
+        let start = match forward_start_index(len as i64, from_index, has_from) {
+            Some(s) => s as i32,
+            None => return 0,
+        };
+        for i in start..len {
             let e = crate::typedarray::js_typed_array_get(ta, i);
             if crate::value::js_jsvalue_same_value_zero(e, value) == 1 {
                 return 1;
@@ -189,15 +243,19 @@ pub extern "C" fn js_array_includes_jsvalue(arr: *const ArrayHeader, value: f64)
         return 0;
     }
     unsafe {
-        let length = (*arr).length;
+        let length = (*arr).length as i64;
+        let start = match forward_start_index(length, from_index, has_from) {
+            Some(s) => s,
+            None => return 0,
+        };
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
 
         // `Array.prototype.includes` uses SameValueZero (ECMA-262 §23.1.3.16),
         // which differs from === in one place: NaN equals NaN. Routing
         // through `js_jsvalue_same_value_zero` preserves the `indexOf(NaN) ===
         // -1` / `includes(NaN) === true` split.
-        for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+        for i in start..length {
+            let element = *elements_ptr.add(i as usize);
             if crate::value::js_jsvalue_same_value_zero(element, value) == 1 {
                 return 1;
             }
@@ -225,13 +283,20 @@ mod typed_search_tests {
             js_typed_array_set(ta, i as i32, *v);
         }
         let arr = ta as *const ArrayHeader;
-        assert_eq!(js_array_indexOf_jsvalue(arr, 2.0), 1);
-        assert_eq!(js_array_indexOf_jsvalue(arr, 3.0), 2);
-        assert_eq!(js_array_indexOf_jsvalue(arr, 9.0), -1);
-        assert_eq!(js_array_includes_jsvalue(arr, 3.0), 1);
-        assert_eq!(js_array_includes_jsvalue(arr, 9.0), 0);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 2.0, 0.0, 0), 1);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 3.0, 0.0, 0), 2);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 9.0, 0.0, 0), -1);
+        assert_eq!(js_array_includes_jsvalue(arr, 3.0, 0.0, 0), 1);
+        assert_eq!(js_array_includes_jsvalue(arr, 9.0, 0.0, 0), 0);
         // indexOf uses strict equality → NaN never matches.
-        assert_eq!(js_array_indexOf_jsvalue(arr, f64::NAN), -1);
+        assert_eq!(js_array_indexOf_jsvalue(arr, f64::NAN, 0.0, 0), -1);
+        // fromIndex on a TypedArray: search from index 2 onward.
+        assert_eq!(js_array_indexOf_jsvalue(arr, 1.0, 2.0, 1), 4);
+        // negative fromIndex counts from end: -2 → index 3.
+        assert_eq!(js_array_indexOf_jsvalue(arr, 2.0, -2.0, 1), 3);
+        // +Infinity fromIndex never matches forward search.
+        assert_eq!(js_array_indexOf_jsvalue(arr, 1.0, f64::INFINITY, 1), -1);
+        assert_eq!(js_array_includes_jsvalue(arr, 1.0, f64::INFINITY, 1), 0);
     }
 
     /// SameValueZero: `includes(NaN)` is true for a Float64Array holding NaN,
@@ -243,9 +308,9 @@ mod typed_search_tests {
         js_typed_array_set(ta, 1, f64::NAN);
         js_typed_array_set(ta, 2, 2.5);
         let arr = ta as *const ArrayHeader;
-        assert_eq!(js_array_includes_jsvalue(arr, f64::NAN), 1);
-        assert_eq!(js_array_indexOf_jsvalue(arr, f64::NAN), -1);
-        assert_eq!(js_array_indexOf_jsvalue(arr, 2.5), 2);
+        assert_eq!(js_array_includes_jsvalue(arr, f64::NAN, 0.0, 0), 1);
+        assert_eq!(js_array_indexOf_jsvalue(arr, f64::NAN, 0.0, 0), -1);
+        assert_eq!(js_array_indexOf_jsvalue(arr, 2.5, 0.0, 0), 2);
     }
 
     /// `lastIndexOf` on a registered TypedArray scans the typed backing store
