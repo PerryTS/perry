@@ -3034,7 +3034,7 @@ pub fn run_with_parse_cache(
                             // code reads them as namespace objects.
                             if matches!(
                                 submod_key.as_str(),
-                                "diagnostics_channel" | "timers" | "sys" | "trace_events"
+                                "diagnostics_channel" | "timers" | "trace_events"
                             ) {
                                 // Default imports of these modules are module
                                 // objects — route to the namespace so they work
@@ -3046,9 +3046,10 @@ pub fn run_with_parse_cache(
                                 }
                             } else {
                                 // Default imports route to "default" — these
-                                // submodules don't have meaningful defaults
-                                // but tracking them keeps the catch-all from
-                                // firing on `import x from "node:..."`.
+                                // submodules either expose a real default
+                                // (`node:sys` aliases `node:util`) or need a
+                                // tracked placeholder to keep the catch-all
+                                // from firing on `import x from "node:..."`.
                                 import_function_node_submodule.insert(
                                     local.clone(),
                                     (submod_key.clone(), "default".to_string()),
