@@ -1,10 +1,28 @@
 import tty from "node:tty";
 
-// Node's WriteStream.prototype.hasColors accepts an optional color count.
-// hasColors() / hasColors(count) / hasColors(count, env) must each return a boolean
-// without throwing for the documented arities.
-console.log("hasColors() boolean:", typeof tty.WriteStream.prototype.hasColors() === "boolean");
-console.log("hasColors(2) boolean:", typeof tty.WriteStream.prototype.hasColors(2) === "boolean");
-console.log("hasColors(16) boolean:", typeof tty.WriteStream.prototype.hasColors(16) === "boolean");
-console.log("hasColors(256) boolean:", typeof tty.WriteStream.prototype.hasColors(256) === "boolean");
-console.log("hasColors(16777216) boolean:", typeof tty.WriteStream.prototype.hasColors(16777216) === "boolean");
+const proto: any = tty.WriteStream.prototype;
+
+console.log("has default depth 2:", proto.hasColors(2, {}) === true);
+console.log("has default depth 16:", proto.hasColors(16, {}) === false);
+console.log("has force1 16:", proto.hasColors(16, { FORCE_COLOR: "1" }) === true);
+console.log("has force1 256:", proto.hasColors(256, { FORCE_COLOR: "1" }) === false);
+console.log("has force2 256:", proto.hasColors(256, { FORCE_COLOR: "2" }) === true);
+console.log("has force2 16m:", proto.hasColors(16777216, { FORCE_COLOR: "2" }) === false);
+console.log("has force3 16m:", proto.hasColors(16777216, { FORCE_COLOR: "3" }) === true);
+console.log("has env object:", proto.hasColors({ FORCE_COLOR: "2" }) === true);
+
+function checkError(label: string, fn: () => unknown) {
+  try {
+    fn();
+    console.log(label + ":", "no-error");
+  } catch (e: any) {
+    console.log(label + ":", e?.name, e?.code || "no-code");
+  }
+}
+
+checkError("count below range", () => proto.hasColors(1));
+checkError("count non-integer", () => proto.hasColors(2.5));
+checkError("count infinity", () => proto.hasColors(Infinity));
+checkError("count string", () => proto.hasColors("16"));
+checkError("count null", () => proto.hasColors(null));
+checkError("count object with env", () => proto.hasColors({}, {}));

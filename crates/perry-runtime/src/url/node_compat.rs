@@ -50,6 +50,50 @@ fn throw_url_type_error_with_code(message: &str, code: &'static str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+fn is_js_string_value(value: f64) -> bool {
+    crate::value::JSValue::from_bits(value.to_bits()).is_any_string()
+}
+
+fn string_from_js_value(value: f64) -> String {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *mut crate::StringHeader;
+    string_from_header(ptr)
+}
+
+fn url_received(value: f64) -> String {
+    if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
+        return "an instance of Buffer".to_string();
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        let ptr = unsafe { crate::symbol::js_symbol_to_string(value) } as *const StringHeader;
+        return format!(
+            "type symbol ({})",
+            string_from_header(ptr as *mut StringHeader)
+        );
+    }
+    crate::fs::validate::describe_received(value)
+}
+
+fn throw_invalid_url_arg(value: f64, url_instance_allowed: bool) -> ! {
+    let expected = if url_instance_allowed {
+        "string or an instance of URL"
+    } else {
+        "string"
+    };
+    let message = format!(
+        "The \"path\" argument must be of type {expected}. Received {}",
+        url_received(value)
+    );
+    throw_url_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn throw_invalid_legacy_url_arg(value: f64) -> ! {
+    let message = format!(
+        "The \"url\" argument must be of type string. Received {}",
+        url_received(value)
+    );
+    throw_url_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
 fn hex_nibble(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -94,13 +138,16 @@ fn decode_file_url_pathname(pathname: &str) -> String {
 /// and `fileURLToPathBuffer` (raw bytes). Returns the decoded path bytes,
 /// throwing the same scheme/host/encoded-slash errors as Node.
 fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
-    let url_string = object_from_f64(url_f64)
-        .map(|obj| object_prop_string(obj, "href"))
-        .unwrap_or_else(|| {
-            let ptr =
-                crate::value::js_get_string_pointer_unified(url_f64) as *mut crate::StringHeader;
-            string_from_header(ptr)
-        });
+    let url_string = if is_js_string_value(url_f64) {
+        string_from_js_value(url_f64)
+    } else if let Some(obj) = object_from_f64(url_f64) {
+        if !is_url_object_shape(obj) {
+            throw_invalid_url_arg(url_f64, true);
+        }
+        object_prop_string(obj, "href")
+    } else {
+        throw_invalid_url_arg(url_f64, true);
+    };
 
     let Some(after_scheme) = url_string.strip_prefix("file:") else {
         throw_url_type_error_with_code("The URL must be of scheme file", "ERR_INVALID_URL_SCHEME");
@@ -123,6 +170,28 @@ fn file_url_to_path_bytes(url_f64: f64) -> Vec<u8> {
     };
     let pathname = pathname.split(['?', '#']).next().unwrap_or_default();
     decode_file_url_pathname_bytes(pathname)
+}
+
+/// Resolve a `node:module` "base" argument (file URL object/string or a
+/// bare path string) to a filesystem path string. URL-shaped values and
+/// `file:`-scheme strings go through the file-URL decoder; any other string
+/// is treated as a path and returned verbatim. Used by
+/// `module.findPackageJSON` (#3120). Returns `None` for non-string,
+/// non-URL-object values so the caller can raise `ERR_INVALID_ARG_TYPE`.
+pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
+    if is_js_string_value(base_f64) {
+        let s = string_from_js_value(base_f64);
+        if s.starts_with("file:") {
+            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+        }
+        return Some(s);
+    }
+    if let Some(obj) = object_from_f64(base_f64) {
+        if is_url_object_shape(obj) {
+            return Some(String::from_utf8_lossy(&file_url_to_path_bytes(base_f64)).into_owned());
+        }
+    }
+    None
 }
 
 /// Convert a file:// URL to a filesystem path
@@ -159,6 +228,9 @@ pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
+    if !is_js_string_value(path_f64) {
+        throw_invalid_url_arg(path_f64, false);
+    }
     let path = get_string_content(path_f64);
     let path = crate::path::resolve_posix_str(&path);
     let mut encoded = String::new();
@@ -180,49 +252,44 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64) -> f64 {
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
+/// `url.domainToASCII(domain)` (#3059). Node Web-IDL-stringifies the argument
+/// (`String(domain)`; a Symbol throws TypeError) and runs the full WHATWG host
+/// parser, so a numeric / IPv4-shorthand domain canonicalizes to a dotted-quad
+/// IPv4 address (`123` → `"0.0.0.123"`, `0x7f.1` → `"127.0.0.1"`) rather than
+/// being treated as a literal label. Unparsable hosts yield `""`.
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
     let input = string_from_header(js_url_coerce_string(input_f64));
-    let out = domain_to_ascii(&input);
+    if input.chars().any(|c| c.is_ascii_whitespace()) {
+        return create_string_f64("");
+    }
+    // `whatwg_canonicalize_host` runs IDNA *and* the WHATWG numeric/IPv4 host
+    // parser, matching Node's `domainToASCII` exactly (IDN → punycode, numeric
+    // → IPv4, invalid → None → ""). It supersedes the bare `idna::domain_to_ascii`.
+    let out = whatwg_canonicalize_host(&input).unwrap_or_default();
     create_string_f64(&out)
 }
 
+/// `url.domainToUnicode(domain)` (#3059). Mirrors `domainToASCII`'s coercion
+/// and WHATWG host parsing, but returns the Unicode IDN form. For numeric /
+/// IPv4-shorthand hosts Node returns the canonical IPv4 address (`123` →
+/// `"0.0.0.123"`); for registrable hostnames it returns the decoded Unicode
+/// (`xn--mnchen-3ya.de` → `münchen.de`); invalid hosts yield `""`.
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
     let input = string_from_header(js_url_coerce_string(input_f64));
-    let ascii = domain_to_ascii(&input);
-    let out = if ascii.starts_with('[') {
-        ascii
-    } else {
-        idna::domain_to_unicode(&ascii).0
+    if input.chars().any(|c| c.is_ascii_whitespace()) {
+        return create_string_f64("");
+    }
+    let out = match whatwg_canonicalize_host(&input) {
+        // Out-of-range / unparsable host → "" (matches Node).
+        None => String::new(),
+        // Numeric / IPv4-shorthand → canonical IPv4 address (Node yields the IP).
+        Some(canon) if is_ipv4_host(&canon) => canon,
+        // Registrable hostname → Unicode IDN form.
+        Some(_) => idna::domain_to_unicode(&input).0,
     };
     create_string_f64(&out)
-}
-
-fn domain_to_ascii(input: &str) -> String {
-    let host_prefix = input
-        .split(|c| matches!(c, '/' | '\\' | '?' | '#'))
-        .next()
-        .unwrap_or("");
-    if host_prefix.is_empty() || host_prefix.contains('@') {
-        return String::new();
-    }
-
-    if host_prefix.starts_with('[') {
-        let Some(end) = host_prefix.find(']') else {
-            return String::new();
-        };
-        if !host_prefix[end + 1..].is_empty() {
-            return String::new();
-        }
-    } else if host_prefix.chars().any(|c| matches!(c, ':' | '[' | ']')) {
-        return String::new();
-    }
-
-    let Ok(parsed) = url::Url::parse(&format!("http://{input}")) else {
-        return String::new();
-    };
-    parsed.host_str().unwrap_or("").to_string()
 }
 
 fn json_to_value(json: serde_json::Value) -> f64 {
@@ -397,10 +464,12 @@ pub extern "C" fn js_url_legacy_parse(
     parse_query_string: f64,
     slashes_denote_host: f64,
 ) -> f64 {
+    if !is_js_string_value(input) {
+        throw_invalid_legacy_url_arg(input);
+    }
     let s = get_string_content(input);
     let (protocol, mut host, mut hostname, mut port, mut pathname, search, hash) = parse_url(&s);
-    let bool_true_bits = 0x7FFC_0000_0000_0004u64;
-    let slashes_host = slashes_denote_host.to_bits() == bool_true_bits;
+    let slashes_host = crate::value::js_is_truthy(slashes_denote_host) != 0;
     let protocol_is_null = protocol.is_empty() && slashes_host && s.starts_with("//");
 
     if protocol_is_null {
@@ -446,7 +515,7 @@ pub extern "C" fn js_url_legacy_parse(
             rest
         };
     }
-    let parse_qs = parse_query_string.to_bits() == bool_true_bits;
+    let parse_qs = crate::value::js_is_truthy(parse_query_string) != 0;
     let query = if parse_qs {
         let mut map = serde_json::Map::new();
         let raw = search.strip_prefix('?').unwrap_or(&search);
@@ -479,6 +548,12 @@ pub extern "C" fn js_url_legacy_parse(
 
 #[no_mangle]
 pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
+    if !is_js_string_value(from) {
+        throw_invalid_legacy_url_arg(from);
+    }
+    if !is_js_string_value(to) {
+        throw_invalid_legacy_url_arg(to);
+    }
     let from_s = get_string_content(from);
     let to_s = get_string_content(to);
     let resolved = if to_s.starts_with('/') && !is_valid_absolute_url(&from_s) {

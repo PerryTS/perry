@@ -1,7 +1,6 @@
 import { isatty } from "node:tty";
 
-// Deno's tty suite imports `isatty` directly and calls it; Node supports the
-// captured function reference as a normal callable.
+// Node supports the captured function reference as a normal callable.
 console.log("named invalid fd false:", isatty(1234567) === false);
 console.log("named negative fd false:", isatty(-1) === false);
 console.log("named fractional fd false:", isatty(0.5) === false);

@@ -112,8 +112,12 @@ pub(super) fn lower_perf_hooks_method(
             }
             "eventLoopUtilization" => {
                 let a0 = lower_or_undef(ctx, 0)?;
-                ctx.block()
-                    .call(DOUBLE, "js_perf_event_loop_utilization", &[(DOUBLE, &a0)])
+                let a1 = lower_or_undef(ctx, 1)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_perf_event_loop_utilization",
+                    &[(DOUBLE, &a0), (DOUBLE, &a1)],
+                )
             }
             "toJSON" => ctx.block().call(DOUBLE, "js_perf_to_json", &[]),
             "clearResourceTimings" => {

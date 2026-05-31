@@ -660,7 +660,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(set, assigned);
         }
         // JSON operations
-        Expr::JsonParse(expr) | Expr::JsonStringify(expr) => {
+        Expr::JsonParse(expr)
+        | Expr::JsonStringify(expr)
+        | Expr::JsonRawJson(expr)
+        | Expr::JsonIsRawJson(expr) => {
             collect_assigned_locals_expr(expr, assigned);
         }
         // Math operations

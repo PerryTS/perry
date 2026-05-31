@@ -1372,3 +1372,52 @@ pub(super) fn try_bare_regexp_call(
     }
     Ok(None)
 }
+
+/// #2874: `Iterator.from(x)` — wrap an iterable in a lazy iterator-helper
+/// object. Only fires when `Iterator` is the global (not a local/func/import).
+/// The produced helper's `.map`/`.filter`/`.take`/etc. dispatch at runtime via
+/// `js_native_call_method`, so no further HIR variants are needed.
+pub(super) fn try_iterator_from(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    has_spread: bool,
+) -> Result<Option<Expr>> {
+    if has_spread {
+        return Ok(None);
+    }
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    let mut callee = callee_expr.as_ref();
+    while let ast::Expr::Paren(p) = callee {
+        callee = p.expr.as_ref();
+    }
+    let ast::Expr::Member(member) = callee else {
+        return Ok(None);
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return Ok(None);
+    };
+    if prop.sym.as_ref() != "from" {
+        return Ok(None);
+    }
+    let mut obj = member.obj.as_ref();
+    while let ast::Expr::Paren(p) = obj {
+        obj = p.expr.as_ref();
+    }
+    let ast::Expr::Ident(obj_ident) = obj else {
+        return Ok(None);
+    };
+    if obj_ident.sym.as_ref() != "Iterator"
+        || ctx.lookup_local("Iterator").is_some()
+        || ctx.lookup_func("Iterator").is_some()
+    {
+        return Ok(None);
+    }
+    let arg = if call.args.is_empty() {
+        Expr::Undefined
+    } else {
+        lower_expr(ctx, &call.args[0].expr)?
+    };
+    Ok(Some(Expr::IteratorFrom(Box::new(arg))))
+}

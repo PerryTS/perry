@@ -188,4 +188,72 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_PTR,
     },
+    // ========== #2875 DisposableStack / AsyncDisposableStack ==========
+    // `new DisposableStack()` / `new AsyncDisposableStack()` are dispatched
+    // by `lower_builtin_new`; the rows below cover the instance methods and
+    // the `disposed` getter. The receiver is NaN-unboxed to a `*mut
+    // ObjectHeader` (the stack instance) and passed as the first arg.
+    NativeModSig {
+        module: "__disposable__",
+        has_receiver: true,
+        method: "use",
+        class_filter: None,
+        runtime: "js_disposable_stack_use",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "__disposable__",
+        has_receiver: true,
+        method: "adopt",
+        class_filter: None,
+        runtime: "js_disposable_stack_adopt",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "__disposable__",
+        has_receiver: true,
+        method: "defer",
+        class_filter: None,
+        runtime: "js_disposable_stack_defer",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "__disposable__",
+        has_receiver: true,
+        method: "dispose",
+        class_filter: None,
+        runtime: "js_disposable_stack_dispose",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "__disposable__",
+        has_receiver: true,
+        method: "disposeAsync",
+        class_filter: None,
+        runtime: "js_async_disposable_stack_dispose_async",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "__disposable__",
+        has_receiver: true,
+        method: "move",
+        class_filter: None,
+        runtime: "js_disposable_stack_move",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "__disposable__",
+        has_receiver: true,
+        method: "disposed",
+        class_filter: None,
+        runtime: "js_disposable_stack_disposed",
+        args: &[],
+        ret: NR_F64,
+    },
 ];

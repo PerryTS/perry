@@ -1483,6 +1483,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::Delete(..)
         | Expr::Sequence(..)
         | Expr::ArrayFrom(..)
+        | Expr::IteratorFrom(..)
         | Expr::TaggedTemplateStrings { .. }
         | Expr::TemplateRaw(..)
         | Expr::ArrayFromMapped { .. }
@@ -1512,6 +1513,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::PathBasenameExt(..)
         | Expr::PathParse(..)
         | Expr::JsonParse(..)
+        | Expr::JsonRawJson(..)
+        | Expr::JsonIsRawJson(..)
         | Expr::JsonParseTyped { .. }
         | Expr::JsonParseReviver { .. }
         | Expr::JsonParseWithReviver(..) => instance_misc1::lower(ctx, expr),
@@ -1696,10 +1699,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SymbolToString(..)
         | Expr::ObjectGetOwnPropertySymbols(..)
         | Expr::TextEncoderNew
-        | Expr::TextDecoderNew
+        | Expr::TextDecoderNew { .. }
         | Expr::TextEncoderEncode(..)
         | Expr::TextEncoderEncodeInto { .. }
-        | Expr::TextDecoderDecode(..)
+        | Expr::TextDecoderDecode { .. }
+        | Expr::TextDecoderEncoding(..)
+        | Expr::TextDecoderFatal(..)
+        | Expr::TextDecoderIgnoreBom(..)
         | Expr::OsArch
         | Expr::OsType
         | Expr::OsPlatform
@@ -1721,7 +1727,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::OsMachine => string_regex_proc::lower(ctx, expr),
         Expr::OsVersion
         | Expr::ProcessMemoryUsage
-        | Expr::ProcessThreadCpuUsage
+        | Expr::ProcessThreadCpuUsage(..)
         | Expr::ProcessAvailableMemory
         | Expr::ProcessConstrainedMemory
         | Expr::ProcessPosixCredential(..)
@@ -1858,6 +1864,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectConstruct { .. }
         | Expr::ReflectDefineProperty { .. }
         | Expr::ReflectGetPrototypeOf(..)
+        | Expr::ReflectSetPrototypeOf { .. }
         | Expr::ReflectIsExtensible(..)
         | Expr::ReflectPreventExtensions(..)
         | Expr::ReflectDefineMetadata { .. }

@@ -263,7 +263,7 @@ pub(crate) fn is_known_math_static_method(name: &str) -> bool {
 
 /// Names of `JSON.<name>` static functions Perry's runtime implements.
 pub(crate) fn is_known_json_static_method(name: &str) -> bool {
-    matches!(name, "parse" | "stringify")
+    matches!(name, "parse" | "stringify" | "rawJSON" | "isRawJSON")
 }
 
 /// Names of `Number.<name>` static functions Perry's runtime implements.
@@ -300,6 +300,8 @@ pub(crate) fn is_known_namespace_static_function(obj_name: &str, prop_name: &str
         // `util.types.isArrayBufferView` predicate at call sites). The bare
         // value-read must report typeof "function".
         "ArrayBuffer" => prop_name == "isView",
+        // #2874: `Iterator.from` is a real static function in Node 22+.
+        "Iterator" => prop_name == "from",
         "Response" => matches!(prop_name, "json" | "redirect" | "error"),
         _ => false,
     }

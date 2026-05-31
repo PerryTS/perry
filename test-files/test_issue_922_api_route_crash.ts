@@ -46,17 +46,20 @@
 //
 // This test exercises the throw_not_callable circuit breaker directly:
 // call an undefined function inside a `try`/`catch` 200K times in a sync
-// loop. Without the fix the loop would silently run to completion (each
-// iteration prints nothing — the throw is caught — but in production the
-// async-step pattern at the heart of the bug produced one stderr line per
-// iteration). With the fix, the process aborts with the diagnostic at
-// iteration 100K and exit code 134 (SIGABRT).
+// loop. These are ordinary catchable `TypeError`s, so in Node the loop
+// completes and prints `loop-end caught=200000`.
 //
-// We pin the BEHAVIOR via a comment + a guard: the loop must NOT
-// silently complete with the bug present, AND must not infinite-loop.
-// The expected output line is the [PERRY ABORT] diagnostic on stderr.
-// See `scripts/test_issue_922_*.sh` (not currently present — this test
-// is a documentation anchor + a smoke test that the fix path is wired up).
+// Issue #2780 fix: the `throw_not_callable` circuit breaker no longer
+// counts CAUGHT throws toward its 100K abort threshold. `js_throw` resets
+// the counter whenever the throw reaches an open `try` (`try_depth > 0`),
+// so this loop now completes byte-identically to Node instead of hitting
+// `[PERRY ABORT]` at iteration 100K. The breaker still aborts genuinely
+// *uncaught* runaway throw loops (`try_depth == 0`), and the async-step
+// guards in `promise/microtasks.rs` still cover unbounded async re-entry.
+//
+// Expected (Node + Perry): two lines —
+//   loop-start
+//   loop-end caught=200000
 
 function makeUndefinedFn(): any {
     return undefined;

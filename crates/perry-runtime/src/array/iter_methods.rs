@@ -714,3 +714,69 @@ static KEEP_ARRAY_JOIN_VALUE: extern "C" fn(
     *const ArrayHeader,
     f64,
 ) -> *mut crate::string::StringHeader = js_array_join_value;
+
+/// `arr.toLocaleString(locales?, options?)` (#2808).
+///
+/// Per the ECMAScript `Array.prototype.toLocaleString` algorithm: walk the
+/// array from `0` to `length - 1`, render `null` / `undefined` elements as the
+/// empty string, and for every other element call its own
+/// `toLocaleString(locales, options)` method, stringify the result, and join
+/// the per-element strings with `","` separators. `locales` / `options` are
+/// forwarded verbatim to each element method (omitted args are passed as
+/// `undefined`).
+#[no_mangle]
+pub extern "C" fn js_array_to_locale_string(
+    arr: *const ArrayHeader,
+    locales: f64,
+    options: f64,
+) -> *mut crate::string::StringHeader {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+    }
+    let len = unsafe { (*arr).length as usize };
+    // Forward (locales, options) to each element's toLocaleString. Both are
+    // always passed (undefined when omitted by the caller) so element methods
+    // that branch on `arguments.length` still observe two slots, matching V8.
+    let elem_args: [f64; 2] = [locales, options];
+    let method = b"toLocaleString";
+    let mut out = String::new();
+    for i in 0..len {
+        if i > 0 {
+            out.push(',');
+        }
+        let elem = js_array_get(arr, i as u32);
+        if elem.is_null() || elem.is_undefined() {
+            // Nullish / hole -> empty field.
+            continue;
+        }
+        let elem_f64 = f64::from_bits(elem.bits());
+        let result = unsafe {
+            crate::object::js_native_call_method(
+                elem_f64,
+                method.as_ptr() as *const i8,
+                method.len(),
+                elem_args.as_ptr(),
+                elem_args.len(),
+            )
+        };
+        let sp = crate::value::js_jsvalue_to_string(result);
+        if !sp.is_null() {
+            unsafe {
+                let header = &*(sp as *const crate::string::StringHeader);
+                let bytes_ptr =
+                    (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let slice = std::slice::from_raw_parts(bytes_ptr, header.byte_len as usize);
+                out.push_str(std::str::from_utf8(slice).unwrap_or(""));
+            }
+        }
+    }
+    crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
+
+#[used]
+static KEEP_ARRAY_TO_LOCALE_STRING: extern "C" fn(
+    *const ArrayHeader,
+    f64,
+    f64,
+) -> *mut crate::string::StringHeader = js_array_to_locale_string;

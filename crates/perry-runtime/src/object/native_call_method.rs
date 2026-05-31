@@ -277,6 +277,22 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     if jsval.is_undefined() || jsval.is_null() {
         throw_object_to_locale_string_nullish_receiver();
     }
+    // #2808: numbers use `Number.prototype.toLocaleString` (thousands
+    // separators), so a number element / receiver formats as `1,000.5` rather
+    // than the bare `toString` form. Locale/option-aware grouping is not yet
+    // modeled — the default-locale grouping matches Node's en-US output for
+    // the common integer/decimal cases.
+    if jsval.is_number() {
+        let s = crate::date::js_number_to_locale_string(jsval.as_number());
+        return f64::from_bits(JSValue::string_ptr(s).bits());
+    }
+    // #2808: a Date value uses `Date.prototype.toLocaleString` (date+time
+    // rendering) rather than `[object Date]`.
+    if crate::date::is_date_value(receiver) {
+        let ts = crate::date::date_cell_timestamp(receiver);
+        let s = crate::date::js_date_to_locale_string(ts);
+        return f64::from_bits(JSValue::string_ptr(s).bits());
+    }
     if !jsval.is_pointer() {
         return js_native_call_method(
             receiver,
@@ -1213,9 +1229,37 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 "replace" | "replaceAll" => {
                     // Two-arg shape: (pattern, replacement). pattern can be a
-                    // string OR a RegExp; replacement is a string. Function
-                    // replacements aren't supported here yet — they need
-                    // closure dispatch and aren't on hono's hot path.
+                    // string OR a RegExp; replacement is a string OR a function.
+                    // Function replacements over a RegExp pattern route to the
+                    // regex-fn helpers (#2867) so dynamically-dispatched
+                    // `str.replace(re, fn)` observes Node's callback argument
+                    // shape `(match, p1, ..., offset, string, groups?)`.
+                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
+                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
+                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
+                        if pat_jsv.is_pointer() && repl_jsv.is_pointer() {
+                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                            if crate::closure::is_closure_ptr(repl_raw) {
+                                let regex_ptr = pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
+                                if !regex_ptr.is_null() {
+                                    let r = if method_name == "replaceAll" {
+                                        crate::regex::js_string_replace_all_regex_fn(
+                                            receiver_string(),
+                                            regex_ptr,
+                                            repl_val,
+                                        )
+                                    } else {
+                                        crate::regex::js_string_replace_regex_fn(
+                                            receiver_string(),
+                                            regex_ptr,
+                                            repl_val,
+                                        )
+                                    };
+                                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                                }
+                            }
+                        }
+                    }
                     let pat_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
                     let repl_handle = root_string_arg_handle(&root_scope, &arg_handles, 1);
                     let pat_str = || {
@@ -1730,6 +1774,81 @@ pub unsafe extern "C" fn js_native_call_method(
                     "entries" => {
                         return crate::array::array_entries_iter(object);
                     }
+                    // #2803: ES2023 immutable methods reaching the dynamic
+                    // dispatch tower (`(arr as any).toSorted()`, computed
+                    // `arr[m]()`, chained-call receivers that escape the HIR
+                    // fold). Each returns a NEW array and leaves the receiver
+                    // unchanged, mirroring the static codegen helpers.
+                    "toReversed" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let result = crate::array::js_array_to_reversed(arr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "toSorted" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        // #2796: validate comparator (function | undefined);
+                        // a null/undefined comparator routes to the default
+                        // (string) sort inside js_array_to_sorted_with_comparator.
+                        let cmp_ptr = if args_len >= 1 && !args_ptr.is_null() {
+                            crate::array::js_validate_array_comparator(*args_ptr)
+                                as *const crate::closure::ClosureHeader
+                        } else {
+                            std::ptr::null()
+                        };
+                        let result = crate::array::js_array_to_sorted_with_comparator(arr, cmp_ptr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "toSpliced" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        // Per spec / #2794: toSpliced() inserts/deletes nothing,
+                        // toSpliced(start) deletes through the end. NaN-coercion
+                        // for the f64 start/deleteCount is handled in the helper.
+                        let start = if args_len >= 1 { *args_ptr } else { 0.0 };
+                        let delete_count = if args_len == 0 {
+                            0.0
+                        } else if args_len == 1 {
+                            f64::INFINITY
+                        } else {
+                            *args_ptr.add(1)
+                        };
+                        let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
+                            std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        let items_ptr = if items.is_empty() {
+                            std::ptr::null()
+                        } else {
+                            items.as_ptr()
+                        };
+                        let result = crate::array::js_array_to_spliced(
+                            arr,
+                            start,
+                            delete_count,
+                            items_ptr,
+                            items.len() as u32,
+                        );
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    // #2808: Array.prototype.toLocaleString — calls each
+                    // non-nullish element's own toLocaleString(locales, options),
+                    // renders nullish/hole elements as empty fields, and joins
+                    // with commas. Routed here for any-typed / computed receivers.
+                    "toLocaleString" => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let locales = if args_len >= 1 && !args_ptr.is_null() {
+                            *args_ptr
+                        } else {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        };
+                        let options = if args_len >= 2 && !args_ptr.is_null() {
+                            *args_ptr.add(1)
+                        } else {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        };
+                        let s = crate::array::js_array_to_locale_string(arr, locales, options);
+                        return f64::from_bits(JSValue::string_ptr(s).bits());
+                    }
                     _ => {} // not a handled array method — fall through to object dispatch
                 }
             }
@@ -1767,6 +1886,11 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            if let Some(result) =
+                crate::node_test::dispatch_object_method((*obj).class_id, method_name)
+            {
+                return result;
+            }
             // #2856: Map/Set iterators returned from a value-level
             // `m.entries()`/`.keys()`/`.values()` / `s.entries()` etc. carry
             // dedicated class ids so `.next()` lands in the matching iterator
@@ -1782,6 +1906,46 @@ pub unsafe extern "C" fn js_native_call_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 );
+            }
+            // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
+            // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
+            // `.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`/`.next`).
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                );
+            }
+
+            // #2874: an iterator-helper method (`map`/`filter`/`take`/…) on a
+            // RAW iterator object — a generator, the runtime array/Map/Set
+            // iterators, or any `{ next() }`. Node resolves these on
+            // `Iterator.prototype`; wrap the iterator in an identity helper and
+            // dispatch there. Skipped when the object defines the name as an own
+            // callable field (the user's own method wins). Runs before the
+            // own-field scan so the cheap has-own check below stays in sync.
+            if crate::iterator_helpers::is_iterator_helper_method(method_name) {
+                let has_own = {
+                    let mk = crate::string::js_string_from_bytes(
+                        method_name.as_ptr(),
+                        method_name.len() as u32,
+                    );
+                    let fv = js_object_get_field_by_name(obj as *const _, mk);
+                    let fp =
+                        crate::value::js_nanbox_get_pointer(f64::from_bits(fv.bits())) as usize;
+                    !fv.is_undefined() && crate::closure::is_closure_ptr(fp)
+                };
+                if let Some(result) = crate::iterator_helpers::maybe_dispatch_helper_on_iterator(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                    has_own,
+                ) {
+                    return result;
+                }
             }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
@@ -2139,6 +2303,36 @@ pub unsafe extern "C" fn js_native_call_method(
                         crate::set::js_set_foreach(set, args[0], this_arg);
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
+                    // #2872: ES2024 Set composition methods. union/intersection/
+                    // difference/symmetricDifference return a new Set; the
+                    // is* predicates return a boolean.
+                    "union" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_union(set, args[0]) as *mut u8).bits(),
+                    ),
+                    "intersection" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_intersection(set, args[0]) as *mut u8)
+                            .bits(),
+                    ),
+                    "difference" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(crate::set::js_set_difference(set, args[0]) as *mut u8)
+                            .bits(),
+                    ),
+                    "symmetricDifference" if !args.is_empty() => f64::from_bits(
+                        JSValue::pointer(
+                            crate::set::js_set_symmetric_difference(set, args[0]) as *mut u8
+                        )
+                        .bits(),
+                    ),
+                    "isSubsetOf" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_subset_of(set, args[0]) != 0).bits(),
+                    ),
+                    "isSupersetOf" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_superset_of(set, args[0]) != 0).bits(),
+                    ),
+                    "isDisjointFrom" if !args.is_empty() => f64::from_bits(
+                        JSValue::bool(crate::set::js_set_is_disjoint_from(set, args[0]) != 0)
+                            .bits(),
+                    ),
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
                 };
             }
@@ -2198,6 +2392,15 @@ pub unsafe extern "C" fn js_native_call_method(
                 return crate::collection_iter_object::dispatch_set_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
+                );
+            }
+            // #2874: lazy iterator-helper objects, same as the NaN-boxed path.
+            if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+                return crate::iterator_helpers::dispatch_iterator_helper_method(
+                    obj as *mut ObjectHeader,
+                    method_name,
+                    args_ptr,
+                    args_len,
                 );
             }
 
@@ -2282,11 +2485,16 @@ pub unsafe extern "C" fn js_native_call_method(
 
     // Handle common method calls
     match method_name {
-        // Function.prototype.bind - returns the same function for native closures
-        // This is a simplification - real bind() creates a new function with bound 'this'
+        // Function.prototype.bind(thisArg, ...boundArgs) — create a distinct
+        // bound function with a fixed `this`, prepended partial args, and an
+        // adjusted `.name`/`.length` (#2840). For closure receivers route to
+        // the runtime bind helper; non-closure receivers fall back to the
+        // prior conservative behavior of returning the receiver unchanged.
         "bind" => {
-            // For native closures, we return the function as-is
-            // The 'this' binding is handled at the call site
+            let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if jsval.is_pointer() && crate::closure::is_closure_ptr(raw_ptr) {
+                return crate::closure::js_function_bind(object, args_ptr, args_len);
+            }
             return object;
         }
 

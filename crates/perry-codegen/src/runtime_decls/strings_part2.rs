@@ -61,9 +61,14 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // byte). Decode accepts both ArrayHeader (from encode) and
     // BufferHeader (from `new Uint8Array([...])`).
     module.declare_function("js_text_encoder_new", I64, &[]);
-    module.declare_function("js_text_decoder_new", I64, &[]);
+    // new TextDecoder(label, fatal, ignoreBOM) -> handle
+    module.declare_function("js_text_decoder_new", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_text_encoder_encode_llvm", I64, &[DOUBLE]);
-    module.declare_function("js_text_decoder_decode_llvm", I64, &[DOUBLE]);
+    // decode(handle, input) -> string ptr
+    module.declare_function("js_text_decoder_decode_llvm", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_text_decoder_encoding", I64, &[DOUBLE]);
+    module.declare_function("js_text_decoder_fatal", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_text_decoder_ignore_bom", DOUBLE, &[DOUBLE]);
     // Microtask queue (queueMicrotask / process.nextTick).
     module.declare_function("js_queue_microtask", VOID, &[I64]);
     module.declare_function("js_queue_next_tick", VOID, &[I64]);
@@ -119,6 +124,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_find_last_index", DOUBLE, &[I64, I64]);
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).
+    module.declare_function(
+        "js_object_property_is_enumerable",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // Issue #620: own-property override probe used by class-method dispatch.
     // Returns the stored value if `name` is in obj's own keys_array (data
     // property only — no vtable getter walk), else TAG_UNDEFINED. Lets
@@ -984,6 +995,10 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_abort_controller_abort_reason", VOID, &[I64, DOUBLE]);
     module.declare_function("js_abort_signal_add_listener", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_abort_signal_timeout", I64, &[DOUBLE]);
+    // #2582: AbortSignal static helpers + lifecycle.
+    module.declare_function("js_abort_signal_abort", I64, &[DOUBLE]);
+    module.declare_function("js_abort_signal_any", I64, &[I64]);
+    module.declare_function("js_abort_signal_throw_if_aborted", DOUBLE, &[I64]);
     module.declare_function("js_event_target_new", I64, &[]);
     module.declare_function("js_event_target_add_event_listener", VOID, &[I64, I64, I64]);
     module.declare_function(
