@@ -707,6 +707,27 @@ const QUERYSTRING_NAMESPACE_KEYS: &[&[u8]] = &[
     b"unescapeBuffer",
 ];
 
+const PUNYCODE_DEFAULT_KEYS: &[&[u8]] = &[
+    b"version",
+    b"ucs2",
+    b"decode",
+    b"encode",
+    b"toASCII",
+    b"toUnicode",
+];
+
+const PUNYCODE_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"decode",
+    b"default",
+    b"encode",
+    b"toASCII",
+    b"toUnicode",
+    b"ucs2",
+    b"version",
+];
+
+const PUNYCODE_UCS2_KEYS: &[&[u8]] = &[b"decode", b"encode"];
+
 const FS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"_toUnixTimestamp",
     b"access",
@@ -1045,6 +1066,9 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "constants" => Some(deprecated_constants_keys()),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
+        "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
+        "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
+        "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
         "url" => Some(URL_NAMESPACE_KEYS),
@@ -1085,6 +1109,7 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
         "async_hooks.default" => Some("async_hooks"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
+        "punycode.default" => Some("punycode"),
         "querystring.default" => Some("querystring"),
         "url.default" => Some("url"),
         "util.default" => Some("util"),
@@ -1097,6 +1122,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "async_hooks" => Some("async_hooks.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
+        "punycode" => Some("punycode.default"),
         "querystring" => Some("querystring.default"),
         "url" => Some("url.default"),
         "util" => Some("util.default"),
@@ -1112,7 +1138,7 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
-        "async_hooks" | "os" | "path" | "querystring" | "url" | "util" => {
+        "async_hooks" | "os" | "path" | "punycode" | "querystring" | "url" | "util" => {
             create_cjs_default_namespace(module_name)
         }
         _ => None,
@@ -1141,6 +1167,9 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "os.default"
             | "path"
             | "path.default"
+            | "punycode"
+            | "punycode.default"
+            | "punycode.ucs2"
             | "querystring"
             | "querystring.default"
             | "process"
@@ -2421,6 +2450,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("punycode", "encode")
             | ("punycode", "toASCII")
             | ("punycode", "toUnicode")
+            | ("punycode.ucs2", "decode")
+            | ("punycode.ucs2", "encode")
             | (
                 "querystring",
                 "unescapeBuffer" | "unescape" | "escape" | "stringify" | "parse"
@@ -3693,6 +3724,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // node:punycode (deprecated, #2513) — the bundled punycode.js version
         // and the `ucs2` code-point helper sub-namespace (#2607).
         "punycode" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("punycode"),
             "version" => Some(str_val(crate::punycode::PUNYCODE_VERSION)),
             "ucs2" => Some(create_sub_namespace("punycode.ucs2")),
             _ => None,

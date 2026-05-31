@@ -17,7 +17,15 @@ use crate::ir::*;
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
-        "async_hooks" | "events" | "os" | "path" | "querystring" | "sys" | "url" | "util"
+        "async_hooks"
+            | "events"
+            | "os"
+            | "path"
+            | "punycode"
+            | "querystring"
+            | "sys"
+            | "url"
+            | "util"
     )
 }
 
@@ -146,6 +154,8 @@ pub(crate) fn lower_module_decl(
                                     (source.clone(), None)
                                 } else if source == "util" && imported == "types" {
                                     ("util.types".to_string(), None)
+                                } else if source == "punycode" && imported == "ucs2" {
+                                    ("punycode.ucs2".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };

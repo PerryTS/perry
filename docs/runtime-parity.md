@@ -4118,6 +4118,7 @@ Bun status: 🟢 Fully implemented. 100% of Node.js's test suite passes. **Depre
 
 | Item | Node.js | Bun | Notes |
 |------|---------|-----|-------|
+| `punycode.default` | ✓ | ✓ | deprecated module; CommonJS namespace object |
 | `punycode.version` | ✓ | ✓ |  |
 
 ---

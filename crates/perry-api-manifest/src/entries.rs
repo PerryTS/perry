@@ -4006,8 +4006,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // `resolveObjectURL` export on `node:buffer`.
     internal_method("url", "createObjectURL", false, None),
     internal_method("url", "revokeObjectURL", false, None),
-    // --- punycode (deprecated module, #2513). Top-level string helpers +
-    //     the `version` property. `ucs2.*` array helpers are a follow-up. ---
+    // --- punycode (deprecated module, #2513). Top-level string helpers,
+    //     Node's CJS default export, and the `version` property. ---
+    property("punycode", "default"),
     method("punycode", "decode", false, None),
     method("punycode", "encode", false, None),
     method("punycode", "toASCII", false, None),

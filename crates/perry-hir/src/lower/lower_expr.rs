@@ -113,7 +113,15 @@ fn is_known_global_identifier_name(name: &str) -> bool {
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
-        "async_hooks" | "events" | "os" | "path" | "querystring" | "sys" | "url" | "util"
+        "async_hooks"
+            | "events"
+            | "os"
+            | "path"
+            | "punycode"
+            | "querystring"
+            | "sys"
+            | "url"
+            | "util"
     )
 }
 
