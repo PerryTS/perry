@@ -122,6 +122,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_with", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_typed_array_find_last", DOUBLE, &[I64, I64]);
     module.declare_function("js_typed_array_find_last_index", DOUBLE, &[I64, I64]);
+    // #3148: TypedArray.prototype.set(source, offset?) / subarray(begin?, end?).
+    module.declare_function("js_typed_array_set_from", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_typed_array_subarray",
+        I64,
+        &[I64, I32, DOUBLE, I32, DOUBLE],
+    );
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
     // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).

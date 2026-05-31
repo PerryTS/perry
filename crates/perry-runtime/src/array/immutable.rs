@@ -267,6 +267,22 @@ pub extern "C" fn js_array_copy_within(
     if arr.is_null() {
         return arr;
     }
+    // #3148: TypedArray receiver — copy over element-typed storage. The typed
+    // impl treats an undefined `end` as "to length", so pass TAG_UNDEFINED
+    // when no end argument was provided.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        let end_value = if has_end != 0 {
+            end
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        return crate::typedarray::js_typed_array_copy_within(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+            target,
+            start,
+            end_value,
+        ) as *mut ArrayHeader;
+    }
     unsafe {
         let len = (*arr).length as isize;
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
