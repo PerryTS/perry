@@ -526,6 +526,12 @@ fn direct_stream_promises_pipeline(source: f64, destination: f64, options: f64) 
     }
 }
 
+fn validate_pipeline_promise_args(source: f64, destination: f64) -> Option<f64> {
+    validate_stream_promises_pipeline_args(source, destination, &[])
+        .err()
+        .map(promise_rejected)
+}
+
 extern "C" fn stream_promises_pipeline_callback(
     closure: *const ClosureHeader,
     err: f64,

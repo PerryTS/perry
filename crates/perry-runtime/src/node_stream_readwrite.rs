@@ -206,6 +206,22 @@ pub(super) fn set_readable_flowing(stream: f64, value: f64) {
     }
 }
 
+pub(super) fn mark_compose_live_pipe_consume_on_emit(stream: f64) {
+    if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
+        set_hidden_value(
+            stream,
+            hidden_compose_live_pipe_consume_key(),
+            f64::from_bits(TAG_TRUE),
+        );
+    }
+}
+
+pub(super) fn consume_readable_buffered_front_for_live_pipe(stream: f64, chunk: f64) {
+    if has_truthy_hidden(stream, hidden_compose_live_pipe_consume_key()) {
+        super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
+    }
+}
+
 pub(super) fn ensure_hidden_array(stream: f64, key: *mut crate::string::StringHeader) -> f64 {
     if let Some(value) = get_hidden_value(stream, key) {
         return value;
