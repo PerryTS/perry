@@ -447,7 +447,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
         ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
         ("process", "getBuiltinModule") => crate::process::js_process_get_builtin_module(arg(0)),
+        ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
+        ("module", "findSourceMap") => crate::process::js_module_find_source_map(arg(0)),
+        ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
+        ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
+        ("module", "SourceMap") => crate::process::js_module_source_map_new(arg(0)),
         ("module", "createRequire") => crate::process::js_module_create_require(arg(0)),
         ("module", "findPackageJSON") => {
             crate::process::js_module_find_package_json(arg(0), arg(1))

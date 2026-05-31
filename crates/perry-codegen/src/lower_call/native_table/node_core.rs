@@ -20,6 +20,42 @@ pub(super) const NODE_CORE_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "findSourceMap",
+        class_filter: None,
+        runtime: "js_module_find_source_map",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "enableCompileCache",
+        class_filter: None,
+        runtime: "js_module_enable_compile_cache",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "getCompileCacheDir",
+        class_filter: None,
+        runtime: "js_module_get_compile_cache_dir",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "module",
+        has_receiver: false,
+        method: "flushCompileCache",
+        class_filter: None,
+        runtime: "js_module_flush_compile_cache",
+        args: &[],
+        ret: NR_F64,
+    },
     // #3120: module.findPackageJSON(specifier[, base]) — walks parent
     // directories from the resolved specifier looking for package.json.
     // `specifier` (string) and `base` (string or URL object) both ride in
