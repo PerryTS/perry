@@ -406,6 +406,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"callbackify",
             b"convertProcessSignalToExitCode",
             b"debuglog",
+            b"debug",
             b"deprecate",
             b"format",
             b"formatWithOptions",
@@ -1400,6 +1401,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "inspect")
             | ("util", "aborted")
             | ("util", "debuglog")
+            | ("util", "debug")
             | ("util", "getCallSites")
             | ("util", "getSystemErrorName")
             | ("util", "getSystemErrorMessage")
