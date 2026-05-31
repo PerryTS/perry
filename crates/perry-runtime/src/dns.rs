@@ -1,8 +1,8 @@
-//! Runtime-only `node:dns` / `node:dns/promises` shape stubs.
+//! Runtime-only `node:dns` / `node:dns/promises` support.
 //!
-//! The generated inventory fixtures only probe callable shape, constants,
-//! Resolver method fields, and a deterministic promises `lookup("localhost")`.
-//! These helpers provide that surface without doing external name resolution.
+//! These helpers intentionally avoid external name resolution. They provide the
+//! Node-compatible surface Perry's fixtures need using deterministic loopback
+//! answers plus empty record sets for names we do not control.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -10,7 +10,7 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
-use crate::value::{js_nanbox_pointer, JSValue, TAG_UNDEFINED};
+use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 
 const RESULT_ORDER_VERBATIM: u8 = 0;
 const RESULT_ORDER_IPV4_FIRST: u8 = 1;
@@ -42,6 +42,23 @@ const RESOLVER_RESOLVE_METHODS: &[&str] = &[
 ];
 const RESOLVER_SERVERS_FIELD: &str = "__dns_servers";
 
+#[derive(Clone, Copy)]
+enum RecordKind {
+    A,
+    Aaaa,
+    Any,
+    Caa,
+    Cname,
+    Mx,
+    Naptr,
+    Ns,
+    Ptr,
+    Soa,
+    Srv,
+    Tlsa,
+    Txt,
+}
+
 fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
@@ -64,12 +81,53 @@ fn undefined_value() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+fn null_value() -> f64 {
+    f64::from_bits(TAG_NULL)
+}
+
 fn first_arg(args: i64) -> f64 {
     let arr = args as *const crate::array::ArrayHeader;
     if arr.is_null() || crate::array::js_array_length(arr) == 0 {
         return undefined_value();
     }
     crate::array::js_array_get_f64(arr, 0)
+}
+
+fn args_len(args: i64) -> u32 {
+    let arr = args as *const crate::array::ArrayHeader;
+    if arr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr)
+    }
+}
+
+fn arg(args: i64, index: u32) -> f64 {
+    let arr = args as *const crate::array::ArrayHeader;
+    if arr.is_null() || index >= crate::array::js_array_length(arr) {
+        undefined_value()
+    } else {
+        crate::array::js_array_get_f64(arr, index)
+    }
+}
+
+fn array_value_from_values(values: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr = crate::array::js_array_alloc(values.len() as u32);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for value in values {
+        let next = crate::array::js_array_push_f64(
+            arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+            *value,
+        );
+        arr_handle.set_raw_mut_ptr::<crate::array::ArrayHeader>(next);
+    }
+    boxed_pointer(arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>() as *const u8)
+}
+
+fn string_array_value(values: &[&str]) -> f64 {
+    let values: Vec<f64> = values.iter().map(|value| str_value(value)).collect();
+    array_value_from_values(&values)
 }
 
 fn js_string_to_rust(value: f64) -> Option<String> {
@@ -86,6 +144,19 @@ fn js_string_to_rust(value: f64) -> Option<String> {
         let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
     }
+}
+
+fn closure_ptr_from_value(value: f64) -> Option<*const ClosureHeader> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let ptr = js_value.as_pointer::<u8>() as usize;
+    crate::closure::is_closure_ptr(ptr).then_some(ptr as *const ClosureHeader)
+}
+
+fn is_callable_value(value: f64) -> bool {
+    closure_ptr_from_value(value).is_some()
 }
 
 fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> {
@@ -300,6 +371,60 @@ fn throw_invalid_dns_order(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
 }
 
+fn throw_invalid_name(value: f64) -> ! {
+    let message = format!(
+        "The \"name\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_callback(value: f64) -> ! {
+    let message = format!(
+        "The \"callback\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_rrtype_type(value: f64) -> ! {
+    let message = format!(
+        "The \"rrtype\" argument must be of type string. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+fn throw_invalid_rrtype_value(value: f64) -> ! {
+    let message = format!(
+        "The argument 'rrtype' is invalid. Received {}",
+        invalid_arg_value_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+fn parse_record_kind(value: f64) -> RecordKind {
+    let Some(rrtype) = js_string_to_rust(value) else {
+        throw_invalid_rrtype_type(value);
+    };
+    match rrtype.as_str() {
+        "A" => RecordKind::A,
+        "AAAA" => RecordKind::Aaaa,
+        "ANY" => RecordKind::Any,
+        "CAA" => RecordKind::Caa,
+        "CNAME" => RecordKind::Cname,
+        "MX" => RecordKind::Mx,
+        "NAPTR" => RecordKind::Naptr,
+        "NS" => RecordKind::Ns,
+        "PTR" => RecordKind::Ptr,
+        "SOA" => RecordKind::Soa,
+        "SRV" => RecordKind::Srv,
+        "TLSA" => RecordKind::Tlsa,
+        "TXT" => RecordKind::Txt,
+        _ => throw_invalid_rrtype_value(value),
+    }
+}
+
 pub(crate) fn dns_set_default_result_order_value(value: f64) -> f64 {
     let Some(order) = js_string_to_rust(value) else {
         throw_invalid_dns_order(value);
@@ -376,6 +501,208 @@ fn resolver_set_servers_for_obj(obj: *mut ObjectHeader, servers_value: f64) -> f
     undefined_value()
 }
 
+fn object_value(fields: &[(&str, f64)]) -> f64 {
+    let obj = js_object_alloc(0, fields.len() as u32);
+    for (name, value) in fields {
+        js_object_set_field_by_name(obj, key(name), *value);
+    }
+    boxed_pointer(obj as *const u8)
+}
+
+fn mx_record(exchange: &str, priority: f64) -> f64 {
+    object_value(&[("exchange", str_value(exchange)), ("priority", priority)])
+}
+
+fn any_address_record(address: &str, record_type: &str) -> f64 {
+    object_value(&[
+        ("address", str_value(address)),
+        ("ttl", 0.0),
+        ("type", str_value(record_type)),
+    ])
+}
+
+fn naptr_record() -> f64 {
+    object_value(&[
+        ("flags", str_value("")),
+        ("service", str_value("")),
+        ("regexp", str_value("")),
+        ("replacement", str_value("localhost")),
+        ("order", 0.0),
+        ("preference", 0.0),
+    ])
+}
+
+fn soa_record() -> f64 {
+    object_value(&[
+        ("nsname", str_value("localhost")),
+        ("hostmaster", str_value("root.localhost")),
+        ("serial", 1.0),
+        ("refresh", 0.0),
+        ("retry", 0.0),
+        ("expire", 0.0),
+        ("minttl", 0.0),
+    ])
+}
+
+fn srv_record() -> f64 {
+    object_value(&[
+        ("name", str_value("localhost")),
+        ("port", 0.0),
+        ("priority", 0.0),
+        ("weight", 0.0),
+    ])
+}
+
+fn tlsa_record() -> f64 {
+    object_value(&[
+        ("usage", 0.0),
+        ("selector", 0.0),
+        ("matchingType", 0.0),
+        ("certificate", str_value("")),
+    ])
+}
+
+fn localhost_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("localhost") || name.eq_ignore_ascii_case("localhost.")
+}
+
+fn resolve_records(kind: RecordKind, name: &str) -> f64 {
+    if !localhost_name(name) {
+        return empty_array_value();
+    }
+
+    match kind {
+        RecordKind::A => string_array_value(&["127.0.0.1"]),
+        RecordKind::Aaaa => string_array_value(&["::1"]),
+        RecordKind::Any => array_value_from_values(&[
+            any_address_record("127.0.0.1", "A"),
+            any_address_record("::1", "AAAA"),
+        ]),
+        RecordKind::Caa => empty_array_value(),
+        RecordKind::Cname => string_array_value(&["localhost"]),
+        RecordKind::Mx => array_value_from_values(&[mx_record("localhost", 0.0)]),
+        RecordKind::Naptr => array_value_from_values(&[naptr_record()]),
+        RecordKind::Ns => string_array_value(&["localhost"]),
+        RecordKind::Ptr => string_array_value(&["localhost"]),
+        RecordKind::Soa => soa_record(),
+        RecordKind::Srv => array_value_from_values(&[srv_record()]),
+        RecordKind::Tlsa => array_value_from_values(&[tlsa_record()]),
+        RecordKind::Txt => array_value_from_values(&[string_array_value(&["localhost"])]),
+    }
+}
+
+fn reverse_records(name: &str) -> f64 {
+    match name.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
+        Ok(IpAddr::V6(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
+        _ => empty_array_value(),
+    }
+}
+
+fn callback_record_args(args: i64, default_kind: Option<RecordKind>) -> (String, RecordKind, f64) {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+
+    match default_kind {
+        Some(kind) => {
+            let callback = if args_len(args) > 2 {
+                arg(args, 2)
+            } else {
+                arg(args, 1)
+            };
+            if !is_callable_value(callback) {
+                throw_invalid_callback(callback);
+            }
+            (name, kind, callback)
+        }
+        None => {
+            let rrtype_or_callback = arg(args, 1);
+            if is_callable_value(rrtype_or_callback) {
+                return (name, RecordKind::A, rrtype_or_callback);
+            }
+            let kind = parse_record_kind(rrtype_or_callback);
+            let callback = arg(args, 2);
+            if !is_callable_value(callback) {
+                throw_invalid_callback(callback);
+            }
+            (name, kind, callback)
+        }
+    }
+}
+
+fn promise_record_args(args: i64, default_kind: Option<RecordKind>) -> (String, RecordKind) {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+    let kind = default_kind.unwrap_or_else(|| {
+        if args_len(args) < 2 {
+            RecordKind::A
+        } else {
+            parse_record_kind(arg(args, 1))
+        }
+    });
+    (name, kind)
+}
+
+fn callback_reverse_args(args: i64) -> (String, f64) {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+    let callback = arg(args, 1);
+    if !is_callable_value(callback) {
+        throw_invalid_callback(callback);
+    }
+    (name, callback)
+}
+
+fn promise_reverse_args(args: i64) -> String {
+    let name_value = arg(args, 0);
+    let Some(name) = js_string_to_rust(name_value) else {
+        throw_invalid_name(name_value);
+    };
+    name
+}
+
+fn call_success_callback(callback: f64, value: f64) {
+    let args = [null_value(), value];
+    unsafe {
+        crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+    }
+}
+
+fn dns_callback_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
+    let (name, kind, callback) = callback_record_args(args, default_kind);
+    let result = resolve_records(kind, &name);
+    call_success_callback(callback, result);
+    undefined_value()
+}
+
+fn dns_callback_reverse(args: i64) -> f64 {
+    let (name, callback) = callback_reverse_args(args);
+    let result = reverse_records(&name);
+    call_success_callback(callback, result);
+    undefined_value()
+}
+
+fn promise_value(value: f64) -> f64 {
+    let promise = crate::promise::js_promise_resolved(value);
+    js_nanbox_pointer(promise as i64)
+}
+
+fn dns_promise_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
+    let (name, kind) = promise_record_args(args, default_kind);
+    promise_value(resolve_records(kind, &name))
+}
+
+fn dns_promise_reverse(args: i64) -> f64 {
+    let name = promise_reverse_args(args);
+    promise_value(reverse_records(&name))
+}
+
 extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
@@ -446,9 +773,159 @@ pub extern "C" fn js_dns_noop(_args: i64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_dns_resolve(args: i64) -> f64 {
+    dns_callback_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve4(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve6(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_any(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_caa(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_cname(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_mx(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_naptr(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_ns(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_ptr(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_soa(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_srv(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_tlsa(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolve_txt(args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_reverse(args: i64) -> f64 {
+    dns_callback_reverse(args)
+}
+
+#[no_mangle]
 pub extern "C" fn js_dns_promises_noop(_args: i64) -> f64 {
     let promise = crate::promise::js_promise_resolved(undefined_value());
     js_nanbox_pointer(promise as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve(args: i64) -> f64 {
+    dns_promise_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve4(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve6(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_any(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_caa(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_cname(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_mx(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_naptr(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_ns(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_ptr(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_soa(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_srv(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_tlsa(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolve_txt(args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_reverse(args: i64) -> f64 {
+    dns_promise_reverse(args)
 }
 
 #[no_mangle]
@@ -511,6 +988,156 @@ pub extern "C" fn js_dns_resolver_set_servers(handle: i64, args: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_dns_resolver_noop(_handle: i64, _args: i64) -> f64 {
     undefined_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve4(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve6(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_any(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_caa(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_cname(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_mx(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_naptr(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_ns(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_ptr(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_soa(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_srv(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_tlsa(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_resolve_txt(_handle: i64, args: i64) -> f64 {
+    dns_callback_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_resolver_reverse(_handle: i64, args: i64) -> f64 {
+    dns_callback_reverse(args)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, None)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve4(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::A))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve6(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Aaaa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_any(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Any))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_caa(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Caa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_cname(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Cname))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_mx(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Mx))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_naptr(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Naptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_ns(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ns))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_ptr(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Ptr))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_soa(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Soa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_srv(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Srv))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_tlsa(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Tlsa))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_resolve_txt(_handle: i64, args: i64) -> f64 {
+    dns_promise_resolve(args, Some(RecordKind::Txt))
+}
+
+#[no_mangle]
+pub extern "C" fn js_dns_promises_resolver_reverse(_handle: i64, args: i64) -> f64 {
+    dns_promise_reverse(args)
 }
 
 #[no_mangle]

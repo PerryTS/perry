@@ -83,6 +83,50 @@ try {
 }
 console.log("dns.getDefaultResultOrder():", dns.getDefaultResultOrder());
 
+// ── deterministic loopback records ──
+function recordCb(call: (cb: (err: any, records: any) => void) => void): Promise<any> {
+  return new Promise((resolve) => {
+    call((err: any, records: any) => resolve({ err, records }));
+  });
+}
+
+function thrownShape(label: string, fn: () => void): void {
+  try {
+    fn();
+    console.log(label + ":", "no throw");
+  } catch (e: any) {
+    console.log(label + ":", e.name, e.code);
+  }
+}
+
+const resolveDefault = await recordCb((cb) => dns.resolve("localhost", cb));
+console.log("dns.resolve default err null:", resolveDefault.err === null);
+console.log("dns.resolve default loopback:", resolveDefault.records[0] === "127.0.0.1");
+
+const resolveA = await recordCb((cb) => dns.resolve("localhost", "A", cb));
+console.log("dns.resolve A loopback:", resolveA.records[0] === "127.0.0.1");
+
+const resolve4 = await recordCb((cb) => dns.resolve4("localhost", cb));
+console.log("dns.resolve4 loopback:", resolve4.records[0] === "127.0.0.1");
+
+const resolve6 = await recordCb((cb) => dns.resolve6("localhost", cb));
+console.log("dns.resolve6 loopback:", resolve6.records[0] === "::1");
+
+const resolveMx = await recordCb((cb) => dns.resolveMx("localhost", cb));
+console.log("dns.resolveMx shape:", resolveMx.records[0]?.exchange, typeof resolveMx.records[0]?.priority);
+
+const resolveTxt = await recordCb((cb) => dns.resolveTxt("localhost", cb));
+console.log("dns.resolveTxt nested:", Array.isArray(resolveTxt.records[0]), resolveTxt.records[0]?.[0]);
+
+const resolveAny = await recordCb((cb) => dns.resolveAny("localhost", cb));
+console.log("dns.resolveAny first type:", resolveAny.records[0]?.type);
+
+const reverse = await recordCb((cb) => dns.reverse("127.0.0.1", cb));
+console.log("dns.reverse loopback:", reverse.records[0]);
+
+thrownShape("dns.resolve invalid rrtype", () => dns.resolve("localhost", "BAD" as any, () => {}));
+thrownShape("dns.resolve4 invalid callback", () => dns.resolve4("localhost", 123 as any));
+
 // ── Classes ──
 console.log("class dns.Resolver typeof:", typeof dns.Resolver);
 try {
@@ -111,6 +155,10 @@ try {
   console.log("resolver.setServers leaves sibling:", sibling.getServers().join("|") === siblingBefore);
   console.log("resolver.setServers leaves dns:", dns.getServers().join("|") === moduleBefore);
   console.log("resolver.setServers typeof:", typeof r.setServers);
+  const resolver4 = await recordCb((cb) => r.resolve4("localhost", cb));
+  console.log("resolver.resolve4 loopback:", resolver4.records[0] === "127.0.0.1");
+  const resolverReverse = await recordCb((cb) => r.reverse("::1", cb));
+  console.log("resolver.reverse loopback:", resolverReverse.records[0]);
   try {
     r.setServers(["not ip"]);
   } catch (e) {

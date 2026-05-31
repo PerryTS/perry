@@ -111,6 +111,47 @@ try {
 }
 console.log("dnsPromises.getDefaultResultOrder():", dns_promises.getDefaultResultOrder());
 
+// ── deterministic loopback records ──
+function thrownShape(label: string, fn: () => void): void {
+  try {
+    fn();
+    console.log(label + ":", "no throw");
+  } catch (e: any) {
+    console.log(label + ":", e.name, e.code);
+  }
+}
+
+async function probeRecords() {
+  const resolveDefault = await dns_promises.resolve("localhost");
+  console.log("dnsPromises.resolve default loopback:", resolveDefault[0] === "127.0.0.1");
+
+  const resolveA = await dns_promises.resolve("localhost", "A");
+  console.log("dnsPromises.resolve A loopback:", resolveA[0] === "127.0.0.1");
+
+  const resolve4 = await dns_promises.resolve4("localhost");
+  console.log("dnsPromises.resolve4 loopback:", resolve4[0] === "127.0.0.1");
+
+  const resolve6 = await dns_promises.resolve6("localhost");
+  console.log("dnsPromises.resolve6 loopback:", resolve6[0] === "::1");
+
+  const resolveMx = await dns_promises.resolveMx("localhost");
+  console.log("dnsPromises.resolveMx shape:", resolveMx[0]?.exchange, typeof resolveMx[0]?.priority);
+
+  const resolveTxt = await dns_promises.resolveTxt("localhost");
+  console.log("dnsPromises.resolveTxt nested:", Array.isArray(resolveTxt[0]), resolveTxt[0]?.[0]);
+
+  const resolveAny = await dns_promises.resolveAny("localhost");
+  console.log("dnsPromises.resolveAny first type:", resolveAny[0]?.type);
+
+  const reverse = await dns_promises.reverse("::1");
+  console.log("dnsPromises.reverse loopback:", reverse[0]);
+
+  thrownShape("dnsPromises.resolve invalid rrtype", () => {
+    dns_promises.resolve("localhost", "BAD" as any);
+  });
+}
+await probeRecords();
+
 // ── localhost lookup (deterministic) ──
 async function probeLocalhost() {
   try {
@@ -121,7 +162,7 @@ async function probeLocalhost() {
     console.log("loopback error:", (e as Error).message);
   }
 }
-probeLocalhost();
+await probeLocalhost();
 
 // ── Classes ──
 console.log("class dnsPromises.Resolver typeof:", typeof dns_promises.Resolver);
@@ -151,6 +192,10 @@ try {
   console.log("resolver.getServers roundtrip:", rsrv.join("|"));
   console.log("resolver.setServers leaves sibling:", sibling.getServers().join("|") === siblingBefore);
   console.log("resolver.setServers leaves dnsPromises:", dns_promises.getServers().join("|") === moduleBefore);
+  const resolver4 = await r.resolve4("localhost");
+  console.log("resolver.resolve4 loopback:", resolver4[0] === "127.0.0.1");
+  const resolverReverse = await r.reverse("127.0.0.1");
+  console.log("resolver.reverse loopback:", resolverReverse[0]);
   try {
     r.setServers(["not ip"]);
   } catch (e) {
