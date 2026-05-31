@@ -1,9 +1,9 @@
-//! Runtime-only `node:test` shape stubs.
+//! Compatibility adapter for the `node:test` native module.
 //!
-//! Perry does not run Node's test runner. This module exposes the small
-//! object/function surface packages use for feature detection and parity
-//! fixtures: top-level runner callables, the global mock tracker, and snapshot
-//! configuration hooks.
+//! The current implementation lives in `node_submodules::test`. This legacy
+//! entry point delegates module-property lookups there so older native-module
+//! dispatch paths observe the same runner, mock, timer, reporter, and snapshot
+//! surface as `node:test` namespace imports.
 
 use crate::{ClosureHeader, JSValue, ObjectHeader, StringHeader};
 
@@ -73,13 +73,11 @@ extern "C" fn mock_property_thunk(
     object_value(crate::object::js_object_alloc(0, 0))
 }
 
-#[no_mangle]
-pub extern "C" fn js_node_test_mock_fn(_implementation: f64, _options: f64) -> f64 {
+fn legacy_node_test_mock_fn(_implementation: f64, _options: f64) -> f64 {
     mock_function_value()
 }
 
-#[no_mangle]
-pub extern "C" fn js_node_test_mock_property(_target: f64, _property: f64, _value: f64) -> f64 {
+fn legacy_node_test_mock_property(_target: f64, _property: f64, _value: f64) -> f64 {
     object_value(crate::object::js_object_alloc(0, 0))
 }
 
@@ -187,10 +185,15 @@ fn snapshot_object() -> *mut ObjectHeader {
 
 pub fn property(property: &str) -> Option<f64> {
     match property {
-        "skip" | "todo" | "only" | "suite" | "describe" | "it" | "before" | "after"
-        | "beforeEach" | "afterEach" | "run" => Some(test_function_value(property)),
-        "mock" => Some(object_value(mock_tracker_object())),
-        "snapshot" => Some(object_value(snapshot_object())),
+        "default" | "test" | "skip" | "todo" | "only" | "suite" | "describe" | "it" | "before"
+        | "after" | "beforeEach" | "afterEach" | "run" | "mock" | "snapshot" => Some(unsafe {
+            crate::node_submodules::js_node_submodule_export_as_function(
+                b"test".as_ptr(),
+                4,
+                property.as_ptr(),
+                property.len() as u32,
+            )
+        }),
         _ => None,
     }
 }

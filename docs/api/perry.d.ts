@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2392 entries across 104 modules
+// Coverage: 2405 entries across 104 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3153,6 +3153,8 @@ declare module "test" {
   /** stdlib */
   export function beforeEach(...args: any[]): any;
   /** stdlib */
+  export default function (...args: any[]): any;
+  /** stdlib */
   export function describe(...args: any[]): any;
   /** stdlib */
   export function it(...args: any[]): any;
@@ -3164,6 +3166,8 @@ declare module "test" {
   export function skip(...args: any[]): any;
   /** stdlib */
   export function suite(...args: any[]): any;
+  /** stdlib */
+  export function test(...args: any[]): any;
   /** stdlib */
   export function todo(...args: any[]): any;
 }

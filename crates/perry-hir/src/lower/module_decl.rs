@@ -234,9 +234,12 @@ pub(crate) fn lower_module_decl(
                         if is_native {
                             // Default import of native module (e.g., import mysql from 'mysql2/promise')
                             // CommonJS-shaped Node builtins expose an actual
-                            // `default` binding; other native modules keep the
-                            // historical namespace-object default.
-                            let native_method = if is_cjs_style_native_default_import(&source) {
+                            // `default` binding; node:test does too for its
+                            // registration function. Other native modules keep
+                            // the historical namespace-object default.
+                            let native_method = if source == "test"
+                                || is_cjs_style_native_default_import(&source)
+                            {
                                 Some("default".to_string())
                             } else {
                                 None
