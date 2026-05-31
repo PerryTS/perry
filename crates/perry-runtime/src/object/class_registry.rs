@@ -15,9 +15,10 @@ pub use super::class_handles::{
     handle_property_set_dispatch, js_register_event_emitter_handle_probe,
     js_register_event_emitter_on, js_register_handle_method_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
-    js_register_stream_handle_kind_probe, js_register_stream_handle_probe,
-    stream_handle_kind_probe, stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn,
-    HandleMethodDispatchFn, HandlePropertyDispatchFn, HandlePropertySetDispatchFn,
+    js_register_net_socket_handle_probe, js_register_stream_handle_kind_probe,
+    js_register_stream_handle_probe, net_socket_handle_probe, stream_handle_kind_probe,
+    stream_handle_probe, EventEmitterHandleProbeFn, EventEmitterOnFn, HandleMethodDispatchFn,
+    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, NetSocketHandleProbeFn,
     StreamHandleKindProbeFn, StreamHandleProbeFn,
 };
 use super::*;
@@ -349,12 +350,35 @@ pub(crate) unsafe fn resolve_proto_chain_field(
     class_id: u32,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
+    resolve_proto_chain_field_inner(class_id, key, None)
+}
+
+pub(crate) unsafe fn resolve_proto_chain_field_with_receiver(
+    class_id: u32,
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    resolve_proto_chain_field_inner(class_id, key, Some(receiver))
+}
+
+unsafe fn resolve_proto_chain_field_inner(
+    class_id: u32,
+    key: *const crate::StringHeader,
+    receiver: Option<f64>,
+) -> Option<JSValue> {
     let mut cid = class_id;
     let mut depth = 0usize;
     while depth < 32 {
         let proto_obj = class_prototype_object(cid);
         if !proto_obj.is_null() {
-            let field_val = js_object_get_field_by_name(proto_obj as *const _, key);
+            let field_val = if let Some(receiver) = receiver {
+                let previous_this = js_implicit_this_set(receiver);
+                let value = js_object_get_field_by_name(proto_obj as *const _, key);
+                js_implicit_this_set(previous_this);
+                value
+            } else {
+                js_object_get_field_by_name(proto_obj as *const _, key)
+            };
             if !field_val.is_undefined() && !field_val.is_null() {
                 return Some(field_val);
             }
@@ -606,8 +630,17 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             return None;
         }
         let func_ptr = (*ptr).func_ptr as usize;
-        let noop_thunk = global_this_builtin_noop_thunk as *const u8 as usize;
-        if func_ptr != noop_thunk {
+        let is_global_builtin_func = func_ptr
+            == global_this_builtin_noop_thunk as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_message_channel_constructor_call_error as *const u8
+                    as usize
+            || func_ptr
+                == crate::messaging::js_message_port_constructor_call_error as *const u8 as usize
+            || func_ptr
+                == crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
+                    as usize;
+        if !is_global_builtin_func {
             return None;
         }
     }
@@ -628,6 +661,21 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         }
     }
     None
+}
+
+fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(options.to_bits());
+    if !jsval.is_pointer() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let obj = jsval.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(obj, key);
+    let value_f64 = f64::from_bits(value.bits());
+    f64::from_bits(crate::value::JSValue::bool(crate::value::js_is_truthy(value_f64) != 0).bits())
 }
 
 #[no_mangle]
@@ -934,6 +982,19 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_len: usize,
 ) -> f64 {
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
+        if module == "sqlite"
+            && matches!(
+                method.as_str(),
+                "DatabaseSync" | "Session" | "StatementSync"
+            )
+        {
+            let ptr =
+                crate::value::JS_NATIVE_SQLITE_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeSqliteDispatchFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len, 1);
+            }
+        }
         if module == "tty" && matches!(method.as_str(), "ReadStream" | "WriteStream") {
             let fd = if !args_ptr.is_null() && args_len > 0 {
                 *args_ptr
@@ -944,6 +1005,36 @@ pub unsafe extern "C" fn js_new_function_construct(
                 crate::tty::js_tty_read_stream_new(fd)
             } else {
                 crate::tty::js_tty_write_stream_new(fd)
+            };
+        }
+        if module == "fs" && method == "Utf8Stream" {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return crate::fs::js_fs_utf8_stream_new(options);
+        }
+        if module == "fs"
+            && matches!(
+                method.as_str(),
+                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+            )
+        {
+            let path = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let options = if !args_ptr.is_null() && args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return if matches!(method.as_str(), "ReadStream" | "FileReadStream") {
+                crate::fs::js_fs_create_read_stream(path, options)
+            } else {
+                crate::fs::js_fs_create_write_stream(path, options)
             };
         }
         if module == "tls" && method == "SecureContext" {
@@ -1095,6 +1186,59 @@ pub unsafe extern "C" fn js_new_function_construct(
             }
             "TextEncoderStream" | "TextDecoderStream" => {
                 return js_text_encoding_stream_new();
+            }
+            "MessageChannel" => {
+                return crate::messaging::js_message_channel_new();
+            }
+            "MessagePort" => {
+                return crate::messaging::js_message_port_constructor_error();
+            }
+            "BroadcastChannel" => {
+                let name = args
+                    .first()
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::messaging::js_broadcast_channel_new(name);
+            }
+            "URL" => {
+                let input = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let input_ptr = crate::url::js_url_coerce_string(input);
+                let url = if let Some(base) = args.get(1).copied() {
+                    let base_ptr = crate::url::js_url_coerce_string(base);
+                    crate::url::js_url_new_with_base(input_ptr, base_ptr)
+                } else {
+                    crate::url::js_url_new(input_ptr)
+                };
+                return crate::value::js_nanbox_pointer(url as i64);
+            }
+            "URLSearchParams" => {
+                let params = if let Some(init) = args.first().copied() {
+                    crate::url::js_url_search_params_new_any(init)
+                } else {
+                    crate::url::js_url_search_params_new_empty()
+                };
+                return crate::value::js_nanbox_pointer(params as i64);
+            }
+            "TextEncoder" => {
+                let encoder = crate::text::js_text_encoder_new();
+                return crate::value::js_nanbox_pointer(encoder);
+            }
+            "TextDecoder" => {
+                let label = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let options = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let fatal = text_decoder_bool_option(options, "fatal");
+                let ignore_bom = text_decoder_bool_option(options, "ignoreBOM");
+                let decoder = crate::text::js_text_decoder_new(label, fatal, ignore_bom);
+                return crate::value::js_nanbox_pointer(decoder);
             }
             _ => {}
         }

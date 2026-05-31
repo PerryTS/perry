@@ -221,6 +221,18 @@ pub(super) fn try_array_only_methods(
                 // emits `Expr::Array<Method>` and the compiled binary calls
                 // `js_array_<method>` on a class handle.
                 let member_obj = unwrap_transparent_expr(member.obj.as_ref());
+                let recv_is_known_string_prop = matches!(
+                    member_obj,
+                    ast::Expr::Member(inner)
+                        if matches!(
+                            &inner.prop,
+                            ast::MemberProp::Ident(prop)
+                                if matches!(
+                                    prop.sym.as_ref(),
+                                    "stack" | "message" | "name" | "sourceSQL" | "expandedSQL"
+                                )
+                        )
+                );
                 let recv_is_class = match member_obj {
                     ast::Expr::Ident(ident) => {
                         let n = ident.sym.to_string();
@@ -719,60 +731,80 @@ pub(super) fn try_array_only_methods(
                         // object's `.join` method (drizzle's sql.join, etc.).
                     }
                     "indexOf" if args.len() == 1 || args.len() == 2 => {
-                        let array_expr = lower_expr(ctx, &member.obj)?;
-                        if matches!(
-                            &array_expr,
-                            Expr::ArrayMap { .. }
-                                | Expr::ArrayFilter { .. }
-                                | Expr::ArraySort { .. }
-                                | Expr::ArraySlice { .. }
-                                | Expr::Array(_)
-                                | Expr::ArrayFrom(_)
-                                | Expr::StringSplit(_, _)
-                                | Expr::ObjectKeys(_)
-                                | Expr::ObjectValues(_)
-                                | Expr::PropertyGet { .. }
-                        ) {
-                            let mut it = args.into_iter();
-                            let value_expr = it.next().unwrap();
-                            let from_index = it.next().map(Box::new);
-                            return Ok(Ok(Expr::ArrayIndexOf {
-                                array: Box::new(array_expr),
-                                value: Box::new(value_expr),
-                                from_index,
-                            }));
+                        if recv_is_known_string_prop {
+                            // Fall through to string/generic dispatch.
+                        } else {
+                            let array_expr = lower_expr(ctx, &member.obj)?;
+                            let is_known_string_prop = matches!(&array_expr,
+                                Expr::PropertyGet { property, .. }
+                                if matches!(
+                                    property.as_str(),
+                                    "stack" | "message" | "name" | "sourceSQL" | "expandedSQL"
+                                )
+                            );
+                            if !is_known_string_prop
+                                && matches!(
+                                    &array_expr,
+                                    Expr::ArrayMap { .. }
+                                        | Expr::ArrayFilter { .. }
+                                        | Expr::ArraySort { .. }
+                                        | Expr::ArraySlice { .. }
+                                        | Expr::Array(_)
+                                        | Expr::ArrayFrom(_)
+                                        | Expr::StringSplit(_, _)
+                                        | Expr::ObjectKeys(_)
+                                        | Expr::ObjectValues(_)
+                                        | Expr::PropertyGet { .. }
+                                )
+                            {
+                                let mut it = args.into_iter();
+                                let value_expr = it.next().unwrap();
+                                let from_index = it.next().map(Box::new);
+                                return Ok(Ok(Expr::ArrayIndexOf {
+                                    array: Box::new(array_expr),
+                                    value: Box::new(value_expr),
+                                    from_index,
+                                }));
+                            }
                         }
                     }
                     "includes" if args.len() == 1 || args.len() == 2 => {
-                        let array_expr = lower_expr(ctx, &member.obj)?;
-                        // Don't treat error string properties as arrays
-                        let is_error_string_prop = matches!(&array_expr,
-                            Expr::PropertyGet { property, .. }
-                            if matches!(property.as_str(), "stack" | "message" | "name")
-                        );
-                        if !is_error_string_prop
-                            && matches!(
-                                &array_expr,
-                                Expr::ArrayMap { .. }
-                                    | Expr::ArrayFilter { .. }
-                                    | Expr::ArraySort { .. }
-                                    | Expr::ArraySlice { .. }
-                                    | Expr::Array(_)
-                                    | Expr::ArrayFrom(_)
-                                    | Expr::StringSplit(_, _)
-                                    | Expr::ObjectKeys(_)
-                                    | Expr::ObjectValues(_)
-                                    | Expr::PropertyGet { .. }
-                            )
-                        {
-                            let mut it = args.into_iter();
-                            let value_expr = it.next().unwrap();
-                            let from_index = it.next().map(Box::new);
-                            return Ok(Ok(Expr::ArrayIncludes {
-                                array: Box::new(array_expr),
-                                value: Box::new(value_expr),
-                                from_index,
-                            }));
+                        if recv_is_known_string_prop {
+                            // Fall through to string/generic dispatch.
+                        } else {
+                            let array_expr = lower_expr(ctx, &member.obj)?;
+                            // Don't treat known string-valued properties as arrays.
+                            let is_known_string_prop = matches!(&array_expr,
+                                Expr::PropertyGet { property, .. }
+                                if matches!(
+                                    property.as_str(),
+                                    "stack" | "message" | "name" | "sourceSQL" | "expandedSQL"
+                                )
+                            );
+                            if !is_known_string_prop
+                                && matches!(
+                                    &array_expr,
+                                    Expr::ArrayMap { .. }
+                                        | Expr::ArrayFilter { .. }
+                                        | Expr::ArraySort { .. }
+                                        | Expr::ArraySlice { .. }
+                                        | Expr::Array(_)
+                                        | Expr::ArrayFrom(_)
+                                        | Expr::StringSplit(_, _)
+                                        | Expr::ObjectKeys(_)
+                                        | Expr::ObjectValues(_)
+                                        | Expr::PropertyGet { .. }
+                                )
+                            {
+                                let mut it = args.into_iter();
+                                let value_expr = it.next().unwrap();
+                                let from_index = it.next().map(Box::new);
+                                return Ok(Ok(Expr::ArrayIncludes {
+                                    array: Box::new(array_expr),
+                                    value: Box::new(value_expr),
+                                    from_index,
+                                }));
+                            }
                         }
                     }
                     "flat" if args.is_empty() => {

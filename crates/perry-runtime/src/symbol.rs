@@ -1148,6 +1148,28 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Generic small-handle `Symbol.dispose` support. Subsystems that expose
+    // a dispose method through HANDLE_PROPERTY_DISPATCH can bind it here
+    // without adding a runtime-specific special case.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if id > 0 && id < 0x100000 {
+            let dispose = well_known_symbol("dispose");
+            if !dispose.is_null() {
+                let dispose_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(dispose as *const u8).bits());
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(dispose_f64) {
+                    if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                        let method = b"@@__perry_wk_dispose";
+                        let v = dispatch(id, method.as_ptr(), method.len());
+                        if v.to_bits() != TAG_UNDEFINED {
+                            return v;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Web Fetch and other stdlib handle-backed values are small ids
     // NaN-boxed as POINTER. A computed `handle[Symbol.iterator]` reaches the
     // symbol resolver directly, bypassing the normal string-key handle

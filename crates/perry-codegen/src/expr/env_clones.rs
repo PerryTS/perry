@@ -407,12 +407,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &h))
         }
 
-        // -------- structuredClone(v) — real deep copy --------
-        Expr::StructuredClone(operand) => {
-            let v = lower_expr(ctx, operand)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_structured_clone", &[(DOUBLE, &v)]))
+        // -------- structuredClone(v[, options]) — real deep copy --------
+        Expr::StructuredClone { value, options } => {
+            let v = lower_expr(ctx, value)?;
+            let opts = lower_expr(ctx, options)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_structured_clone_with_options",
+                &[(DOUBLE, &v), (DOUBLE, &opts)],
+            ))
         }
 
         // -------- `new WeakRef(target)` — allocate a wrapper object --------

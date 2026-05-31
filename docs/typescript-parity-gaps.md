@@ -268,16 +268,22 @@ Everything the Perry compiler is missing for absolute parity with Node.js runnin
 
 ## Global APIs
 
+### Issue #3598 globalThis/Web closure audit
+
+Issue #3598 was closed on 2026-05-31 because the umbrella is superseded by granular child issues. The current `origin/main` audit found no manifest-backed API docs/type delta to regenerate for this docs-only closure branch: `./scripts/regen_api_docs.sh` produced no changes to `docs/src/api/reference.md` or `docs/api/perry.d.ts`.
+
+The tables below reflect the global APIs that are already present on current `main`. Do not mark the #3598 feature-branch globals as complete here until their runtime PRs land; residual child issues should continue tracking weak GC semantics, BroadcastChannel delivery, deeper FormData/File/Blob body parity, full WebAssembly execution classes/streaming, full text encoding stream behavior, and URLPattern behavior for the Node 22 target.
+
 ### Timers
 
 | API | Status |
 |---|---|
 | `setTimeout(fn, ms)` | ✓ |
 | `setInterval(fn, ms)` | ✓ |
-| `clearTimeout(id)` | Missing |
-| `clearInterval(id)` | Missing |
-| `setImmediate(fn)` | Missing |
-| `clearImmediate(id)` | Missing |
+| `clearTimeout(id)` | ✓ |
+| `clearInterval(id)` | ✓ |
+| `setImmediate(fn)` | ✓ |
+| `clearImmediate(id)` | ✓ |
 
 ### Console
 
@@ -287,37 +293,42 @@ Everything the Perry compiler is missing for absolute parity with Node.js runnin
 | `console.error()` | ✓ |
 | `console.warn()` | ✓ |
 | `console.table()` | Missing |
-| `console.dir()` | Missing |
-| `console.time()` / `timeEnd()` / `timeLog()` | Missing |
+| `console.dir()` | ✓ |
+| `console.time()` / `timeEnd()` | ✓ |
+| `console.timeLog()` | Missing |
 | `console.group()` / `groupEnd()` | Missing |
-| `console.trace()` | Missing |
-| `console.assert()` | Missing |
-| `console.count()` / `countReset()` | Missing |
+| `console.trace()` | ✓ |
+| `console.assert()` | ✓ |
+| `console.count()` | ✓ |
+| `console.countReset()` | Missing |
 | `console.clear()` | Missing |
 
 ### Encoding
 
 | API | Status |
 |---|---|
-| `TextEncoder` | Missing |
-| `TextDecoder` | Missing |
-| `atob()` | Missing |
-| `btoa()` | Missing |
+| `TextEncoder` | ✓ |
+| `TextDecoder` | ✓ |
+| `TextEncoderStream` / `TextDecoderStream` | Partial (constructor/global shape; transform behavior remains tracked) |
+| `atob()` | ✓ |
+| `btoa()` | ✓ |
 | `encodeURIComponent()` | ✓ |
 | `decodeURIComponent()` | ✓ |
-| `encodeURI()` / `decodeURI()` | Missing |
+| `encodeURI()` / `decodeURI()` | ✓ |
 
 ### Other Globals
 
 | API | Status |
 |---|---|
-| `structuredClone()` | Missing |
-| `queueMicrotask()` | Missing |
-| `AbortController` / `AbortSignal` | Missing |
-| `performance.now()` | Missing |
+| `structuredClone()` | ✓ (transfer/lifecycle edge cases remain tracked) |
+| `queueMicrotask()` | ✓ |
+| `AbortController` / `AbortSignal` | Partial |
+| `EventTarget` | Partial |
+| `performance.now()` | ✓ |
+| `navigator` | Partial (Node metadata object; Web Locks is a stub) |
 | `URL` / `URLSearchParams` | ✓ |
-| `WeakRef` | Missing |
-| `FinalizationRegistry` | Missing |
+| `WeakRef` | Partial (strong-reference wrapper; true weak semantics missing) |
+| `FinalizationRegistry` | Partial (registration shape; cleanup-on-GC semantics missing) |
 | `Intl` (entire namespace) | Missing |
 
 ---
@@ -436,13 +447,14 @@ Everything the Perry compiler is missing for absolute parity with Node.js runnin
 
 | Feature | Status |
 |---|---|
-| `fetch()` global | ✓ (basic GET/POST) |
-| `Response.json()` / `.text()` / `.arrayBuffer()` | Missing |
-| `Response.headers` | Missing |
-| `Response.status` / `.statusText` / `.ok` | Missing |
-| `Headers` class | Missing |
-| `Request` class | Missing |
-| `FormData` | Missing |
+| `fetch()` global | ✓ (GET/POST/options) |
+| `Response.json()` / `.text()` / `.arrayBuffer()` | ✓ |
+| `Response.headers` | ✓ |
+| `Response.status` / `.statusText` / `.ok` | ✓ |
+| `Headers` class | ✓ |
+| `Request` class | ✓ |
+| `Blob` / `File` | Partial |
+| `FormData` | Partial (response/request extraction helpers; constructor and mutators remain tracked) |
 | `http.createServer()` | Missing (use Fastify integration instead) |
 | `http.request()` / `http.get()` | Missing |
 
@@ -542,7 +554,7 @@ These are features that are fundamentally difficult for an AOT native compiler:
 | Core language syntax | 48/52 | 4 | 92% |
 | Built-in object methods | ~120/180 | ~60 | 67% |
 | Node.js std lib functions | ~65/200+ | ~135+ | ~30% |
-| Global APIs | ~15/30 | ~15 | 50% |
+| Global APIs | ~24/30 | ~6 | 80% |
 | **Overall language parity** | | | **~85%** |
 | **Overall Node.js API parity** | | | **~35%** |
 

@@ -123,8 +123,14 @@ pub(crate) fn resolve_inherited_field(
         return None;
     }
     // `js_object_get_field_by_name` handles its own further prototype hops
-    // (recorded protos on the proto object), so this is the full walk.
+    // (recorded protos on the proto object), so this is the full walk. Bind
+    // accessor getters to the original receiver while walking inherited
+    // properties; otherwise prototype accessors would observe the prototype
+    // object instead of the instance.
+    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
+    let previous_this = super::js_implicit_this_set(receiver);
     let v = super::js_object_get_field_by_name(proto, key);
+    super::js_implicit_this_set(previous_this);
     if v.bits() == 0x7FFC_0000_0000_0001 {
         // undefined — treat as "not present" so callers fall back cleanly.
         None

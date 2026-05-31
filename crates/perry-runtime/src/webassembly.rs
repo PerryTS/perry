@@ -10,13 +10,12 @@
 //! `WebAssembly.*` never trigger an undefined-symbol error because the
 //! linker dead-strips the unreferenced `js_webassembly_*` functions.
 //!
-//! ## MVP API (Perry-specific, not standard)
+//! ## API shape
 //!
 //! The standard `WebAssembly.instantiate(bytes).then(({instance}) =>
 //! instance.exports.add(2, 3))` shape needs (a) Promise wrapping and
-//! (b) dynamic property access proxying — both substantial codegen work.
-//! For the PoC we expose three top-level builtins on the `WebAssembly`
-//! namespace instead, all synchronous:
+//! (b) dynamic property access proxying. The first wasm-host pass exposed
+//! a Perry-specific synchronous helper:
 //!
 //! ```ts
 //! WebAssembly.validate(bytes: Uint8Array): boolean;
@@ -24,12 +23,16 @@
 //! WebAssembly.callExport(handle: number, name: string, ...args: number[]): number;
 //! ```
 //!
+//! This file also carries the low-risk standard module metadata slice:
+//! `new WebAssembly.Module(bytes)`, `WebAssembly.compile(bytes)`, and
+//! `WebAssembly.Module.{exports,imports,customSections}`.
+//!
 //! Numeric args only (i32/i64/f32/f64). Standard surface tracked as
 //! follow-up work in the issue thread.
 
 use std::ffi::{c_char, c_void};
 
-use crate::value::TAG_UNDEFINED;
+use crate::value::{JSValue, TAG_UNDEFINED};
 
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -132,6 +135,10 @@ const WASM_VAL_KIND_I64: u8 = 1;
 const WASM_VAL_KIND_F32: u8 = 2;
 const WASM_VAL_KIND_F64: u8 = 3;
 const WASM_VAL_KIND_NONE: u8 = 0xFF;
+const WASM_EXTERN_KIND_FUNCTION: u8 = 0;
+const WASM_EXTERN_KIND_TABLE: u8 = 1;
+const WASM_EXTERN_KIND_MEMORY: u8 = 2;
+const WASM_EXTERN_KIND_GLOBAL: u8 = 3;
 
 extern "C" {
     fn perry_wasm_host_string_free(s: *mut c_char);
@@ -142,6 +149,37 @@ extern "C" {
         out_err: *mut *mut c_char,
     ) -> *mut c_void;
     fn perry_wasm_host_module_drop(module: *mut c_void);
+    fn perry_wasm_host_module_exports_len(module: *mut c_void) -> usize;
+    fn perry_wasm_host_module_export_at(
+        module: *mut c_void,
+        index: usize,
+        out_name: *mut *const c_char,
+        out_name_len: *mut usize,
+        out_kind: *mut u8,
+    ) -> i32;
+    fn perry_wasm_host_module_imports_len(module: *mut c_void) -> usize;
+    fn perry_wasm_host_module_import_at(
+        module: *mut c_void,
+        index: usize,
+        out_module: *mut *const c_char,
+        out_module_len: *mut usize,
+        out_name: *mut *const c_char,
+        out_name_len: *mut usize,
+        out_kind: *mut u8,
+    ) -> i32;
+    fn perry_wasm_host_module_custom_sections_len(
+        module: *mut c_void,
+        name: *const c_char,
+        name_len: usize,
+    ) -> usize;
+    fn perry_wasm_host_module_custom_section_at(
+        module: *mut c_void,
+        name: *const c_char,
+        name_len: usize,
+        nth: usize,
+        out_data: *mut *const u8,
+        out_data_len: *mut usize,
+    ) -> i32;
     fn perry_wasm_host_instance_new(module: *mut c_void, out_err: *mut *mut c_char) -> *mut c_void;
     #[allow(dead_code)]
     fn perry_wasm_host_instance_drop(inst: *mut c_void);
@@ -168,6 +206,123 @@ fn emit_error_to_stderr(prefix: &str, err: *mut c_char) {
     }
 }
 
+fn string_value(bytes: &[u8]) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn named_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
+    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+fn object_set(obj: *mut crate::object::ObjectHeader, key: &[u8], value: f64) {
+    crate::object::js_object_set_field_by_name(obj, named_key(key), value);
+}
+
+fn object_set_string(obj: *mut crate::object::ObjectHeader, key: &[u8], value: &[u8]) {
+    object_set(obj, key, string_value(value));
+}
+
+fn object_value(obj: *mut crate::object::ObjectHeader) -> f64 {
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+fn array_value(arr: *mut crate::array::ArrayHeader) -> f64 {
+    crate::value::js_nanbox_pointer(arr as i64)
+}
+
+fn array_buffer_from_bytes(data: *const u8, len: usize) -> f64 {
+    let len_i32 = len.min(i32::MAX as usize) as i32;
+    let buf = crate::buffer::js_array_buffer_new(len_i32);
+    if !buf.is_null() && !data.is_null() && len_i32 > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data,
+                crate::buffer::buffer_data_mut(buf),
+                len_i32 as usize,
+            );
+        }
+    }
+    crate::value::js_nanbox_pointer(buf as i64)
+}
+
+fn make_module_object(module: *mut c_void) -> f64 {
+    if module.is_null() {
+        return nanbox_undefined();
+    }
+    let obj = crate::object::js_object_alloc(0, 2);
+    object_set_string(obj, b"__wasmKind", b"module");
+    object_set(obj, b"__wasmModulePtr", module as usize as f64);
+    object_value(obj)
+}
+
+fn extract_module_handle(module_jsval: f64) -> Option<*mut c_void> {
+    let ptr = unbox_pointer(module_jsval);
+    if ptr.is_null() {
+        return None;
+    }
+    let raw = crate::object::js_object_get_field_by_name_f64(
+        ptr as *const crate::object::ObjectHeader,
+        named_key(b"__wasmModulePtr"),
+    );
+    let n = JSValue::from_bits(raw.to_bits()).to_number();
+    if n.is_finite() && n > 0.0 {
+        Some(n as usize as *mut c_void)
+    } else {
+        None
+    }
+}
+
+fn extern_kind_name(kind: u8) -> &'static [u8] {
+    match kind {
+        WASM_EXTERN_KIND_FUNCTION => b"function",
+        WASM_EXTERN_KIND_TABLE => b"table",
+        WASM_EXTERN_KIND_MEMORY => b"memory",
+        WASM_EXTERN_KIND_GLOBAL => b"global",
+        _ => b"unknown",
+    }
+}
+
+fn make_export_descriptor(name: *const c_char, name_len: usize, kind: u8) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    let name_bytes = if name.is_null() {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(name as *const u8, name_len) }
+    };
+    object_set_string(obj, b"name", name_bytes);
+    object_set_string(obj, b"kind", extern_kind_name(kind));
+    object_value(obj)
+}
+
+fn make_import_descriptor(
+    module: *const c_char,
+    module_len: usize,
+    name: *const c_char,
+    name_len: usize,
+    kind: u8,
+) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 3);
+    let module_bytes = if module.is_null() {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(module as *const u8, module_len) }
+    };
+    let name_bytes = if name.is_null() {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(name as *const u8, name_len) }
+    };
+    object_set_string(obj, b"module", module_bytes);
+    object_set_string(obj, b"name", name_bytes);
+    object_set_string(obj, b"kind", extern_kind_name(kind));
+    object_value(obj)
+}
+
+fn empty_array_value() -> f64 {
+    array_value(crate::array::js_array_alloc(0))
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // FFI surface called from codegen.
 // ────────────────────────────────────────────────────────────────────────
@@ -180,6 +335,124 @@ pub extern "C" fn js_webassembly_validate(bytes_jsval: f64) -> f64 {
     };
     let ok = unsafe { perry_wasm_host_validate(ptr, len) } != 0;
     nanbox_bool(ok)
+}
+
+/// `new WebAssembly.Module(bytes)` — compile bytes and return a JS wrapper
+/// around the host module handle.
+#[no_mangle]
+pub extern "C" fn js_webassembly_module_new(bytes_jsval: f64) -> f64 {
+    let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
+        eprintln!("WebAssembly.Module: argument is not a Uint8Array or ArrayBuffer");
+        return nanbox_undefined();
+    };
+    let mut err: *mut c_char = std::ptr::null_mut();
+    let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
+    if module.is_null() {
+        emit_error_to_stderr("WebAssembly.CompileError", err);
+        return nanbox_undefined();
+    }
+    make_module_object(module)
+}
+
+/// `WebAssembly.compile(bytes)` — async-standard shape, implemented as a
+/// pre-resolved Promise over the same module wrapper used by the constructor.
+#[no_mangle]
+pub extern "C" fn js_webassembly_compile(bytes_jsval: f64) -> f64 {
+    let module = js_webassembly_module_new(bytes_jsval);
+    let promise = if module.to_bits() == TAG_UNDEFINED {
+        crate::promise::js_promise_rejected(string_value(b"WebAssembly compile failed"))
+    } else {
+        crate::promise::js_promise_resolved(module)
+    };
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_webassembly_module_exports(module_jsval: f64) -> f64 {
+    let Some(module) = extract_module_handle(module_jsval) else {
+        return empty_array_value();
+    };
+    let len = unsafe { perry_wasm_host_module_exports_len(module) };
+    let mut arr = crate::array::js_array_alloc(len as u32);
+    for i in 0..len {
+        let mut name: *const c_char = std::ptr::null();
+        let mut name_len = 0usize;
+        let mut kind = 0u8;
+        let ok = unsafe {
+            perry_wasm_host_module_export_at(module, i, &mut name, &mut name_len, &mut kind)
+        };
+        if ok != 0 {
+            arr =
+                crate::array::js_array_push_f64(arr, make_export_descriptor(name, name_len, kind));
+        }
+    }
+    array_value(arr)
+}
+
+#[no_mangle]
+pub extern "C" fn js_webassembly_module_imports(module_jsval: f64) -> f64 {
+    let Some(module) = extract_module_handle(module_jsval) else {
+        return empty_array_value();
+    };
+    let len = unsafe { perry_wasm_host_module_imports_len(module) };
+    let mut arr = crate::array::js_array_alloc(len as u32);
+    for i in 0..len {
+        let mut module_name: *const c_char = std::ptr::null();
+        let mut module_name_len = 0usize;
+        let mut name: *const c_char = std::ptr::null();
+        let mut name_len = 0usize;
+        let mut kind = 0u8;
+        let ok = unsafe {
+            perry_wasm_host_module_import_at(
+                module,
+                i,
+                &mut module_name,
+                &mut module_name_len,
+                &mut name,
+                &mut name_len,
+                &mut kind,
+            )
+        };
+        if ok != 0 {
+            arr = crate::array::js_array_push_f64(
+                arr,
+                make_import_descriptor(module_name, module_name_len, name, name_len, kind),
+            );
+        }
+    }
+    array_value(arr)
+}
+
+#[no_mangle]
+pub extern "C" fn js_webassembly_module_custom_sections(module_jsval: f64, name_jsval: f64) -> f64 {
+    let Some(module) = extract_module_handle(module_jsval) else {
+        return empty_array_value();
+    };
+    let Some((name_ptr, name_len)) = extract_string_bytes(name_jsval) else {
+        return empty_array_value();
+    };
+    let len = unsafe {
+        perry_wasm_host_module_custom_sections_len(module, name_ptr as *const c_char, name_len)
+    };
+    let mut arr = crate::array::js_array_alloc(len as u32);
+    for i in 0..len {
+        let mut data: *const u8 = std::ptr::null();
+        let mut data_len = 0usize;
+        let ok = unsafe {
+            perry_wasm_host_module_custom_section_at(
+                module,
+                name_ptr as *const c_char,
+                name_len,
+                i,
+                &mut data,
+                &mut data_len,
+            )
+        };
+        if ok != 0 {
+            arr = crate::array::js_array_push_f64(arr, array_buffer_from_bytes(data, data_len));
+        }
+    }
+    array_value(arr)
 }
 
 /// `WebAssembly.instantiate(bytes)` — synchronous, returns an opaque handle

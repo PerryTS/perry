@@ -60,18 +60,26 @@ thread_local! {
 struct MessagePortState {
     /// Id of the paired port. `postMessage` delivers to the peer's inbox.
     peer: u64,
+    /// NaN-boxed MessagePort object value, used as MessageEvent target.
+    object_bits: u64,
     /// Queue of delivered messages as JSON strings (oldest first).
     inbox: VecDeque<String>,
     /// `message` event listener (NaN-boxed closure value bits), if registered.
     message_cb: Option<u64>,
     /// `close` event listener (NaN-boxed closure value bits), if registered.
     close_cb: Option<u64>,
+    /// `message` listeners registered through addEventListener().
+    message_event_cbs: Vec<u64>,
+    /// `close` listeners registered through addEventListener().
+    close_event_cbs: Vec<u64>,
     /// Whether `.start()` (or a `message` listener) has been attached. Until a
     /// port is started, queued messages are not dispatched to the listener
     /// (Node semantics), though `receiveMessageOnPort` still drains them.
     started: bool,
     /// Whether `close()` has been called on this port.
     closed: bool,
+    /// Whether a close event still needs to be delivered.
+    close_pending: bool,
 }
 
 static ENVIRONMENT_DATA_GC_REGISTERED: Once = Once::new();
@@ -95,10 +103,18 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
     // moves (#3157). Stored as NaN-boxed closure value bits.
     MESSAGE_PORTS.with(|ports| {
         for state in ports.borrow_mut().values_mut() {
+            visitor.visit_nanbox_u64_slot(&mut state.object_bits);
             if let Some(cb) = state.message_cb.as_mut() {
                 visitor.visit_nanbox_u64_slot(cb);
             }
             if let Some(cb) = state.close_cb.as_mut() {
+                visitor.visit_nanbox_u64_slot(cb);
+            }
+            for cb in state
+                .message_event_cbs
+                .iter_mut()
+                .chain(state.close_event_cbs.iter_mut())
+            {
                 visitor.visit_nanbox_u64_slot(cb);
             }
         }
@@ -189,10 +205,25 @@ fn set_object_field(obj: *mut perry_runtime::object::ObjectHeader, name: &str, v
     perry_runtime::object::js_object_set_field_by_name(obj, key, value);
 }
 
+fn get_object_field(obj: *const perry_runtime::object::ObjectHeader, name: &str) -> f64 {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    perry_runtime::object::js_object_get_field_by_name_f64(obj, key)
+}
+
 fn closure_value(func_ptr: *const u8, arity: u32) -> f64 {
     perry_runtime::closure::js_register_closure_arity(func_ptr, arity);
     let closure = perry_runtime::closure::js_closure_alloc(func_ptr, 0);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
+fn callback_bits_from_value(value: f64) -> Option<u64> {
+    let bits = value.to_bits();
+    let js_value = JSValue::from_bits(bits);
+    if !js_value.is_pointer() {
+        return None;
+    }
+    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    perry_runtime::closure::is_closure_ptr(ptr).then_some(bits)
 }
 
 extern "C" fn worker_threads_noop0(_closure: *const ClosureHeader) -> f64 {
@@ -236,11 +267,79 @@ fn deserialize_message(msg: &str) -> f64 {
     f64::from_bits(unsafe { js_json_parse(str_ptr) })
 }
 
+fn call_callback0(callback_bits: u64, this_bits: u64) {
+    let closure = closure_ptr_from_bits(callback_bits);
+    if closure.is_null() {
+        return;
+    }
+    let prev_this = perry_runtime::object::js_implicit_this_set(f64::from_bits(this_bits));
+    perry_runtime::closure::js_closure_call0(closure);
+    perry_runtime::object::js_implicit_this_set(prev_this);
+}
+
+fn call_callback1(callback_bits: u64, this_bits: u64, arg: f64) {
+    let closure = closure_ptr_from_bits(callback_bits);
+    if closure.is_null() {
+        return;
+    }
+    let prev_this = perry_runtime::object::js_implicit_this_set(f64::from_bits(this_bits));
+    perry_runtime::closure::js_closure_call1(closure, arg);
+    perry_runtime::object::js_implicit_this_set(prev_this);
+}
+
+fn object_event_handler(target_bits: u64, name: &str) -> Option<u64> {
+    if target_bits == 0 {
+        return None;
+    }
+    let target = f64::from_bits(target_bits);
+    let js = JSValue::from_bits(target.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let obj = perry_runtime::value::js_nanbox_get_pointer(target)
+        as *const perry_runtime::object::ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    callback_bits_from_value(get_object_field(obj, name))
+}
+
+fn event_object(event_type: &str, target_bits: u64, data: Option<f64>) -> f64 {
+    let obj = perry_runtime::object::js_object_alloc(0, 6);
+    let type_ptr = js_string_from_bytes(event_type.as_ptr(), event_type.len() as u32);
+    let type_value = f64::from_bits(JSValue::string_ptr(type_ptr).bits());
+    let target = f64::from_bits(target_bits);
+    set_object_field(obj, "type", type_value);
+    set_object_field(obj, "target", target);
+    set_object_field(obj, "currentTarget", target);
+    set_object_field(obj, "defaultPrevented", js_bool(false));
+    let ctor = perry_runtime::object::js_object_alloc(0, 1);
+    if let Some(data) = data {
+        set_object_field(obj, "data", data);
+        let name = js_string_from_bytes(b"MessageEvent".as_ptr(), 12);
+        set_object_field(
+            ctor,
+            "name",
+            f64::from_bits(JSValue::string_ptr(name).bits()),
+        );
+    } else {
+        let name = js_string_from_bytes(b"Event".as_ptr(), 5);
+        set_object_field(
+            ctor,
+            "name",
+            f64::from_bits(JSValue::string_ptr(name).bits()),
+        );
+    }
+    set_object_field(obj, "constructor", object_value(ctor));
+    object_value(obj)
+}
+
 /// Build a MessagePort JS object for a same-process channel. The id is also
 /// stored on the object (hidden `__perryPortId` field) so `receiveMessageOnPort`
 /// can recover it from the object reference.
 fn message_port_object(port_id: u64) -> *mut perry_runtime::object::ObjectHeader {
     let obj = perry_runtime::object::js_object_alloc(0, 0);
+    let object_bits = object_value(obj).to_bits();
     set_object_field(
         obj,
         "postMessage",
@@ -273,6 +372,16 @@ fn message_port_object(port_id: u64) -> *mut perry_runtime::object::ObjectHeader
     );
     set_object_field(
         obj,
+        "addEventListener",
+        port_bound_closure(port_add_event_listener as *const u8, 2, port_id),
+    );
+    set_object_field(
+        obj,
+        "removeEventListener",
+        port_bound_closure(port_remove_event_listener as *const u8, 2, port_id),
+    );
+    set_object_field(
+        obj,
         "close",
         port_bound_closure(port_close as *const u8, 0, port_id),
     );
@@ -297,6 +406,13 @@ fn message_port_object(port_id: u64) -> *mut perry_runtime::object::ObjectHeader
         closure_value(worker_threads_has_ref as *const u8, 0),
     );
     set_object_field(obj, "__perryPortId", f64::from_bits(port_id));
+    set_object_field(obj, "onmessage", js_null());
+    set_object_field(obj, "onmessageerror", js_null());
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            state.object_bits = object_bits;
+        }
+    });
     obj
 }
 
@@ -305,7 +421,7 @@ extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _tran
     let port_id = port_id_from_closure(closure);
     // Reject values flagged uncloneable (#3159). Match Node's DataCloneError.
     if UNCLONEABLE_OBJECTS.with(|set| set.borrow().contains(&value.to_bits())) {
-        return throw_data_clone_error("object could not be cloned.");
+        throw_data_clone_error("object could not be cloned.");
     }
     let serialized = serialize_message(value);
     MESSAGE_PORTS.with(|ports| {
@@ -317,9 +433,12 @@ extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _tran
             }
         };
         if let Some(peer_state) = ports.borrow_mut().get_mut(&peer) {
-            peer_state.inbox.push_back(serialized);
+            if !peer_state.closed {
+                peer_state.inbox.push_back(serialized);
+            }
         }
     });
+    perry_runtime::event_pump::js_notify_main_thread();
     js_undefined()
 }
 
@@ -365,6 +484,62 @@ extern "C" fn port_off(closure: *const ClosureHeader, event: f64, _callback: f64
     js_undefined()
 }
 
+/// port.addEventListener(event, callback) (#3598).
+extern "C" fn port_add_event_listener(
+    closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let event_name = string_value_to_string(event).unwrap_or_default();
+    let Some(cb_bits) = callback_bits_from_value(callback) else {
+        return js_undefined();
+    };
+    crate::common::async_bridge::ensure_pump_registered();
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            match event_name.as_str() {
+                "message" => {
+                    state.started = true;
+                    if !state.message_event_cbs.contains(&cb_bits) {
+                        state.message_event_cbs.push(cb_bits);
+                    }
+                }
+                "close" => {
+                    if !state.close_event_cbs.contains(&cb_bits) {
+                        state.close_event_cbs.push(cb_bits);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    js_undefined()
+}
+
+/// port.removeEventListener(event, callback) (#3598).
+extern "C" fn port_remove_event_listener(
+    closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let event_name = string_value_to_string(event).unwrap_or_default();
+    let Some(cb_bits) = callback_bits_from_value(callback) else {
+        return js_undefined();
+    };
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            match event_name.as_str() {
+                "message" => state.message_event_cbs.retain(|cb| *cb != cb_bits),
+                "close" => state.close_event_cbs.retain(|cb| *cb != cb_bits),
+                _ => {}
+            }
+        }
+    });
+    js_undefined()
+}
+
 /// port.start() — enable delivery of queued messages to the listener (#3157).
 extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
@@ -379,12 +554,27 @@ extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
 /// port.close() — mark closed and queue `close` events on both ends (#3157).
 extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
+    let peer_id = MESSAGE_PORTS.with(|ports| ports.borrow().get(&port_id).map(|state| state.peer));
     MESSAGE_PORTS.with(|ports| {
         let mut ports = ports.borrow_mut();
         if let Some(state) = ports.get_mut(&port_id) {
+            if !state.closed {
+                state.close_pending = true;
+            }
             state.closed = true;
+            state.inbox.clear();
+        }
+        if let Some(peer_id) = peer_id {
+            if let Some(peer) = ports.get_mut(&peer_id) {
+                if !peer.closed {
+                    peer.close_pending = true;
+                }
+                peer.closed = true;
+                peer.inbox.clear();
+            }
         }
     });
+    perry_runtime::event_pump::js_notify_main_thread();
     js_undefined()
 }
 
@@ -494,6 +684,7 @@ pub extern "C" fn js_worker_threads_post_message_to_thread(
 #[no_mangle]
 pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
     ensure_environment_data_gc_scanner();
+    crate::common::async_bridge::ensure_pump_registered();
     let (id1, id2) = NEXT_PORT_ID.with(|n| {
         let mut n = n.borrow_mut();
         let a = *n;
@@ -534,24 +725,62 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
     // Snapshot deliverable (port_id, callback, message) tuples, then invoke the
     // callbacks OUTSIDE the MESSAGE_PORTS borrow — a listener may re-enter
     // postMessage / close, which needs to borrow MESSAGE_PORTS again.
+    struct MessageDispatch {
+        target_bits: u64,
+        raw_cb: Option<u64>,
+        event_cbs: Vec<u64>,
+        handler_cb: Option<u64>,
+        msg: String,
+    }
+
     loop {
-        let next: Option<(u64, String)> = MESSAGE_PORTS.with(|ports| {
-            let mut ports = ports.borrow_mut();
-            for state in ports.values_mut() {
-                if state.started && !state.closed && state.message_cb.is_some() {
-                    if let Some(msg) = state.inbox.pop_front() {
-                        return Some((state.message_cb.unwrap(), msg));
-                    }
-                }
-            }
-            None
+        let candidates: Vec<(u64, u64)> = MESSAGE_PORTS.with(|ports| {
+            ports
+                .borrow()
+                .iter()
+                .filter_map(|(port_id, state)| {
+                    (!state.closed && !state.inbox.is_empty())
+                        .then_some((*port_id, state.object_bits))
+                })
+                .collect()
         });
+        let mut next: Option<MessageDispatch> = None;
+        for (port_id, target_bits) in candidates {
+            let handler_cb = object_event_handler(target_bits, "onmessage");
+            next = MESSAGE_PORTS.with(|ports| {
+                let mut ports = ports.borrow_mut();
+                let state = ports.get_mut(&port_id)?;
+                let has_event_target = state.started
+                    && (state.message_cb.is_some() || !state.message_event_cbs.is_empty());
+                if state.closed || (!has_event_target && handler_cb.is_none()) {
+                    return None;
+                }
+                state.inbox.pop_front().map(|msg| MessageDispatch {
+                    target_bits: state.object_bits,
+                    raw_cb: state.message_cb,
+                    event_cbs: state.message_event_cbs.clone(),
+                    handler_cb,
+                    msg,
+                })
+            });
+            if next.is_some() {
+                break;
+            }
+        }
         match next {
-            Some((cb_bits, msg)) => {
-                let value = deserialize_message(&msg);
-                let closure = closure_ptr_from_bits(cb_bits);
-                if !closure.is_null() {
-                    perry_runtime::closure::js_closure_call1(closure, value);
+            Some(dispatch) => {
+                let value = deserialize_message(&dispatch.msg);
+                if let Some(cb_bits) = dispatch.raw_cb {
+                    call_callback1(cb_bits, dispatch.target_bits, value);
+                }
+                if !dispatch.event_cbs.is_empty() || dispatch.handler_cb.is_some() {
+                    let event = event_object("message", dispatch.target_bits, Some(value));
+                    for cb_bits in dispatch.event_cbs {
+                        call_callback1(cb_bits, dispatch.target_bits, event);
+                    }
+                    if let Some(cb_bits) = dispatch.handler_cb {
+                        call_callback1(cb_bits, dispatch.target_bits, event);
+                    }
                 }
                 dispatched += 1;
             }
@@ -560,21 +789,35 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
     }
 
     // Fire `close` callbacks once for newly-closed ports.
-    let close_cbs: Vec<u64> = MESSAGE_PORTS.with(|ports| {
-        let mut cbs = Vec::new();
+    struct CloseDispatch {
+        target_bits: u64,
+        raw_cb: Option<u64>,
+        event_cbs: Vec<u64>,
+    }
+
+    let close_events: Vec<CloseDispatch> = MESSAGE_PORTS.with(|ports| {
+        let mut events = Vec::new();
         for state in ports.borrow_mut().values_mut() {
-            if state.closed {
-                if let Some(cb) = state.close_cb.take() {
-                    cbs.push(cb);
-                }
+            if state.close_pending {
+                state.close_pending = false;
+                events.push(CloseDispatch {
+                    target_bits: state.object_bits,
+                    raw_cb: state.close_cb,
+                    event_cbs: state.close_event_cbs.clone(),
+                });
             }
         }
-        cbs
+        events
     });
-    for cb_bits in close_cbs {
-        let closure = closure_ptr_from_bits(cb_bits);
-        if !closure.is_null() {
-            perry_runtime::closure::js_closure_call0(closure);
+    for event in close_events {
+        if let Some(cb_bits) = event.raw_cb {
+            call_callback0(cb_bits, event.target_bits);
+        }
+        if !event.event_cbs.is_empty() {
+            let close_event = event_object("close", event.target_bits, None);
+            for cb_bits in event.event_cbs {
+                call_callback1(cb_bits, event.target_bits, close_event);
+            }
         }
         dispatched += 1;
     }
@@ -586,16 +829,30 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
 /// `message` listener with queued or potentially-incoming messages (#3157).
 #[no_mangle]
 pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
-    let pending = MESSAGE_PORTS.with(|ports| {
+    let pending_without_onmessage = MESSAGE_PORTS.with(|ports| {
         ports.borrow().values().any(|state| {
-            (state.started
-                && state.message_cb.is_some()
-                && !state.closed
-                && !state.inbox.is_empty())
-                || (state.closed && state.close_cb.is_some())
+            let has_event_target = state.started
+                && (state.message_cb.is_some() || !state.message_event_cbs.is_empty());
+            (!state.closed && !state.inbox.is_empty() && has_event_target) || state.close_pending
         })
     });
-    if pending {
+    if pending_without_onmessage {
+        return 1;
+    }
+
+    let onmessage_targets: Vec<u64> = MESSAGE_PORTS.with(|ports| {
+        ports
+            .borrow()
+            .values()
+            .filter_map(|state| {
+                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
+            })
+            .collect()
+    });
+    if onmessage_targets
+        .into_iter()
+        .any(|target_bits| object_event_handler(target_bits, "onmessage").is_some())
+    {
         1
     } else {
         0

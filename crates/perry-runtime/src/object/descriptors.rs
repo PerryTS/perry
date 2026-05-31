@@ -200,6 +200,55 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
 
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let (Some(module_name), Some(key_name)) =
+                (read_native_module_name(obj), key_rust.as_deref())
+            {
+                if native_module_has_enumerable_key(&module_name, key_name) {
+                    if module_name == "fs" {
+                        match key_name {
+                            "ReadStream" | "WriteStream" | "FileReadStream" | "FileWriteStream"
+                            | "Utf8Stream" => {
+                                let get =
+                                    super::native_module::fs_namespace_descriptor_getter_value(
+                                        key_name,
+                                    );
+                                let set =
+                                    super::native_module::fs_namespace_descriptor_setter_value(
+                                        key_name,
+                                    );
+                                return build_accessor_descriptor(get, set, true, true);
+                            }
+                            "promises" => {
+                                let get =
+                                    super::native_module::fs_namespace_descriptor_getter_value(
+                                        key_name,
+                                    );
+                                return build_accessor_descriptor(
+                                    get,
+                                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                                    true,
+                                    true,
+                                );
+                            }
+                            "constants" => {
+                                let value = js_object_get_field_by_name(obj, key_str);
+                                return build_data_descriptor(
+                                    f64::from_bits(value.bits()),
+                                    false,
+                                    true,
+                                    false,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    let value = js_object_get_field_by_name(obj, key_str);
+                    return build_data_descriptor(f64::from_bits(value.bits()), true, true, true);
+                }
+            }
+        }
+
         // Check whether the key is actually present on the object. A property can
         // legitimately hold `undefined`, and accessor descriptors have no value slot,
         // so we check the keys_array directly instead of relying on "value != undefined".
@@ -282,6 +331,28 @@ unsafe fn build_data_descriptor(
     // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
     *fields = value;
     *fields.add(1) = bf(writable);
+    *fields.add(2) = bf(enumerable);
+    *fields.add(3) = bf(configurable);
+    super::rebuild_object_field_layout(desc, 4);
+    f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
+}
+
+unsafe fn build_accessor_descriptor(
+    get: f64,
+    set: f64,
+    enumerable: bool,
+    configurable: bool,
+) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let bf = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
+    let packed = b"get\0set\0enumerable\0configurable";
+    let desc = js_object_alloc_with_shape(0x0D_E5_C1, 4, packed.as_ptr(), packed.len() as u32);
+    let header_size = std::mem::size_of::<ObjectHeader>();
+    let fields = (desc as *mut u8).add(header_size) as *mut f64;
+    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
+    *fields = get;
+    *fields.add(1) = set;
     *fields.add(2) = bf(enumerable);
     *fields.add(3) = bf(configurable);
     super::rebuild_object_field_layout(desc, 4);

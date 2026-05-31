@@ -426,6 +426,40 @@ pub fn entries_for_module(module: &str) -> impl Iterator<Item = &'static ApiEntr
 mod tests {
     use super::*;
 
+    const FS_PROMISES_METHOD_EXPORTS: &[&str] = &[
+        "access",
+        "appendFile",
+        "chmod",
+        "chown",
+        "copyFile",
+        "cp",
+        "glob",
+        "lchmod",
+        "lchown",
+        "link",
+        "lstat",
+        "lutimes",
+        "mkdir",
+        "mkdtemp",
+        "open",
+        "opendir",
+        "readFile",
+        "readdir",
+        "readlink",
+        "realpath",
+        "rename",
+        "rm",
+        "rmdir",
+        "stat",
+        "statfs",
+        "symlink",
+        "truncate",
+        "unlink",
+        "utimes",
+        "watch",
+        "writeFile",
+    ];
+
     #[test]
     fn lookup_strips_node_prefix() {
         // Whatever `crypto.randomUUID` resolves to in the real manifest,
@@ -562,6 +596,44 @@ mod tests {
     }
 
     #[test]
+    fn fs_promises_manifest_matches_runtime_backed_exports() {
+        assert!(is_known_module("fs/promises"));
+        assert!(is_known_module("node:fs/promises"));
+        assert!(module_has_any_entries("fs/promises"));
+
+        for name in FS_PROMISES_METHOD_EXPORTS {
+            let entry = module_has_symbol("node:fs/promises", name).unwrap_or_else(|| {
+                panic!("node:fs/promises missing runtime-backed export: {name}")
+            });
+            assert!(
+                matches!(
+                    entry.kind,
+                    ApiKind::Method {
+                        has_receiver: false,
+                        class_filter: None
+                    }
+                ),
+                "node:fs/promises::{name} should be a receiver-less method"
+            );
+        }
+
+        let constants = module_has_symbol("node:fs/promises", "constants")
+            .expect("node:fs/promises missing constants export");
+        assert_eq!(
+            constants.kind,
+            ApiKind::Property,
+            "node:fs/promises::constants should be an object-valued property"
+        );
+
+        for not_implemented in ["FileHandle", "Dir", "Dirent"] {
+            assert!(
+                module_has_symbol("node:fs/promises", not_implemented).is_none(),
+                "node:fs/promises::{not_implemented} should stay out of the manifest until runtime-backed"
+            );
+        }
+    }
+
+    #[test]
     fn deprecated_constants_alias_has_manifest_entries() {
         for name in [
             "F_OK",
@@ -580,14 +652,20 @@ mod tests {
             assert!(matches!(entry.kind, ApiKind::Property));
         }
 
+        // Platform-specific constants are listed in the manifest
+        // unconditionally so the generated docs (`docs/api/perry.d.ts`,
+        // `docs/src/api/reference.md`) are byte-identical regardless of the
+        // host OS the generator runs on — otherwise `api-docs-drift` fails for
+        // every PR whenever the committed docs were regenerated on a different
+        // OS than CI (macOS vs Linux). RTLD_DEEPBIND is therefore present on
+        // all platforms; the runtime `constants` module still only exposes a
+        // real value where the OS provides one.
         let rtld_deepbind = module_has_symbol("node:constants", "RTLD_DEEPBIND");
-        assert_eq!(
+        assert!(
             rtld_deepbind.is_some(),
-            cfg!(all(target_os = "linux", target_env = "gnu"))
+            "RTLD_DEEPBIND should be in the manifest on every platform"
         );
-        if let Some(entry) = rtld_deepbind {
-            assert!(matches!(entry.kind, ApiKind::Property));
-        }
+        assert!(matches!(rtld_deepbind.unwrap().kind, ApiKind::Property));
     }
 
     #[test]

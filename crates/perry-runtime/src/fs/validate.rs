@@ -18,6 +18,8 @@
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 
+use crate::closure::ClosureHeader;
+
 /// True if `value` is a valid Node "path-like" — a string (including inline
 /// SSO short strings), a `Buffer`, or a `file:` URL object. Mirrors the type
 /// acceptance of Node's internal `getValidatedPath`.
@@ -48,6 +50,10 @@ pub(crate) fn is_path_like(value: f64) -> bool {
 /// so both must be checked.
 pub fn is_numeric(jv: JSValue) -> bool {
     jv.is_number() || jv.is_int32()
+}
+
+fn is_nullish(jv: JSValue) -> bool {
+    jv.is_undefined() || jv.is_null()
 }
 
 fn numeric_to_i32(jv: JSValue) -> i32 {
@@ -90,6 +96,9 @@ pub fn describe_received(value: f64) -> String {
             return format!("type number ({})", n as i64);
         }
         return format!("type number ({})", n);
+    }
+    if !super::stream::extract_closure_ptr(value).is_null() {
+        return "function ".to_string();
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>();
@@ -183,15 +192,33 @@ pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "EBADF");
     crate::node_submodules::register_error_syscall(msg, syscall);
+    #[cfg(unix)]
+    crate::node_submodules::register_error_errno(msg, -libc::EBADF);
+    #[cfg(not(unix))]
+    crate::node_submodules::register_error_errno(msg, -9);
     let err = crate::error::js_error_new_with_message(msg);
     crate::value::js_nanbox_pointer(err as i64)
 }
 
-pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
+pub(crate) fn build_type_error_with_code_value(message: &str, code: &'static str) -> f64 {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
+    crate::exception::js_throw(build_type_error_with_code_value(message, code))
+}
+
+/// Throw Node's null-byte path error. Node uses `ERR_INVALID_ARG_VALUE`
+/// rather than an fs errno when a decoded PathLike contains `\0`.
+pub(crate) fn throw_invalid_path_arg_value(arg_name: &str, received: &str) -> ! {
+    let display = received.replace('\0', "\\x00");
+    let message = format!(
+        "The argument '{arg_name}' must be a string, Uint8Array, or URL without null bytes. Received '{display}'"
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
 }
 
 /// Validate a `node:events` listener argument (#3072).
@@ -336,6 +363,132 @@ pub(crate) fn fd_open_callback_error(value: f64, syscall: &'static str) -> Optio
         None
     } else {
         Some(build_ebadf_error_value(syscall))
+    }
+}
+
+/// Validate callback-style fs APIs that require a callback. Node's current fs
+/// validators use the argument name `"cb"` for most legacy callback entry
+/// points; `fs.opendir` is the notable `"callback"` exception, so callers pass
+/// the exact name they need.
+pub(crate) fn validate_required_callback(arg_name: &str, value: f64) -> *const ClosureHeader {
+    let ptr = super::stream::extract_closure_ptr(value);
+    if ptr.is_null() {
+        let message = format!(
+            "The \"{}\" argument must be of type function. Received {}",
+            arg_name,
+            describe_received(value)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    ptr
+}
+
+fn gc_type_for_value(value: f64) -> Option<u8> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    if gc_header.obj_type <= crate::gc::GC_TYPE_MAX {
+        Some(gc_header.obj_type)
+    } else {
+        None
+    }
+}
+
+fn is_options_object_like(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() {
+        return true;
+    }
+    crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1
+        || !super::stream::extract_closure_ptr(value).is_null()
+}
+
+fn is_plain_options_object(value: f64) -> bool {
+    if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
+        return false;
+    }
+    if !super::stream::extract_closure_ptr(value).is_null() {
+        return false;
+    }
+    gc_type_for_value(value) == Some(crate::gc::GC_TYPE_OBJECT)
+}
+
+/// Validate fs options parameters that accept either an encoding string or an
+/// object (`readFile`, `writeFile`, `readdir`, `readlink`, `realpath`,
+/// `mkdtemp`, ...). `null` and `undefined` are accepted.
+pub(crate) fn validate_string_or_object_options(arg_name: &str, value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if is_nullish(jv) || jv.is_any_string() || is_options_object_like(value) {
+        return;
+    }
+    let message = format!(
+        "The \"{}\" argument must be one of type string or object. Received {}",
+        arg_name,
+        describe_received(value)
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// Validate fs options parameters that accept only an options object. Node
+/// accepts an omitted value but rejects `null`, arrays, functions, and
+/// primitives with `ERR_INVALID_ARG_TYPE`.
+pub(crate) fn validate_object_options(arg_name: &str, value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() || is_plain_options_object(value) {
+        return;
+    }
+    let message = format!(
+        "The \"{}\" argument must be of type object. Received {}",
+        arg_name,
+        describe_received(value)
+    );
+    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// Validate the `mode` bitmask used by `fs.access*` and `fs.copyFile*`.
+/// Node treats `null`/`undefined` as the default, rejects non-numbers with a
+/// short `ERR_INVALID_ARG_TYPE` message, and rejects values whose integer part
+/// is outside the supported 0..=7 bitmask.
+pub(crate) fn validate_fs_mode(value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    if is_nullish(jv) {
+        return;
+    }
+    if !is_numeric(jv) {
+        throw_type_error_with_code(
+            "mode must be int32 or null/undefined",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        jv.as_number()
+    };
+    if !n.is_finite() {
+        throw_range_error_with_code("mode is out of range");
+    }
+    let mode = n as i64;
+    if !(0..=7).contains(&mode) {
+        throw_range_error_with_code("mode is out of range: >= 0 && <= 7");
+    }
+}
+
+pub(crate) fn fs_mode_value(value: f64) -> i32 {
+    validate_fs_mode(value);
+    let jv = JSValue::from_bits(value.to_bits());
+    if is_nullish(jv) {
+        0
+    } else if jv.is_int32() {
+        jv.as_int32()
+    } else {
+        jv.as_number() as i32
     }
 }
 

@@ -81,12 +81,18 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "AbortController"
             | "AbortSignal"
             | "EventTarget"
+            | "Crypto"
+            | "CryptoKey"
+            | "SubtleCrypto"
             | "FormData"
             | "Blob"
             | "File"
             | "Headers"
             | "Request"
             | "Response"
+            | "MessageChannel"
+            | "MessagePort"
+            | "BroadcastChannel"
             | "FinalizationRegistry"
             | "Performance"
             | "PerformanceEntry"
@@ -102,6 +108,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "Buffer"
             | "process"
             | "console"
+            | "crypto"
             // #2905: standard global helper functions used as bare values
             // (`const p = parseInt`). Bare CALLS (`parseInt(x)`) are picked
             // off earlier by `try_global_builtins` → `Expr::ParseInt`/etc., so
@@ -137,8 +144,9 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
         "Array" | "Object" | "String" | "Number" | "Boolean" | "Function" | "Error"
         | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
         | "URIError" | "Promise" | "WeakRef" | "BigInt" => 1,
-        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" => 0,
+        "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort" => 0,
         "RegExp" | "Proxy" | "File" => 2,
+        "BroadcastChannel" => 1,
         "Date" => 7,
         "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
         | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
