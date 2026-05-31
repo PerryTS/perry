@@ -212,6 +212,10 @@ fn js_regex_to_rust(pattern: &str) -> String {
     let mut result = String::with_capacity(pattern.len());
     let chars: Vec<char> = pattern.chars().collect();
     let mut i = 0;
+    // Whether we're inside a `[...]` character class. JS and the Rust
+    // `regex`/`fancy-regex` engines disagree on a couple of constructs there,
+    // so we track it to translate them.
+    let mut in_class = false;
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             match chars[i + 1] {
@@ -220,16 +224,38 @@ fn js_regex_to_rust(pattern: &str) -> String {
                     result.push('/');
                     i += 2;
                 }
-                // Pass through all other backslash sequences as-is
+                // Pass through all other backslash sequences as-is. (An escaped
+                // `\]` inside a class does NOT close the class — handled here
+                // before the `]` class-close branch below.)
                 _ => {
                     result.push('\\');
                     result.push(chars[i + 1]);
                     i += 2;
                 }
             }
-        } else if chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
+        } else if chars[i] == '[' {
+            // #3527: JS treats a literal `[` *inside* a character class as a
+            // plain character, but the `regex`/`fancy-regex` engines reject the
+            // unescaped form ("invalid character class"). get-intrinsic's
+            // path-split pattern `[^%.[\]]` hit this — and, because the same
+            // translated string feeds both engines, an otherwise fancy-regex-
+            // compatible pattern (backreferences + lookahead) was rejected
+            // outright. Escape the inner `[`; the opening `[` starts the class.
+            if in_class {
+                result.push_str("\\[");
+            } else {
+                in_class = true;
+                result.push('[');
+            }
+            i += 1;
+        } else if chars[i] == ']' && in_class {
+            in_class = false;
+            result.push(']');
+            i += 1;
+        } else if !in_class && chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
             // Check for JS named group (?<name>...) — convert to (?P<name>...)
-            // But NOT (?<=...) (lookbehind) or (?<!...) (negative lookbehind)
+            // But NOT (?<=...) (lookbehind) or (?<!...) (negative lookbehind).
+            // Only meaningful outside a character class, where `(` is literal.
             if chars[i + 2] == '<'
                 && i + 3 < chars.len()
                 && chars[i + 3] != '='
@@ -1807,6 +1833,30 @@ mod tests {
         let c3 = re3.captures(s3).unwrap();
         assert_eq!(expand_js_replacement("$1$2$3", &c3, s3, false), "ab"); // $2 unmatched → ""
         assert_eq!(expand_js_replacement("$10", &c3, s3, false), "a0"); // no group 10 → $1 then '0'
+    }
+
+    #[test]
+    fn js_regex_to_rust_escapes_literal_bracket_in_class() {
+        // #3527: a literal `[` inside a character class is valid in JS but must
+        // be escaped for the Rust `regex`/`fancy-regex` engines. get-intrinsic's
+        // path-split pattern starts with `[^%.[\]]`.
+        assert_eq!(js_regex_to_rust(r"[^%.[\]]"), r"[^%.\[\]]");
+        // The inner `[` is escaped; the opening/closing brackets and the
+        // already-escaped `\]` are preserved.
+        assert_eq!(js_regex_to_rust(r"[a[b]"), r"[a\[b]");
+        // `[` outside a class is left alone (it opens the class).
+        assert_eq!(js_regex_to_rust(r"a[bc]d"), r"a[bc]d");
+        // `(?<name>...)` named-group rewrite still fires outside a class…
+        assert_eq!(js_regex_to_rust(r"(?<y>\d+)"), r"(?P<y>\d+)");
+        // …but a `[` inside a class is not mistaken for group syntax, and the
+        // whole get-intrinsic pattern now compiles under fancy-regex.
+        let translated = js_regex_to_rust(
+            r#"[^%.[\]]+|\[(?:(-?\d+(?:\.\d+)?)|(["'])((?:(?!\2)[^\\]|\\.)*?)\2)\]|(?=(?:\.|\[\])(?:\.|\[\]|%$))"#,
+        );
+        assert!(
+            fancy_regex::Regex::new(&translated).is_ok(),
+            "translated get-intrinsic pattern must compile under fancy-regex: {translated}"
+        );
     }
 
     #[test]
