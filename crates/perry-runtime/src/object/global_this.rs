@@ -9,6 +9,10 @@
 
 use super::*;
 
+// #3662: per-method brand-checking thunks for the collection prototypes,
+// installed by `populate_builtin_prototype_methods` below.
+use super::collection_proto_thunks::*;
+
 /// Issue #611 (Effect): `globalThis[<computed>] = value` and the
 /// `(globalThis as any)[id] ??= new Map()` pattern (used by hono / Effect /
 /// most ESM libraries that ship a CJS-compat global side-store) wrote to
@@ -1681,47 +1685,77 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Map" => {
-            install_noop_proto_methods(
+            // #3662: real thunks (brand-check `this` + dispatch) instead of
+            // no-ops, so reflective `Map.prototype.get.call(x, k)` throws a
+            // TypeError on a non-Map receiver (and works on a real Map).
+            install_proto_method(proto_obj, "clear", map_proto_clear_thunk as *const u8, 0);
+            install_proto_method(proto_obj, "delete", map_proto_delete_thunk as *const u8, 1);
+            install_proto_method(
                 proto_obj,
-                &[
-                    ("clear", 0),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("get", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("values", 0),
-                ],
+                "entries",
+                map_proto_entries_thunk as *const u8,
+                0,
             );
+            install_proto_method(
+                proto_obj,
+                "forEach",
+                map_proto_foreach_thunk as *const u8,
+                1,
+            );
+            install_proto_method(proto_obj, "get", map_proto_get_thunk as *const u8, 1);
+            install_proto_method(proto_obj, "has", map_proto_has_thunk as *const u8, 1);
+            install_proto_method(proto_obj, "keys", map_proto_keys_thunk as *const u8, 0);
+            install_proto_method(proto_obj, "set", map_proto_set_thunk as *const u8, 2);
+            install_proto_method(proto_obj, "values", map_proto_values_thunk as *const u8, 0);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Set" => {
-            install_noop_proto_methods(
+            // #3662: real thunks (brand-check `this` + dispatch) instead of
+            // no-ops; reflective `Set.prototype.add.call(x, v)` now throws a
+            // TypeError on a non-Set receiver (and works on a real Set).
+            install_proto_method(proto_obj, "add", set_proto_add_thunk as *const u8, 1);
+            install_proto_method(proto_obj, "clear", set_proto_clear_thunk as *const u8, 0);
+            install_proto_method(proto_obj, "delete", set_proto_delete_thunk as *const u8, 1);
+            install_proto_method(
                 proto_obj,
-                &[
-                    ("add", 1),
-                    ("clear", 0),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("values", 0),
-                ],
+                "entries",
+                set_proto_entries_thunk as *const u8,
+                0,
             );
+            install_proto_method(
+                proto_obj,
+                "forEach",
+                set_proto_foreach_thunk as *const u8,
+                1,
+            );
+            install_proto_method(proto_obj, "has", set_proto_has_thunk as *const u8, 1);
+            install_proto_method(proto_obj, "keys", set_proto_keys_thunk as *const u8, 0);
+            install_proto_method(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "WeakMap" => {
-            install_noop_proto_methods(
+            // #3662: brand-checking thunks (non-WeakMap receiver -> TypeError).
+            install_proto_method(
                 proto_obj,
-                &[("delete", 1), ("get", 1), ("has", 1), ("set", 2)],
+                "delete",
+                weakmap_proto_delete_thunk as *const u8,
+                1,
             );
+            install_proto_method(proto_obj, "get", weakmap_proto_get_thunk as *const u8, 1);
+            install_proto_method(proto_obj, "has", weakmap_proto_has_thunk as *const u8, 1);
+            install_proto_method(proto_obj, "set", weakmap_proto_set_thunk as *const u8, 2);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "WeakSet" => {
-            install_noop_proto_methods(proto_obj, &[("add", 1), ("delete", 1), ("has", 1)]);
+            // #3662: brand-checking thunks (non-WeakSet receiver -> TypeError).
+            install_proto_method(proto_obj, "add", weakset_proto_add_thunk as *const u8, 1);
+            install_proto_method(
+                proto_obj,
+                "delete",
+                weakset_proto_delete_thunk as *const u8,
+                1,
+            );
+            install_proto_method(proto_obj, "has", weakset_proto_has_thunk as *const u8, 1);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"

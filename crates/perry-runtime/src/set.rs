@@ -121,6 +121,30 @@ pub fn is_registered_set(addr: usize) -> bool {
     SET_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
+/// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Set`
+/// pointer, or `None` if the receiver is not a `Set`. Backs the reflective
+/// `Set.prototype.*` thunks so they can perform the spec brand check
+/// (`TypeError` on a non-`Set` receiver) before dispatching. Mirrors the
+/// receiver extraction used by the `Array.prototype.slice` thunk: a
+/// NaN-boxed pointer, or a bare raw-i64 pointer some module-init call sites
+/// stash in `IMPLICIT_THIS`. Primitives (undefined/null/number/string/bool)
+/// carry a non-zero tag in the top 16 bits and resolve to `None`.
+pub fn set_ptr_from_receiver_bits(bits: u64) -> Option<*mut SetHeader> {
+    let jsv = crate::value::JSValue::from_bits(bits);
+    let addr = if jsv.is_pointer() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if bits >> 48 == 0 && bits > 0x10000 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if is_registered_set(addr) {
+        Some(addr as *mut SetHeader)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_set_roots() {
     SET_REGISTRY.with(|r| r.borrow_mut().clear());
