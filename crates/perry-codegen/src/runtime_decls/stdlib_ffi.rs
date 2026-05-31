@@ -15,6 +15,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_get", I64, &[DOUBLE, I64]);
+    // #3226/#3227/#3228 — overload-normalizing client factories take a
+    // single `NA_VARARGS` array (i64 ArrayHeader ptr) and return a
+    // ClientRequest handle.
+    module.declare_function("js_http_get_overload", I64, &[I64]);
+    module.declare_function("js_http_request_overload", I64, &[I64]);
+    module.declare_function("js_https_get_overload", I64, &[I64]);
+    module.declare_function("js_https_request_overload", I64, &[I64]);
     module.declare_function("js_http_on", I64, &[I64, I64, I64]);
     module.declare_function("js_http_request", I64, &[DOUBLE, I64]);
     module.declare_function("js_http_request_body", I64, &[I64]);
