@@ -1325,13 +1325,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
-<<<<<<< HEAD
         "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
         "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
         "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
-=======
         "timers" => Some(TIMERS_NAMESPACE_KEYS),
->>>>>>> origin/main
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
         "url" => Some(URL_NAMESPACE_KEYS),
@@ -1364,15 +1361,6 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"globalAgent",
         ]),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
-        "timers" => Some(&[
-            b"setTimeout",
-            b"clearTimeout",
-            b"setImmediate",
-            b"clearImmediate",
-            b"setInterval",
-            b"clearInterval",
-            b"promises",
-        ]),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "zlib" => Some(&[b"codes"]),
         _ => None,
