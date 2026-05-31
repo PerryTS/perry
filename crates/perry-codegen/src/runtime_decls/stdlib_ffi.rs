@@ -370,19 +370,34 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
     // #3092 — callback is passed as a full NaN-boxed value (DOUBLE), not a raw
     // pointer, so the runtime can reject non-callable callbacks.
-    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
     module.declare_function("js_async_local_storage_new", I64, &[]);
-    module.declare_function("js_async_local_storage_run", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_async_local_storage_run",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, I64],
+    );
+
+    // ========== #2875 DisposableStack / AsyncDisposableStack / SuppressedError ==========
+    // `new` ctors (dispatched by lower_builtin_new). Instance methods are
+    // declared through the native_table dispatch path, but the constructors
+    // are called directly so they need an explicit declaration here.
+    module.declare_function("js_disposable_stack_new", I64, &[]);
+    module.declare_function("js_async_disposable_stack_new", I64, &[]);
+    module.declare_function("js_suppressed_error_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
 
     // ========== zlib ==========
-    module.declare_function("js_zlib_deflate_sync", I64, &[DOUBLE]);
+    // #2935: gzipSync/deflateSync take the data as raw NaN-box bits (I64) plus
+    // an options object (DOUBLE) so the `{ level }` option can select the
+    // compression level / throw RangeError. The codec unboxes the data itself.
+    module.declare_function("js_zlib_deflate_sync", I64, &[I64, DOUBLE]);
     module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_gunzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_gunzip_sync", I64, &[I64]);
     module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_gzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_gzip_sync", I64, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_inflate_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE]);
@@ -500,14 +515,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     //     (*mut ObjectHeader)                                  -> f64 (NaN-boxed string)
     //   js_url_search_params_new(*mut StringHeader)            -> *mut ObjectHeader
     //   js_url_search_params_new_empty()                       -> *mut ObjectHeader
-    //   js_url_search_params_get(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_get(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> *mut StringHeader (null if missing)
-    //   js_url_search_params_has(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_has(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (0.0 or 1.0)
-    //   js_url_search_params_set/append(*mut ObjectHeader, *mut ..., *mut ...) -> void
-    //   js_url_search_params_delete(*mut ObjectHeader, *mut StringHeader)      -> void
+    //   js_url_search_params_set/append(*mut ObjectHeader, name, value) -> void
+    //   js_url_search_params_delete(*mut ObjectHeader, name)            -> void
     //   js_url_search_params_to_string(*mut ObjectHeader)     -> *mut StringHeader
-    //   js_url_search_params_get_all(*mut ObjectHeader, *mut StringHeader)
+    //   js_url_search_params_get_all(*mut ObjectHeader, NaN-boxed name)
     //                                                          -> f64 (NaN-boxed array)
     module.declare_function("js_url_file_url_to_path", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_file_url_to_path_buffer", DOUBLE, &[DOUBLE]);
@@ -529,28 +544,29 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_parse", I64, &[I64]);
     module.declare_function("js_url_parse_with_base", I64, &[I64, I64]);
     // Issue #650: URL setters — mutate field + re-derive href.
-    module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_search", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_hash", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_protocol", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_hostname", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_port", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_username", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_password", VOID, &[I64, I64]);
-    module.declare_function("js_url_set_href", VOID, &[I64, I64]);
-    module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_delete2", VOID, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
-    module.declare_function("js_url_search_params_delete", VOID, &[I64, I64]);
-    module.declare_function("js_url_search_params_get", I64, &[I64, I64]);
-    module.declare_function("js_url_search_params_get_all", DOUBLE, &[I64, I64]);
-    module.declare_function("js_url_search_params_has", DOUBLE, &[I64, I64]);
+    module.declare_function("js_url_set_pathname", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_search", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_hash", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_protocol", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_hostname", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_port", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_username", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_password", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_set_href", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_has2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_delete2", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_throw_missing_args", DOUBLE, &[I32]);
+    module.declare_function("js_url_search_params_append", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_url_search_params_delete", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_get", I64, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_get_all", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_url_search_params_has", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_url_search_params_new", I64, &[I64]);
     // Generic init that handles string / record / URLSearchParams / null /
     // undefined — see `js_url_search_params_new_any` rustdoc. Refs #575.
     module.declare_function("js_url_search_params_new_any", I64, &[DOUBLE]);
     module.declare_function("js_url_search_params_new_empty", I64, &[]);
-    module.declare_function("js_url_search_params_set", VOID, &[I64, I64, I64]);
+    module.declare_function("js_url_search_params_set", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_url_search_params_to_string", I64, &[I64]);
     // Issue #650: URLSearchParams.size getter — returns entries count.
     module.declare_function("js_url_search_params_size", I32, &[I64]);
@@ -1195,7 +1211,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
     module.declare_function("js_call_value", DOUBLE, &[DOUBLE, I64, I64]);
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
+    // (closure_env i64, args_ptr, args_len i64). The args pointer is a real
+    // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
+    // to I64 in the integer register class) so call sites can pass an alloca
+    // directly. See `try_lower_closure_call_fallthrough` (#3527).
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,
@@ -1292,10 +1312,18 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_perf_get_entries_by_name", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_clear_marks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_clear_measures", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perf_event_loop_utilization", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_to_json", DOUBLE, &[]);
     module.declare_function("js_perf_clear_resource_timings", DOUBLE, &[]);
     module.declare_function("js_perf_set_resource_timing_buffer_size", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_perf_mark_resource_timing",
+        DOUBLE,
+        &[
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function("js_perf_timerify", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perf_observer_observe", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_perf_observer_disconnect", DOUBLE, &[DOUBLE]);

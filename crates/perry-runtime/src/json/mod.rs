@@ -23,6 +23,7 @@ use std::cell::RefCell;
 
 mod parse_api;
 mod parser;
+mod raw_json;
 mod replacer;
 mod reviver;
 mod simd;
@@ -34,6 +35,7 @@ mod stringify_api;
 pub use parse_api::{
     js_json_parse, js_json_parse_or_null, js_json_parse_result, js_json_parse_typed_array,
 };
+pub use raw_json::{js_json_is_raw_json, js_json_raw_json};
 pub use replacer::{js_json_stringify_full, js_json_stringify_with_replacer};
 pub use reviver::js_json_parse_with_reviver;
 pub use stringify_api::{
@@ -57,6 +59,8 @@ pub(crate) use parse_api::test_json_parse_direct;
 pub(crate) use parse_api::{try_parse_via_tape, TapeMode};
 #[allow(unused_imports)]
 pub(crate) use parser::{DirectParser, ObjectShapeHint};
+#[allow(unused_imports)]
+pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes, RAW_JSON_CLASS_ID};
 #[cfg(test)]
 pub(crate) use reviver::test_apply_reviver_for_value;
 #[allow(unused_imports)]

@@ -493,8 +493,8 @@ pub enum Expr {
     ProcessExit(Option<Box<Expr>>), // process.exit(code?) -> never; None means code 0
     ProcessAbort,                   // process.abort() -> never; raises SIGABRT
     ProcessUmask(Option<Box<Expr>>), // process.umask(mask?) -> number; no-arg reads, arg sets and returns previous
-    ProcessThreadCpuUsage,           // process.threadCpuUsage() -> { user, system } microseconds
-    ProcessAvailableMemory,          // process.availableMemory() -> number (free memory bytes)
+    ProcessThreadCpuUsage(Option<Box<Expr>>), // process.threadCpuUsage(prior?) -> { user, system } µs
+    ProcessAvailableMemory, // process.availableMemory() -> number (free memory bytes)
     ProcessConstrainedMemory, // process.constrainedMemory() -> number (OS limit, 0 if unconstrained)
     ProcessPosixCredential(super::PosixCredentialKind), // process.{getuid,geteuid,getgid,getegid}() (#1408)
     ProcessEmitWarning(Vec<Expr>), // process.emitWarning(warning[, type, code, ctor]) -> undefined (#1375)
@@ -674,6 +674,10 @@ pub enum Expr {
         space: Box<Expr>,
     },
     JsonStringifyFull(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `JSON.rawJSON(text)` (#2900) -> raw-JSON wrapper object.
+    JsonRawJson(Box<Expr>),
+    /// `JSON.isRawJSON(value)` (#2900) -> boolean.
+    JsonIsRawJson(Box<Expr>),
 
     // Math operations
     MathFloor(Box<Expr>),            // Math.floor(x) -> number
@@ -745,10 +749,24 @@ pub enum Expr {
         source: Box<Expr>,
         dest: Box<Expr>,
     },
-    /// new TextDecoder() or new TextDecoder("utf-8") -> opaque handle
-    TextDecoderNew,
-    /// decoder.decode(buffer) -> string (UTF-8 decode)
-    TextDecoderDecode(Box<Expr>),
+    /// new TextDecoder(label?, { fatal?, ignoreBOM? }) -> opaque handle.
+    /// `label` is undefined for the no-arg form; `fatal`/`ignore_bom`
+    /// default to `false`.
+    TextDecoderNew {
+        label: Box<Expr>,
+        fatal: Box<Expr>,
+        ignore_bom: Box<Expr>,
+    },
+    /// decoder.decode(buffer) -> string. `decoder` carries the encoding
+    /// state (the lowered receiver handle); `input` is the bytes.
+    TextDecoderDecode {
+        decoder: Box<Expr>,
+        input: Box<Expr>,
+    },
+    /// decoder.encoding / .fatal / .ignoreBOM property reads.
+    TextDecoderEncoding(Box<Expr>),
+    TextDecoderFatal(Box<Expr>),
+    TextDecoderIgnoreBom(Box<Expr>),
 
     // URI encoding / decoding
     /// encodeURI(string) -> string
@@ -1695,6 +1713,12 @@ pub enum Expr {
     // URLSearchParams operations
     /// new URLSearchParams(init?)
     UrlSearchParamsNew(Option<Box<Expr>>),
+    /// URLSearchParams method call missing required arguments.
+    UrlSearchParamsMissingArgs {
+        params: Box<Expr>,
+        args: Vec<Expr>,
+        name_and_value: bool,
+    },
     /// params.get(name) -> string | null
     UrlSearchParamsGet {
         params: Box<Expr>,
@@ -1875,6 +1899,13 @@ pub enum Expr {
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
 
+    /// `Iterator.from(iterable)` (#2874) — wrap any iterable/iterator in a lazy
+    /// iterator-helper object exposing `.map`/`.filter`/`.take`/`.drop`/
+    /// `.flatMap`/`.toArray`/`.forEach`/`.reduce`/`.some`/`.every`/`.find`.
+    /// The helper methods themselves dispatch at runtime through
+    /// `js_native_call_method` (no dedicated HIR variant).
+    IteratorFrom(Box<Expr>),
+
     /// Tagged-template strings literal — codegen builds the cooked-strings
     /// array AND a parallel raw-strings array, registers the (cooked, raw)
     /// pair via `js_tagged_template_register_raw`, and returns the cooked
@@ -1907,11 +1938,13 @@ pub enum Expr {
     /// else drives its `[Symbol.iterator]`. Without it the index loop read
     /// `.length` off a raw Map/Set handle (→ 0) and iterated zero times.
     ForOfToArray(Box<Expr>),
-    /// Array.from(iterable, mapFn) -> Array
+    /// Array.from(iterable, mapFn, thisArg?) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
+    /// `this_arg` (#2773) binds `this` inside a non-arrow mapFn.
     ArrayFromMapped {
         iterable: Box<Expr>,
         map_fn: Box<Expr>,
+        this_arg: Option<Box<Expr>>,
     },
 
     // Global built-in functions
@@ -1933,6 +1966,9 @@ pub enum Expr {
     /// String(value) -> string
     /// Type coercion to string
     StringCoerce(Box<Expr>),
+    /// `Object(value)` plain-call coercion (#3149). Nullish/primitive → a fresh
+    /// `{}`; an existing object/array passes through unchanged.
+    ObjectCoerce(Box<Expr>),
     /// Boolean(value) -> boolean
     /// Type coercion to boolean via JS truthiness rules
     BooleanCoerce(Box<Expr>),
@@ -2091,6 +2127,9 @@ pub enum Expr {
     ReflectGet {
         target: Box<Expr>,
         key: Box<Expr>,
+        /// #2766: optional `receiver` argument (the `this` binding for accessor
+        /// getters). Lowering supplies `target` when the call omits it.
+        receiver: Box<Expr>,
     },
     ReflectSet {
         target: Box<Expr>,
@@ -2121,6 +2160,13 @@ pub enum Expr {
         descriptor: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
+    /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
+    /// (false when rejected), unlike `Object.setPrototypeOf` which returns the
+    /// object. Lowered separately so it can report failure / throw on bad args.
+    ReflectSetPrototypeOf {
+        target: Box<Expr>,
+        proto: Box<Expr>,
+    },
     // #2762: Reflect.isExtensible / Reflect.preventExtensions have
     // Reflect-specific semantics (boolean result, TypeError on non-object)
     // distinct from the Object.* helpers, so they use dedicated variants.

@@ -22,6 +22,117 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     )
 }
 
+/// Dispatch a `Function.prototype.bind` result (BOUND_FUNCTION_FUNC_PTR
+/// sentinel). Reads the bound target/this/partial-args from the closure
+/// captures, prepends the bound args to the call-time args, sets
+/// `IMPLICIT_THIS` to the bound receiver, and invokes the target closure.
+/// Refs #2840.
+#[inline]
+pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64]) -> f64 {
+    let target = js_closure_get_capture_f64(closure, 0);
+    let bound_this = js_closure_get_capture_f64(closure, 1);
+    let bound_args_ptr = js_closure_get_capture_ptr(closure, 2) as *const crate::array::ArrayHeader;
+
+    // Collect the partial-applied (bound) leading args, then append the
+    // call-time args. `g = f.bind(obj, 2); g(3)` calls `f` with `(2, 3)`.
+    let mut combined: Vec<f64> = Vec::with_capacity(args.len() + 4);
+    if !bound_args_ptr.is_null() {
+        let n = crate::array::js_array_length(bound_args_ptr) as usize;
+        for i in 0..n {
+            combined.push(crate::array::js_array_get_f64(bound_args_ptr, i as u32));
+        }
+    }
+    combined.extend_from_slice(args);
+
+    let prev_this = crate::object::js_implicit_this_set(bound_this);
+    let (call_ptr, call_len) = if combined.is_empty() {
+        (std::ptr::null::<f64>(), 0usize)
+    } else {
+        (combined.as_ptr(), combined.len())
+    };
+    let result = js_native_call_value(target, call_ptr, call_len);
+    crate::object::js_implicit_this_set(prev_this);
+    result
+}
+
+/// `Function.prototype.bind(thisArg, ...boundArgs)` — create a distinct bound
+/// function closure. Captures the target closure value, the bound `this`, and
+/// the partial-applied leading args (as a JS array). The returned closure uses
+/// the BOUND_FUNCTION_FUNC_PTR sentinel; `js_closure_callN` /
+/// `js_native_call_value` route it through `dispatch_bound_function`.
+///
+/// `.name` is set to `"bound " + target.name` and `.length` to
+/// `max(0, target.length - boundArgs.length)`, matching Node. Refs #2840.
+#[no_mangle]
+pub unsafe extern "C" fn js_function_bind(
+    target_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    use crate::value::JSValue;
+
+    let target_jv = JSValue::from_bits(target_value.to_bits());
+    // Only closures can be bound; non-callable receivers fall back to
+    // returning the receiver unchanged (the prior conservative behavior).
+    if !target_jv.is_pointer() {
+        return target_value;
+    }
+    let target_closure = target_jv.as_pointer::<ClosureHeader>();
+    if target_closure.is_null() || (*target_closure).type_tag != CLOSURE_MAGIC {
+        return target_value;
+    }
+
+    let bound_this = if args_len >= 1 && !args_ptr.is_null() {
+        *args_ptr
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
+    let bound_arg_count = args_len.saturating_sub(1);
+
+    // Build the partial-args array (NaN-boxed values copied as-is).
+    let bound_args_arr: *mut crate::array::ArrayHeader = if bound_arg_count > 0 {
+        let arr = crate::array::js_array_alloc(bound_arg_count as u32);
+        let mut cur = arr;
+        for i in 0..bound_arg_count {
+            cur = crate::array::js_array_push_f64(cur, *args_ptr.add(1 + i));
+        }
+        cur
+    } else {
+        std::ptr::null_mut()
+    };
+
+    // Allocate the bound closure with 3 capture slots.
+    let bound = crate::closure::js_closure_alloc(BOUND_FUNCTION_FUNC_PTR, 3);
+    js_closure_set_capture_f64(bound, 0, target_value);
+    js_closure_set_capture_f64(bound, 1, bound_this);
+    js_closure_set_capture_ptr(bound, 2, bound_args_arr as i64);
+
+    // Spec `.length` = max(0, target.length - boundArgs.length).
+    let target_len = crate::closure::closure_arity(target_closure).unwrap_or(0);
+    let bound_len = target_len.saturating_sub(bound_arg_count as u32);
+    crate::object::set_builtin_closure_length(bound as usize, bound_len);
+
+    // Spec `.name` = "bound " + target.name.
+    let target_name = crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize)
+        .unwrap_or_default();
+    let bound_name = format!("bound {target_name}");
+    let name_ptr =
+        crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
+    let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
+    crate::closure::closure_set_dynamic_prop(bound as usize, "name", name_value);
+
+    crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
+    f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
+}
+
+/// Keepalive anchor for the `js_function_bind` symbol. The auto-optimize
+/// whole-program LLVM rebuild dead-strips `#[no_mangle]` fns that are only
+/// referenced from generated `.o` / other crates; this `#[used]` static
+/// survives the bitcode pipeline. See project_auto_optimize_keepalive_3320.
+#[used]
+static KEEP_JS_FUNCTION_BIND: unsafe extern "C" fn(f64, *const f64, usize) -> f64 =
+    js_function_bind;
+
 /// Issue #648: calling a value that isn't a function (most commonly the
 /// result of a property lookup that returned undefined, e.g.
 /// `obj.missingFn()`) must throw a TypeError that user code can catch via
@@ -163,6 +274,13 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return func_ptr;
     }
+    // BOUND_FUNCTION_FUNC_PTR (0xBADD_B12D) is the Function.prototype.bind
+    // sentinel — like BOUND_METHOD_FUNC_PTR it's not a real code address, so
+    // pass it through here and let the call sites route to
+    // dispatch_bound_function (#2840).
+    if func_ptr == BOUND_FUNCTION_FUNC_PTR {
+        return func_ptr;
+    }
     // Validate func_ptr is in a reasonable code address range.
     // macOS ARM64: .text starts at 0x100000000, typically < 0x400000000
     // Windows x86_64: typically 0x7FF7_xxxx_xxxx (ASLR), so we allow up to 0x8000_0000_0000
@@ -189,6 +307,7 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[]) },
+        DispatchStrategy::BoundFunction => unsafe { dispatch_bound_function(closure, &[]) },
         DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[], fixed_arity, synth)
         },
@@ -212,6 +331,7 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0]) },
+        DispatchStrategy::BoundFunction => unsafe { dispatch_bound_function(closure, &[arg0]) },
         DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0], fixed_arity, synth)
         },
@@ -239,7 +359,10 @@ pub(crate) fn resolve_call2_direct(
     closure: *const ClosureHeader,
 ) -> Option<extern "C" fn(*const ClosureHeader, f64, f64) -> f64> {
     let func_ptr = get_valid_func_ptr(closure);
-    if func_ptr.is_null() || func_ptr == BOUND_METHOD_FUNC_PTR {
+    if func_ptr.is_null()
+        || func_ptr == BOUND_METHOD_FUNC_PTR
+        || func_ptr == BOUND_FUNCTION_FUNC_PTR
+    {
         return None;
     }
     if lookup_closure_rest(func_ptr).is_some() {
@@ -262,6 +385,9 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0, arg1]) },
+        DispatchStrategy::BoundFunction => unsafe {
+            dispatch_bound_function(closure, &[arg0, arg1])
+        },
         DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1], fixed_arity, synth)
         },
@@ -291,6 +417,9 @@ pub extern "C" fn js_closure_call3(
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe {
             dispatch_bound_method(closure, &[arg0, arg1, arg2])
+        },
+        DispatchStrategy::BoundFunction => unsafe {
+            dispatch_bound_function(closure, &[arg0, arg1, arg2])
         },
         DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2], fixed_arity, synth)
@@ -322,6 +451,9 @@ pub extern "C" fn js_closure_call4(
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe {
             dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3])
+        },
+        DispatchStrategy::BoundFunction => unsafe {
+            dispatch_bound_function(closure, &[arg0, arg1, arg2, arg3])
         },
         DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(
@@ -359,6 +491,9 @@ pub extern "C" fn js_closure_call5(
     }
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return unsafe { dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4]) };
+    }
+    if func_ptr == BOUND_FUNCTION_FUNC_PTR {
+        return unsafe { dispatch_bound_function(closure, &[arg0, arg1, arg2, arg3, arg4]) };
     }
     if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
         return unsafe {
@@ -401,6 +536,9 @@ pub extern "C" fn js_closure_call6(
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return unsafe { dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4, arg5]) };
     }
+    if func_ptr == BOUND_FUNCTION_FUNC_PTR {
+        return unsafe { dispatch_bound_function(closure, &[arg0, arg1, arg2, arg3, arg4, arg5]) };
+    }
     if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
         return unsafe {
             dispatch_rest_bundled(
@@ -429,6 +567,39 @@ pub extern "C" fn js_closure_call6(
     func(closure, arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
+#[inline]
+fn dispatch_registered_call(
+    closure: *const ClosureHeader,
+    func_ptr: *const u8,
+    args: &[f64],
+) -> Option<f64> {
+    if func_ptr == BOUND_METHOD_FUNC_PTR {
+        return Some(unsafe { dispatch_bound_method(closure, args) });
+    }
+    if func_ptr == BOUND_FUNCTION_FUNC_PTR {
+        return Some(unsafe { dispatch_bound_function(closure, args) });
+    }
+    None
+}
+
+#[inline]
+fn dispatch_rest_or_declared_arity(
+    closure: *const ClosureHeader,
+    func_ptr: *const u8,
+    args: &[f64],
+    provided: u32,
+) -> Option<f64> {
+    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
+        return Some(unsafe { dispatch_rest_bundled(closure, func_ptr, args, fixed_arity, synth) });
+    }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > provided {
+            return Some(unsafe { dispatch_with_arity(closure, func_ptr, args, declared) });
+        }
+    }
+    None
+}
+
 /// Call a closure with 7 arguments, returning f64
 #[no_mangle]
 pub extern "C" fn js_closure_call7(
@@ -445,10 +616,13 @@ pub extern "C" fn js_closure_call7(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4, arg5, arg6])
-        };
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 7) {
+        return result;
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
@@ -472,10 +646,13 @@ pub extern "C" fn js_closure_call8(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7])
-        };
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 8) {
+        return result;
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
@@ -500,13 +677,13 @@ pub extern "C" fn js_closure_call9(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8],
-            )
-        };
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 9) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -544,13 +721,13 @@ pub extern "C" fn js_closure_call10(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9],
-            )
-        };
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 10) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -590,15 +767,17 @@ pub extern "C" fn js_closure_call11(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[
-                    arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
-                ],
-            )
-        };
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+    ];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 11) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -640,15 +819,17 @@ pub extern "C" fn js_closure_call12(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[
-                    arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
-                ],
-            )
-        };
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
+    ];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 12) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -692,15 +873,17 @@ pub extern "C" fn js_closure_call13(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[
-                    arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
-                ],
-            )
-        };
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
+    ];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 13) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -746,16 +929,17 @@ pub extern "C" fn js_closure_call14(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[
-                    arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
-                    arg12, arg13,
-                ],
-            )
-        };
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+    ];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 14) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -804,16 +988,19 @@ pub extern "C" fn js_closure_call15(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[
-                    arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
-                    arg12, arg13, arg14,
-                ],
-            )
-        };
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+        arg14,
+    ];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+        arg14,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 15) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -864,16 +1051,19 @@ pub extern "C" fn js_closure_call16(
     if func_ptr.is_null() {
         throw_not_callable();
     }
-    if func_ptr == BOUND_METHOD_FUNC_PTR {
-        return unsafe {
-            dispatch_bound_method(
-                closure,
-                &[
-                    arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
-                    arg12, arg13, arg14, arg15,
-                ],
-            )
-        };
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+        arg14, arg15,
+    ];
+    if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
+        return result;
+    }
+    let args = [
+        arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
+        arg14, arg15,
+    ];
+    if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 16) {
+        return result;
     }
     let func: extern "C" fn(
         *const ClosureHeader,
@@ -1222,7 +1412,7 @@ pub unsafe extern "C" fn js_closure_call_array(
             a(13),
             a(14),
         ),
-        _ => js_closure_call16(
+        16 => js_closure_call16(
             closure,
             a(0),
             a(1),
@@ -1241,6 +1431,37 @@ pub unsafe extern "C" fn js_closure_call_array(
             a(14),
             a(15),
         ),
+        // #3527: arities above 16 can't go through a fixed per-arity
+        // `js_closure_callN` (none exist past 16). Build the full unboxed
+        // arg slice and dispatch through the strategy resolver so the
+        // closure body is called with ALL its args (the old `_ =>
+        // js_closure_call16(...)` silently dropped args 16.. — breaking
+        // qs's recursive `stringify`, which self-calls with 18 args). For
+        // a plain (Direct) closure with no registered rest/arity, dispatch
+        // through `dispatch_with_arity` with the provided count so the body
+        // is transmuted to its real N-arg signature.
+        _ => {
+            let mut full: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                full.push(a(i));
+            }
+            let func_ptr = get_valid_func_ptr(closure);
+            if func_ptr.is_null() {
+                throw_not_callable();
+            }
+            if let Some(result) = dispatch_registered_call(closure, func_ptr, &full) {
+                return result;
+            }
+            if let Some(result) =
+                dispatch_rest_or_declared_arity(closure, func_ptr, &full, n as u32)
+            {
+                return result;
+            }
+            // Direct closure: declared arity == provided count. Reuse the
+            // arity dispatcher (it transmutes to the concrete N-arg fn and
+            // forwards the slice unchanged when provided == declared).
+            dispatch_with_arity(closure, func_ptr, &full, n as u32)
+        }
     }
 }
 

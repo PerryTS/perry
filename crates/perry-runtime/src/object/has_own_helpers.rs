@@ -1,6 +1,6 @@
 //! Helpers for `Object.hasOwn` ToObject and primitive own-key handling.
 
-pub(super) fn throw_to_object_nullish_type_error() -> ! {
+pub(crate) fn throw_to_object_nullish_type_error() -> ! {
     let message = "Cannot convert undefined or null to object";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
