@@ -737,6 +737,9 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                         ("FileHandle", "readLines") => {
                             return Type::Named(FILEHANDLE_READLINES_ITERATOR_TYPE.to_string());
                         }
+                        ("FileHandle", "readableWebStream") => {
+                            return Type::Named("ReadableStream".to_string());
+                        }
                         (
                             "Readable",
                             "map" | "filter" | "flatMap" | "take" | "drop" | "compose",

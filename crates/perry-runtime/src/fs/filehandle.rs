@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::closure::ClosureHeader;
 
@@ -12,6 +13,19 @@ thread_local! {
     static READ_LINES_REGISTRY: RefCell<HashMap<usize, ReadLinesState>> =
         RefCell::new(HashMap::new());
     static NEXT_READ_LINES_ID: RefCell<usize> = const { RefCell::new(1) };
+}
+
+type ReadableWebStreamFactory = unsafe extern "C" fn(f64, f64) -> f64;
+
+static READABLE_WEB_STREAM_FACTORY: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Called by `perry-stdlib` when `bundled-streams` is linked. The runtime owns
+/// FileHandle state and fd reads; stdlib owns Web Streams handle allocation.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_filehandle_readable_web_stream_factory(
+    f: ReadableWebStreamFactory,
+) {
+    READABLE_WEB_STREAM_FACTORY.store(f as *mut (), Ordering::Release);
 }
 
 struct ReadLinesState {
@@ -94,6 +108,39 @@ fn set_filehandle_field_fd(handle: f64, fd: i32) {
         key,
         fd as f64,
     );
+}
+
+fn filehandle_bool_field(handle: f64, name: &[u8]) -> bool {
+    let ptr = crate::value::js_nanbox_get_pointer(handle);
+    if ptr < 0x1000 {
+        return false;
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value =
+        crate::object::js_object_get_field_by_name(ptr as *const crate::object::ObjectHeader, key);
+    value.bits() == crate::value::TAG_TRUE
+}
+
+fn set_filehandle_bool_field(handle: f64, name: &[u8], value: bool) {
+    let ptr = crate::value::js_nanbox_get_pointer(handle);
+    if ptr < 0x1000 {
+        return;
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let tag = if value {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    };
+    crate::object::js_object_set_field_by_name(
+        ptr as *mut crate::object::ObjectHeader,
+        key,
+        f64::from_bits(tag),
+    );
+}
+
+fn throw_filehandle_invalid_state(message: &str) -> ! {
+    crate::fs::validate::throw_error_with_code(message, "ERR_INVALID_STATE")
 }
 
 /// Resolve the *live* fd for a FileHandle mutator. The closure captures the
@@ -223,6 +270,150 @@ fn install_read_lines_async_iterator(target: f64, iterator: f64) {
     unsafe {
         crate::symbol::js_object_set_symbol_property(target, symbol_value, closure_value);
     }
+}
+
+fn install_filehandle_async_dispose(handle: f64, method: f64) {
+    let async_dispose = crate::symbol::well_known_symbol("asyncDispose");
+    if async_dispose.is_null() {
+        return;
+    }
+    let symbol_value =
+        f64::from_bits(crate::value::JSValue::pointer(async_dispose as *const u8).bits());
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(handle, symbol_value, method);
+    }
+}
+
+const FILEHANDLE_WEBSTREAM_LOCKED: &[u8] = b"__perry_filehandle_webstream_locked";
+
+fn make_filehandle_webstream_callback(
+    fd: i32,
+    handle: f64,
+    auto_close: bool,
+    func: *const u8,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(func, 3);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::js_closure_set_capture_f64(closure, 1, handle);
+    crate::closure::js_closure_set_capture_ptr(closure, 2, if auto_close { 1 } else { 0 });
+    f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
+}
+
+fn webstream_handle(closure: *const ClosureHeader) -> f64 {
+    crate::closure::js_closure_get_capture_f64(closure, 1)
+}
+
+fn webstream_auto_close(closure: *const ClosureHeader) -> bool {
+    crate::closure::js_closure_get_capture_ptr(closure, 2) != 0
+}
+
+fn allocate_uint8array_chunk(bytes: &[u8]) -> f64 {
+    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
+    crate::buffer::mark_as_uint8array(buf as usize);
+    unsafe {
+        (*buf).length = bytes.len() as u32;
+        if !bytes.is_empty() {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                crate::buffer::buffer_data_mut(buf),
+                bytes.len(),
+            );
+        }
+    }
+    f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+}
+
+fn read_filehandle_webstream_chunk(fd: i32) -> Option<Vec<u8>> {
+    FD_REGISTRY.with(|r| {
+        let mut reg = r.borrow_mut();
+        let file = reg.get_mut(&fd)?;
+        let mut bytes = vec![0u8; 16 * 1024];
+        match file.read(&mut bytes) {
+            Ok(0) | Err(_) => None,
+            Ok(n) => {
+                bytes.truncate(n);
+                Some(bytes)
+            }
+        }
+    })
+}
+
+extern "C" fn filehandle_webstream_pull_impl(closure: *const ClosureHeader) -> f64 {
+    let handle = webstream_handle(closure);
+    let fallback_fd = filehandle_fd(closure);
+    let fd = filehandle_field_fd(handle).unwrap_or(fallback_fd);
+    if fd < 0 || !fd_is_registered(fd) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if let Some(bytes) = read_filehandle_webstream_chunk(fd) {
+        return allocate_uint8array_chunk(&bytes);
+    }
+    if webstream_auto_close(closure) {
+        close_filehandle_fd(fd, handle);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn filehandle_webstream_cancel_impl(closure: *const ClosureHeader, _reason: f64) -> f64 {
+    let handle = webstream_handle(closure);
+    let fallback_fd = filehandle_fd(closure);
+    let fd = filehandle_field_fd(handle).unwrap_or(fallback_fd);
+    if webstream_auto_close(closure) {
+        close_filehandle_fd(fd, handle);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn readable_webstream_auto_close(options: f64) -> bool {
+    crate::fs::validate::validate_object_options("options", options);
+    let auto_close_value = unsafe { options_field_value(options, b"autoClose") };
+    let Some(value) = auto_close_value else {
+        return false;
+    };
+    let js = crate::value::JSValue::from_bits(value.bits());
+    if js.is_bool() {
+        return js.as_bool();
+    }
+    let message = format!(
+        "The \"options.autoClose\" argument must be of type boolean. Received {}",
+        crate::fs::validate::describe_received(f64::from_bits(value.bits()))
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+pub(crate) extern "C" fn filehandle_readable_web_stream_impl(
+    closure: *const ClosureHeader,
+    options: f64,
+) -> f64 {
+    let raw = READABLE_WEB_STREAM_FACTORY.load(Ordering::Acquire);
+    let handle = filehandle_object(closure).unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let fallback_fd = filehandle_fd(closure);
+    let fd = filehandle_field_fd(handle).unwrap_or(fallback_fd);
+    if fd < 0 || !fd_is_registered(fd) {
+        throw_filehandle_invalid_state("Invalid state: The FileHandle is closed");
+    }
+    if filehandle_bool_field(handle, FILEHANDLE_WEBSTREAM_LOCKED) {
+        throw_filehandle_invalid_state("Invalid state: The FileHandle is locked");
+    }
+    set_filehandle_bool_field(handle, FILEHANDLE_WEBSTREAM_LOCKED, true);
+    let auto_close = readable_webstream_auto_close(options);
+    if raw.is_null() {
+        throw_filehandle_invalid_state("Invalid state: ReadableStream is unavailable");
+    }
+    let pull = make_filehandle_webstream_callback(
+        fd,
+        handle,
+        auto_close,
+        filehandle_webstream_pull_impl as *const u8,
+    );
+    let cancel = make_filehandle_webstream_callback(
+        fd,
+        handle,
+        auto_close,
+        filehandle_webstream_cancel_impl as *const u8,
+    );
+    let factory: ReadableWebStreamFactory = unsafe { std::mem::transmute(raw) };
+    unsafe { factory(pull, cancel) }
 }
 
 pub(crate) extern "C" fn filehandle_close_impl(closure: *const ClosureHeader) -> f64 {
@@ -632,21 +823,24 @@ fn build_filehandle_object(fd: i32) -> f64 {
     crate::closure::js_register_closure_arity(filehandle_read_impl as *const u8, 5);
     crate::closure::js_register_closure_arity(filehandle_write_impl as *const u8, 5);
     crate::closure::js_register_closure_arity(filehandle_read_lines_impl as *const u8, 1);
+    crate::closure::js_register_closure_arity(filehandle_readable_web_stream_impl as *const u8, 1);
+    crate::closure::js_register_closure_arity(filehandle_webstream_pull_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(filehandle_webstream_cancel_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(read_lines_next_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(read_lines_return_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(read_lines_close_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(read_lines_iterator_impl as *const u8, 0);
-    let obj = crate::object::js_object_alloc(0, 19);
+    let obj = crate::object::js_object_alloc(0, 20);
     let handle = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
     let set = |name: &str, v: f64| {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(obj, key, v);
     };
     set("fd", fd as f64);
-    set(
-        "close",
-        make_filehandle_method_with_handle(fd, handle, filehandle_close_impl as *const u8),
-    );
+    let close_method =
+        make_filehandle_method_with_handle(fd, handle, filehandle_close_impl as *const u8);
+    set("close", close_method);
+    install_filehandle_async_dispose(handle, close_method);
     set(
         "sync",
         make_filehandle_method(fd, filehandle_sync_impl as *const u8),
@@ -722,6 +916,14 @@ fn build_filehandle_object(fd: i32) -> f64 {
     set(
         "readLines",
         make_filehandle_method_with_handle(fd, handle, filehandle_read_lines_impl as *const u8),
+    );
+    set(
+        "readableWebStream",
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            filehandle_readable_web_stream_impl as *const u8,
+        ),
     );
     FILEHANDLE_OBJECT_FDS.with(|fds| {
         fds.borrow_mut().insert(obj as usize, fd);
