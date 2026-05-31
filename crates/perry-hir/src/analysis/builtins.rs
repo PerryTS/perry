@@ -10,7 +10,6 @@ pub(crate) fn is_builtin_function(name: &str) -> bool {
             | "clearTimeout"
             | "clearInterval"
             | "clearImmediate"
-            | "fetch"
             | "gc"
     )
 }
@@ -106,6 +105,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "AsyncDisposableStack"
             | "SuppressedError"
             | "Buffer"
+            | "fetch"
             | "process"
             | "console"
             | "crypto"

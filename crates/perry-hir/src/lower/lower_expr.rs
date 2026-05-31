@@ -388,6 +388,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // `Expr::Date*Get(...)` — so they don't reach this arm.
                 // date-fns / drizzle / lodash duck-typing path.
                 if is_builtin_global_value_name(&name) {
+                    if name == "fetch" {
+                        ctx.uses_fetch = true;
+                    }
                     return Ok(Expr::PropertyGet {
                         object: Box::new(Expr::GlobalGet(0)),
                         property: name,
@@ -683,9 +686,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     {
                         return Ok(Expr::String("function".to_string()));
                     }
-                    // #1454: global timer builtins (+ fetch) are functions, but
-                    // a bare read lowers to an ExternFuncRef whose typeof reads
-                    // "boolean". Fold to "function" (gc is excluded — it's
+                    // #1454: global timer builtins and fetch are functions.
+                    // Timers still lower bare reads to ExternFuncRef; fetch
+                    // now resolves through globalThis for value identity.
+                    // Fold both shapes to "function" (gc is excluded — it's
                     // undefined in Node without --expose-gc).
                     let n = id.sym.as_ref();
                     if matches!(

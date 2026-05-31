@@ -1444,6 +1444,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     }
 
     let mut object_expr = lower_expr(ctx, &member.obj)?;
+    let member_reads_global_fetch = matches!(
+        unwrap_transparent(member.obj.as_ref()),
+        ast::Expr::Ident(i) if i.sym.as_ref() == "globalThis"
+    ) && match &member.prop {
+        ast::MemberProp::Ident(p) => p.sym.as_ref() == "fetch",
+        ast::MemberProp::Computed(c) => {
+            matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(s)) if s.value.as_str() == Some("fetch"))
+        }
+        ast::MemberProp::PrivateName(_) => false,
+    };
+    if member_reads_global_fetch {
+        ctx.uses_fetch = true;
+    }
 
     // #973 (5ddccbbc) rerouted bare built-in identifiers used as VALUES
     // (`Number`, `Object`, `Array`, ...) to `PropertyGet { GlobalGet(0),
