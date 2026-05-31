@@ -254,6 +254,7 @@ pub struct Function {
     pub body: Vec<Stmt>,
     pub is_async: bool,
     pub is_generator: bool,
+    pub is_strict: bool,
     pub is_exported: bool,
     /// Captured variables (for closures)
     pub captures: Vec<LocalId>,

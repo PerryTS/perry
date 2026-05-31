@@ -549,6 +549,7 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"UV_DIRENT_BLOCK",
     b"UV_FS_SYMLINK_DIR",
     b"UV_FS_SYMLINK_JUNCTION",
+    b"UV_FS_O_FILEMAP",
     b"UV_FS_COPYFILE_EXCL",
     b"UV_FS_COPYFILE_FICLONE",
     b"UV_FS_COPYFILE_FICLONE_FORCE",
@@ -560,6 +561,9 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"S_IFIFO",
     b"S_IFLNK",
     b"S_IFSOCK",
+    b"S_IRWXU",
+    b"S_IRWXG",
+    b"S_IRWXO",
     b"O_DIRECTORY",
     b"O_NOCTTY",
     b"O_NONBLOCK",
@@ -568,6 +572,35 @@ const DEPRECATED_CONSTANTS_KEYS: &[&[u8]] = &[
     b"O_SYMLINK",
     b"defaultCoreCipherList",
 ];
+
+// Linux-only open() flags: Node only enumerates these on platforms whose libc
+// defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
+// enumerable-key tail by target so `Object.keys(constants)` matches Node here.
+#[cfg(target_os = "linux")]
+fn deprecated_constants_keys() -> &'static [&'static [u8]] {
+    use std::sync::OnceLock;
+    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+    MERGED
+        .get_or_init(|| {
+            // Insert the Linux-only flags just before the trailing
+            // `defaultCoreCipherList` metadata entry, matching Node's order.
+            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 2);
+            for &k in DEPRECATED_CONSTANTS_KEYS {
+                if k == b"defaultCoreCipherList" {
+                    v.push(b"O_DIRECT");
+                    v.push(b"O_NOATIME");
+                }
+                v.push(k);
+            }
+            v
+        })
+        .as_slice()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn deprecated_constants_keys() -> &'static [&'static [u8]] {
+    DEPRECATED_CONSTANTS_KEYS
+}
 
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     match module_name {
@@ -599,7 +632,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // Deprecated path alias enumerable on the top-level and style
         // sub-namespaces, matching Node's `Object.keys(...).includes`.
         "path" | "path.posix" | "path.win32" => Some(&[b"_makeLong"]),
-        "constants" => Some(DEPRECATED_CONSTANTS_KEYS),
+        "constants" => Some(deprecated_constants_keys()),
         "querystring" => Some(&[
             b"unescapeBuffer",
             b"unescape",
@@ -654,6 +687,14 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"setDefaultAutoSelectFamily",
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
+        ]),
+        "https" => Some(&[
+            b"Agent",
+            b"Server",
+            b"createServer",
+            b"get",
+            b"request",
+            b"globalAgent",
         ]),
         "events" => Some(&[
             b"EventEmitter",
@@ -887,6 +928,12 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        ("process", "setSourceMapsEnabled") => Some(1),
+        (
+            "process",
+            "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback",
+        ) => Some(1),
+        ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("util", "debug" | "debuglog") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
@@ -898,6 +945,12 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("wasi", "WASI") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
+        ("module", "enableCompileCache") => Some(1),
+        ("module", "flushCompileCache") => Some(0),
+        ("module", "getCompileCacheDir") => Some(0),
+        ("module", "getSourceMapsSupport") => Some(0),
+        ("module", "setSourceMapsSupport") => Some(1),
+        ("module", "stripTypeScriptTypes") => Some(1),
         ("module", "syncBuiltinESMExports") => Some(0),
         ("module", "runMain") => Some(0),
         _ => None,
@@ -1345,6 +1398,10 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "kill")
             | ("process", "exit")
             | ("process", "umask")
+            | ("process", "setSourceMapsEnabled")
+            | ("process", "hasUncaughtExceptionCaptureCallback")
+            | ("process", "setUncaughtExceptionCaptureCallback")
+            | ("process", "addUncaughtExceptionCaptureCallback")
             | ("process", "threadCpuUsage")
             | ("process", "availableMemory")
             | ("process", "constrainedMemory")
@@ -2379,6 +2436,15 @@ pub(crate) unsafe fn get_native_module_constant(
             "UV_FS_COPYFILE_EXCL" => Some(1),
             "UV_FS_COPYFILE_FICLONE" => Some(2),
             "UV_FS_COPYFILE_FICLONE_FORCE" => Some(4),
+            // libuv filemap open flag (Windows-only; 0 elsewhere, matching Node).
+            #[cfg(windows)]
+            "UV_FS_O_FILEMAP" => Some(0x2000_0000),
+            #[cfg(not(windows))]
+            "UV_FS_O_FILEMAP" => Some(0),
+            // POSIX combined rwx permission masks (stable across platforms).
+            "S_IRWXU" => Some(0o700),
+            "S_IRWXG" => Some(0o070),
+            "S_IRWXO" => Some(0o007),
             // POSIX file-type masks (S_IFMT family) — stable across Linux/macOS.
             #[cfg(unix)]
             "S_IFMT" => Some(libc::S_IFMT as i64),
@@ -2427,6 +2493,12 @@ pub(crate) unsafe fn get_native_module_constant(
             "O_DSYNC" => Some(libc::O_DSYNC as i64),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             "O_SYMLINK" => Some(0x200000),
+            // Linux-only open() flags (Node returns undefined for these on
+            // platforms that lack them).
+            #[cfg(target_os = "linux")]
+            "O_DIRECT" => Some(libc::O_DIRECT as i64),
+            #[cfg(target_os = "linux")]
+            "O_NOATIME" => Some(libc::O_NOATIME as i64),
             #[cfg(not(unix))]
             "O_DIRECTORY" => Some(0x10000),
             #[cfg(not(unix))]
@@ -3065,6 +3137,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "constants" => Some(crate::process::js_module_constants()),
             _ => None,
         },
+        "process" => match property {
+            "sourceMapsEnabled" => Some(crate::process::js_process_source_maps_enabled()),
+            _ => None,
+        },
         "dns" => match property {
             "promises" => {
                 crate::dns::dns_promises_init_servers_from_callback_if_unset();
@@ -3323,6 +3399,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "METHODS" => Some(unsafe { http_methods_array() }),
             _ => None,
         },
+        "https" => match property {
+            "globalAgent" => Some(unsafe { https_global_agent_object() }),
+            _ => None,
+        },
         // node:http2 — `constants` is a sub-namespace object (the spec exposes
         // it as a single frozen object, not loose top-level constants), so
         // `import { constants } from 'node:http2'` binds to a real object and
@@ -3459,6 +3539,46 @@ unsafe fn http_methods_array() -> f64 {
         Ordering::Relaxed,
     );
     value
+}
+
+unsafe fn https_global_agent_object() -> f64 {
+    if let Some(bits) =
+        NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("https.globalAgent").copied())
+    {
+        return f64::from_bits(bits);
+    }
+
+    let field_names = [
+        "defaultPort",
+        "protocol",
+        "keepAlive",
+        "maxSockets",
+        "maxFreeSockets",
+    ];
+    let packed = field_names.join("\0");
+    let obj = js_object_alloc_with_shape(
+        0x7FFF_FF12,
+        field_names.len() as u32,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    js_object_set_field(obj, 0, JSValue::number(443.0));
+    let protocol = crate::string::js_string_from_bytes(b"https:".as_ptr(), 6);
+    js_object_set_field(obj, 1, JSValue::string_ptr(protocol));
+    js_object_set_field(obj, 2, JSValue::bool(true));
+    js_object_set_field(obj, 3, JSValue::number(f64::INFINITY));
+    js_object_set_field(obj, 4, JSValue::number(256.0));
+
+    let result = crate::value::js_nanbox_pointer(obj as i64);
+    NATIVE_MODULE_NAMESPACES.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert("https.globalAgent".to_string(), result.to_bits());
+    });
+    result
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.

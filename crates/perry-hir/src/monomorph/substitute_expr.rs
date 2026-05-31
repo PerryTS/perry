@@ -771,6 +771,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             enclosing_class,
             is_async,
             is_generator,
+            is_strict,
         } => Expr::Closure {
             func_id: *func_id,
             params: params
@@ -795,6 +796,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             enclosing_class: enclosing_class.clone(),
             is_async: *is_async,
             is_generator: *is_generator,
+            is_strict: *is_strict,
         },
 
         // RegExp operations
